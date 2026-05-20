@@ -14,6 +14,8 @@ pub mod core;
 pub mod crypto;
 pub mod hashkit;
 pub mod io;
+pub mod msg;
+pub mod proto;
 pub mod stats;
 pub mod util;
 

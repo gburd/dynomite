@@ -378,6 +378,133 @@ next to its only consumer.
 | `contrib/fmemopen.{c,h}` | omitted: not needed in Rust. |
 | `contrib/murmur3/` | open-coded in `dynomite::hashkit::murmur3` (Stage 3). |
 
+### dyn_message.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `MSG_TYPE_CODEC` (X-macro) | `dynomite::msg::MsgType` (179 variants, indices identical) | done (Stage 7) |
+| `enum msg_type` / `MSG_*` variants | `dynomite::msg::MsgType` variants (`Unknown`, `ReqMcGet`, ..., `EndIdx`) | done (Stage 7) |
+| `enum msg_parse_result` | `dynomite::msg::MsgParseResult` | done (Stage 7) |
+| `enum dyn_error` | `dynomite::msg::DynErrorCode` | done (Stage 7) |
+| `dn_strerror` | `dynomite::msg::DynErrorCode::message` | done (Stage 7) |
+| `dyn_error_source` | `dynomite::msg::DynErrorCode::source` | done (Stage 7) |
+| `enum consistency` (`DC_ONE`, `DC_QUORUM`, `DC_SAFE_QUORUM`, `DC_EACH_SAFE_QUORUM`) | `dynomite::msg::ConsistencyLevel` | done (Stage 7) |
+| `get_consistency_string` / `get_consistency_enum_from_string` | `ConsistencyLevel::name` / `from_name` | done (Stage 7) |
+| `enum msg_routing` | `dynomite::msg::MsgRouting` | done (Stage 7) |
+| `get_msg_routing_string` | `MsgRouting::name` | done (Stage 7) |
+| `struct keypos` / `struct argpos` | deferred to Stage 8 (introduced by the redis/memcache parsers) | omitted-for-stage |
+| `struct write_with_ts` | deferred to Stage 8 (read-repair metadata is rewritten by the redis parser) | omitted-for-stage |
+| `struct msg` | `dynomite::msg::Msg` | done (Stage 7) (data shape; recv/send paths defer to Stage 9) |
+| `MSG_TYPE_CODEC` strings (`msg_type_strings`) | `MsgType::name` | done (Stage 7) |
+| `g_read_repairs_enabled` | `dynomite::msg::is_read_repairs_enabled` / `set_read_repairs_enabled` (backed by `OnceLock<bool>`) | done (Stage 7) |
+| `g_pre_coalesce` / `g_post_coalesce` / `g_fragment` / `g_verify_request` / `g_is_multikey_request` / `g_reconcile_responses` / `g_rewrite_query` / `g_rewrite_query_with_timestamp_md` / `g_make_repair_query` / `g_clear_repair_md_for_key` | deferred to Stage 8 (redis/memcache parser dispatch tables) | omitted-for-stage |
+| `set_datastore_ops` | deferred to Stage 8 | omitted-for-stage |
+| `g_read_consistency` / `g_write_consistency` / `g_timeout_factor` | deferred to Stage 9 (consumed by the conn FSM) | omitted-for-stage |
+| `msg_init` / `msg_deinit` | replaced by `Msg::new` and `Drop` (Rust ownership replaces the free queue) | done (Stage 7) |
+| `msg_get` / `_msg_get` / `msg_put` / `msg_free` | replaced by `Msg::new` + `Drop`; the alloc-budget cap moves to `dynomited` startup wiring (Stage 12) | done (Stage 7) for the data-shape side; cap deferred to Stage 12 |
+| `msg_get_error` | `dynomite::msg::response::make_error` | done (Stage 7) |
+| `msg_get_rsp_integer` | deferred to Stage 8 (redis-shape integer reply) | omitted-for-stage |
+| `msg_clone` | deferred to Stage 9 (uses connection ownership) | omitted-for-stage |
+| `msg_type_string` | `MsgType::name` | done (Stage 7) |
+| `msg_empty` | `Msg::mlen() == 0` (the BAD_FORMAT side is folded into `dyn_error_code`) | done (Stage 7) |
+| `msg_dump` | omitted: replaced by `tracing::debug!(?msg)` once tracing is wired across the engine. |
+| `msg_length` / `msg_mbuf_size` | `Msg::recompute_mlen` and `MbufQueue::len` | done (Stage 7) |
+| `msg_alloc_msgs` / `msg_free_queue_size` | omitted: the C alloc cap is replaced by ownership and a Stage 12 budget knob. |
+| `msg_payload_crc32` | deferred to Stage 8 (uses `crc32_sz` over the payload region defined by the redis parser) | omitted-for-stage |
+| `msg_gen_frag_id` | deferred to Stage 8 | omitted-for-stage |
+| `msg_ensure_mbuf` / `msg_append` / `msg_append_format` / `msg_prepend` / `msg_prepend_format` | deferred to Stage 8 (callers are protocol parsers and error paths that emit redis/memcache replies) | omitted-for-stage |
+| `msg_get_full_key` / `msg_get_tagged_key` / `msg_get_full_key_copy` / `msg_get_arg_copy` / `msg_get_key` / `msg_get_arg` | deferred to Stage 8 (consumes `keypos`/`argpos`) | omitted-for-stage |
+| `msg_recv` / `msg_recv_chain` / `msg_send` / `msg_send_chain` / `msg_parse` / `msg_parsed` / `msg_repair` | deferred to Stage 9 (conn FSM + reactor wiring) | omitted-for-stage |
+| `msg_tmo_min` / `msg_tmo_insert` / `msg_tmo_delete` / `msg_from_rbe` | deferred to Stage 9 (timeout queue is conn-coupled) | omitted-for-stage |
+| `msg_incr_awaiting_rsps` / `msg_decr_awaiting_rsps` | `Msg::incr_awaiting_rsps` / `decr_awaiting_rsps` | done (Stage 7) |
+| `msg_handle_response` | deferred to Stage 9 (rsp_handler vtable lives on `Conn`) | omitted-for-stage |
+| `craft_ok_rsp` / `simulate_ok_rsp` / `msg_apply_config` | deferred to Stage 8 (redis-specific reply text) | omitted-for-stage |
+| `is_msg_type_dyno_config` | `MsgType::HackSettingConnConsistency` discriminator (caller compares directly) | done (Stage 7) |
+| `print_req` / `print_rsp` / `init_object` | omitted: replaced by `#[derive(Debug)]` on `Msg`. |
+| `parse_int_arg_for_formatting` / `parse_llu_arg_for_formatting` / `parse_string_arg_for_formatting` | omitted: replaced by `format!` and `write!` at the call sites in Stage 8. |
+| (new) | `dynomite::msg::MsgFlags` | Bag mirroring the `unsigned :1` flag fields on `struct msg`. |
+| (new) | `dynomite::msg::MsgQueue` | Owning queue replacing every `msg_tqh` list. |
+| (new) | `dynomite::msg::MsgIndex` | Owning index keyed on `MsgId`, replacing the `outstanding_msgs_dict` use of `dict_msg_id`. |
+| (new) | `dynomite::msg::ConnId` | Stage 7 placeholder for the Stage 9 connection reference. |
+
+### dyn_dnode_msg.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `dyn_parse_state_t` | `dynomite::proto::dnode::DynParseState` (16 variants, names and order identical) | done (Stage 7) |
+| `dmsg_type_t` | `dynomite::proto::dnode::DmsgType` (14 variants, on-the-wire integer values identical) | done (Stage 7) |
+| `dmsg_version_t` / `VERSION_10` | `dynomite::proto::dnode::VERSION_10` | done (Stage 7) |
+| `MAGIC_STR` (`"   $2014$ "`) | encoder writes the same literal; parser tolerates leading whitespace and matches the `$2014$` core via `dynomite::proto::dnode::MAGIC` | done (Stage 7) |
+| `CRLF_STR` | `dynomite::proto::dnode::CRLF` | done (Stage 7) |
+| `struct dval` | omitted: the C struct is unused in the live call graph (no in-tree caller). |
+| `struct dmsg` | `dynomite::proto::dnode::Dmsg` | done (Stage 7) |
+| `dmsg_init` / `dmsg_deinit` / `dmsg_get` / `dmsg_put` / `dmsg_free` | replaced by `Dmsg::new` + Rust ownership | done (Stage 7) |
+| `dmsg_empty` | `Dmsg::mlen == 0` (caller-side check) | done (Stage 7) |
+| `dmsg_dump` | omitted: replaced by `#[derive(Debug)]` on `Dmsg`. |
+| `dyn_parse_core` | `dynomite::proto::dnode::DnodeParser::step` | done (Stage 7) |
+| `dyn_parse_req` | `dynomite::proto::dnode::parse_req` | done (Stage 7) (data-shape; the encrypted-payload decryption hook lands in Stage 9) |
+| `dyn_parse_rsp` | `dynomite::proto::dnode::parse_rsp` | done (Stage 7) |
+| `data_store_parse_req` / `data_store_parse_rsp` | deferred to Stage 8 (redis/memcache dispatch) | omitted-for-stage |
+| `dmsg_write` | `dynomite::proto::dnode::dmsg_write` | done (Stage 7) |
+| `dmsg_write_mbuf` | `dynomite::proto::dnode::dmsg_write_mbuf` | done (Stage 7) |
+| `dmsg_process` | `dynomite::proto::dnode::dmsg_process` (returns `DmsgDispatch::{Bypass, Forward}`); gossip-message decoders ship with Stage 10 | done (Stage 7) |
+| `dmsg_parse` / `dmsg_parse_host_id` | deferred to Stage 10 (gossip ring messages live there) | omitted-for-stage |
+| `dmsg_to_gossip` | deferred to Stage 10 (uses `C2G_InQ`) | omitted-for-stage |
+| (new) | `dynomite::proto::dnode::DnodeParser` | Public streaming state machine. |
+| (new) | `dynomite::proto::dnode::ParseStep` | Step-result enum used by `DnodeParser::step`. |
+| (new) | `dynomite::proto::dnode::DnodeError` | Typed encode/parse error. |
+| (new) | `dynomite::proto::dnode::DmsgDispatch` | Result of `dmsg_process` classifying control vs data plane. |
+| (new) | `dynomite::proto::dnode::DMSG_FLAG_ENCRYPTED` / `DMSG_FLAG_COMPRESSED` | Bit constants for `Dmsg::flags`. |
+| (new) | `dynomite::proto::dnode::HANDSHAKE_PLACEHOLDER_DATA` / `GOSSIP_PLACEHOLDER_DATA` | Single-byte constants emitted by the two encoder flavours. |
+| (new) | `dynomite::proto::dnode::flatten_chain` | Test helper draining an `MbufQueue` into a `Vec<u8>`. |
+
+### dyn_response_mgr.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `MAX_REPLICAS_PER_DC` | `dynomite::msg::MAX_REPLICAS_PER_DC` | done (Stage 7) |
+| `struct response_mgr` | `dynomite::msg::ResponseMgr` | done (Stage 7) |
+| `init_response_mgr` | `ResponseMgr::new` | done (Stage 7) |
+| `init_response_mgr_all_dcs` / `init_response_mgr_each_quorum_helper` | data-shape side via `Msg::set_rspmgr` + `Msg::additional_rspmgrs_mut`; the wiring that walks the cluster's datacenter list lives in Stage 10 | done (Stage 7) for data shape; per-DC fan-out deferred to Stage 10 |
+| `rspmgr_check_is_done` / `rspmgr_is_quorum_achieved` | `ResponseMgr::is_done` / `outcome` (folded into a single `QuorumOutcome` enum) | done (Stage 7) |
+| `rspmgr_get_response` | `ResponseMgr::pick_response` (data-shape) plus `error_response` for the failure path; the read-repair side-effect path lands in Stage 8 | done (Stage 7) for data shape |
+| `rspmgr_submit_response` | `ResponseMgr::submit_response` | done (Stage 7) |
+| `rspmgr_free_response` / `rspmgr_free_other_responses` | replaced by Rust ownership: `Drop` on `ResponseMgr` releases all retained responses; `pick_response` borrows so the caller still owns the manager. | done (Stage 7) |
+| `rspmgr_clone_responses` | deferred to Stage 9 (uses `msg_clone`) | omitted-for-stage |
+| `msg_local_one_rsp_handler` | deferred to Stage 9 (the response handler vtable lives on `Conn`) | omitted-for-stage |
+| `perform_repairs_if_necessary` | deferred to Stage 8 (calls into `g_make_repair_query`) | omitted-for-stage |
+| `rspmgr_incr_non_quorum_responses_stats` | deferred to Stage 9 (uses pool-level stats counters that need the `Conn` reference) | omitted-for-stage |
+| (new) | `dynomite::msg::QuorumOutcome` | Enum unifying `done` + `is_quorum_achieved` into a single decision. |
+
+### dyn_request.c
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `req_get` / `req_put` | deferred to Stage 9 (conn-coupled allocator + timeout queue) | omitted-for-stage |
+| `req_done` (data-shape side: `is this single request resolved?`) | `dynomite::msg::request::is_done` | done (Stage 7) |
+| `req_done` (sibling-walk that flips `fdone` on every fragment) | deferred to Stage 9 (walks the connection's client tail-queue) | omitted-for-stage |
+| `req_error` | `dynomite::msg::request::is_error` (data-shape side); sibling-walk deferred to Stage 9 | done (Stage 7) for data shape |
+| `req_make_reply` | deferred to Stage 9 (allocates a paired response on the conn outq) | omitted-for-stage |
+| `req_recv_next` / `req_recv_done` / `req_send_next` / `req_send_done` / `req_forward_error` / `req_forward_local_datastore` / `req_forward_all_racks_for_dc` | deferred to Stage 9 (connection FSM + reactor wiring) | omitted-for-stage |
+| (new) | `dynomite::msg::request::set_error` | Idempotent error-state setter. |
+| (new) | `dynomite::msg::request::move_completed` | Data-shape building block for sibling-walk tests. |
+
+### dyn_response.c
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `rsp_get` / `rsp_put` | deferred to Stage 9 (conn-coupled allocator) | omitted-for-stage |
+| `rsp_make_error` (response-construction side) | `dynomite::msg::response::make_error` | done (Stage 7) |
+| `rsp_make_error` (fragment dequeue side) | deferred to Stage 9 (walks the conn outq) | omitted-for-stage |
+| `rsp_recv_next` / `server_rsp_recv_done` / `rsp_send_next` / `rsp_send_done` | deferred to Stage 9 (connection FSM) | omitted-for-stage |
+| (new) | `dynomite::msg::response::link` | Pairs a response with its request; used by tests and by the Stage 9 dispatcher. |
+
+### dyn_dnode_request.c
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `dnode_req_forward_error` / `dnode_peer_req_forward` / `dnode_peer_gossip_forward` / `dnode_peer_req_forward_stats` | deferred to Stage 9 (conn FSM) and Stage 10 (gossip plumbing) | omitted-for-stage |
+
 ## Ambiguities
 
 ### Stage 4: `conf_validate_pool` keeps `mbuf_size` / `max_msgs` defaults disabled
@@ -401,6 +528,37 @@ the same shape with a typed `ConfError::BadServer` rather than a
 panic. A regression test
 (`crates/dynomite/src/conf/pool.rs::tests::empty_servers_rejected`)
 plus the per-fixture tests confirm one entry is required.
+
+### Stage 7: `_/dynomite/docs/dyn_protocol.txt` example header is out of date
+
+The legacy spec at `_/dynomite/docs/dyn_protocol.txt` shows an
+example DNODE header `"2014 1344 5 1 1 0\r\n*4 minh\r\n..."` that
+omits the `$` magic delimiters, the `*<mlen>` data-length marker,
+the inline data byte, and the `*<plen>` payload-length marker.
+The live encoder in `_/dynomite/src/dyn_dnode_msg.c::dmsg_write`
+emits `"   $2014$ <id> <type> <flags> <version> <same-dc> *<mlen>
+<data> *<plen>\r\n"`, and the live parser
+(`dyn_parse_core`) requires that exact shape. The Rust port
+reproduces the live-on-the-wire framing; the textual spec is
+recorded here as background only and not used as authoritative.
+
+### Stage 7: `dval` struct dropped
+
+The header `_/dynomite/src/dyn_dnode_msg.h` declares `struct dval`
+but the symbol has no in-tree caller; the Rust port omits it
+entirely rather than carrying a never-instantiated type.
+
+### Stage 7: parser does not span an mbuf chain in this stage
+
+`_/dynomite/src/dyn_dnode_msg.c::dyn_parse_core` walks the bytes
+of the last mbuf in the connection's chain; on truncation it
+yields `MSG_PARSE_AGAIN` and returns to the caller, which feeds in
+more data. The Stage 7 Rust parser flattens the chain into a
+contiguous slice in `parse_req` / `parse_rsp` before driving the
+state machine. The streaming primitive
+([`DnodeParser::step`]) accepts arbitrary boundaries and is the
+entry point Stage 9 will use directly from the connection FSM
+when it spans buffers.
 
 ## Deviations
 

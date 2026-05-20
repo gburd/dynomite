@@ -1,0 +1,1088 @@
+//! DNODE wire codec.
+//!
+//! The DNODE protocol frames every Dynomite peer-to-peer message
+//! with a small ASCII header followed by an opaque payload. The
+//! header carries the message id, type tag, encryption/compression
+//! flags, protocol version, same-datacenter bit, an inline data
+//! field (either a one-byte placeholder or an RSA-wrapped AES key),
+//! and the byte length of the payload that follows after `\r\n`.
+//!
+//! The reference engine implements the parser as a single state
+//! machine driven byte-by-byte. This module ports the same machine
+//! into safe Rust and exposes:
+//!
+//! * [`DynParseState`] - the parser's state alphabet.
+//! * [`DmsgType`] - the full set of message-type discriminators.
+//! * [`Dmsg`] - the in-memory header.
+//! * [`DnodeParser`] - the state machine, advanced by feeding bytes
+//!   through [`DnodeParser::step`].
+//! * [`dmsg_write`] / [`dmsg_write_mbuf`] - the canonical encoders.
+//! * [`parse_req`] / [`parse_rsp`] - thin sync wrappers around the
+//!   parser that operate on a [`crate::msg::Msg`]'s mbuf chain.
+//! * [`dmsg_process`] - dispatcher that classifies a parsed
+//!   [`Dmsg`] by type for the cluster layer to act on.
+//!
+//! The encoder accepts an optional `aes_key_payload`: when present,
+//! the caller provides the bytes the inline data field should hold
+//! (the RSA-wrapped AES key produced by [`crate::crypto::Crypto`]).
+//! When absent, the encoder writes the single-byte `'d'` placeholder
+//! the reference engine emits after the first handshake message.
+
+// The parser truncates accumulated decimals into the same fixed
+// bit widths the reference engine uses on the wire (`u8` for the
+// type and flags, `u32` for the data and payload lengths). The
+// allowance keeps the Rust port faithful to the C `(uint8_t)num`
+// and `(uint32_t)num` casts; out-of-range numerals are surfaced as
+// parse errors elsewhere in the state machine.
+#![allow(clippy::cast_possible_truncation)]
+
+use std::net::SocketAddr;
+
+use crate::core::types::MsgId;
+use crate::io::mbuf::{Mbuf, MbufQueue};
+use crate::msg::message::Msg;
+use crate::msg::message::MsgParseResult;
+
+/// Magic literal that opens every DNODE header.
+pub const MAGIC: &[u8] = b"$2014$";
+
+/// Default protocol version emitted by [`dmsg_write`]. Mirrors
+/// `VERSION_10` in the reference engine.
+pub const VERSION_10: u8 = 1;
+
+/// CRLF delimiter that separates the DNODE header from its payload.
+pub const CRLF: &[u8] = b"\r\n";
+
+/// Single-byte placeholder used by [`dmsg_write`] when no AES key
+/// payload accompanies the header.
+pub const HANDSHAKE_PLACEHOLDER_DATA: u8 = b'd';
+
+/// Single-byte placeholder used by [`dmsg_write_mbuf`] when no AES
+/// key payload accompanies the header. The gossip path emits `'a'`
+/// instead of `'d'` to disambiguate the two encoder flavours.
+pub const GOSSIP_PLACEHOLDER_DATA: u8 = b'a';
+
+/// Parser state transitions.
+///
+/// Each variant matches a state in the reference engine's
+/// `dyn_parse_state_t`. The numeric values match the C enum's
+/// numeric values to keep external parity tooling honest.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum DynParseState {
+    /// Initial state; consumes leading whitespace until the magic
+    /// literal is observed.
+    #[default]
+    Start,
+    /// `$2014$` was matched; awaiting the trailing space.
+    MagicString,
+    /// Reading the decimal message id.
+    MsgId,
+    /// Reading the decimal message type.
+    TypeId,
+    /// Reading the decimal flags bit field.
+    BitField,
+    /// Reading the decimal protocol version.
+    Version,
+    /// Reading the same-datacenter digit.
+    SameDc,
+    /// Awaiting the leading `*` before the data length.
+    Star,
+    /// Reading the decimal data length.
+    DataLen,
+    /// Consuming the inline data of `mlen` bytes.
+    Data,
+    /// Skipping spaces before the payload-length marker.
+    SpacesBeforePayloadLen,
+    /// Reading the decimal payload length.
+    PayloadLen,
+    /// Awaiting the LF that terminates the header.
+    CrlfBeforeDone,
+    /// Header complete; payload position recorded.
+    Done,
+    /// Header complete and post-handshake decryption applied.
+    PostDone,
+    /// Recovery state after the parser hit a malformed byte.
+    Unknown,
+}
+
+/// DNODE message type identifier.
+///
+/// The numeric values match `dmsg_type_t` from the reference engine
+/// because the discriminator travels on the wire as a decimal.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[repr(u8)]
+pub enum DmsgType {
+    /// Unset / unknown type.
+    #[default]
+    Unknown = 0,
+    /// Diagnostic frame (unused on the live wire; kept for parity).
+    Debug = 1,
+    /// Parse-error frame (unused on the live wire; kept for parity).
+    ParseError = 2,
+    /// Datastore request bound for the local DC.
+    Req = 3,
+    /// Datastore request to be forwarded across DCs.
+    ReqForward = 4,
+    /// Datastore response.
+    Res = 5,
+    /// AES key handshake.
+    CryptoHandshake = 6,
+    /// Gossip SYN.
+    GossipSyn = 7,
+    /// Gossip SYN reply.
+    GossipSynReply = 8,
+    /// Gossip ACK.
+    GossipAck = 9,
+    /// Gossip digest SYN.
+    GossipDigestSyn = 10,
+    /// Gossip digest ACK.
+    GossipDigestAck = 11,
+    /// Gossip digest ACK round 2.
+    GossipDigestAck2 = 12,
+    /// Gossip shutdown notice.
+    GossipShutdown = 13,
+}
+
+impl DmsgType {
+    /// Build a type from its on-the-wire integer value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::proto::dnode::DmsgType;
+    /// assert_eq!(DmsgType::from_u8(3), Some(DmsgType::Req));
+    /// assert_eq!(DmsgType::from_u8(99), None);
+    /// ```
+    #[must_use]
+    pub fn from_u8(v: u8) -> Option<Self> {
+        Some(match v {
+            0 => DmsgType::Unknown,
+            1 => DmsgType::Debug,
+            2 => DmsgType::ParseError,
+            3 => DmsgType::Req,
+            4 => DmsgType::ReqForward,
+            5 => DmsgType::Res,
+            6 => DmsgType::CryptoHandshake,
+            7 => DmsgType::GossipSyn,
+            8 => DmsgType::GossipSynReply,
+            9 => DmsgType::GossipAck,
+            10 => DmsgType::GossipDigestSyn,
+            11 => DmsgType::GossipDigestAck,
+            12 => DmsgType::GossipDigestAck2,
+            13 => DmsgType::GossipShutdown,
+            _ => return None,
+        })
+    }
+
+    /// Numeric on-the-wire value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::proto::dnode::DmsgType;
+    /// assert_eq!(DmsgType::CryptoHandshake.as_u8(), 6);
+    /// ```
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Encryption bit in [`Dmsg::flags`].
+pub const DMSG_FLAG_ENCRYPTED: u8 = 0x1;
+
+/// Compression bit in [`Dmsg::flags`].
+pub const DMSG_FLAG_COMPRESSED: u8 = 0x2;
+
+/// Parsed DNODE header.
+///
+/// `data` and `payload` hold copies of the on-the-wire bytes. The
+/// encoder side fills both before emitting; the parser fills them as
+/// it advances through the state machine.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Dmsg {
+    /// Message id.
+    pub id: MsgId,
+    /// Message type.
+    pub ty: DmsgType,
+    /// Flag bit field; encryption is bit 0, compression is bit 1.
+    pub flags: u8,
+    /// Protocol version.
+    pub version: u8,
+    /// True when sender and receiver share a datacenter.
+    pub same_dc: bool,
+    /// Source address recorded by the recv path. Stage 7 leaves it
+    /// `None`; Stage 9 stamps it from the connection state.
+    pub source_address: Option<SocketAddr>,
+    /// Length (in bytes) of the inline data field.
+    pub mlen: u32,
+    /// Inline data: either the single-byte placeholder or the
+    /// RSA-wrapped AES key during the crypto handshake.
+    pub data: Vec<u8>,
+    /// Length (in bytes) of the trailing payload framed by the
+    /// header.
+    pub plen: u32,
+    /// Payload bytes, if collected by the parser.
+    pub payload: Vec<u8>,
+}
+
+impl Dmsg {
+    /// Construct an empty `Dmsg` defaulted the same way the
+    /// reference engine's `dmsg_get` initialises a fresh slot.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::proto::dnode::{Dmsg, DmsgType, VERSION_10};
+    /// let d = Dmsg::new();
+    /// assert_eq!(d.ty, DmsgType::Unknown);
+    /// assert_eq!(d.version, VERSION_10);
+    /// assert!(d.same_dc);
+    /// ```
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            id: 0,
+            ty: DmsgType::Unknown,
+            flags: 0,
+            version: VERSION_10,
+            same_dc: true,
+            source_address: None,
+            mlen: 0,
+            data: Vec::new(),
+            plen: 0,
+            payload: Vec::new(),
+        }
+    }
+
+    /// True when the encryption flag is set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::proto::dnode::{Dmsg, DMSG_FLAG_ENCRYPTED};
+    /// let mut d = Dmsg::new();
+    /// d.flags = DMSG_FLAG_ENCRYPTED;
+    /// assert!(d.is_encrypted());
+    /// ```
+    #[must_use]
+    pub fn is_encrypted(&self) -> bool {
+        self.flags & DMSG_FLAG_ENCRYPTED != 0
+    }
+
+    /// True when the compression flag is set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::proto::dnode::{Dmsg, DMSG_FLAG_COMPRESSED};
+    /// let mut d = Dmsg::new();
+    /// d.flags = DMSG_FLAG_COMPRESSED;
+    /// assert!(d.is_compressed());
+    /// ```
+    #[must_use]
+    pub fn is_compressed(&self) -> bool {
+        self.flags & DMSG_FLAG_COMPRESSED != 0
+    }
+}
+
+/// Result of a single [`DnodeParser::step`] invocation.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ParseStep {
+    /// More bytes are required to advance the state machine. The
+    /// `consumed` field records how many of the input bytes the
+    /// parser already absorbed.
+    NeedMore {
+        /// Number of input bytes the parser absorbed before it
+        /// stopped waiting for more.
+        consumed: usize,
+    },
+    /// The header (up to and including the trailing LF) has been
+    /// parsed. The `consumed` field records the offset just past
+    /// the LF, so the caller can read the payload starting at that
+    /// index.
+    HeaderDone {
+        /// Offset just past the trailing LF.
+        consumed: usize,
+    },
+    /// The parser hit an unrecoverable bad byte. The caller should
+    /// drop the buffer (or split it at `consumed`) and reset.
+    Error {
+        /// Offset of the byte that triggered the error.
+        consumed: usize,
+    },
+}
+
+/// Errors that can be raised when encoding or parsing a DNODE
+/// header without going through the streaming state machine.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DnodeError {
+    /// Buffer too small to encode the header.
+    OutOfSpace,
+    /// Header does not begin with the magic literal.
+    BadMagic,
+    /// Numeric field could not be parsed.
+    BadNumber,
+    /// Trailing CRLF missing.
+    MissingCrlf,
+    /// Type discriminator out of range.
+    BadType,
+    /// Inline data shorter than the declared `mlen`.
+    TruncatedData,
+}
+
+/// Streaming DNODE header parser.
+#[derive(Debug)]
+pub struct DnodeParser {
+    state: DynParseState,
+    num: u64,
+    dmsg: Dmsg,
+    data_remaining: u32,
+    magic_progress: u8,
+}
+
+impl DnodeParser {
+    /// Build a fresh parser positioned at [`DynParseState::Start`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::proto::dnode::{DnodeParser, DynParseState};
+    /// let p = DnodeParser::new();
+    /// assert_eq!(p.state(), DynParseState::Start);
+    /// ```
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: DynParseState::Start,
+            num: 0,
+            dmsg: Dmsg::new(),
+            data_remaining: 0,
+            magic_progress: 0,
+        }
+    }
+
+    /// Reset the parser to [`DynParseState::Start`] with a fresh
+    /// accumulator [`Dmsg`].
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    /// Current state.
+    #[must_use]
+    pub fn state(&self) -> DynParseState {
+        self.state
+    }
+
+    /// Borrow the partial [`Dmsg`].
+    #[must_use]
+    pub fn dmsg(&self) -> &Dmsg {
+        &self.dmsg
+    }
+
+    /// Move the parsed [`Dmsg`] out of the parser. Only meaningful
+    /// after a [`ParseStep::HeaderDone`] step.
+    pub fn take_dmsg(&mut self) -> Dmsg {
+        let mut out = Dmsg::new();
+        std::mem::swap(&mut out, &mut self.dmsg);
+        self.state = DynParseState::Start;
+        self.num = 0;
+        self.data_remaining = 0;
+        self.magic_progress = 0;
+        out
+    }
+
+    /// Feed `input` to the parser. The parser advances as far as it
+    /// can and returns one of the three [`ParseStep`] variants.
+    ///
+    /// The state machine is byte-driven and can be reentered with a
+    /// fresh slice when [`ParseStep::NeedMore`] indicates the input
+    /// was truncated mid-header.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::proto::dnode::{DnodeParser, ParseStep};
+    /// let mut p = DnodeParser::new();
+    /// let bytes = b"$2014$ 1 3 0 1 1 *1 d *0\r\n";
+    /// match p.step(bytes) {
+    ///     ParseStep::HeaderDone { consumed } => assert_eq!(consumed, bytes.len()),
+    ///     other => panic!("unexpected: {other:?}"),
+    /// }
+    /// ```
+    /// The state machine intentionally stays in one function to
+    /// match the reference engine's single-block parser; splitting
+    /// the per-state arms across helpers would obscure the parity.
+    #[allow(clippy::too_many_lines)]
+    pub fn step(&mut self, input: &[u8]) -> ParseStep {
+        let mut idx = 0usize;
+        while idx < input.len() {
+            let ch = input[idx];
+            match self.state {
+                DynParseState::Start => {
+                    // Phase 1: skip leading whitespace, identical
+                    // to the C engine's `while (ch == ' ')` arm.
+                    if self.magic_progress == 0 {
+                        if ch == b' ' {
+                            idx += 1;
+                            continue;
+                        }
+                        if ch != b'$' {
+                            return ParseStep::Error { consumed: idx };
+                        }
+                    }
+                    // Phase 2: byte-incrementally match the magic
+                    // literal so split inputs are tolerated.
+                    let want = MAGIC[usize::from(self.magic_progress)];
+                    if ch != want {
+                        return ParseStep::Error { consumed: idx };
+                    }
+                    self.magic_progress += 1;
+                    idx += 1;
+                    if usize::from(self.magic_progress) == MAGIC.len() {
+                        self.state = DynParseState::MagicString;
+                        self.magic_progress = 0;
+                    }
+                    continue;
+                }
+                DynParseState::MagicString => {
+                    if ch == b' ' {
+                        self.state = DynParseState::MsgId;
+                        self.num = 0;
+                        idx += 1;
+                        continue;
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::MsgId => {
+                    if ch.is_ascii_digit() {
+                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        idx += 1;
+                        continue;
+                    }
+                    if ch == b' ' && self.num != 0 {
+                        self.dmsg.id = self.num;
+                        self.state = DynParseState::TypeId;
+                        self.num = 0;
+                        idx += 1;
+                        continue;
+                    }
+                    if ch == b' ' {
+                        // Leading spaces (e.g. after MAGIC_STR)
+                        // before any digit; advance.
+                        idx += 1;
+                        continue;
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::TypeId => {
+                    if ch.is_ascii_digit() {
+                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        idx += 1;
+                        continue;
+                    }
+                    if ch == b' ' {
+                        self.dmsg.ty = match DmsgType::from_u8(self.num as u8) {
+                            Some(t) => t,
+                            None => return ParseStep::Error { consumed: idx },
+                        };
+                        self.state = DynParseState::BitField;
+                        self.num = 0;
+                        idx += 1;
+                        continue;
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::BitField => {
+                    if ch.is_ascii_digit() {
+                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        idx += 1;
+                        continue;
+                    }
+                    if ch == b' ' {
+                        self.dmsg.flags = (self.num as u8) & 0xF;
+                        self.state = DynParseState::Version;
+                        self.num = 0;
+                        idx += 1;
+                        continue;
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::Version => {
+                    if ch.is_ascii_digit() {
+                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        idx += 1;
+                        continue;
+                    }
+                    if ch == b' ' {
+                        self.dmsg.version = self.num as u8;
+                        self.state = DynParseState::SameDc;
+                        self.num = 0;
+                        idx += 1;
+                        continue;
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::SameDc => {
+                    if ch.is_ascii_digit() {
+                        self.dmsg.same_dc = ch != b'0';
+                        idx += 1;
+                        continue;
+                    }
+                    if ch == b' ' {
+                        self.state = DynParseState::DataLen;
+                        self.num = 0;
+                        idx += 1;
+                        continue;
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::Star | DynParseState::DataLen => {
+                    if ch == b'*' {
+                        idx += 1;
+                        continue;
+                    }
+                    if ch.is_ascii_digit() {
+                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        idx += 1;
+                        continue;
+                    }
+                    if ch == b' ' && self.state == DynParseState::DataLen {
+                        self.dmsg.mlen = self.num as u32;
+                        self.data_remaining = self.dmsg.mlen;
+                        self.dmsg.data.clear();
+                        self.dmsg.data.reserve(self.data_remaining as usize);
+                        self.state = DynParseState::Data;
+                        self.num = 0;
+                        idx += 1;
+                        continue;
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::Data => {
+                    if self.data_remaining == 0 {
+                        self.state = DynParseState::SpacesBeforePayloadLen;
+                        continue;
+                    }
+                    let take = std::cmp::min(self.data_remaining as usize, input.len() - idx);
+                    self.dmsg.data.extend_from_slice(&input[idx..idx + take]);
+                    self.data_remaining -= take as u32;
+                    idx += take;
+                    if self.data_remaining == 0 {
+                        self.state = DynParseState::SpacesBeforePayloadLen;
+                    }
+                    continue;
+                }
+                DynParseState::SpacesBeforePayloadLen => {
+                    if ch == b' ' {
+                        idx += 1;
+                        continue;
+                    }
+                    if ch == b'*' {
+                        self.state = DynParseState::PayloadLen;
+                        self.num = 0;
+                        idx += 1;
+                        continue;
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::PayloadLen => {
+                    if ch.is_ascii_digit() {
+                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        idx += 1;
+                        continue;
+                    }
+                    if ch == b'\r' {
+                        self.dmsg.plen = self.num as u32;
+                        self.state = DynParseState::CrlfBeforeDone;
+                        self.num = 0;
+                        idx += 1;
+                        continue;
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::CrlfBeforeDone => {
+                    if ch == b'\n' {
+                        self.state = DynParseState::Done;
+                        idx += 1;
+                        return ParseStep::HeaderDone { consumed: idx };
+                    }
+                    return ParseStep::Error { consumed: idx };
+                }
+                DynParseState::Done | DynParseState::PostDone | DynParseState::Unknown => {
+                    return ParseStep::HeaderDone { consumed: idx };
+                }
+            }
+        }
+        ParseStep::NeedMore { consumed: idx }
+    }
+}
+
+impl Default for DnodeParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Encode a DNODE header into the writable region of `mbuf`.
+///
+/// `aes_key_payload`, when `Some`, is written as the inline data
+/// field; this is how the crypto handshake transports the
+/// RSA-wrapped AES key. When `None`, a single-byte `'d'` placeholder
+/// is emitted.
+///
+/// `flags` is taken verbatim (the encryption bit must be set by the
+/// caller, alongside any compression bit).
+///
+/// The encoder writes the entire header as a single contiguous
+/// region; if `mbuf` lacks the necessary capacity,
+/// [`DnodeError::OutOfSpace`] is returned.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::io::mbuf::MbufPool;
+/// use dynomite::proto::dnode::{dmsg_write, DmsgType};
+///
+/// let pool = MbufPool::default();
+/// let mut buf = pool.get();
+/// dmsg_write(
+///     &mut buf,
+///     /* msg_id */ 1,
+///     DmsgType::Req,
+///     /* flags */ 0,
+///     /* same_dc */ true,
+///     /* aes_key_payload */ None,
+///     /* plen */ 0,
+/// )
+/// .unwrap();
+/// assert!(buf.readable().starts_with(b"   $2014$ 1 3 0"));
+/// ```
+pub fn dmsg_write(
+    mbuf: &mut Mbuf,
+    msg_id: MsgId,
+    ty: DmsgType,
+    flags: u8,
+    same_dc: bool,
+    aes_key_payload: Option<&[u8]>,
+    plen: u32,
+) -> Result<(), DnodeError> {
+    let header = build_header(msg_id, ty, flags, same_dc, aes_key_payload, plen, false);
+    write_chain(mbuf, &header)
+}
+
+/// Encode a gossip-flavored DNODE header.
+///
+/// Mirrors the reference engine's `dmsg_write_mbuf`, which differs
+/// from [`dmsg_write`] only in the placeholder byte emitted when no
+/// AES key payload accompanies the header (`'a'` instead of `'d'`).
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::io::mbuf::MbufPool;
+/// use dynomite::proto::dnode::{dmsg_write_mbuf, DmsgType};
+///
+/// let pool = MbufPool::default();
+/// let mut buf = pool.get();
+/// dmsg_write_mbuf(
+///     &mut buf,
+///     /* msg_id */ 5,
+///     DmsgType::GossipSyn,
+///     /* flags */ 0,
+///     /* same_dc */ true,
+///     /* aes_key_payload */ None,
+///     /* plen */ 64,
+/// )
+/// .unwrap();
+/// assert!(buf.readable().contains(&b'a'));
+/// ```
+pub fn dmsg_write_mbuf(
+    mbuf: &mut Mbuf,
+    msg_id: MsgId,
+    ty: DmsgType,
+    flags: u8,
+    same_dc: bool,
+    aes_key_payload: Option<&[u8]>,
+    plen: u32,
+) -> Result<(), DnodeError> {
+    let header = build_header(msg_id, ty, flags, same_dc, aes_key_payload, plen, true);
+    write_chain(mbuf, &header)
+}
+
+fn build_header(
+    msg_id: MsgId,
+    ty: DmsgType,
+    flags: u8,
+    same_dc: bool,
+    aes_key_payload: Option<&[u8]>,
+    plen: u32,
+    gossip_placeholder: bool,
+) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut buf: Vec<u8> = Vec::with_capacity(64);
+    // Three leading spaces are part of the magic literal as written
+    // on the wire; the parser tolerates and skips them in DYN_START.
+    buf.extend_from_slice(b"   $2014$ ");
+    let _ = write!(buf, "{msg_id}");
+    buf.push(b' ');
+    let _ = write!(buf, "{}", ty.as_u8());
+    buf.push(b' ');
+    let _ = write!(buf, "{}", flags & 0xF);
+    buf.push(b' ');
+    let _ = write!(buf, "{VERSION_10}");
+    buf.push(b' ');
+    buf.push(if same_dc { b'1' } else { b'0' });
+    buf.push(b' ');
+    buf.push(b'*');
+    if let Some(payload) = aes_key_payload {
+        let _ = write!(buf, "{}", payload.len());
+        buf.push(b' ');
+        buf.extend_from_slice(payload);
+    } else {
+        buf.extend_from_slice(b"1 ");
+        buf.push(if gossip_placeholder {
+            GOSSIP_PLACEHOLDER_DATA
+        } else {
+            HANDSHAKE_PLACEHOLDER_DATA
+        });
+    }
+    buf.push(b' ');
+    buf.push(b'*');
+    let _ = write!(buf, "{plen}");
+    buf.extend_from_slice(CRLF);
+    buf
+}
+
+fn write_chain(mbuf: &mut Mbuf, payload: &[u8]) -> Result<(), DnodeError> {
+    if mbuf.remaining() < payload.len() {
+        return Err(DnodeError::OutOfSpace);
+    }
+    let n = mbuf.recv(payload);
+    debug_assert_eq!(n, payload.len());
+    Ok(())
+}
+
+/// Sync byte parser that drives a request message's DNODE header
+/// state machine.
+///
+/// The parser walks the contiguous bytes spanning the message's
+/// mbuf chain and updates the [`Msg`] in place. On a fully parsed
+/// header, the function attaches the [`Dmsg`] to the message and
+/// returns `MsgParseResult::Ok`. On truncated input the parser
+/// returns `MsgParseResult::Again`. On invalid bytes the parser
+/// records `MsgParseResult::Error` and surfaces the same value.
+///
+/// The async wrapping (per-connection task scheduling, decryption
+/// hand-off when the encryption bit is set) ships in Stage 9.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::io::mbuf::MbufPool;
+/// use dynomite::msg::{Msg, MsgType};
+/// use dynomite::proto::dnode::{parse_req, DmsgType, DynParseState};
+///
+/// let pool = MbufPool::default();
+/// let mut msg = Msg::new(0, MsgType::Unknown, true);
+/// let mut mb = pool.get();
+/// mb.recv(b"$2014$ 1 3 0 1 1 *1 d *0\r\n");
+/// msg.mbufs_mut().push_back(mb);
+/// msg.recompute_mlen();
+/// let result = parse_req(&mut msg);
+/// assert_eq!(msg.dyn_parse_state(), DynParseState::Done);
+/// assert_eq!(msg.dmsg().unwrap().ty, DmsgType::Req);
+/// drop(result);
+/// ```
+pub fn parse_req(msg: &mut Msg) -> MsgParseResult {
+    parse_msg(msg, false)
+}
+
+/// Sync byte parser counterpart to [`parse_req`] for response
+/// messages.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::io::mbuf::MbufPool;
+/// use dynomite::msg::{Msg, MsgType};
+/// use dynomite::proto::dnode::{parse_rsp, DmsgType};
+///
+/// let pool = MbufPool::default();
+/// let mut msg = Msg::new(0, MsgType::Unknown, false);
+/// let mut mb = pool.get();
+/// mb.recv(b"$2014$ 9 5 0 1 1 *1 d *0\r\n");
+/// msg.mbufs_mut().push_back(mb);
+/// msg.recompute_mlen();
+/// let _ = parse_rsp(&mut msg);
+/// assert_eq!(msg.dmsg().unwrap().ty, DmsgType::Res);
+/// ```
+pub fn parse_rsp(msg: &mut Msg) -> MsgParseResult {
+    parse_msg(msg, true)
+}
+
+fn parse_msg(msg: &mut Msg, _is_response: bool) -> MsgParseResult {
+    // Flatten the chain into a single buffer for parsing. The
+    // reference engine walks the chain byte by byte and tolerates
+    // splits at arbitrary boundaries; the Rust port drives the same
+    // state machine over a contiguous slice. Stage 9 will replace
+    // this with a streaming feed when the connection FSM lands.
+    let mut bytes: Vec<u8> = Vec::with_capacity(msg.mbufs().total_len());
+    for mbuf in msg.mbufs() {
+        bytes.extend_from_slice(mbuf.readable());
+    }
+
+    let mut parser = DnodeParser::new();
+    parser.state = msg.dyn_parse_state();
+    match parser.step(&bytes) {
+        ParseStep::HeaderDone { .. } => {
+            let dmsg = parser.take_dmsg();
+            msg.set_dyn_parse_state(DynParseState::Done);
+            msg.set_dmsg(dmsg);
+            msg.set_parse_result(MsgParseResult::Ok);
+            MsgParseResult::Ok
+        }
+        ParseStep::NeedMore { .. } => {
+            msg.set_dyn_parse_state(parser.state);
+            msg.set_parse_result(MsgParseResult::Again);
+            MsgParseResult::Again
+        }
+        ParseStep::Error { .. } => {
+            msg.set_dyn_parse_state(DynParseState::Unknown);
+            msg.set_parse_result(MsgParseResult::Error);
+            MsgParseResult::Error
+        }
+    }
+}
+
+/// Outcome of [`dmsg_process`].
+///
+/// `Bypass` means the header has been recognised as control traffic
+/// and the cluster layer should not pass the message further down
+/// the protocol stack.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DmsgDispatch {
+    /// Frame consumed by a control-plane handler.
+    Bypass,
+    /// Frame should continue through the data-plane stack.
+    Forward,
+}
+
+/// Stage 7 dispatcher: classify a parsed [`Dmsg`] as
+/// control-plane traffic the cluster layer should consume directly,
+/// or data-plane traffic that should continue through the protocol
+/// stack.
+///
+/// Stage 10 will extend this with the gossip-message decoders. For
+/// now, only the message-shape side of the dispatch is in place.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::proto::dnode::{dmsg_process, Dmsg, DmsgDispatch, DmsgType};
+///
+/// let mut d = Dmsg::new();
+/// d.ty = DmsgType::CryptoHandshake;
+/// assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
+///
+/// d.ty = DmsgType::Req;
+/// assert_eq!(dmsg_process(&d), DmsgDispatch::Forward);
+/// ```
+#[must_use]
+pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
+    match dmsg.ty {
+        DmsgType::CryptoHandshake
+        | DmsgType::GossipSyn
+        | DmsgType::GossipSynReply
+        | DmsgType::GossipAck
+        | DmsgType::GossipDigestSyn
+        | DmsgType::GossipDigestAck
+        | DmsgType::GossipDigestAck2
+        | DmsgType::GossipShutdown => DmsgDispatch::Bypass,
+        _ => DmsgDispatch::Forward,
+    }
+}
+
+/// Drain `chain` into a contiguous `Vec<u8>` recycling each chunk
+/// back to `pool`. Useful for tests and for the Stage 9 path that
+/// needs a flat buffer of decrypted payload bytes.
+pub fn flatten_chain(chain: &mut MbufQueue) -> Vec<u8> {
+    let mut out = Vec::with_capacity(chain.total_len());
+    while let Some(buf) = chain.pop_front() {
+        out.extend_from_slice(buf.readable());
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::mbuf::MbufPool;
+
+    #[test]
+    fn parse_simple_req() {
+        let mut p = DnodeParser::new();
+        let bytes = b"$2014$ 1 3 0 1 1 *1 d *0\r\n";
+        match p.step(bytes) {
+            ParseStep::HeaderDone { consumed } => assert_eq!(consumed, bytes.len()),
+            other => panic!("unexpected: {other:?}"),
+        }
+        let d = p.take_dmsg();
+        assert_eq!(d.id, 1);
+        assert_eq!(d.ty, DmsgType::Req);
+        assert_eq!(d.flags, 0);
+        assert_eq!(d.version, 1);
+        assert!(d.same_dc);
+        assert_eq!(d.mlen, 1);
+        assert_eq!(d.data, b"d");
+        assert_eq!(d.plen, 0);
+    }
+
+    #[test]
+    fn parse_payload_len() {
+        let mut p = DnodeParser::new();
+        let bytes = b"$2014$ 2 3 0 1 1 *1 d *413\r\n";
+        match p.step(bytes) {
+            ParseStep::HeaderDone { consumed } => assert_eq!(consumed, bytes.len()),
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(p.dmsg().plen, 413);
+    }
+
+    #[test]
+    fn parse_three_back_to_back() {
+        let mut input: Vec<u8> = Vec::new();
+        input.extend_from_slice(b"$2014$ 1 3 0 1 1 *1 d *0\r\n");
+        input.extend_from_slice(b"some redis bytes here ignored");
+        input.extend_from_slice(b"$2014$ 2 3 0 1 1 *1 d *3\r\nABC");
+        input.extend_from_slice(b"$2014$ 3 3 0 1 1 *1 d *0\r\n");
+        let mut p = DnodeParser::new();
+        let mut idx = 0;
+        let mut count = 0;
+        while idx < input.len() {
+            match p.step(&input[idx..]) {
+                ParseStep::HeaderDone { consumed } => {
+                    let d = p.take_dmsg();
+                    count += 1;
+                    let after_header = idx + consumed;
+                    if count == 1 {
+                        assert_eq!(d.id, 1);
+                        // skip past the redis bytes by scanning for the next '$'
+                        idx = input[after_header..]
+                            .iter()
+                            .position(|&b| b == b'$')
+                            .map_or(input.len(), |n| after_header + n);
+                    } else if count == 2 {
+                        assert_eq!(d.id, 2);
+                        assert_eq!(d.plen, 3);
+                        idx = after_header + d.plen as usize;
+                    } else {
+                        assert_eq!(d.id, 3);
+                        idx = after_header;
+                    }
+                    p.reset();
+                }
+                ParseStep::NeedMore { .. } => {
+                    break;
+                }
+                ParseStep::Error { consumed } => {
+                    idx += consumed.max(1);
+                    p.reset();
+                }
+            }
+        }
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn need_more_when_truncated() {
+        let mut p = DnodeParser::new();
+        let prefix = b"$2014$ 1 3 0 1 1 *1 d *";
+        match p.step(prefix) {
+            ParseStep::NeedMore { consumed } => assert_eq!(consumed, prefix.len()),
+            other => panic!("unexpected: {other:?}"),
+        }
+        let suffix = b"42\r\n";
+        match p.step(suffix) {
+            ParseStep::HeaderDone { consumed } => assert_eq!(consumed, suffix.len()),
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert_eq!(p.take_dmsg().plen, 42);
+    }
+
+    #[test]
+    fn parse_error_on_garbage_prefix() {
+        let mut p = DnodeParser::new();
+        match p.step(b"!nope") {
+            ParseStep::Error { consumed } => assert_eq!(consumed, 0),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn writer_round_trip_unencrypted() {
+        let pool = MbufPool::default();
+        let mut buf = pool.get();
+        dmsg_write(&mut buf, 42, DmsgType::Req, 0, true, None, 0).unwrap();
+        let bytes = buf.readable().to_vec();
+        let mut p = DnodeParser::new();
+        let step = p.step(&bytes);
+        assert!(matches!(step, ParseStep::HeaderDone { .. }));
+        let d = p.take_dmsg();
+        assert_eq!(d.id, 42);
+        assert_eq!(d.ty, DmsgType::Req);
+        assert_eq!(d.flags, 0);
+        assert!(d.same_dc);
+        assert_eq!(d.mlen, 1);
+        assert_eq!(d.data, b"d");
+        assert_eq!(d.plen, 0);
+    }
+
+    #[test]
+    fn writer_round_trip_with_aes_payload() {
+        let pool = MbufPool::default();
+        let mut buf = pool.get();
+        let payload = vec![0xAB; 128];
+        dmsg_write(
+            &mut buf,
+            7,
+            DmsgType::CryptoHandshake,
+            DMSG_FLAG_ENCRYPTED,
+            false,
+            Some(&payload),
+            512,
+        )
+        .unwrap();
+        let bytes = buf.readable().to_vec();
+        let mut p = DnodeParser::new();
+        match p.step(&bytes) {
+            ParseStep::HeaderDone { consumed } => assert_eq!(consumed, bytes.len()),
+            other => panic!("unexpected: {other:?}"),
+        }
+        let d = p.take_dmsg();
+        assert_eq!(d.id, 7);
+        assert_eq!(d.ty, DmsgType::CryptoHandshake);
+        assert!(d.is_encrypted());
+        assert!(!d.same_dc);
+        assert_eq!(d.data, payload);
+        assert_eq!(d.plen, 512);
+    }
+
+    #[test]
+    fn dispatcher_classifies_control_plane() {
+        let mut d = Dmsg::new();
+        for ty in [
+            DmsgType::CryptoHandshake,
+            DmsgType::GossipSyn,
+            DmsgType::GossipShutdown,
+        ] {
+            d.ty = ty;
+            assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
+        }
+        for ty in [DmsgType::Req, DmsgType::ReqForward, DmsgType::Res] {
+            d.ty = ty;
+            assert_eq!(dmsg_process(&d), DmsgDispatch::Forward);
+        }
+    }
+}
