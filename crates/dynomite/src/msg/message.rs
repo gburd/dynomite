@@ -14,6 +14,7 @@
 
 use crate::core::types::MsgId;
 
+use super::keypos::{ArgPos, KeyPos};
 use super::msg_type::MsgType;
 use super::response_mgr::ResponseMgr;
 use crate::io::mbuf::MbufQueue;
@@ -169,6 +170,21 @@ pub struct Msg {
     flags: MsgFlags,
     rspmgr: Option<ResponseMgr>,
     additional_rspmgrs: Vec<ResponseMgr>,
+    parser_state: u32,
+    parser_pos: usize,
+    parser_token: Option<usize>,
+    rlen: u32,
+    rntokens: u32,
+    ntokens: u32,
+    nkeys: u32,
+    vlen: u32,
+    integer: i64,
+    keys: Vec<KeyPos>,
+    args: Vec<ArgPos>,
+    end_marker: Option<usize>,
+    ntoken_start: Option<usize>,
+    ntoken_end: Option<usize>,
+    frag_id: u64,
 }
 
 impl Msg {
@@ -210,7 +226,203 @@ impl Msg {
             flags: MsgFlags::default_for_msg(),
             rspmgr: None,
             additional_rspmgrs: Vec::new(),
+            parser_state: 0,
+            parser_pos: 0,
+            parser_token: None,
+            rlen: 0,
+            rntokens: 0,
+            ntokens: 0,
+            nkeys: 0,
+            vlen: 0,
+            integer: 0,
+            keys: Vec::new(),
+            args: Vec::new(),
+            end_marker: None,
+            ntoken_start: None,
+            ntoken_end: None,
+            frag_id: 0,
         }
+    }
+
+    /// Borrow the parsed key list. Populated by the protocol parsers.
+    ///
+    /// # Examples
+    /// ```
+    /// use dynomite::msg::{Msg, MsgType};
+    /// assert!(Msg::new(1, MsgType::Unknown, true).keys().is_empty());
+    /// ```
+    #[must_use]
+    pub fn keys(&self) -> &[KeyPos] {
+        &self.keys
+    }
+
+    /// Mutably borrow the parsed key list.
+    pub fn keys_mut(&mut self) -> &mut Vec<KeyPos> {
+        &mut self.keys
+    }
+
+    /// Append a parsed key. Used by the protocol parsers.
+    pub fn push_key(&mut self, k: KeyPos) {
+        self.keys.push(k);
+    }
+
+    /// Borrow the parsed argument list.
+    #[must_use]
+    pub fn args(&self) -> &[ArgPos] {
+        &self.args
+    }
+
+    /// Mutably borrow the parsed argument list.
+    pub fn args_mut(&mut self) -> &mut Vec<ArgPos> {
+        &mut self.args
+    }
+
+    /// Append a parsed argument.
+    pub fn push_arg(&mut self, a: ArgPos) {
+        self.args.push(a);
+    }
+
+    /// Protocol-specific parser state index. Each parser defines
+    /// its own state alphabet keyed on this `u32`.
+    #[must_use]
+    pub fn parser_state(&self) -> u32 {
+        self.parser_state
+    }
+
+    /// Set the protocol parser state index.
+    pub fn set_parser_state(&mut self, s: u32) {
+        self.parser_state = s;
+    }
+
+    /// Cursor offset into the input buffer where the next byte
+    /// should be read.
+    #[must_use]
+    pub fn parser_pos(&self) -> usize {
+        self.parser_pos
+    }
+
+    /// Set the parser cursor offset.
+    pub fn set_parser_pos(&mut self, p: usize) {
+        self.parser_pos = p;
+    }
+
+    /// Optional token marker offset.
+    #[must_use]
+    pub fn parser_token(&self) -> Option<usize> {
+        self.parser_token
+    }
+
+    /// Set the optional token marker offset.
+    pub fn set_parser_token(&mut self, t: Option<usize>) {
+        self.parser_token = t;
+    }
+
+    /// Remaining length of the bulk argument the parser is currently
+    /// consuming.
+    #[must_use]
+    pub fn rlen(&self) -> u32 {
+        self.rlen
+    }
+
+    /// Set the bulk-argument remaining length.
+    pub fn set_rlen(&mut self, n: u32) {
+        self.rlen = n;
+    }
+
+    /// Remaining unprocessed token count for the current parse.
+    #[must_use]
+    pub fn rntokens(&self) -> u32 {
+        self.rntokens
+    }
+
+    /// Set the remaining-token counter.
+    pub fn set_rntokens(&mut self, n: u32) {
+        self.rntokens = n;
+    }
+
+    /// Total parsed token count for the current message.
+    #[must_use]
+    pub fn ntokens(&self) -> u32 {
+        self.ntokens
+    }
+
+    /// Set the total parsed token count.
+    pub fn set_ntokens(&mut self, n: u32) {
+        self.ntokens = n;
+    }
+
+    /// Number of keys the script (EVAL/EVALSHA) declared.
+    #[must_use]
+    pub fn nkeys(&self) -> u32 {
+        self.nkeys
+    }
+
+    /// Set the script-key count.
+    pub fn set_nkeys(&mut self, n: u32) {
+        self.nkeys = n;
+    }
+
+    /// Storage-command value length.
+    #[must_use]
+    pub fn vlen(&self) -> u32 {
+        self.vlen
+    }
+
+    /// Set the storage-command value length.
+    pub fn set_vlen(&mut self, n: u32) {
+        self.vlen = n;
+    }
+
+    /// Integer value carried by the response (`:n\r\n`).
+    #[must_use]
+    pub fn integer(&self) -> i64 {
+        self.integer
+    }
+
+    /// Set the integer response value.
+    pub fn set_integer(&mut self, v: i64) {
+        self.integer = v;
+    }
+
+    /// Offset of the multi-bulk `END` marker in the response, if any.
+    #[must_use]
+    pub fn end_marker(&self) -> Option<usize> {
+        self.end_marker
+    }
+
+    /// Set the response `END` marker offset.
+    pub fn set_end_marker(&mut self, m: Option<usize>) {
+        self.end_marker = m;
+    }
+
+    /// Start offset of the multi-bulk argument count token.
+    #[must_use]
+    pub fn ntoken_start(&self) -> Option<usize> {
+        self.ntoken_start
+    }
+
+    /// End offset (exclusive) of the multi-bulk argument count token.
+    #[must_use]
+    pub fn ntoken_end(&self) -> Option<usize> {
+        self.ntoken_end
+    }
+
+    /// Set the multi-bulk argument count span.
+    pub fn set_ntoken_span(&mut self, start: Option<usize>, end: Option<usize>) {
+        self.ntoken_start = start;
+        self.ntoken_end = end;
+    }
+
+    /// Fragment id grouping all sub-messages produced from a
+    /// multi-key request.
+    #[must_use]
+    pub fn frag_id(&self) -> u64 {
+        self.frag_id
+    }
+
+    /// Set the fragment id.
+    pub fn set_frag_id(&mut self, id: u64) {
+        self.frag_id = id;
     }
 
     /// Message id.
