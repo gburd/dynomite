@@ -16,7 +16,10 @@ proptest! {
     #[test]
     fn dispatch_is_deterministic(
         idx in 0usize..HashType::all().len(),
-        key in proptest::collection::vec(any::<u8>(), 0..256),
+        // Bumped from 0..256 to exercise the 1024-byte boundary in
+        // the jenkins/murmur3 main loops. Runs in well under 5s at
+        // the default proptest budget.
+        key in proptest::collection::vec(any::<u8>(), 0..1024),
     ) {
         let ty = HashType::all()[idx];
         let a = hash(ty, &key);

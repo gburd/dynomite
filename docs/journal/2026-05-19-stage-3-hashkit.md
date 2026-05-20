@@ -100,3 +100,78 @@ BRANCH: stage/3-hashkit
 JOURNAL: docs/journal/2026-05-19-stage-3-hashkit.md
 PARITY_DELTA: 29
 ```
+
+## Review response
+
+Independent review by reviewer-pi (`docs/journal/review-stage-3-reviewer-pi.md`,
+verdict `REQUEST_CHANGES`) flagged three blockers and three nits. Each
+is addressed below with the commit that resolves it.
+
+* **Blocker 1 - parity.md Deviation 4 was factually wrong.** The C
+  `_/dynomite/src/tools/dyn_hash_tool.c` exists (3486 bytes,
+  murmur-only, `-h/-k/-i/-o`). Deviation 4 is rewritten to describe
+  the C surface accurately, and `dyn-hash-tool` grew a `--c-compat`
+  mode (`-i/--input`, `-o/--output`, `-k` as the `KEY:` toggle) that
+  reproduces the C tool's I/O contract. Inline keys move to the
+  `--key` long flag. Five new `assert_cmd` tests in
+  `crates/dyn-hash-tool/tests/c_compat.rs` cover stdin/stdout, the
+  `KEY:` prefix, file I/O, the dash-as-stdin alias, and the
+  non-murmur rejection.
+  Commit: `a307151`.
+
+* **Blocker 2 - workspace-wide clippy allowances were too broad.**
+  Eight allowances are removed from `[workspace.lints.clippy]`
+  (`cast_possible_truncation`, `cast_possible_wrap`, `cast_sign_loss`,
+  `cast_precision_loss`, `many_single_char_names`, `similar_names`,
+  `too_many_arguments`, `too_many_lines`). They are reintroduced as
+  module-scope `#![allow]` declarations on the specific hashkit files
+  that need them, plus per-function `#[allow]` on `md5::step`
+  (`too_many_arguments`) and `murmur3::murmur3_x86_128`
+  (`too_many_lines`), and per-struct `#[allow]` on the
+  `dyn-hash-tool` `Cli` struct for `struct_excessive_bools`.
+  `doc_markdown` stays workspace-scope as the reviewer agreed.
+  `docs/journal/allowances.md` is rewritten accordingly.
+  Commit: `98cf317`.
+
+* **Blocker 3 - three undocumented behavioral deviations.**
+  - `hash_hsieh` empty-key handling: documented as resolving C UB to
+    `DynToken::from_u32(0)` and pinned by
+    `hashkit::hsieh::tests::empty_key_is_zero_token_not_uninit`.
+  - `crc32_sz` lower-casing: documented as ASCII-only via
+    `to_ascii_lowercase` (vs the C `tolower` locale dependence) and
+    pinned by
+    `hashkit::crc32::tests::crc32_sz_ascii_only_high_byte_is_unchanged`.
+  - `PseudoRng`: documented as a Knuth MMIX 64-bit LCG seeded from
+    `SystemTime::now()`. PLAN.md Stage 3 originally mentioned
+    `clock_gettime(CLOCK_MONOTONIC)`; the choice to stay with
+    `SystemTime` is justified (the `nix` workspace crate is not
+    built with the `time` feature; monotonicity is overkill for a
+    non-cryptographic PRNG that the active C call graph never
+    reads) and pinned by
+    `hashkit::random::tests::lcg_parameters_are_pinned`.
+  Commit: `a0e345c`.
+
+* **Nit 1 - cargo deny wildcard on `dyn-hash-tool`.** Resolved by
+  marking the crate `publish = false`, mirroring the approach
+  already used by `dynomited`. Folded into the Blocker 1 commit
+  (`a307151`).
+
+* **Nit 2 - fixture self-anchoring note.** A module-level rustdoc
+  comment on `crates/dynomite/tests/stage_03_hashkit.rs` lists every
+  externally-anchored row (RFC 1321 MD5, canonical FNV-1a-32, the
+  standard CRC-32 vector, and the MurmurHash3 algorithmic anchor),
+  notes that the C `dyn_hash_tool` can in principle anchor only the
+  `murmur` column, and records the intent to pipe a key set through
+  the C build once a host with the C toolchain is available.
+  Skipped the actual C-build step on this host: the C tree under
+  `_/dynomite/` does not include a buildable Makefile target for
+  the tool in isolation and the user's worker contract restricts
+  this branch to Rust-side work.
+  Commit: this commit (Nit 2 + Nit 3 + journal review-response section).
+
+* **Nit 3 (optional) - proptest byte-vector ceiling.** Bumped the
+  `dispatch_is_deterministic` proptest from `0..256` to `0..1024`
+  bytes. Local timing measurement shows the test runs in ~46ms,
+  well under the 5s budget mentioned in the review. A comment in
+  the test records the rationale.
+  Commit: this commit (Nit 2 + Nit 3 + journal review-response section).
