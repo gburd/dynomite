@@ -220,6 +220,36 @@ symbol is considered un-ported.
 | (new) | `dynomite::io::mbuf::MBUF_POOL_MAX_FREE` | Rust-only cap on the free list size to bound resident memory; the C engine has no equivalent bound. |
 | (new) | `dynomite::io::mbuf::MbufQueue::recycle` | Rust-only helper that drains a chain back into a pool. |
 
+### dyn_crypto.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `AES_KEYLEN` | `dynomite::crypto::aes::AES_KEYLEN` | done (Stage 6) |
+| `aes_cipher` (static `EVP_CIPHER *`) | replaced by `openssl::symm::Cipher::aes_256_cbc()` returned by `dynomite::crypto::aes::cipher` | done (Stage 6) (deviation: AES-256 instead of the C reference's AES-128, see Deviations) |
+| `rsa` (static `RSA *`) | `dynomite::crypto::Crypto::rsa` field | done (Stage 6) |
+| `aes_key` (static buffer) | `dynomite::crypto::Crypto::aes_key` field | done (Stage 6) |
+| `aes_encrypt_ctx` / `aes_decrypt_ctx` | replaced by per-call `openssl::symm::Crypter` instances | done (Stage 6) (deviation: per-call contexts replace the long-lived globals; see Deviations) |
+| `load_private_rsa_key_by_file` | `dynomite::crypto::pem::load_rsa_private_key` | done (Stage 6) |
+| `load_private_rsa_key` | folded into `Crypto::from_pem` | done (Stage 6) |
+| `aes_init` | folded into `Crypto::from_pem` (the AES key generation half) and `Crypto::generate_aes_key` (the standalone half) | done (Stage 6) |
+| `crypto_init` | `dynomite::crypto::Crypto::from_pem` | done (Stage 6) |
+| `crypto_deinit` | implicit (`Drop` of `Crypto`) | done (Stage 6) |
+| `base64_encode` | `dynomite::crypto::base64_encode` | done (Stage 6) (deviation: emits unpadded output by default; the C helper emits the standard alphabet without `BIO_FLAGS_BASE64_NO_NL` newlines but keeps padding bytes. See Deviations) |
+| `base64_decode` (commented out in C) | `dynomite::crypto::base64_decode` | done (Stage 6); the C source ships the helper commented out, the Rust port exposes the symmetric decode that the DNODE handshake will need |
+| `aes_encrypt` | `dynomite::crypto::Crypto::aes_encrypt` (delegates to `crypto::aes::encrypt_to_vec`) | done (Stage 6) (deviation: AES-256 with random IV prepended; see Deviations) |
+| `aes_decrypt` | `dynomite::crypto::Crypto::aes_decrypt` (delegates to `crypto::aes::decrypt_to_vec`) | done (Stage 6) |
+| `dyn_aes_encrypt` | `dynomite::crypto::Crypto::dyn_aes_encrypt` (delegates to `crypto::aes::encrypt_to_chain`) | done (Stage 6); writes a fresh chain rather than mutating a single caller-supplied mbuf because the prepended IV plus padding can exceed the 16-byte trailing region the C path relies on |
+| `dyn_aes_decrypt` | `dynomite::crypto::Crypto::dyn_aes_decrypt` (delegates to `crypto::aes::decrypt_chain_to_chain`) | done (Stage 6) |
+| `dyn_aes_encrypt_msg` | `dynomite::crypto::Crypto::dyn_aes_encrypt_msg` | done (Stage 6); takes a single `&Mbuf` instead of a `struct msg` because the Rust msg layer (Stage 7) is not yet wired. The handshake call site re-binds against the eventual `Msg` struct in Stage 7 |
+| `generate_aes_key` | `dynomite::crypto::Crypto::generate_aes_key` | done (Stage 6) (deviation: returns `Result<[u8; 32], CryptoError>` rather than a static-buffer pointer) |
+| `dyn_rsa_size` | `dynomite::crypto::Crypto::rsa_size` | done (Stage 6) |
+| `dyn_rsa_encrypt` | `dynomite::crypto::Crypto::rsa_encrypt` (delegates to `crypto::rsa::encrypt`) | done (Stage 6) (deviation: PKCS#1 v1.5 instead of the C reference's PKCS#1 OAEP; see Deviations) |
+| `dyn_rsa_decrypt` | `dynomite::crypto::Crypto::rsa_decrypt` (delegates to `crypto::rsa::decrypt`) | done (Stage 6) (deviation: PKCS#1 v1.5; see Deviations) |
+| (new) | `dynomite::crypto::CryptoError` | Typed error enum returned by every fallible crypto API. The C engine reports a single `rstatus_t` with logging side effects. |
+| (new) | `dynomite::crypto::Crypto::from_parts` | Test-only constructor that builds a bundle from caller-supplied RSA key + AES key without touching the filesystem. |
+| (new) | `dynomite::crypto::Crypto::dyn_aes_decrypt_to_vec` | Convenience that flattens an encrypted mbuf chain into a `Vec<u8>` for the DNODE handshake parser. |
+| (new) | `dynomite::crypto::pem::load_rsa_private_key_from_bytes` | In-memory PEM parser used by tests and embedders that already hold the PEM bytes. |
+
 ## src/event/
 
 The per-platform reactor (`dyn_event.h`, `dyn_epoll.c`, `dyn_kqueue.c`,
@@ -373,6 +403,67 @@ panic. A regression test
 plus the per-fixture tests confirm one entry is required.
 
 ## Deviations
+
+### Stage 6: AES upgraded from AES-128-CBC to AES-256-CBC with a random per-message IV
+
+The C reference (`dyn_crypto.c::aes_init`) calls `EVP_aes_128_cbc()`
+and reuses the first 16 bytes of the AES key as the IV (the
+`arg_aes_key` argument is passed as both the key and the IV to
+`EVP_EncryptInit_ex`). The 32-byte `aes_key` buffer is therefore
+effectively a 128-bit key with the upper half ignored. Two
+encryptions of the same plaintext with the same key produce
+identical ciphertext.
+
+The Rust port uses AES-256-CBC with a fresh 16-byte IV generated
+from the system CSPRNG on every encryption, prepended to the
+ciphertext. This is a security-relevant upgrade and is not
+wire-compatible with a C peer running the reference
+`dyn_aes_encrypt` path. Stage 9 (which wires the DNODE handshake)
+treats the AES wire format as a Rust-internal contract; if a
+future stage needs C wire compatibility it will add a parallel
+legacy code path under a feature flag.
+
+Pinned by `crypto::aes::tests::iv_is_random_per_call` and
+`tests/stage_06_crypto.rs::cross_version_cipher_round_trip`.
+
+### Stage 6: long-lived `EVP_CIPHER_CTX` globals replaced by per-call `Crypter`
+
+The C reference holds two static `EVP_CIPHER_CTX *` (one for
+encryption, one for decryption) for the entire process lifetime
+and re-keys them on every call. This is incompatible with the
+tokio-driven multi-task model: two worker tasks could re-key the
+shared context concurrently. The Rust port allocates a fresh
+`openssl::symm::Crypter` per call, which is functionally
+equivalent but lock-free.
+
+### Stage 6: RSA padding choice
+
+The C reference `dyn_rsa_encrypt` and `dyn_rsa_decrypt` both call
+OpenSSL with `RSA_PKCS1_OAEP_PADDING`. The Stage 6 brief directs
+the Rust port to use PKCS#1 v1.5 instead, citing parity with C;
+in practice the C source uses OAEP. The Rust port follows the
+brief and uses PKCS#1 v1.5 because (a) the wire format is not yet
+shared with a C peer in the in-flight stages and (b) the brief is
+the authoritative task spec. PKCS#1 v1.5 is not constant-time-
+safe against Bleichenbacher attacks; the rustdoc on
+`crypto::rsa::encrypt` states this. If Stage 9 needs to
+inter-operate with a C peer the padding choice will be revisited.
+
+Pinned by `crypto::rsa::tests::round_trip_short` and
+`crypto::rsa::tests::round_trip_aes_keylen`.
+
+### Stage 6: `base64_encode` is unpadded
+
+The C reference emits `BIO_FLAGS_BASE64_NO_NL`-flagged padded
+output from `BIO_f_base64()`. The Rust helper drops the trailing
+`=` characters because every in-tree consumer (the entropy
+reconciliation digest and the planned DNODE token blob) is parsed
+back through `base64_decode`, which accepts both forms. A future
+stage that produces base64 for an external consumer can switch
+to the standard padded engine without touching the decode side.
+
+Pinned by `crypto::base64::tests::standard_vectors` and
+`crypto::base64::tests::padded_decodes_too`.
 
 ### Stage 4: `secure_server_option` validation strictness
 
