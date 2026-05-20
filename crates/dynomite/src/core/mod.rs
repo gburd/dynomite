@@ -1,5 +1,9 @@
-//! Core engine primitives: types, context, logging, signals, scheduler.
-//!
-//! Stage 1 wires up the foundational types used by the rest of the crate.
+//! Core engine primitives: types, settings, logging, signals, queues,
+//! and the task scheduler used by the rest of the engine.
 
+pub mod log;
+pub mod ring_queue;
+pub mod setting;
+pub mod signal;
+pub mod task;
 pub mod types;
