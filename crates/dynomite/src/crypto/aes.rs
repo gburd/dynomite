@@ -39,9 +39,9 @@ use openssl::symm::{Cipher, Crypter, Mode};
 use crate::crypto::CryptoError;
 use crate::io::mbuf::{Mbuf, MbufPool, MbufQueue};
 
-/// AES key buffer length in bytes. Matches the C `AES_KEYLEN`
-/// constant (`dyn_crypto.h`). The cipher itself is AES-128, which
-/// uses only the first 16 bytes; the remaining 16 are unused.
+/// AES key buffer length in bytes (the `AES_KEYLEN` constant from
+/// `dyn_crypto.h`). The cipher itself is AES-128, which uses only
+/// the first 16 bytes; the remaining 16 are unused.
 pub const AES_KEYLEN: usize = 32;
 
 /// AES block size in bytes.
