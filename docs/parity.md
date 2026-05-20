@@ -638,7 +638,7 @@ next to its only consumer.
 | `proxy_close` | folded into `Proxy::run`'s exit. |
 | `proxy_init` | `dynomite::net::proxy::Proxy::bind` | done (Stage 9) |
 | `proxy_deinit` | folded into `Proxy::run`'s cancel branch. |
-| `proxy_accept` | folded into `Proxy::run`'s accept loop. | done (Stage 9) |
+| `proxy_accept` | folded into `Proxy::run`'s accept loop, including `set_nodelay(true)` on each accepted client socket. | done (Stage 9) |
 | `proxy_recv` | folded into `Proxy::run`'s accept loop (tokio replaces the level-triggered recv-ready spin). |
 | `proxy_ops` (vtable) | replaced by the per-role driver pattern; PROXY only needs an accept loop, which is `Proxy::run`. |
 | `init_proxy_conn` | folded into `Proxy::bind`. |
@@ -676,8 +676,9 @@ next to its only consumer.
 | `dnode_client_close` | folded into `dnode_client_loop`'s exit. |
 | `dnode_client_handle_response` | folded into `dnode_client_loop`'s response branch. | done (Stage 9) |
 | `dnode_req_filter` | folded into `dnode_client_loop::drive_dnode_parser` (the `dmsg_process` classification arm). | done (Stage 9) |
-| `dnode_req_forward` | deferred to Stage 10 (cluster routing of inbound peer requests). | omitted-for-stage |
-| `dnode_req_recv_next` / `dnode_req_recv_done` | folded into `dnode_client_loop::drive_dnode_parser`. | done (Stage 9) for parse-and-decode; routing depends on Stage 10. |
+| `dnode_req_forward` | the inbound peer-client driver hands the parsed `Msg` to the configured `Dispatcher` via `handler.dispatcher().dispatch(msg, responder)`; the cluster-aware dispatcher (DC/rack routing) lands with Stage 10. | done (Stage 9) for the dispatch hook; cluster-aware routing depends on Stage 10. |
+| `dnode_req_recv_next` / `dnode_req_recv_done` | folded into `dnode_client_loop::drive_dnode_parser`, which now invokes the configured `Dispatcher` and routes the result through the per-connection responder channel. | done (Stage 9) |
+| (encrypted payload decrypt) | `dnode_client::decrypt_dnode_payload` calls `Crypto::aes_decrypt(payload, conn.aes_key())` when the dnode header marks the payload as encrypted; failure collapses to a single opaque `NetError::Dnode` (see Deviation "Stage 9: dnode decrypt error collapse"). | done (Stage 9) |
 | `dnode_req_client_enqueue_omsgq` / `dnode_req_client_dequeue_omsgq` | folded into `Conn::enqueue_out` and `omsg_q_mut().pop_front`. |
 | `dnode_rsp_send_next` | folded into `dnode_server::DnodeServerConn::run`'s response-prepend path. | done (Stage 9) |
 | `dnode_rsp_send_done` | folded into `dnode_server::DnodeServerConn::run`'s post-send arm. | done (Stage 9) |
@@ -925,9 +926,43 @@ factors the policy into [`net::auto_eject::AutoEject`] so the
 pool and the Stage 10 cluster code share a single
 implementation. Behaviour is preserved.
 
-### Stage 9: QUIC + crypto coexistence (resolved)
+### Stage 9: dnode decrypt error collapse
 
-The original Stage 6 port used the `openssl` C-binding crate with
+The Stage 6 review flagged that
+`crypto::aes::decrypt_to_vec` returns either
+`CryptoError::BadPadding` (from the unpadding step) or
+`CryptoError::DecryptionFailed` (from a length validation or a
+block-cipher feed step). Surfacing the two variants to a peer
+is a textbook Vaudenay padding-oracle. The Stage 9 dnode
+peer-client driver consumes the decrypt result through
+`net::dnode_client::decrypt_dnode_payload`, which collapses any
+failure into a single opaque `NetError::Dnode("dnode payload
+decrypt failed")` before the loop can write a response
+frame. The detail-level error is dropped on the floor (no
+`tracing::warn!`) so an attacker cannot use log timing or
+content to distinguish the variants either. The Rust port
+is therefore strictly safer than the C reference on this
+surface.
+
+### Stage 9: QUIC driver pump cadence
+
+The `net::quic` driver task wakes on a tokio `select!` whose
+timeout arm is capped at 10 ms. Without the cap, `quiche::Connection::timeout()`
+returns the QUIC idle-timeout cadence (multiple seconds) once the
+connection is established, which is far too coarse for an
+interactive proxy where the application pushes bytes between
+QUIC datagrams. The cap is conservative; a real wake-on-app-data
+`Notify` is tracked for Stage 14 hardening (`docs/journal/blocked.md`).
+
+The driver also buffers outgoing application bytes locally until
+`quiche::Connection::is_established()` returns true. The C
+reference does not have an analogue because it does not ship a
+QUIC transport; this is a deviation from the TCP-only behaviour
+of the original engine but is the canonical pattern for QUIC
+drivers that share a single bidirectional stream with their
+application layer.
+
+### Stage 9: QUIC + crypto coexistence (resolved)
 the `vendored` feature, which statically links a copy of
 OpenSSL's libcrypto. The `quic` cargo feature enables `quiche`,
 which bundles its own BoringSSL. A binary that links both static
@@ -943,6 +978,10 @@ Attack timing sidechannel); `dynomite::crypto` uses OAEP, not the
 affected PKCS#1 v1.5 path, and the advisory is documented and
 ignored in `deny.toml` and `scripts/check.sh` per
 `docs/journal/blocked.md`.
+
+The Stage 9 review confirmed `--features quic` now runs an
+end-to-end loopback test (`tests/stage_09_quic.rs`) using a
+pure-Rust `rcgen`-generated self-signed cert.
 
 ## Caveats
 

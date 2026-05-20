@@ -26,18 +26,24 @@ parsers. The Stage 6 review (review/stage-6) flagged its absence;
 folding it into the single fuzz-crate dispatch is cheaper than
 spinning up a one-target crate now.
 
-### Crypto padding-oracle surface
+### Crypto padding-oracle surface (resolved)
 
 The Stage 6 review flagged that `crypto::aes::decrypt_to_vec`
-returns either `CryptoError::BadPadding` (from
-`Crypter::finalize` failure) or `CryptoError::DecryptionFailed`
-(from `Crypter::update` failure or length validation). The two
-are distinguishable to a caller. In the DNODE handshake context
-that surfaces the decrypt result to peers, this is a textbook
-Vaudenay padding-oracle. Stage 9 wires that surface; resolve
-there by mapping all decrypt errors to a single externally-
-visible variant before returning to the caller, then expose the
-detail only via `tracing` events scoped to the local process.
+returns either `CryptoError::BadPadding` or
+`CryptoError::DecryptionFailed`, distinguishable to a caller. In
+the peer-plane handshake context that surfaces the decrypt
+result to peers, this is a textbook Vaudenay padding-oracle.
+
+Resolution (Stage 9 review response): the dnode peer-client
+driver consumes the decrypt result through
+`net::dnode_client::decrypt_dnode_payload`, which collapses any
+failure into a single opaque `NetError::Dnode("dnode payload
+decrypt failed")` before the loop can write a response frame.
+The detail-level variant is dropped at the boundary - no
+`tracing` event is emitted in the failure arm so an attacker
+cannot use log timing or content to distinguish bad-padding
+from decryption-failed either. See the Stage 9 deviation entry
+in `docs/parity.md`.
 
 ### Crypto PEM-loader panic-free proptest
 
