@@ -2,7 +2,6 @@
 title = "Dynomite (Rust) Reference Manual"
 authors = ["The Dynomite Rust Port Authors"]
 language = "en"
-multilingual = false
 src = "src"
 
 [build]
