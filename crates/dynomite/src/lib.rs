@@ -12,6 +12,7 @@
 pub mod conf;
 pub mod core;
 pub mod hashkit;
+pub mod io;
 pub mod stats;
 pub mod util;
 
