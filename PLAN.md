@@ -648,27 +648,58 @@ doctest; `cargo test --doc` passes.
   cached as a CI artifact) and Rust `dynomited`; assert response equivalence
   on a Redis trace.
 
-### Stage 15 - Fuzz, property, bench
+### Stage 15 - Fuzz, property, bench, coverage gate
 
 * `cargo-fuzz` targets:
   * `proto_redis_parse`
   * `proto_memcache_parse`
   * `dnode_parse`
   * `conf_parse`
-* Property tests (`proptest`):
+  * `crypto_aes_decrypt`
+* Property tests (`hegeltest`, the user's specified property-testing
+  framework; see https://github.com/hegeldev/hegel-rust):
   * Hash + token arithmetic invariants.
   * Quorum decision table (given N/M responses, decide is_done correctly).
   * mbuf split/merge identity.
   * Dispatch routing: same key always routes to same primary (under fixed
     ring).
+  * State-machine tests (`#[hegel::state_machine]`) for the `MinStack`-style
+    invariants on the gossip and response-manager state.
 * Benches (`criterion`):
-  * Micro: parser throughput per protocol, per command class; mbuf
-    allocator; hash funcs.
-  * Macro: end-to-end TCP get/set throughput vs C; QUIC throughput; gossip
-    round latency at 100/1000 nodes; quorum read tail latency under simulated
-    packet loss (tc netem).
+  * Micro (per-component, individually meaningful):
+    - Parser throughput per protocol per command class (Redis SET/GET/MGET/
+      MSET/HSET/ZADD/EVAL; Memcache get/set/cas) on representative
+      payload sizes (16/64/256/1024/8192 bytes).
+    - mbuf alloc/free hot path; pool recycling; split/merge.
+    - Hash funcs: each algorithm on 16/64/256/1024 byte keys.
+    - Token arithmetic: `set_int_dyn_token`, `dyn_token_cmp`, ring lookup.
+    - DNODE codec: encode + parse over message size sweep.
+    - Crypto: AES-128-CBC over 16/64/256/1024/4096 byte payloads;
+      RSA OAEP wrap/unwrap; PEM key load.
+    - ResponseMgr quorum decision table.
+  * Macro (end-to-end, with tc/netem injected impairments):
+    - 3-node TCP cluster get/set throughput vs the C reference (when a
+      static-lib build of dynomite is available; otherwise vs raw
+      Redis as the upper bound).
+    - 3-node QUIC cluster get/set throughput.
+    - 6-node multi-DC throughput across consistency levels.
+    - Gossip round latency at 100 / 500 / 1000 nodes.
+    - Quorum read tail latency under simulated packet loss
+      (`tc qdisc add dev lo root netem loss 1%/5%/10%`).
+    - Cold-start time to first request through.
+  Each criterion bench has a baseline checked into
+  `crates/dynomite/benches/baseline/`; CI fails on >10% regression
+  (configurable per-bench).
+* Coverage gate: `cargo llvm-cov --workspace --all-features` must report
+  >= 95% line coverage AND >= 95% branch coverage AND >= 95% function
+  coverage. The current Stage 11 baseline is 79.62% line / 78.38% branch;
+  Stage 14's conformance harness pushes the network and FSM modules above
+  90%, and Stage 15 closes the remaining gap. Anything below 95% must be
+  documented as an explicit Deviation in `docs/parity.md` with a
+  technical justification (e.g. listener accept loops only exercised by
+  the chaos test in Stage 16).
 
-### Stage 16 - Docs, packaging, release
+### Stage 16 - Docs, packaging, release, chaos verification
 
 * `mdBook` reference under `docs/book/`:
   * Architecture overview (carry over `notes/` and the C wiki content
@@ -681,6 +712,81 @@ doctest; `cargo test --doc` passes.
 * `dist/` packaging: systemd unit (port from `_/dynomite/init/`), Docker
   image (port from `_/dynomite/docker/`), .deb/.rpm scripts.
 * `CHANGELOG.md`.
+* Chaos / punishment / stress test: a 1-hour test run that
+  simulates the full set of failures distributed systems must
+  survive in production. The test lives at
+  `crates/dynomite/tests/stage_16_chaos.rs`, runs under
+  `cargo nextest run --test stage_16_chaos --release` and asserts
+  the cluster keeps serving requests through the entire hour with
+  zero data loss within quorum constraints. Specifically:
+  * Cluster bootstrap: 3-node single-DC. Grow to 9 nodes across 3
+    DCs over the first 10 minutes, then shrink back to 3 over the
+    last 10. Mid-run nodes join and leave randomly; the test
+    asserts no client request observes a permanent error.
+  * Workload mix:
+    - 50% read traffic, 50% write traffic (steady state).
+    - Spike windows shifting the mix to 90% writes for 60 seconds
+      every 10 minutes.
+    - 3 concurrent client populations with different latency-
+      sensitivity profiles (interactive, batch, background).
+  * Concurrent failure injectors driven by
+    `scripts/netem/`:
+    - `partition_dc.sh`: 3 random 30-second cross-DC partitions.
+    - `slow_peer.sh`: rotating 200ms one-way delay on one peer
+      per minute.
+    - `flap.sh`: connectivity flaps at 1s intervals against one
+      randomly-chosen peer per 5-minute window.
+    - `gc_pause.sh`: SIGSTOP/SIGCONT on one peer for 5 seconds
+      every 7 minutes.
+    - `clock_skew.sh`: faketime skew of 0..30s applied to one
+      peer at the 30-minute mark.
+    - Random peer kills (SIGKILL) every 12 minutes; the supervisor
+      restarts the killed peer within 5 seconds.
+  * State-transition coverage: the test exercises every cluster
+    state transition from `dyn_core.h::dyn_state_t` (INIT,
+    STANDBY, WRITES_ONLY, RESUMING, NORMAL, JOINING, DOWN,
+    RESET, UNKNOWN) and asserts that every legal transition path
+    is observed at least once over the run.
+  * Invariants asserted continuously:
+    - No request ever returns the wrong key's value.
+    - Quorum-acknowledged writes survive any single-node failure.
+    - DC_EACH_SAFE_QUORUM writes survive a full DC partition.
+    - Auto-eject reinstates within `server_retry_timeout_ms`
+      after the failure clears.
+    - Gossip converges within 60 seconds of any topology change.
+    - No tokio task is detached without explicit `into_detached()`.
+  * Cleanup: when the test finishes, all spawned dynomited
+    instances are killed, all Redis backends are torn down,
+    netem qdiscs are removed, faketime is unset. The test must
+    leave the host in the same state it found it in. Asserted
+    by a post-test sweep that compares `tc qdisc show dev lo`
+    output against a captured baseline.
+  * Test report: `target/chaos/<run-id>/report.md` is produced
+    summarising the run (start/end times, failure injections
+    applied, peer state-transition counts, per-window throughput
+    + tail latency, any invariant violations). The report is the
+    artifact the release tag references.
+* CI dual-platform integration:
+  * `.github/workflows/ci.yml` for GitHub Actions (already in
+    place; extend to run the Stage 14 conformance suite + the
+    Stage 15 fuzz smoke + the Stage 15 coverage gate).
+  * `.forgejo/workflows/ci.yml` for Codeberg Forgejo Actions
+    (mirror of the GitHub workflow; same gates; the same
+    `scripts/check.sh` is the single source of truth so both
+    runners exercise identical commands).
+  * Both pipelines must pass before tag.
+* Author normalisation: rewrite history so every commit on
+  `main` is authored by `Greg Burd <greg@burd.me>`. Done with
+  `git filter-repo --commit-callback` on the entire history
+  immediately before the tag. Verify via
+  `git log --format='%an <%ae>' | sort -u` returning exactly
+  one line.
+* Release artifacts:
+  * `CHANGELOG.md` summarising every stage.
+  * `git tag -a v0.1.0 -s -m "..." ` (signed) on the
+    post-rewrite HEAD.
+  * `git push origin main && git push origin v0.1.0`.
+  * Forgejo mirror push.
 * Final release checklist (see AGENTS.md).
 
 ---
