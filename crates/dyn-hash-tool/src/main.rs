@@ -53,7 +53,7 @@ use clap::Parser;
 use dynomite::hashkit::{hash, HashType};
 
 /// Hash one or more keys with a Dynomite hashkit algorithm.
-#[allow(clippy::struct_excessive_bools)] // CLI surface mirrors the C tool's flag set
+#[allow(clippy::struct_excessive_bools)] // see docs/journal/allowances.md (independent boolean toggles)
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
