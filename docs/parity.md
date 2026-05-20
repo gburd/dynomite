@@ -237,11 +237,14 @@ follows the typed-Option model PLAN.md Stage 4 calls for.
   reference rewrites `reqline[1]` to `"/info"` but then immediately
   returns without re-dispatching, which is a known C bug; the Rust
   port serves the snapshot for both paths.
-* **Stage 5: stats REST loop strips query strings.** The reference
-  does literal `strcmp` against the request path. The Rust port
-  treats anything after `?` as ignored. This deviation will be
-  removed in Stage 12 when the binary wires up the full command
-  surface; for the Stage 5 `/info` path it is harmless.
+* **Stage 5: stats REST loop matches C `strcmp` exactly.** The C
+  reference compares the request path with literal `strcmp`. The
+  Rust port now does the same (the earlier `?`-stripping behavior
+  was removed in `b4135aa`). The full command surface beyond `/`
+  and `/info` arrives in Stage 10 cluster control plane; until
+  then, requests with query strings or unknown paths fall through
+  to the default 200 `OK` response, which is the same shape the C
+  reference uses for unsupported commands.
 * **Stage 5: counters use wrapping arithmetic.** Pool and server
   counter increments wrap on overflow to match the reference `++` /
   `+=` semantics. Counters are 64-bit signed and never reach the
