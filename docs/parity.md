@@ -517,3 +517,39 @@ Documented design choices that downstream stages must respect.
   intentionally repurposed as the C-compat KEY-prefix toggle, so
   inline keys must be passed via the long flag `--key` to avoid
   ambiguity.
+
+
+* `hashkit::hsieh::hash` defines what the C reference left
+  undefined. `_/dynomite/src/hashkit/dyn_hsieh.c:49-51` returns
+  `DN_OK` on an empty key without ever calling `size_dyn_token` or
+  `set_int_dyn_token`; the caller's `struct dyn_token` is therefore
+  read in whatever state it was passed in (typically uninitialised
+  stack memory from `init_dyn_token`'s `len = 0` state). The Rust
+  port returns a zero-valued single-word token
+  (`DynToken::from_u32(0)`) so callers see a deterministic value.
+  Pinned by `hashkit::hsieh::tests::empty_key_is_zero_token_not_uninit`.
+
+* `hashkit::crc32::crc32_sz` lower-cases bytes with
+  `u8::to_ascii_lowercase`; the C reference uses libc
+  `tolower((unsigned int)*p)`, which is locale-dependent and folds
+  some bytes >= 0x80 differently in non-`C` locales. The helper is
+  used by the entropy reconciliation digest path in
+  `_/dynomite/src/dyn_message.c`; in practice that path consumes
+  ASCII keys, so this divergence is observable only when a peer
+  ships a non-ASCII key whose mainline locale would have folded it.
+  The Rust choice yields portable, locale-independent reconciliation
+  digests. Pinned by
+  `hashkit::crc32::tests::crc32_sz_ascii_only_high_byte_is_unchanged`.
+
+* `hashkit::random::PseudoRng` replaces glibc `random()` with a
+  Knuth MMIX 64-bit linear congruential generator seeded from
+  `SystemTime::now()`. The C `random_dispatch` is
+  `random() % ncontinuum`; `random_update` is entirely commented
+  out, so no caller observes the libc PRNG's specific stream.
+  PLAN.md Stage 3 originally suggested `clock_gettime(CLOCK_MONOTONIC)`
+  for symmetry; the Rust port uses `SystemTime` because the `nix`
+  workspace crate is not built with the `time` feature and
+  monotonicity is overkill for a non-cryptographic PRNG that the
+  active C call graph never reads. The LCG parameters are pinned
+  by `hashkit::random::tests::lcg_parameters_are_pinned` so any
+  future move to a different PRNG is an intentional change.
