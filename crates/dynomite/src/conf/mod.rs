@@ -53,8 +53,6 @@ pub use tokens::{TokenComponent, TokenList};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde::Deserialize;
-
 /// Top-level configuration value: a single named [`ConfPool`].
 ///
 /// The YAML document mirrors the C reference: a top-level mapping with
@@ -80,7 +78,10 @@ impl Config {
         if raw.len() != 1 {
             return Err(ConfError::TooManyPools(raw.len()));
         }
-        let (pool_name, pool) = raw.into_iter().next().expect("len == 1");
+        let (pool_name, pool) = raw
+            .into_iter()
+            .next()
+            .expect("invariant: raw.len() == 1, checked above");
         if pool_name.is_empty() {
             return Err(ConfError::EmptyPoolName);
         }
@@ -137,15 +138,6 @@ impl Config {
             owned.pool_name
         ))
     }
-}
-
-/// Stand-in deserializer used when a [`ConfPool`] appears at the value
-/// position of the top-level map.
-#[doc(hidden)]
-#[derive(Deserialize)]
-struct _ConfigShape {
-    #[serde(flatten)]
-    _inner: BTreeMap<String, ConfPool>,
 }
 
 #[cfg(test)]
