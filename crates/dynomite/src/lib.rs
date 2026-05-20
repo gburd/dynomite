@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod cluster;
 pub mod conf;
 pub mod core;
 pub mod crypto;
@@ -17,6 +18,7 @@ pub mod io;
 pub mod msg;
 pub mod net;
 pub mod proto;
+pub mod seeds;
 pub mod stats;
 pub mod util;
 
