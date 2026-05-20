@@ -30,7 +30,7 @@ pub fn string_compare(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
 }
 
 /// Return the byte index of the first occurrence of `needle` in
-/// `haystack`, or [`None`] if absent. Mirrors `dn_strchr`.
+/// `haystack`, or [`None`] if absent.
 ///
 /// # Examples
 ///
@@ -44,7 +44,7 @@ pub fn strchr(haystack: &[u8], needle: u8) -> Option<usize> {
 }
 
 /// Return the byte index of the last occurrence of `needle` in
-/// `haystack`, or [`None`] if absent. Mirrors `dn_strrchr`.
+/// `haystack`, or [`None`] if absent.
 ///
 /// # Examples
 ///

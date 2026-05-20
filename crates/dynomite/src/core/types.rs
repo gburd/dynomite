@@ -1,10 +1,10 @@
 //! Foundational result and error types used throughout the engine.
 //!
 //! [`Status`] is the void-returning fallible alias used by most internal
-//! APIs. [`DynError`] mirrors the small fixed set of error categories
-//! used by the C reference and absorbs `std::io::Error` for transport
-//! layer failures. The numeric scalars `MsgId`, `Msec`, `Usec`, and
-//! `Sec` are typed aliases that mirror the corresponding C scalars.
+//! APIs. [`DynError`] is the small fixed set of error categories the
+//! engine reports and absorbs `std::io::Error` for transport layer
+//! failures. The numeric scalars `MsgId`, `Msec`, `Usec`, and `Sec`
+//! are typed aliases for the corresponding wire-format integers.
 
 use std::io;
 
@@ -39,8 +39,8 @@ pub type Status = Result<(), DynError>;
 
 /// Top-level error type for the Dynomite engine.
 ///
-/// The variants mirror the small fixed error set used by the C
-/// reference plus an [`Io`](DynError::Io) variant for transport failures
+/// The variants enumerate the small fixed error set the engine
+/// reports plus an [`Io`](DynError::Io) variant for transport failures
 /// and an unstructured [`Generic`](DynError::Generic) catch-all.
 #[derive(Debug, Error)]
 pub enum DynError {
@@ -82,9 +82,9 @@ impl DynError {
 
 /// Connection-level secure-traffic policy.
 ///
-/// Mirrors `secure_server_option_t` in the C reference. The variants
-/// describe which inter-node traffic should be encrypted with the
-/// peer-shared AES key established during the DNODE handshake.
+/// The variants describe which inter-node traffic should be encrypted
+/// with the peer-shared AES key established during the DNODE
+/// handshake.
 ///
 /// # Examples
 ///

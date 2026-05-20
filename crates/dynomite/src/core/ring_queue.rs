@@ -23,16 +23,13 @@
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 /// Maximum in-flight ring messages for the core -> gossip direction.
-///
-/// Mirrors `C2G_InQ_SIZE` in the C reference.
 pub const C2G_IN_CAPACITY: usize = 256;
 
 /// Maximum in-flight ring messages for the gossip -> core direction.
-///
-/// Mirrors `C2G_OutQ_SIZE` in the C reference.
 pub const C2G_OUT_CAPACITY: usize = 256;
 
-/// A pair of bounded channels that mirror the C2G/G2C SPSC rings.
+/// A pair of bounded channels that carry the core <-> gossip ring
+/// traffic.
 ///
 /// `I` is the message type the core thread sends *to* the secondary
 /// thread (typically gossip); `O` is the message type the secondary

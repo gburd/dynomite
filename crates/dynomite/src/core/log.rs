@@ -251,9 +251,8 @@ pub fn current_level() -> u8 {
 /// Bump the stored verbosity by one, saturating at [`LOG_LEVEL_MAX`].
 ///
 /// The actual `tracing` filter is set once at [`log_init`] time; this
-/// updates the C-style numeric counter that downstream subsystems read
-/// to gate periodic-verbose output, mirroring `log_level_up` in the C
-/// reference.
+/// updates a numeric counter that downstream subsystems read to gate
+/// periodic-verbose output.
 pub fn log_level_increment() -> u8 {
     let prev = CURRENT_LEVEL.load(Ordering::Relaxed);
     let next = clamp_level(prev.saturating_add(1));
@@ -276,8 +275,7 @@ pub fn log_level_set(level: u8) {
 
 /// Return whether a given numeric level is loud enough to be logged.
 ///
-/// Mirrors `log_loggable` in the C reference: the message at `level`
-/// is loggable iff `level <= current_level()`.
+/// A message at `level` is loggable iff `level <= current_level()`.
 pub fn log_loggable(level: u8) -> bool {
     level <= current_level()
 }
