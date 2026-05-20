@@ -178,4 +178,32 @@ proptest! {
         a.merge(&b);
         prop_assert_eq!(a.count(), total);
     }
+
+    /// Differential check: for any count of identical zero observations
+    /// the histogram's percentile threshold matches the reference
+    /// expression `(p * count as f64).floor() as u64`. The helper
+    /// `floor_p_times_u64` is internal to the engine so this test
+    /// pins the observable behavior at the public API.
+    #[test]
+    fn percentile_threshold_matches_f64_floor(
+        count in 1u64..=u64::from(u16::MAX),
+        p_idx in 0usize..7,
+    ) {
+        let ps = [0.0f64, 0.5, 0.9, 0.95, 0.99, 0.999, 1.0];
+        let p = ps[p_idx];
+        let mut h = Histogram::new();
+        for _ in 0..count { h.record(0); }
+        // Bucket 0 has offset 1, so percentile is 1 when the floor
+        // threshold is >= 1 and 0 otherwise. p=1.0 in the engine
+        // returns 0 because the percentile gate excludes p > 1.0
+        // wraps; here p=1.0 is in range and yields the offset.
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let reference_floor = (p * (count as f64)).floor() as u64;
+        let expected = if reference_floor >= 1 { 1 } else { 0 };
+        prop_assert_eq!(
+            h.percentile(p),
+            expected,
+            "percentile diverged from f64 floor at p={} count={}", p, count
+        );
+    }
 }
