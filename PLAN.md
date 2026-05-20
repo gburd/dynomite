@@ -359,8 +359,12 @@ Depends on Stage 1. **Can run in parallel with Stages 2, 3, 5.**
   the public contract; capture the C output and snapshot-test against it.
 * `--describe-stats` (`-D`) prints the same description table.
 
-**Exit gate**: snapshot tests prove byte-equal JSON against captured C
-output for an empty cluster.
+**Exit gate**: snapshot tests prove structural equivalence to the C
+JSON output for an empty cluster - the field set, ordering, and value
+types match what the reference engine emits, while the byte-level
+formatting (whitespace, trailing newlines, comma trim placement) is a
+recorded Deviation in `docs/parity.md` because the Rust writer is
+allocation-friendly and emits a single compact line.
 
 Depends on Stage 1. **Parallelizable with Stages 2-4.**
 

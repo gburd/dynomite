@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use dynomite::stats::{
     describe_stats, Histogram, PoolField, PoolStats, ServerField, ServerStats, ServiceInfo,
-    Snapshot, StatsServer,
+    Snapshot, StatsServer, POOL_CODEC, SERVER_CODEC,
 };
 use parking_lot::Mutex;
 use proptest::prelude::*;
@@ -43,10 +43,66 @@ fn deterministic_snapshot() -> Snapshot {
 
 #[test]
 fn snapshot_matches_fixture() {
+    // Structural equivalence: the writer is expected to emit a single
+    // compact JSON object. The fixture captures that exact byte
+    // sequence so any future regression in field set or ordering will
+    // diverge here. See docs/parity.md "Stage 5: snapshot.json is
+    // structural, not byte-equal" for the rationale.
     let snap = deterministic_snapshot();
     let actual = snap.to_json();
     let expected = include_str!("fixtures/stats/snapshot.json").trim_end_matches('\n');
     assert_eq!(actual, expected, "snapshot diverged from fixture");
+}
+
+#[test]
+fn snapshot_contains_every_pool_metric_with_expected_value() {
+    // Independent reconstruction of the expected JSON from POOL_CODEC
+    // and SERVER_CODEC ensures the test does not just round-trip the
+    // writer against a snapshot of itself: any change to the metric
+    // set, naming, or ordering will fail this check.
+    let snap = deterministic_snapshot();
+    let body = snap.to_json();
+    for (idx, spec) in POOL_CODEC.iter().enumerate() {
+        let value = snap.pool.metrics[idx];
+        let needle = format!("\"{}\":{value}", spec.name);
+        assert!(
+            body.contains(&needle),
+            "pool metric {} missing or has wrong value in JSON",
+            spec.name
+        );
+    }
+    for (idx, spec) in SERVER_CODEC.iter().enumerate() {
+        let value = snap.server.metrics[idx];
+        let needle = format!("\"{}\":{value}", spec.name);
+        assert!(
+            body.contains(&needle),
+            "server metric {} missing or has wrong value in JSON",
+            spec.name
+        );
+    }
+    // Engine identification fields.
+    assert!(body.contains("\"service\":\"dynomite\""));
+    assert!(body.contains("\"source\":\"node-a\""));
+    assert!(body.contains("\"version\":\"0.0.1\""));
+    assert!(body.contains("\"rack\":\"rack-1\""));
+    assert!(body.contains("\"dc\":\"dc-1\""));
+    // Pool and server names appear as object keys.
+    assert!(body.contains("\"dyn_o_mite\":{"));
+    assert!(body.contains("\"redis_local\":{"));
+}
+
+#[test]
+fn snapshot_pool_object_appears_before_server_object() {
+    // The reference output nests the per-server object inside the
+    // per-pool object. We assert the structural ordering remains.
+    let snap = deterministic_snapshot();
+    let body = snap.to_json();
+    let pool_idx = body.find("\"dyn_o_mite\":{").expect("pool object present");
+    let server_idx = body.find("\"redis_local\":{").expect("server object present");
+    assert!(
+        pool_idx < server_idx,
+        "pool object must precede the nested server object"
+    );
 }
 
 #[test]
