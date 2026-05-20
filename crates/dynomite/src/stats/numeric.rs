@@ -24,7 +24,11 @@ pub(crate) fn u64_to_f64(x: u64) -> f64 {
 /// the nearest representable `f64`, and the product is floored. NaN and
 /// negative `p` return zero. Saturates at `u64::MAX` for products that
 /// overflow the integer range.
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 pub(crate) fn floor_p_times_u64(p: f64, scale: u64) -> u64 {
     // The cast lints are allowed for this helper because the function's
     // contract is to reproduce the C reference's `(double)scale * p`
@@ -112,7 +116,11 @@ mod tests {
             (0.999, 9_990),
         ];
         for &(p, scale) in cases {
-            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[allow(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss
+            )]
             let reference = (p * (scale as f64)).floor() as u64;
             assert_eq!(
                 floor_p_times_u64(p, scale),

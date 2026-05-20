@@ -6,6 +6,13 @@
 //! typed handle, an iterable list, and constant metadata.
 
 /// Kind of metric tracked by the stats subsystem.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::{PoolField, StatsMetricType};
+/// assert_eq!(PoolField::ClientEof.kind(), StatsMetricType::Counter);
+/// ```
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum StatsMetricType {
     /// Monotonically increasing accumulator.
@@ -18,6 +25,14 @@ pub enum StatsMetricType {
 
 /// Static descriptor for a metric: how it is interpreted, what its
 /// canonical lower-case name is, and a one-line human description.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::{POOL_CODEC, MetricSpec};
+/// let first: &MetricSpec = &POOL_CODEC[0];
+/// assert!(!first.name.is_empty());
+/// ```
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct MetricSpec {
     /// Lower-case identifier as emitted in JSON.
@@ -31,10 +46,15 @@ pub struct MetricSpec {
 macro_rules! define_codec {
     (
         $enum_name:ident, $codec_const:ident,
+        $codec_doc:literal,
+        $variant_doc:literal,
         { $( $variant:ident, $name:literal, $kind:ident, $desc:literal );* $(;)? }
     ) => {
-        /// Typed handle for a metric; the `as usize` value of each
-        /// variant is also its index into the metric vector.
+        #[doc = $variant_doc]
+        ///
+        /// Each variant is a typed handle for a metric; its `as usize`
+        /// value is also the index into the metric vector held by
+        /// `PoolStats` / `ServerStats`.
         #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
         #[repr(usize)]
         pub enum $enum_name {
@@ -46,30 +66,76 @@ macro_rules! define_codec {
 
         impl $enum_name {
             /// All variants of this metric set, in canonical order.
+            ///
+            /// # Examples
+            ///
+            #[doc = concat!(
+                "```\nuse dynomite::stats::", stringify!($enum_name),
+                ";\nassert!(!", stringify!($enum_name), "::ALL.is_empty());\n```"
+            )]
             pub const ALL: &'static [$enum_name] = &[ $( Self::$variant ),* ];
 
             /// Lower-case identifier as it appears in the JSON output.
+            ///
+            /// # Examples
+            ///
+            #[doc = concat!(
+                "```\nuse dynomite::stats::", stringify!($enum_name),
+                ";\nlet name = ", stringify!($enum_name),
+                "::ALL[0].name();\nassert!(!name.is_empty());\n```"
+            )]
             pub fn name(self) -> &'static str {
                 match self { $( Self::$variant => $name ),* }
             }
 
             /// Whether this metric is a counter, gauge, or timestamp.
+            ///
+            /// # Examples
+            ///
+            #[doc = concat!(
+                "```\nuse dynomite::stats::{", stringify!($enum_name),
+                ", StatsMetricType};\nlet k = ", stringify!($enum_name),
+                "::ALL[0].kind();\nassert!(matches!(k, StatsMetricType::Counter | StatsMetricType::Gauge | StatsMetricType::Timestamp));\n```"
+            )]
             pub fn kind(self) -> StatsMetricType {
                 match self { $( Self::$variant => StatsMetricType::$kind ),* }
             }
 
             /// Human-readable description used by `--describe-stats`.
+            ///
+            /// # Examples
+            ///
+            #[doc = concat!(
+                "```\nuse dynomite::stats::", stringify!($enum_name),
+                ";\nlet d = ", stringify!($enum_name),
+                "::ALL[0].description();\nassert!(!d.is_empty());\n```"
+            )]
             pub fn description(self) -> &'static str {
                 match self { $( Self::$variant => $desc ),* }
             }
 
             /// Index of this metric in the corresponding stats vector.
+            ///
+            /// # Examples
+            ///
+            #[doc = concat!(
+                "```\nuse dynomite::stats::", stringify!($enum_name),
+                ";\nassert_eq!(", stringify!($enum_name),
+                "::ALL[0].index(), 0);\n```"
+            )]
             pub fn index(self) -> usize {
                 self as usize
             }
         }
 
-        /// Const slice of every metric descriptor in declaration order.
+        #[doc = $codec_doc]
+        ///
+        /// # Examples
+        ///
+        #[doc = concat!(
+            "```\nuse dynomite::stats::", stringify!($codec_const),
+            ";\nassert!(!", stringify!($codec_const), ".is_empty());\n```"
+        )]
         pub const $codec_const: &[MetricSpec] = &[
             $(
                 MetricSpec {
@@ -82,7 +148,11 @@ macro_rules! define_codec {
     };
 }
 
-define_codec!(PoolField, POOL_CODEC, {
+define_codec!(
+    PoolField, POOL_CODEC,
+    "Const slice of every pool metric descriptor in declaration order.",
+    "Typed handle for a pool metric.",
+    {
     ClientEof,                "client_eof",                Counter, "# eof on client connections";
     ClientErr,                "client_err",                Counter, "# errors on client connections";
     ClientConnections,        "client_connections",        Gauge,   "# active client connections";
@@ -130,7 +200,11 @@ define_codec!(PoolField, POOL_CODEC, {
     StatsCount,               "stats_count",               Counter, "# stats request";
 });
 
-define_codec!(ServerField, SERVER_CODEC, {
+define_codec!(
+    ServerField, SERVER_CODEC,
+    "Const slice of every server metric descriptor in declaration order.",
+    "Typed handle for a server metric.",
+    {
     ServerEof,                "server_eof",                Counter, "# eof on server connections";
     ServerErr,                "server_err",                Counter, "# errors on server connections";
     ServerTimedout,           "server_timedout",           Counter, "# timeouts on server connections";

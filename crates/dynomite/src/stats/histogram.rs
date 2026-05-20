@@ -23,6 +23,13 @@ use std::sync::OnceLock;
 use crate::stats::numeric::{floor_p_times_u64, u64_to_f64};
 
 /// Number of buckets in the estimated histogram.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::BUCKET_COUNT;
+/// assert_eq!(BUCKET_COUNT, 94);
+/// ```
 pub const BUCKET_COUNT: usize = 94;
 
 /// Returns the cached bucket offset table.

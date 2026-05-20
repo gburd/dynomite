@@ -98,7 +98,9 @@ fn snapshot_pool_object_appears_before_server_object() {
     let snap = deterministic_snapshot();
     let body = snap.to_json();
     let pool_idx = body.find("\"dyn_o_mite\":{").expect("pool object present");
-    let server_idx = body.find("\"redis_local\":{").expect("server object present");
+    let server_idx = body
+        .find("\"redis_local\":{")
+        .expect("server object present");
     assert!(
         pool_idx < server_idx,
         "pool object must precede the nested server object"
@@ -255,7 +257,7 @@ proptest! {
         // wraps; here p=1.0 is in range and yields the offset.
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let reference_floor = (p * (count as f64)).floor() as u64;
-        let expected = if reference_floor >= 1 { 1 } else { 0 };
+        let expected = u64::from(reference_floor >= 1);
         prop_assert_eq!(
             h.percentile(p),
             expected,
