@@ -8,6 +8,7 @@
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -17,16 +18,49 @@ use crate::stats::snapshot::Snapshot;
 
 /// Maximum number of bytes the server will read for an HTTP request
 /// line plus headers. Requests larger than this are rejected.
+///
+/// # Examples
+///
+/// ```
+/// assert!(dynomite::stats::MAX_REQUEST_BYTES >= 1024);
+/// ```
 pub const MAX_REQUEST_BYTES: usize = 8 * 1024;
 
 /// Maximum number of headers parsed in a single request.
+///
+/// # Examples
+///
+/// ```
+/// assert!(dynomite::stats::MAX_HEADERS > 0);
+/// ```
 pub const MAX_HEADERS: usize = 32;
+
+/// Maximum time the server waits for a single read from a connected
+/// peer before closing the socket. Mirrors the implicit blocking-recv
+/// behavior of the reference engine while protecting tokio tasks from
+/// slow-loris clients.
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A bound TCP listener serving the stats endpoint.
 ///
 /// Construct via [`StatsServer::bind`] then call
 /// [`StatsServer::run`] to accept connections in a loop, or
 /// [`StatsServer::accept_one`] for one-shot tests.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use dynomite::stats::{Snapshot, StatsServer};
+/// use parking_lot::Mutex;
+///
+/// # async fn _example() -> std::io::Result<()> {
+/// let sink = Arc::new(Mutex::new(Snapshot::default()));
+/// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+/// let _addr = server.local_addr()?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct StatsServer {
     listener: TcpListener,
     source: Arc<Mutex<Snapshot>>,
@@ -35,18 +69,63 @@ pub struct StatsServer {
 impl StatsServer {
     /// Bind a listener at `addr`. Returns the bound server alongside
     /// its actual local address (useful when binding to port 0).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use dynomite::stats::{Snapshot, StatsServer};
+    /// use parking_lot::Mutex;
+    ///
+    /// # async fn _example() -> std::io::Result<()> {
+    /// let sink = Arc::new(Mutex::new(Snapshot::default()));
+    /// let _server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn bind(addr: SocketAddr, source: Arc<Mutex<Snapshot>>) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         Ok(Self { listener, source })
     }
 
     /// Returns the local socket address the server is listening on.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use dynomite::stats::{Snapshot, StatsServer};
+    /// use parking_lot::Mutex;
+    ///
+    /// # async fn _example() -> std::io::Result<()> {
+    /// let sink = Arc::new(Mutex::new(Snapshot::default()));
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+    /// let addr = server.local_addr()?;
+    /// assert!(addr.port() != 0);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.listener.local_addr()
     }
 
     /// Accept a single connection, serve one HTTP/1.1 request, and
     /// return.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use dynomite::stats::{Snapshot, StatsServer};
+    /// use parking_lot::Mutex;
+    ///
+    /// # async fn _example() -> std::io::Result<()> {
+    /// let sink = Arc::new(Mutex::new(Snapshot::default()));
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+    /// server.accept_one().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn accept_one(&self) -> io::Result<()> {
         let (sock, _peer) = self.listener.accept().await?;
         let snapshot = self.source.lock().clone();
@@ -55,7 +134,22 @@ impl StatsServer {
 
     /// Run the accept loop until cancelled. Each connection is handled
     /// on a fresh task so a slow client cannot stall the listener.
-    pub async fn run(&self) -> io::Result<()> {
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use dynomite::stats::{Snapshot, StatsServer};
+    /// use parking_lot::Mutex;
+    ///
+    /// # async fn _example() -> std::io::Result<()> {
+    /// let sink = Arc::new(Mutex::new(Snapshot::default()));
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+    /// let _ = tokio::spawn(async move { server.run().await });
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn run(self) -> io::Result<()> {
         loop {
             let (sock, _peer) = self.listener.accept().await?;
             let snapshot = self.source.lock().clone();
@@ -73,7 +167,17 @@ async fn serve_connection(mut sock: TcpStream, snapshot: Snapshot) -> io::Result
         if filled == buf.len() {
             return write_response(&mut sock, 400, "Bad Request", b"").await;
         }
-        let n = sock.read(&mut buf[filled..]).await?;
+        let read_result = tokio::time::timeout(READ_TIMEOUT, sock.read(&mut buf[filled..])).await;
+        let n = match read_result {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) | Err(_) => {
+                // Read error or timeout: close silently, matching the
+                // reference error path which drops the connection
+                // without writing a response.
+                let _ = sock.shutdown().await;
+                return Ok(());
+            }
+        };
         if n == 0 {
             break;
         }
@@ -102,8 +206,7 @@ async fn handle_parsed(
     if !matches!(req.method, Some("GET")) {
         return write_response(sock, 405, "Method Not Allowed", b"").await;
     }
-    let route = path.split('?').next().unwrap_or(path);
-    match route {
+    match path {
         "/" | "/info" => {
             let body = snapshot.to_json();
             write_json_response(sock, body.as_bytes()).await

@@ -22,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use tokio::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 
 pub use crate::stats::codec::{
     MetricSpec, PoolField, ServerField, StatsMetricType, POOL_CODEC, SERVER_CODEC,
@@ -228,10 +229,14 @@ impl Stats {
     }
 
     /// Add `delta` to a pool counter or gauge.
+    ///
+    /// Wraps on overflow to mirror the reference engine's `++` / `+=`
+    /// semantics. Counters are 64-bit signed and never reach the wrap
+    /// boundary under realistic workloads.
     pub fn pool_incr_by(&self, field: PoolField, delta: i64) {
         let mut inner = self.inner.lock();
         let slot = &mut inner.pool.metrics[field.index()];
-        *slot = slot.saturating_add(delta);
+        *slot = slot.wrapping_add(delta);
     }
 
     /// Set a pool gauge or timestamp to an absolute value.
@@ -255,10 +260,14 @@ impl Stats {
     }
 
     /// Add `delta` to a server counter or gauge.
+    ///
+    /// Wraps on overflow to mirror the reference engine's `++` / `+=`
+    /// semantics. Counters are 64-bit signed and never reach the wrap
+    /// boundary under realistic workloads.
     pub fn server_incr_by(&self, field: ServerField, delta: i64) {
         let mut inner = self.inner.lock();
         let slot = &mut inner.server.metrics[field.index()];
-        *slot = slot.saturating_add(delta);
+        *slot = slot.wrapping_add(delta);
     }
 
     /// Set a server gauge or timestamp to an absolute value.
@@ -367,6 +376,29 @@ fn queue_p99(h: &Histogram) -> u64 {
 
 /// Async aggregator handle: snapshots at a fixed interval into a
 /// shared cell that the REST server reads from.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use std::time::Duration;
+/// use dynomite::stats::{Aggregator, PoolStats, ServerStats, ServiceInfo, Snapshot, Stats};
+/// use parking_lot::Mutex;
+/// use tokio_util::sync::CancellationToken;
+///
+/// # async fn _example() {
+/// let stats = Arc::new(Stats::new(
+///     ServiceInfo::default(),
+///     PoolStats::new("dyn_o_mite"),
+///     ServerStats::new("redis"),
+/// ));
+/// let sink = Arc::new(Mutex::new(Snapshot::default()));
+/// let token = CancellationToken::new();
+/// let agg = Aggregator::new(stats, sink, Duration::from_secs(1), Duration::from_secs(300));
+/// let _ = tokio::spawn({ let token = token.clone(); async move { agg.run(token).await } });
+/// token.cancel();
+/// # }
+/// ```
 pub struct Aggregator {
     stats: Arc<Stats>,
     sink: Arc<Mutex<Snapshot>>,
@@ -379,6 +411,23 @@ impl Aggregator {
     /// `stats` and publishes to `sink` once every `interval`.
     /// Histograms are reset every `histogram_reset` elapsed time, the
     /// same five-minute cadence the C reference uses by default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use dynomite::stats::{Aggregator, PoolStats, ServerStats, ServiceInfo, Snapshot, Stats};
+    /// use parking_lot::Mutex;
+    ///
+    /// let stats = Arc::new(Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("dyn_o_mite"),
+    ///     ServerStats::new("redis"),
+    /// ));
+    /// let sink = Arc::new(Mutex::new(Snapshot::default()));
+    /// let _agg = Aggregator::new(stats, sink, Duration::from_secs(1), Duration::from_secs(300));
+    /// ```
     pub fn new(
         stats: Arc<Stats>,
         sink: Arc<Mutex<Snapshot>>,
@@ -393,14 +442,45 @@ impl Aggregator {
         }
     }
 
-    /// Run the aggregation loop. The future never returns until
-    /// cancelled.
-    pub async fn run(self) {
+    /// Run the aggregation loop until `cancel` is triggered. The future
+    /// returns `()` after observing cancellation; callers that want a
+    /// clean shutdown should clone the token and call
+    /// [`CancellationToken::cancel`] on it.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use dynomite::stats::{Aggregator, PoolStats, ServerStats, ServiceInfo, Snapshot, Stats};
+    /// use parking_lot::Mutex;
+    /// use tokio_util::sync::CancellationToken;
+    ///
+    /// # async fn _example() {
+    /// let stats = Arc::new(Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("dyn_o_mite"),
+    ///     ServerStats::new("redis"),
+    /// ));
+    /// let sink = Arc::new(Mutex::new(Snapshot::default()));
+    /// let token = CancellationToken::new();
+    /// let agg = Aggregator::new(stats, sink, Duration::from_secs(1), Duration::from_secs(300));
+    /// let cancel = token.clone();
+    /// let handle = tokio::spawn(async move { agg.run(cancel).await });
+    /// token.cancel();
+    /// let _ = handle.await;
+    /// # }
+    /// ```
+    pub async fn run(self, cancel: CancellationToken) {
         let mut ticker = tokio::time::interval(self.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut last_reset = Instant::now();
         loop {
-            ticker.tick().await;
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                _ = ticker.tick() => {}
+            }
             let snap = self.stats.snapshot();
             *self.sink.lock() = snap;
             if last_reset.elapsed() >= self.histogram_reset {
