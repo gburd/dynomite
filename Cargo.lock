@@ -368,6 +368,7 @@ dependencies = [
  "clap",
  "dynomite",
  "predicates",
+ "tempfile",
 ]
 
 [[package]]
