@@ -34,11 +34,8 @@ fn make_cert_pair() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBu
     let cert_path = dir.path().join("cert.pem");
     let key_path = dir.path().join("key.pem");
 
-    let cert = rcgen::generate_simple_self_signed(vec![
-        "localhost".into(),
-        "127.0.0.1".into(),
-    ])
-    .expect("rcgen self-signed cert");
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()])
+        .expect("rcgen self-signed cert");
     std::fs::write(&cert_path, cert.cert.pem()).expect("write cert.pem");
     std::fs::write(&key_path, cert.key_pair.serialize_pem()).expect("write key.pem");
 
@@ -73,7 +70,7 @@ async fn quic_loopback_round_trip() {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while got.len() < 32 && tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(Duration::from_millis(500), transport.read(&mut buf)).await {
-                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => continue,
+                Ok(Ok(0) | Err(_)) | Err(_) => continue,
                 Ok(Ok(n)) => got.extend_from_slice(&buf[..n]),
             }
         }
@@ -92,10 +89,7 @@ async fn quic_loopback_round_trip() {
         .await
         .expect("client connect");
     let payload: Vec<u8> = (0u8..32).collect();
-    client
-        .write_all(&payload)
-        .await
-        .expect("client write_all");
+    client.write_all(&payload).await.expect("client write_all");
 
     let mut echo = vec![0u8; payload.len()];
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -104,7 +98,7 @@ async fn quic_loopback_round_trip() {
         match tokio::time::timeout(Duration::from_millis(500), client.read(&mut echo[filled..]))
             .await
         {
-            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => continue,
+            Ok(Ok(0) | Err(_)) | Err(_) => continue,
             Ok(Ok(n)) => filled += n,
         }
     }

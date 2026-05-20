@@ -208,15 +208,13 @@ impl AsyncWrite for QuicTransport {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         match self.tx.poll_reserve(cx) {
-            Poll::Ready(Ok(())) => {
-                match self.tx.send_item(buf.to_vec()) {
-                    Ok(()) => Poll::Ready(Ok(buf.len())),
-                    Err(_) => Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "quic driver shut down",
-                    ))),
-                }
-            }
+            Poll::Ready(Ok(())) => match self.tx.send_item(buf.to_vec()) {
+                Ok(()) => Poll::Ready(Ok(buf.len())),
+                Err(_) => Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "quic driver shut down",
+                ))),
+            },
             Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "quic driver shut down",
@@ -380,9 +378,11 @@ fn spawn_driver(
                 while off < pending_app_bytes.len() {
                     match conn.stream_send(STREAM_ID, &pending_app_bytes[off..], false) {
                         Ok(written) => off += written,
-                        Err(quiche::Error::Done)
-                        | Err(quiche::Error::StreamLimit)
-                        | Err(quiche::Error::FlowControl) => break,
+                        Err(
+                            quiche::Error::Done
+                            | quiche::Error::StreamLimit
+                            | quiche::Error::FlowControl,
+                        ) => break,
                         Err(e) => {
                             tracing::debug!(?role, ?e, "quic stream_send error");
                             done = true;
