@@ -8,9 +8,9 @@
 //! token strictly greater than the requested hash, wrapping back to the
 //! beginning when the lookup falls past the end.
 
-// Weighted-fraction arithmetic widens u32 weights into f64 to mirror
-// the C continuum builder. The precision loss at u32::MAX is
-// negligible for ring-point counts.
+// Weighted-fraction arithmetic widens u32 weights into f64 in the
+// continuum builder; precision loss at u32::MAX is negligible for ring-
+// point counts. See docs/journal/allowances.md.
 #![allow(clippy::cast_precision_loss)]
 
 use std::cmp::Ordering;
