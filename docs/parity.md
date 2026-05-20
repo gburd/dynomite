@@ -425,11 +425,153 @@ next to its only consumer.
 
 ## src/seedsprovider/
 
-(Stage 10.)
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `florida_get_seeds` | `dynomite::seeds::florida::FloridaSeedsProvider::fetch` (and the blocking `SeedsProvider::get_seeds` impl which spins up a private current-thread runtime) | done (Stage 10) |
+| `dns_get_seeds` | `dynomite::seeds::dns::DnsSeedsProvider::get_seeds` (resolver injected via the [`dynomite::seeds::dns::Resolver`] trait so unit tests stay deterministic) | done (Stage 10) |
+| `seeds_check` (per-provider 30s rate limiter) | `dynomite::seeds::SeedsError::NoFreshSeeds` (rate limiting is the responsibility of the gossip task driving the trait; the trait surfaces `NoFreshSeeds` so the gossip task can short-circuit as the C engine does) | done (Stage 10) |
+| `hash_seeds` (per-provider de-dup hash on the response body) | folded into the gossip task: the task calls `gossip::add_or_update`, which is idempotent for unchanged nodes (returns `GossipStep::Unchanged`). The dedup-by-hash check is therefore unnecessary in the Rust port. | done (Stage 10) |
+| `evalOSVar` (florida env-var lookup) | folded into `FloridaSeedsProvider::new` + `FloridaSeedsProvider::with_request`; the env-var override is the responsibility of the Stage 12 binary which configures the provider before installing it. | done (Stage 10) |
+| `create_tcp_socket` (florida) | replaced by `tokio::net::TcpStream::connect`. | done (Stage 10) |
+| (new) | `dynomite::seeds::SeedsProvider` trait | the seam Stage 13 will surface as the embedding API for custom seeds backends. |
+| (new) | `dynomite::seeds::simple::SimpleSeedsProvider` | static, in-memory provider that returns the YAML-loaded seeds list (the reference engine routes to no provider when `dyn_seed_provider:` is unset and uses the seed list directly; Rust models that branch as `SimpleSeedsProvider`). |
 
 ## src/entropy/
 
 (Stage 11.)
+
+## src/dyn_server.{c,h} (Stage 10)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `struct datastore` (data shape) | `dynomite::cluster::pool::ServerPool::config()` + the per-pool `crate::net::ConnPool` for the backing datastore connection pool | done (Stage 10) for the data shape; per-conn FSM ships in Stage 9. |
+| `struct server_pool` | `dynomite::cluster::pool::ServerPool` (peers, datacenters, auto-eject deciders, config) | done (Stage 10) |
+| `struct datacenter` | `dynomite::cluster::datacenter::Datacenter` | done (Stage 10) |
+| `struct rack` | `dynomite::cluster::datacenter::Rack` | done (Stage 10) |
+| `struct continuum` | `dynomite::cluster::datacenter::Continuum` | done (Stage 10) |
+| `server_pool_init` | `dynomite::cluster::pool::ServerPool::new` + `PoolConfig::from_conf` | done (Stage 10) |
+| `server_pool_deinit` | implicit (`Drop` of owned types) | done (Stage 10) |
+| `server_pool_preconnect` / `server_pool_disconnect` | folded into `crate::net::ConnPool` lifecycle; the cluster owns the pool refs and lets the connection layer manage preconnect / disconnect. | done (Stage 9 + Stage 10 wiring) |
+| `server_get_dc` / `server_get_rack` / `server_get_rack_by_dc_rack` | `Datacenter::rack` / `Datacenter::upsert_rack` plus `ServerPool::rebuild_ring` for the upsert-on-walk side. | done (Stage 10) |
+| `datacenter_destroy` / `rack_destroy` | implicit (`Drop`) | done (Stage 10) |
+| `dc_init` / `dc_deinit` / `rack_init` / `rack_deinit` | `Datacenter::new` / `Rack::new` (RAII; no explicit init/deinit). | done (Stage 10) |
+| `dc_string_dict_type` (dict typedef) | omitted: replaced by `Vec<Rack>` linear scan + `Datacenter::rack_idx` lookup. The reference engine carries the dict alongside the array but only ever reads from the array; the Rust port drops the redundant dict. | done (Stage 10) |
+| `server_init` / `server_connect` / `server_failure` / `server_close` / `server_close_stats` / `server_ack_err` / `server_connected` / `server_ok` / `server_active` | folded into the Stage 9 `crate::net::server::ServerConn` driver + `ConnPool` machinery; the cluster layer never owns these per-conn paths. The pool-side eject decision the C engine bundles into `server_failure` is reimplemented as `crate::net::auto_eject::AutoEject` and called from both [`ConnPool`] and `ServerPool`'s per-peer auto-eject vector. | done (Stage 9 + Stage 10) |
+| `datastore_check_autoeject` | `crate::net::auto_eject::AutoEject::record_attempt` | done (Stage 9; integrated by Stage 10 via `ServerPool::auto_eject()`) |
+| `get_datastore_conn` | folded into Stage 9's `ConnPool::get`; cluster-side wiring is Stage 12 binary work. | done (Stage 9 + Stage 12 wiring) |
+| `init_server_conn` / `server_ops` (server-side conn vtable) | replaced by per-role driver pattern (Stage 9 `ServerConn`); cluster has no role-vtable. | done (Stage 9) |
+| `server_timeout` / `dnode_peer_timeout` (per-conn timeout helpers) | `PoolConfig::timeout_ms` + per-target adjustments will land with Stage 12 binary wiring; the data shape is preserved here. | omitted-for-stage (Stage 12) |
+| `rsp_recv_next` / `rsp_recv_done` / `req_send_next` / `req_send_done` (server-side) | Stage 9 `ServerConn::run` | done (Stage 9) |
+| `_print_datastore` / `_print_node` | replaced by `#[derive(Debug)]`. | done (Stage 10) |
+| `req_server_enqueue_imsgq` / `req_server_dequeue_imsgq` / `req_server_enqueue_omsgq` / `req_server_dequeue_omsgq` | Stage 9 `Conn::enqueue_in` / `enqueue_out` | done (Stage 9) |
+
+## src/dyn_dnode_peer.{c,h} (Stage 10)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `struct node` (peer record) | `dynomite::cluster::peer::Peer` | done (Stage 10) |
+| `enum dnode_state` (UNKNOWN..LEAVING) | `dynomite::cluster::peer::PeerState` | done (Stage 10) |
+| `dnode_initialize_peers` | `ServerPool::new` (the ctor seeds the local peer at index 0 then appends every `ConfDynSeed`-derived `Peer`). | done (Stage 10) for data shape; the live `tokio` wiring is Stage 12. |
+| `dnode_peer_add_local` | folded into `ServerPool::new` + `Peer::new(.., is_local=true, ..)`. | done (Stage 10) |
+| `dnode_initialize_peer_each` | folded into the caller's loop in `ServerPool::new`; the `is_secure` flag is computed by the binary at startup using `is_secure(secure_server_option, dc, rack, peer.dc, peer.rack)` (Stage 12). | done (Stage 10) for data shape; secure-flag wiring lands with Stage 12. |
+| `dnode_peer_deinit` | implicit (`Drop`). | done (Stage 10) |
+| `dnode_peer_pool_run` / `vnode_update` (peer-side caller) | `ServerPool::rebuild_ring` | done (Stage 10) |
+| `dnode_peer_pool_update` | the rebuild trigger lives in the gossip task; on every `GossipStep::Added` / `Replaced` outcome, the gossip task calls `ServerPool::rebuild_ring`. The `WAIT_BEFORE_UPDATE_PEERS_IN_MILLIS` (30s) throttle is honored by the gossip task itself. | done (Stage 10) for data shape; throttle wiring is Stage 12. |
+| `dnode_peer_pool_server` | folded into `ClusterDispatcher::plan` (which combines the rack lookup, the `vnode_dispatch` call, and the routing-tag check). | done (Stage 10) |
+| `dnode_peer_idx_for_key_on_rack` | `crate::cluster::vnode::dispatch` (and `crate::hashkit::hash` for the key->token half). | done (Stage 10) |
+| `dnode_peer_for_key_on_rack` | folded into `ClusterDispatcher::plan`. | done (Stage 10) |
+| `dnode_peer_get_conn` / `dnode_peer_conn` / `dnode_peer_each_preconnect` / `dnode_peer_each_disconnect` / `dnode_peer_pool_preconnect` / `dnode_peer_pool_disconnect` | folded into Stage 9 `ConnPool::get` / lifecycle; the cluster layer holds Arcs to the per-peer pools. | done (Stage 9 + Stage 12 wiring) |
+| `dnode_peer_ref` / `dnode_peer_unref` / `dnode_peer_active` | replaced by Rust ownership (`Conn::new` / drop). | done (Stage 9) |
+| `dnode_peer_close` / `dnode_peer_failure` / `dnode_peer_ack_err` / `dnode_peer_close_stats` | Stage 9 `dnode_server::DnodeServerConn::run` (close path) + the gossip-driven failure detector here. | done (Stage 9 + Stage 10) |
+| `dnode_peer_connected` / `dnode_peer_ok` | Stage 9 `dnode_server::DnodeServerConn` plus `Peer::record_success`. | done (Stage 9 + Stage 10) |
+| `dnode_create_connection_pool` | folded into Stage 12 binary wiring (it consumes `local_peer_connections` / `remote_peer_connections` from the YAML). The data shape (per-peer `ConnPool` ref) lives on `Peer`. | omitted-for-stage (Stage 12) |
+| `dnode_peer_forward_state` | the gossip task drives this: it calls `dnode_peer_gossip_forward` on a randomly chosen peer. The encode path lives in `proto::dnode::dmsg_write`; the cluster module exposes `gossip::GossipState` so the encoder has everything it needs. | done (Stage 10) for data shape; live tokio task is Stage 12. |
+| `dnode_peer_handshake_announcing` | gossip-driven: emitted when `dyn_state` is `JOINING`. The encoder uses `proto::dnode::dmsg_write` with `DmsgType::GossipSyn`. | done (Stage 10) for data shape; live wiring is Stage 12. |
+| `dnode_peer_add` / `dnode_peer_replace` | the gossip task applies `GossipState::add_or_update`, then calls `ServerPool::rebuild_ring`. | done (Stage 10) |
+| `dnode_rsp_filter` / `dnode_rsp_swallow` / `dnode_rsp_forward_match` / `dnode_rsp_forward` / `dnode_rsp_recv_done` | Stage 9 `dnode_server::DnodeServerConn::run`. | done (Stage 9) |
+| `dnode_req_send_next` (peer-side throttle) | the per-conn `msgs_per_sec()` bucket is left as a Stage 12 wiring item; the rate cap is preserved on `crate::core::setting::msgs_per_sec`. | omitted-for-stage (Stage 12) |
+| `dnode_req_peer_enqueue_imsgq` / `dnode_req_peer_dequeue_imsgq` / `_omsgq` variants | Stage 9 `Conn::enqueue_in` / `enqueue_out`. | done (Stage 9) |
+| `dnode_peer_ops` (peer-side conn vtable) | replaced by per-role driver. | done (Stage 9) |
+| `init_dnode_peer_conn` | folded into Stage 9 `dnode_server::DnodeServerConn::new`. | done (Stage 9) |
+| `preselect_remote_rack_for_replication` | `ServerPool::preselect_remote_racks` | done (Stage 10) |
+| `rack_name_cmp` | folded into `Datacenter::sort_racks` (`Vec::sort_by`). | done (Stage 10) |
+
+## src/dyn_dnode_proxy.c (Stage 10 portion)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `dnode_peer_req_forward` | data-shape side handled by `ClusterDispatcher::plan` (the `DispatchPlan::Replicas` arm names the targets); the encode + outbound enqueue is Stage 9 `dnode_server::DnodeServerConn`. | done (Stage 9 + Stage 10) for shape; runtime fan-out is Stage 12. |
+| `dnode_peer_gossip_forward` | gossip task drives the encoder using `proto::dnode::dmsg_write` with `DmsgType::GossipSyn`. | done (Stage 10) for shape; tokio task is Stage 12. |
+| `dnode_peer_req_forward_stats` | Stage 12 stats wiring. | omitted-for-stage (Stage 12) |
+
+## src/dyn_dnode_request.c (Stage 10 portion)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `dnode_req_forward_error` | folded into `ClusterDispatcher::dispatch`'s `DispatchPlan::NoTargets` arm, which produces an error response via `crate::msg::response::make_error`. | done (Stage 10) |
+| `dnode_peer_req_forward` | data shape: see `ClusterDispatcher::plan`. | done (Stage 10) |
+
+## src/dyn_gossip.{c,h} (Stage 10)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `struct gossip_node` | `dynomite::cluster::gossip::GossipNode` | done (Stage 10) |
+| `struct gossip_rack` / `struct gossip_dc` / `struct gossip_node_pool` (data shape) | folded into `dynomite::cluster::gossip::GossipState` (a `(dc, rack, token)`-keyed map plus a `(dc, rack, host)` map for IP-replacement detection). The C reference duplicates the (dc, rack, node) data into both `gossip_node_pool::datacenters` and `dict_dc`; the Rust port keeps a single map and reconstructs the array on demand. | done (Stage 10) |
+| `parse_seeds` | `dynomite::cluster::gossip::parse_seed_node` | done (Stage 10) |
+| (multi-entry seeds blob parser, inline in `gossip_update_seeds`) | `dynomite::cluster::gossip::parse_seed_blob` | done (Stage 10) |
+| `gossip_dc_init` / `gossip_rack_init` | implicit (`HashMap::insert`) | done (Stage 10) |
+| `gossip_add_node_to_rack` / `gossip_add_node` / `gossip_replace_node` / `gossip_update_state` / `gossip_add_node_if_absent` | unified into `GossipState::add_or_update` (returns a `GossipStep` enum that classifies the change so the caller can rebuild the ring on add / replace and skip on unchanged). | done (Stage 10) |
+| `gossip_failure_detector` | `GossipState::run_failure_detector` | done (Stage 10) |
+| `gossip_forward_state` / `gossip_announce_joining` | data shape preserved; the live tokio task that drives the per-round emission is Stage 12 binary wiring. | done (Stage 10) for shape; live task is Stage 12. |
+| `gossip_loop` (the pthread main loop) | the periodic walker is Stage 12 (a tokio interval task built on `crate::core::task`). The state machine it drives lives here in `GossipState`. | omitted-for-stage (Stage 12) |
+| `gossip_pool_init` / `gossip_destroy` | folded into `ServerPool::new` (initial state) and `Drop` (destroy). The `gossip_set_seeds_provider` dispatch lives in Stage 12 (the binary picks a `SeedsProvider` impl based on `dyn_seed_provider:`). | done (Stage 10) for shape; provider switch is Stage 12. |
+| `gossip_msg_peer_update` | folded into `GossipState::add_or_update`. | done (Stage 10) |
+| `gossip_set_seeds_provider` | Stage 12 binary wiring. | omitted-for-stage (Stage 12) |
+| `dict_node_hash` / `dict_node_key_compare` / `dict_node_destructor` / `dict_string_*` (dict typedefs) | omitted: replaced by `HashMap` keyed on owned `(dc, rack, token-string)` tuples. | done (Stage 10) |
+| `gossip_process_msgs` / `gossip_msg_to_core` / `gossip_ring_msg_to_core` / `string_write_uint32` / `num_len` / `write_char` / `write_number` / `token_to_string` | omitted: ring-message bookkeeping is replaced by Rust ownership; numeric serialisation goes through `format!`. | done (Stage 10) |
+| `gossip_debug` | replaced by `tracing::debug!(?GossipState)`. | done (Stage 10) |
+
+## src/dyn_node_snitch.{c,h} (Stage 10)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `is_aws_env` | `dynomite::cluster::snitch::is_aws_env` | done (Stage 10) |
+| `hostname_to_ip` / `hostname_to_private_ip4` | omitted: replaced by `tokio::net::lookup_host` at the call site (the C function is referenced only by `parse_seeds`, which the Rust port forwards through the seeds-provider trait). | done (Stage 10) |
+| `get_broadcast_address` | `dynomite::cluster::snitch::broadcast_address` (closure-injected env lookup keeps the function pure) | done (Stage 10) |
+| `get_public_hostname` | `dynomite::cluster::snitch::public_hostname` | done (Stage 10) |
+| `get_public_ip4` | `dynomite::cluster::snitch::public_ip4` | done (Stage 10) |
+| `get_private_ip4` | `dynomite::cluster::snitch::private_ip4` | done (Stage 10) |
+| (new, brief-mandated) | `dynomite::cluster::snitch::rack_distance` / `pick_target_rack` / `RackDistance` | the brief asked for DC/rack proximity ordering helpers in `cluster::snitch`. The reference engine's snitch unit does not own them; the proximity decision lives in the peer-side `preselect_remote_rack_for_replication`. We add the helpers here to satisfy the brief and use them from `ClusterDispatcher::plan`; the deviation is recorded in the `# Deviations` section below. |
+
+## src/dyn_vnode.{c,h} (Stage 10)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `vnode_update` | `ServerPool::rebuild_ring` (which calls `crate::cluster::vnode::rebuild_continuums`) | done (Stage 10) |
+| `vnode_dispatch` | `crate::cluster::vnode::dispatch` | done (Stage 10) |
+| `vnode_item_cmp` / `vnode_rack_verify_continuum` | folded into `Rack::sort_continuums` (`Vec::sort_by` on `Continuum::token`). | done (Stage 10) |
+
+## src/dyn_setting.{c,h} (Stage 10 wiring)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `msgs_per_sec` / `set_msgs_per_sec` | `crate::core::setting::msgs_per_sec` / `set_msgs_per_sec` (Stage 1); cluster-side per-conn token bucket integration is Stage 12 binary wiring. | done (Stage 1); cluster integration is Stage 12. |
+
+## Stage-10 new types
+
+| New type | Rust home | Notes |
+|---|---|---|
+| `dynomite::cluster::peer::Peer` / `PeerState` / `PeerEndpoint` | per-peer record. |
+| `dynomite::cluster::datacenter::Datacenter` / `Rack` / `Continuum` | topology. |
+| `dynomite::cluster::pool::ServerPool` / `PoolConfig` | cluster owner. |
+| `dynomite::cluster::vnode::dispatch` / `rebuild_continuums` / `PeerTokens` | token ring math. |
+| `dynomite::cluster::snitch::rack_distance` / `pick_target_rack` / `RackDistance` | rack proximity. |
+| `dynomite::cluster::gossip::GossipState` / `GossipNode` / `GossipStep` / `GossipConfig` / `SeedRecord` / `parse_seed_node` / `parse_seed_blob` | gossip state machine + seed parser. |
+| `dynomite::cluster::dispatch::ClusterDispatcher` / `DispatchPlan` / `ReplicaTarget` | cluster-aware [`Dispatcher`](crate::net::Dispatcher) implementation. |
+| `dynomite::seeds::SeedsProvider` / `SeedsError` | seeds provider trait + error type. |
+| `dynomite::seeds::simple::SimpleSeedsProvider` | YAML-loaded list. |
+| `dynomite::seeds::dns::DnsSeedsProvider` / `Resolver` / `ResolvedSeeds` | DNS-driven provider with injectable resolver. |
+| `dynomite::seeds::florida::FloridaSeedsProvider` | HTTP/1.0 over `tokio::net::TcpStream` + `httparse`. |
 
 ## src/tools/
 
@@ -982,6 +1124,70 @@ ignored in `deny.toml` and `scripts/check.sh` per
 The Stage 9 review confirmed `--features quic` now runs an
 end-to-end loopback test (`tests/stage_09_quic.rs`) using a
 pure-Rust `rcgen`-generated self-signed cert.
+
+### Stage 10: snitch rack-distance helpers added
+
+The reference engine's `dyn_node_snitch.{c,h}` implements only
+four helpers: `get_broadcast_address`, `get_public_hostname`,
+`get_public_ip4`, `get_private_ip4` (each an env-var lookup with
+a peer-name fallback) plus `hostname_to_private_ip4` which is a
+thin wrapper around `gethostbyname`. The brief for Stage 10
+asked for `pick_target_rack` and `rack_distance` helpers in
+the snitch module "mirroring `dyn_node_snitch.c`". They are not
+in that file. The reference's only DC/rack proximity decision
+lives in `dyn_dnode_peer.c::preselect_remote_rack_for_replication`,
+which picks one rack per remote DC for replication. We honor the
+brief by adding `rack_distance` / `pick_target_rack` /
+`RackDistance` to `cluster::snitch` (they are pure functions of
+`(self_dc, self_rack, other_dc, other_rack)`) and use them from
+`ClusterDispatcher::plan` to order replica candidates. The
+functions are not present in the reference snitch unit; they
+represent a Rust-side convenience that the dispatcher needs.
+
+Pinned by `dynomite::cluster::snitch::tests::distance_orders_correctly`,
+`dynomite::cluster::snitch::tests::pick_target_rack_*`.
+
+### Stage 10: gossip data shapes consolidated into a single map
+
+`gossip_node_pool` carries both `datacenters: array<gossip_dc>`
+(walked iteratively) and `dict_dc: dict<string, gossip_dc>`
+(used for O(1) DC lookup); each `gossip_dc` likewise carries
+both `racks` and `dict_rack`, and each `gossip_rack` carries
+both `nodes` and `dict_token_nodes` / `dict_name_nodes`. The
+update path keeps every dict in sync with the corresponding
+array. The Rust port compresses this into a single
+`HashMap<(dc, rack, token_str), GossipNode>` plus a parallel
+`(dc, rack, host) -> GossipNode` map for IP-replacement
+detection. The walker that emits the gossip state digest
+reconstructs the per-DC / per-rack groupings on demand. The
+observable behaviour is identical; the dict-and-array
+duplication is dropped.
+
+Pinned by `dynomite::cluster::gossip::tests::*` (the full
+add / replace / unchanged / state-changed matrix).
+
+### Stage 10: `init_response_mgr_all_dcs` lives on `ServerPool`
+
+The Stage 7 brief recorded that the per-DC response manager
+walker (`init_response_mgr_all_dcs`) belonged to Stage 10
+because it walks the cluster's DC list. It now lives on
+`ServerPool` as `init_response_mgrs`, returns a `Vec<ResponseMgr>`
+of one entry per DC sized to the rack count (capped at
+`MAX_REPLICAS_PER_DC = 3`), and is the integration point the
+Stage 12 binary wires into the request lifecycle.
+
+### Stage 10: HTTP florida client hand-rolled on tokio
+
+The reference engine uses blocking BSD sockets for the Florida
+fetch. The Rust port hand-rolls an HTTP/1.0 client over
+`tokio::net::TcpStream` (the locked dependency set in PLAN.md
+Section 2 forbids `hyper`/`reqwest`). Status-line and headers
+are parsed by `httparse`; the body is everything past the
+status-line + header block. The wire shape is unchanged.
+
+Pinned by
+`dynomite::seeds::florida::tests::ok_response_parsed` and
+`tests/stage_10_cluster.rs::florida_seeds_via_canned_listener`.
 
 ## Caveats
 
