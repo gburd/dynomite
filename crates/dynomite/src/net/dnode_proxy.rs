@@ -2,8 +2,7 @@
 //!
 //! Listens for inbound peer connections from other Dynomite nodes
 //! and spawns a [`crate::net::dnode_client::dnode_client_loop`] task
-//! per accepted socket. Mirrors `dyn_dnode_proxy.{c,h}` in the C
-//! reference engine.
+//! per accepted socket.
 //!
 //! # Examples
 //!

@@ -1,12 +1,10 @@
 //! PROXY listener.
 //!
-//! The reference engine's `dyn_proxy.{c,h}` listens for client
-//! connections on the `listen:` port and spawns a CLIENT FSM per
-//! accepted socket. The Rust port keeps the same shape: [`Proxy`]
-//! owns a [`tokio::net::TcpListener`] and a per-listener
-//! [`Dispatcher`] reference; calling [`Proxy::run`] enters an
-//! accept-loop that drives a fresh `tokio::spawn` for every
-//! incoming socket.
+//! Listens for client connections on the configured `listen:` port
+//! and spawns a CLIENT FSM per accepted socket. [`Proxy`] owns a
+//! [`tokio::net::TcpListener`] and a per-listener [`Dispatcher`]
+//! reference; calling [`Proxy::run`] enters an accept-loop that
+//! drives a fresh `tokio::spawn` for every incoming socket.
 //!
 //! # Examples
 //!
@@ -111,6 +109,14 @@ impl Proxy {
                 () = &mut cancel => break,
                 res = accept => {
                     let (sock, peer) = res?;
+                    // Match the latency expectation of the
+                    // datastore engines: Redis and memcache both
+                    // assume the upstream proxy disables Nagle so
+                    // small Redis requests fly without batching.
+                    // Errors here are non-fatal: a peer that
+                    // disconnected before the option could be
+                    // applied is fine.
+                    let _ = sock.set_nodelay(true);
                     let role = ConnRole::Client;
                     let transport = Box::new(TcpTransport::new(sock, role));
                     let conn = Conn::new(transport, role);

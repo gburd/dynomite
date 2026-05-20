@@ -18,15 +18,10 @@
 //! [`Transport`](crate::io::reactor::Transport) so the same FSM
 //! drives TCP today and QUIC behind the `quic` cargo feature.
 //!
-//! The C reference engine fans these responsibilities across
-//! `dyn_connection.{c,h}`, `dyn_connection_pool.{c,h}`,
-//! `dyn_proxy.{c,h}`, `dyn_client.{c,h}`, `dyn_server.{c,h}`,
-//! `dyn_dnode_proxy.{c,h}`, `dyn_dnode_client.{c,h}`,
-//! `dyn_request.c`, and `dyn_response.c`. The Rust port keeps the
-//! same role split and the same per-role responsibilities; cluster
-//! routing decisions (`req_forward_*`, peer selection, gossip) live
-//! in Stage 10's `cluster::*` module and are dispatched into via the
-//! [`Dispatcher`] trait below.
+//! Cluster routing decisions (request forwarding across racks /
+//! DCs, peer selection, gossip) live in Stage 10's `cluster::*`
+//! module and are dispatched into via the [`Dispatcher`] trait
+//! below.
 //!
 //! # Examples
 //!

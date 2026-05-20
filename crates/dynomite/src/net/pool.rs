@@ -1,16 +1,16 @@
 //! Outbound connection pool with backoff and auto-eject.
 //!
-//! The reference engine uses two pool flavors: the per-datastore
-//! pool (managed in `dyn_connection_pool.c` with backing storage
-//! in `dyn_server.c`) and the per-peer pool (driven by
-//! `dyn_dnode_peer.c`). Both share the policy:
+//! Two pool flavors share the same policy in this codebase: the
+//! per-datastore pool that hands a Redis or memcache backend
+//! connection to a CLIENT FSM, and the per-peer pool that hands a
+//! peer connection to the cluster routing layer. Both share:
 //!
-//! * cap the active connection count at `max_connections`,
+//! * a cap on the active connection count (`max_connections`),
 //! * round-robin across slots keyed on a caller-supplied `tag`,
-//! * back off exponentially on connect failures (doubling the
-//!   timeout each time, capped at `max_timeout`),
-//! * eject the host after `server_failure_limit` consecutive
-//!   failures, retry after `server_retry_timeout_ms`.
+//! * exponential connect-failure backoff (doubling the timeout each
+//!   time, capped at `max_timeout`),
+//! * auto-eject of the host after `failure_limit` consecutive
+//!   failures, with retry after `retry_after`.
 //!
 //! [`ConnPool`] reproduces the policy in safe Rust. Connections are
 //! manufactured by a caller-supplied [`ConnFactory`] (so tests can
@@ -123,9 +123,9 @@ impl Backoff {
     }
 
     fn record_failure(&mut self) -> Duration {
-        // Mirrors `dyn_connection_pool.c::conn_pool_notify_conn_errored`:
-        // the wait starts at MIN_WAIT_BEFORE_RECONNECT_IN_SECS=1s and
-        // doubles per failure, capped at the configured maximum.
+        // Exponential connect-failure backoff: the wait starts at
+        // 1s and doubles on each consecutive failure, capped at
+        // the configured maximum.
         if self.current.is_zero() {
             self.current = Duration::from_secs(1);
         } else {

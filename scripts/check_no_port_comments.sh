@@ -10,7 +10,7 @@ if [ ! -d crates ]; then
   exit 0
 fi
 
-PATTERN='ported from|port of|matches dyn_|matches the C|originally in dyn_|from twemproxy'
+PATTERN='ported from|port of|matches dyn_|matches the C|originally in dyn_|from twemproxy|[Mm]irrors `?dyn_|[Mm]irrors the `?dyn_|[Mm]irror[s]? .* dyn_|C reference engine|dyn_[a-z_]+\.c'
 HITS=$(grep -RInE -i "$PATTERN" \
   --include='*.rs' \
   --include='*.md' \

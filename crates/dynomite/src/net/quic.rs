@@ -15,9 +15,8 @@
 //! [`AsyncWrite`].
 //!
 //! TLS material is configured through [`QuicConfig`]; tests use a
-//! checked-in self-signed cert under
-//! `crates/dynomite/tests/fixtures/quic/`. Production deployments
-//! must supply real certificates.
+//! self-signed cert generated at test-binary startup. Production
+//! deployments must supply real certificates.
 //!
 //! # Examples
 //!
@@ -28,8 +27,8 @@
 //! let _cfg = QuicConfig::server_with_cert_paths("server.crt", "server.key");
 //! ```
 //!
-//! See `crates/dynomite/tests/stage_09_net.rs` for a runnable
-//! end-to-end test.
+//! See `crates/dynomite/tests/stage_09_quic.rs` for a runnable
+//! end-to-end test (gated on the `quic` feature).
 
 use std::io;
 use std::net::SocketAddr;
@@ -43,6 +42,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
+use tokio_util::sync::PollSender;
 
 use crate::io::reactor::{ConnRole, Transport};
 
@@ -128,11 +128,16 @@ impl QuicConfig {
 }
 
 /// QUIC-backed [`Transport`].
+///
+/// `tx` is wrapped in a [`PollSender`] so [`AsyncWrite::poll_write`]
+/// can return [`Poll::Pending`] (after registering the caller's
+/// waker) when the driver task's inbox is full, instead of busy-
+/// looping on a zero-byte short write.
 pub struct QuicTransport {
     role: ConnRole,
     peer_addr: SocketAddr,
     rx: mpsc::Receiver<Vec<u8>>,
-    tx: mpsc::Sender<Vec<u8>>,
+    tx: PollSender<Vec<u8>>,
     pending_read: Vec<u8>,
     closed: Arc<Notify>,
     _driver: Arc<DriverHandle>,
@@ -198,21 +203,25 @@ impl AsyncRead for QuicTransport {
 
 impl AsyncWrite for QuicTransport {
     fn poll_write(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        match self.tx.try_send(buf.to_vec()) {
-            Ok(()) => Poll::Ready(Ok(buf.len())),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                // The driver task is busy; report a short write so
-                // the caller retries.
-                Poll::Ready(Ok(0))
+        match self.tx.poll_reserve(cx) {
+            Poll::Ready(Ok(())) => {
+                match self.tx.send_item(buf.to_vec()) {
+                    Ok(()) => Poll::Ready(Ok(buf.len())),
+                    Err(_) => Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "quic driver shut down",
+                    ))),
+                }
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => Poll::Ready(Err(io::Error::new(
+            Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "quic driver shut down",
             ))),
+            Poll::Pending => Poll::Pending,
         }
     }
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -437,7 +446,7 @@ fn spawn_driver(
         role,
         peer_addr: peer,
         rx: driver_to_app_rx,
-        tx: app_to_driver_tx,
+        tx: PollSender::new(app_to_driver_tx),
         pending_read: Vec::new(),
         closed: Arc::clone(&closed),
         _driver: Arc::new(DriverHandle {

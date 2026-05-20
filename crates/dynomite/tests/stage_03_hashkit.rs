@@ -27,8 +27,7 @@
 //!   (algorithmic property).
 //!
 //! PLAN.md Stage 3 also suggested anchoring against the C
-//! `dyn_hash_tool` as an oracle. That tool exists
-//! (`_/dynomite/src/tools/dyn_hash_tool.c`) but only supports the
+//! `dyn_hash_tool` as an oracle. That tool only supports the
 //! `murmur` algorithm, so it can anchor only one of the thirteen
 //! columns. Once a host with the C build environment is available,
 //! piping a small key set through it and diffing against

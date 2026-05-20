@@ -6,10 +6,10 @@
 //! ```
 //!
 //! The fixture pins the AES wire format implemented in Stage 6.
-//! Because the cipher is AES-128-CBC with the key reused as the IV
-//! (mirroring the C reference at `_/dynomite/src/dyn_crypto.c:277`),
+//! Because the cipher is AES-128-CBC with the key reused as the IV,
 //! the ciphertext is deterministic and any compliant implementation
-//! produces the same bytes for the same inputs.
+//! produces the same bytes for the same inputs. The C-reference
+//! mapping is recorded in `docs/parity.md` only.
 //!
 //! The committed `cipher.bin` was independently verified against
 //! the OpenSSL CLI:

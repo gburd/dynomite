@@ -18,7 +18,8 @@ use dynomite::proto::dnode::{
 
 use proptest::prelude::*;
 
-/// The canonical multi-message blob from `dyn_test.c`.
+/// Canonical multi-message blob used as the cross-implementation
+/// fixture for Stage 7.
 ///
 /// Three messages, all `DMSG_REQ`, with msg ids 1, 2, 3. The second
 /// payload is a 413-byte Redis `set` with a long bulk string;
@@ -199,10 +200,9 @@ fn dnode_parser_round_trip_proptest() {
 
 #[test]
 fn dispatcher_routes_control_plane_through_bypass() {
-    // The C `dmsg_process` switch in
-    // `_/dynomite/src/dyn_dnode_msg.c:626-656` only short-circuits
-    // these three variants; every other gossip variant must fall
-    // through to the default (forward) branch.
+    // Only CRYPTO_HANDSHAKE, GOSSIP_SYN, and GOSSIP_SYN_REPLY
+    // short-circuit through the bypass; every other gossip variant
+    // must fall through to the default (forward) branch.
     let mut d = Dmsg::new();
     for ty in [
         DmsgType::CryptoHandshake,

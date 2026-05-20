@@ -340,13 +340,13 @@ pub struct DnodeParser {
     dmsg: Dmsg,
     data_remaining: u32,
     magic_progress: u8,
-    /// Tracks the C reference engine's `isdigit(*(p - 1))` guard.
-    /// `dyn_parse_core` only transitions out of the numeric header
+    /// Whether the previous byte was an ASCII digit. The header
+    /// state machine only transitions out of the numeric header
     /// fields (MSG_ID, TYPE_ID, BIT_FIELD, VERSION, SAME_DC) when
     /// the byte immediately preceding the field-terminating space
-    /// was a digit; the Rust port reproduces the same guard so
-    /// extra whitespace (or any other non-digit byte) is rejected
-    /// with the same strictness as the C engine.
+    /// was a digit; the parser reproduces this guard so extra
+    /// whitespace (or any other non-digit byte) is rejected with
+    /// the wire protocol's strictness.
     prev_was_digit: bool,
 }
 
@@ -466,10 +466,9 @@ impl DnodeParser {
                     return ParseStep::Error { consumed: idx };
                 }
                 DynParseState::MsgId => {
-                    // Mirrors `dyn_parse_core`'s DYN_MSG_ID arm in
-                    // `_/dynomite/src/dyn_dnode_msg.c`: digits
-                    // accumulate, a single space terminates the
-                    // field but only when the byte immediately
+                    // DYN_MSG_ID state: digits accumulate, a single
+                    // space terminates the field but only when the
+                    // byte immediately
                     // before it was a digit. Anything else is
                     // rejected (the C engine resets to DYN_START
                     // and lets the recovery path retry; the Rust
@@ -918,8 +917,7 @@ pub enum DmsgDispatch {
 /// ```
 #[must_use]
 pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
-    // Mirrors the C `dmsg_process` switch in
-    // `_/dynomite/src/dyn_dnode_msg.c`: only CRYPTO_HANDSHAKE,
+    // Dmsg dispatch table: only CRYPTO_HANDSHAKE,
     // GOSSIP_SYN, and GOSSIP_SYN_REPLY short-circuit; the other
     // gossip variants (ACK, DIGEST_SYN, DIGEST_ACK, DIGEST_ACK2,
     // SHUTDOWN) fall through to the default branch and are
