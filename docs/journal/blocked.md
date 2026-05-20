@@ -48,30 +48,23 @@ The Stage 6 review recommended a one-line `proptest!` case in
 panic-free contract; track alongside the `crypto_aes_decrypt`
 fuzz target above so the additions land together.
 
-### Stage 9: QUIC + openssl-vendored link conflict
+### Stage 9: QUIC + crypto coexistence (resolved)
 
-The `quic` cargo feature pulls in `quiche`, which bundles its
-own BoringSSL. The `openssl` workspace dependency is configured
-with the `vendored` feature, which statically links a copy of
-OpenSSL's libcrypto. Binaries that link both static archives
-(test artifacts built with `--all-features`) fail with
-`multiple definition` linker errors on every shared symbol
-(`EVP_*`, `BIO_*`, `RSA_*`, ...).
+The original `quic` feature pulled in `quiche` which bundles its
+own BoringSSL while the original Stage 6 used the `openssl` crate
+with the `vendored` feature. The two static archives both
+exported the OpenSSL ABI symbols and produced multi-definition
+linker errors when the QUIC integration test attempted to link
+both into one artifact.
 
-The Stage 9 QUIC code compiles cleanly as a library (`cargo
-build -p dynomite --features quic`) but the integration test
-that exercises the QUIC end-to-end loopback cannot link in
-the same artifact as the Stage 6 crypto code. Stage 9 ships
-the transport behind `#[cfg(feature = "quic")]`; the
-end-to-end test is documented as deferred until either the
-`openssl-vendored` feature is replaced with system
-`openssl-sys` (Stage 12 binary-wiring decision) or the Stage 6
-crypto module is migrated to a non-OpenSSL backend
-(`aws-lc-rs` or `boring`).
+Resolution: Stage 6 crypto migrated to the pure-Rust RustCrypto
+stack (`aes`/`cbc`/`rsa`/`sha1`/`rand`). With no C-binding crypto
+in the workspace, `cargo build --workspace --all-features` and
+`cargo nextest run --workspace --all-features` both succeed.
+The QUIC end-to-end test now runs alongside the AES/RSA tests in
+a single `--all-features` artifact.
 
-Non-QUIC Stage 9 surfaces (TCP loopback echo, `ConnPool`,
-`AutoEject`, IPv6 dual-stack, role-specific FSMs) ship and
-test cleanly without the conflict.
+Follow-up: see the RUSTSEC-2023-0071 entry below.
 
 ### Stage 9: cluster-side dispatcher seam
 
