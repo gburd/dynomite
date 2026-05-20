@@ -9,6 +9,11 @@
 //! Sharding is delegated to a [`FragmentDispatcher`] so the
 //! fragmenter has no compile-time dependency on the cluster layer.
 
+// The fragmenter assigns each input key to a shard index returned
+// by the dispatcher (a `u32` by contract); the per-fragment shard
+// index is therefore safe to truncate from `usize`.
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::io::mbuf::{Mbuf, MbufPool};
 use crate::msg::{KeyPos, Msg, MsgType};
 
@@ -112,33 +117,43 @@ pub fn redis_fragment<D: FragmentDispatcher + ?Sized>(
         if idx >= bucket.len() {
             bucket.resize(idx + 1, None);
         }
-        let bucket_idx = match bucket[idx] {
-            Some(j) => j,
-            None => {
-                let mut sub = Msg::new(0, r.ty(), true);
-                sub.set_frag_id(frag_id);
-                fragments.push(sub);
-                keys_per_fragment.push(Vec::new());
-                values_per_fragment.push(Vec::new());
-                let j = fragments.len() - 1;
-                bucket[idx] = Some(j);
-                j
+        let bucket_idx = if let Some(j) = bucket.get(idx).copied().flatten() {
+            j
+        } else {
+            let mut sub = Msg::new(0, r.ty(), true);
+            sub.set_frag_id(frag_id);
+            fragments.push(sub);
+            keys_per_fragment.push(Vec::new());
+            values_per_fragment.push(Vec::new());
+            let j = fragments.len() - 1;
+            if let Some(slot) = bucket.get_mut(idx) {
+                *slot = Some(j);
             }
+            j
         };
-        keys_per_fragment[bucket_idx].push(clone_keypos(key));
-        if key_step == 2 {
-            values_per_fragment[bucket_idx].push(value_for_key[i].clone());
+        if let Some(kf) = keys_per_fragment.get_mut(bucket_idx) {
+            kf.push(clone_keypos(key));
         }
-        shard_for_key.push(idx as u32);
+        if key_step == 2 {
+            if let (Some(vf), Some(v)) = (
+                values_per_fragment.get_mut(bucket_idx),
+                value_for_key.get(i),
+            ) {
+                vf.push(v.clone());
+            }
+        }
+        shard_for_key.push(u32::try_from(idx).unwrap_or(u32::MAX));
     }
 
     // Encode the wire frame for each fragment.
     for (i, frag) in fragments.iter_mut().enumerate() {
-        encode_fragment(frag, &keys_per_fragment[i], &values_per_fragment[i], pool)?;
-        for k in &keys_per_fragment[i] {
+        let keys = keys_per_fragment.get(i).cloned().unwrap_or_default();
+        let values = values_per_fragment.get(i).cloned().unwrap_or_default();
+        encode_fragment(frag, &keys, &values, pool)?;
+        for k in &keys {
             frag.push_key(clone_keypos(k));
         }
-        let nkeys = u32::try_from(keys_per_fragment[i].len()).unwrap_or(u32::MAX);
+        let nkeys = u32::try_from(keys.len()).unwrap_or(u32::MAX);
         let multiplier = if key_step == 2 { 2 } else { 1 };
         frag.set_ntokens(1 + nkeys.saturating_mul(multiplier));
     }
@@ -248,7 +263,9 @@ mod tests {
     fn mget_fragments_across_shards() {
         let mut m = build_mget(&[b"a", b"b", b"c"]); // a,c on shard 1, b on shard 0
         let pool = MbufPool::default();
-        let outcome = redis_fragment(&mut m, &OddEven, &[], &pool).unwrap().unwrap();
+        let outcome = redis_fragment(&mut m, &OddEven, &[], &pool)
+            .unwrap()
+            .unwrap();
         assert_eq!(outcome.fragments.len(), 2);
         assert_eq!(outcome.shard_for_key.len(), 3);
     }

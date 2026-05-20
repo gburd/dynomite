@@ -87,9 +87,7 @@ pub fn redis_rewrite_query(orig: &mut Msg, pool: &MbufPool) -> Result<RepairOutc
 /// let outcome = redis_rewrite_query_with_timestamp_md(&mut req).unwrap();
 /// matches!(outcome, dynomite::proto::redis::RepairOutcome::NoOp);
 /// ```
-pub fn redis_rewrite_query_with_timestamp_md(
-    orig: &mut Msg,
-) -> Result<RepairOutcome, RepairError> {
+pub fn redis_rewrite_query_with_timestamp_md(orig: &mut Msg) -> Result<RepairOutcome, RepairError> {
     if !orig.is_request() {
         return Ok(RepairOutcome::NoOp);
     }

@@ -12,6 +12,8 @@
 //! Stage 10). Tests pass an in-memory dispatcher; the real engine
 //! supplies one backed by `dnode_peer_idx_for_key_on_rack`.
 
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::msg::{KeyPos, Msg, MsgType};
 
 use super::commands::memcache_retrieval;
@@ -94,27 +96,28 @@ pub fn memcache_fragment<D: FragmentDispatcher + ?Sized>(
 
     let frag_id = next_frag_id();
 
-    for (i, key) in r.keys().iter().enumerate() {
+    for key in r.keys() {
         let idx = dispatcher.shard_for(key.tag_bytes()) as usize;
         if idx >= bucket.len() {
             bucket.resize(idx + 1, None);
         }
-        let bucket_idx = match bucket[idx] {
-            Some(j) => j,
-            None => {
-                let mut sub = Msg::new(0, r.ty(), true);
-                sub.set_frag_id(frag_id);
-                fragments.push(sub);
-                let j = fragments.len() - 1;
-                bucket[idx] = Some(j);
-                j
+        let bucket_idx = if let Some(j) = bucket.get(idx).copied().flatten() {
+            j
+        } else {
+            let mut sub = Msg::new(0, r.ty(), true);
+            sub.set_frag_id(frag_id);
+            fragments.push(sub);
+            let j = fragments.len() - 1;
+            if let Some(slot) = bucket.get_mut(idx) {
+                *slot = Some(j);
             }
+            j
         };
-        let sub = &mut fragments[bucket_idx];
-        sub.push_key(clone_keypos(key));
-        sub.set_ntokens(sub.ntokens().saturating_add(1));
-        shard_for_key.push(idx as u32);
-        let _ = i;
+        if let Some(sub) = fragments.get_mut(bucket_idx) {
+            sub.push_key(clone_keypos(key));
+            sub.set_ntokens(sub.ntokens().saturating_add(1));
+        }
+        shard_for_key.push(u32::try_from(idx).unwrap_or(u32::MAX));
     }
 
     // Prepend the verb and append CRLF for each fragment.

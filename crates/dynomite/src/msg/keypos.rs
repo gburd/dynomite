@@ -165,7 +165,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "tag range must be valid")]
     fn keypos_rejects_inverted_range() {
-        let _ = KeyPos::new(b"abc".to_vec(), 2..1);
+        let bad = std::ops::Range::<usize> { start: 2, end: 1 };
+        let _ = KeyPos::new(b"abc".to_vec(), bad);
     }
 
     #[test]

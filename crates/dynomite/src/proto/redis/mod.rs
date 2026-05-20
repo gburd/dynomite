@@ -14,10 +14,10 @@
 //! use dynomite::proto::redis;
 //!
 //! let mut req = Msg::new(0, MsgType::Unknown, true);
-//! let r = redis::redis_parse_req(&mut req, b\"*2\\r\\n$3\\r\\nGET\\r\\n$3\\r\\nfoo\\r\\n\");
+//! let r = redis::redis_parse_req(&mut req, b"*2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n");
 //! assert_eq!(r, MsgParseResult::Ok);
 //! assert_eq!(req.ty(), MsgType::ReqRedisGet);
-//! assert_eq!(req.keys()[0].key(), b\"foo\");
+//! assert_eq!(req.keys()[0].key(), b"foo");
 //! ```
 
 pub mod coalesce;
