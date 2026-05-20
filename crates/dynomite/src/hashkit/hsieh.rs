@@ -73,6 +73,17 @@ mod tests {
         assert_eq!(h(b""), 0);
     }
 
+    /// Pins the empty-key behavior. The C `hash_hsieh` returns
+    /// `DN_OK` without touching the token, leaving the caller's
+    /// uninitialised memory in place; we resolve that to a zero-valued
+    /// token. See `docs/parity.md` deviation.
+    #[test]
+    fn empty_key_is_zero_token_not_uninit() {
+        let token = hash(b"");
+        assert_eq!(token.len(), 1);
+        assert_eq!(token.get_int(), 0);
+    }
+
     #[test]
     fn determinism() {
         for k in [&b"a"[..], b"ab", b"abc", b"abcd", b"abcde"] {

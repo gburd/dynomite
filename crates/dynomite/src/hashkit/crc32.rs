@@ -324,6 +324,30 @@ mod tests {
         assert_eq!(upper, lower);
     }
 
+    /// Pins ASCII-only lower-casing. The C `crc32_sz` calls
+    /// `tolower((unsigned int)*p)`, which is locale-dependent for
+    /// bytes >= 0x80; the Rust implementation uses
+    /// `to_ascii_lowercase`, which is a no-op for those bytes. See
+    /// the deviation in `docs/parity.md`.
+    #[test]
+    fn crc32_sz_ascii_only_high_byte_is_unchanged() {
+        // Construct a buffer with a single high byte. A locale-aware
+        // tolower could fold this byte to a different value; the Rust
+        // helper must hash it as-is.
+        let high = [0xC0u8];
+        let same = crc32_sz(&high, 0);
+        // Re-running with the same byte must reproduce.
+        assert_eq!(same, crc32_sz(&high, 0));
+        // And it must NOT equal the CRC of the would-be locale
+        // fold (e.g. 0xE0 in some Latin-1 locales).
+        let folded = [0xE0u8];
+        assert_ne!(
+            same,
+            crc32_sz(&folded, 0),
+            "crc32_sz must not perform locale-aware folding"
+        );
+    }
+
     #[test]
     fn determinism() {
         for k in [&b"x"[..], b"key", b"foobar"] {

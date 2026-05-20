@@ -1,11 +1,19 @@
 //! Pseudo-random integer source used by the `random` distribution.
 //!
 //! The C reference seeds glibc `srandom` with `time(NULL)` and dispatches
-//! requests to live servers using `random() % ncontinuum`. We replace that
-//! with a small, deterministic-when-seeded LCG so the engine can run on
-//! platforms whose libc does not provide BSD `random()`. The default seed
-//! still draws entropy from a monotonic clock, matching the spirit of the
-//! C version.
+//! requests to live servers using `random() % ncontinuum`. We replace
+//! that with a small, deterministic-when-seeded LCG so the engine does
+//! not depend on libc's BSD `random()` family.
+//!
+//! The default seed is drawn from `SystemTime::now()` (nanoseconds
+//! since the Unix epoch). PLAN.md Stage 3 originally suggested
+//! `clock_gettime(CLOCK_MONOTONIC)` for symmetry with the C `time(0)`
+//! seeding; the chosen `SystemTime` source achieves the same goal
+//! (per-process seed entropy) without requiring the `time` cargo
+//! feature on the `nix` workspace dependency. The choice is documented
+//! as a deviation in `docs/parity.md` and pinned by a regression
+//! test, so any future move to a monotonic source is an intentional
+//! change rather than a drift.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,7 +26,11 @@ pub struct PseudoRng {
 }
 
 impl PseudoRng {
-    /// Construct a generator seeded from a monotonic clock.
+    /// Construct a generator seeded from the system clock.
+    ///
+    /// The seed mixes seconds and nanoseconds drawn from
+    /// [`SystemTime::now()`]. See the module-level docs for why we use
+    /// the system clock rather than a monotonic clock.
     ///
     /// # Examples
     ///
@@ -96,6 +108,21 @@ mod tests {
         for _ in 0..32 {
             assert_eq!(a.next_u32(), b.next_u32());
         }
+    }
+
+    /// Pins the choice of LCG parameters and the high-bit return
+    /// strategy. If this test breaks, treat it as an intentional API
+    /// change and update `docs/parity.md`'s `PseudoRng` deviation.
+    #[test]
+    fn lcg_parameters_are_pinned() {
+        // Knuth MMIX constants applied once and the high 32 bits of
+        // the resulting state.
+        let mut rng = PseudoRng::from_seed(1);
+        let expected = ((1u64
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407))
+            >> 32) as u32;
+        assert_eq!(rng.next_u32(), expected);
     }
 
     #[test]
