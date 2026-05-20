@@ -159,11 +159,7 @@ impl ServerConn {
         use crate::proto::redis::redis_parse_rsp;
 
         while !accumulated.is_empty() {
-            let id = self
-                .pending_responses
-                .front()
-                .copied()
-                .unwrap_or(0);
+            let id = self.pending_responses.front().copied().unwrap_or(0);
             let mut msg = Msg::new(id, MsgType::Unknown, false);
             let result = match self.data_store {
                 DataStore::Redis => redis_parse_rsp(&mut msg, accumulated),
@@ -186,9 +182,7 @@ impl ServerConn {
                     rsp.mbufs_mut().push_back(buf);
                     rsp.recompute_mlen();
                     if let Some(sender) = responder.as_ref() {
-                        let _ = sender
-                            .send(OutboundEnvelope { req_id, rsp })
-                            .await;
+                        let _ = sender.send(OutboundEnvelope { req_id, rsp }).await;
                     }
                 }
                 MsgParseResult::Again => return Ok(()),

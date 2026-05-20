@@ -76,8 +76,7 @@ impl Default for ConnPoolConfig {
 }
 
 /// Boxed future returned by a [`ConnFactory`].
-pub type ConnFuture<C> =
-    Pin<Box<dyn Future<Output = Result<C, NetError>> + Send + 'static>>;
+pub type ConnFuture<C> = Pin<Box<dyn Future<Output = Result<C, NetError>> + Send + 'static>>;
 
 /// Factory that produces a fresh connection on demand.
 ///
