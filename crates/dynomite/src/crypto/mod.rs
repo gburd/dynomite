@@ -5,12 +5,14 @@
 //! key and exchanged during the DNODE handshake. This module exposes:
 //!
 //! * [`Crypto`] - bundle of an RSA key pair (loaded from PEM) and a
-//!   freshly generated AES-256 key. Construct it with
+//!   freshly generated 32-byte AES key buffer. Construct it with
 //!   [`Crypto::from_pem`] at process startup.
-//! * AES-256-CBC encryption and decryption, including helpers that
-//!   pipe through the [`MbufQueue`](crate::io::mbuf::MbufQueue) chain
-//!   the rest of the engine uses.
-//! * RSA wrap and unwrap of the symmetric key, using PKCS#1 v1.5
+//! * AES-128-CBC encryption and decryption (the cipher consumes the
+//!   first 16 bytes of the 32-byte key buffer; the IV is the same
+//!   16 bytes), including helpers that pipe through the
+//!   [`MbufQueue`](crate::io::mbuf::MbufQueue) chain the rest of the
+//!   engine uses.
+//! * RSA wrap and unwrap of the symmetric key, using PKCS#1 OAEP
 //!   padding.
 //! * Base64 encoding and decoding wrappers around the workspace
 //!   `base64` crate.
@@ -43,7 +45,7 @@ pub mod base64;
 pub mod pem;
 pub mod rsa;
 
-pub use self::aes::{AES_BLOCK_SIZE, AES_IV_LEN, AES_KEYLEN};
+pub use self::aes::{AES_BLOCK_SIZE, AES_KEYLEN};
 pub use self::base64::{base64_decode, base64_encode};
 
 /// Errors produced by the crypto module.
@@ -90,10 +92,13 @@ pub enum CryptoError {
 
 /// Bundle of crypto state used by a Dynomite peer instance.
 ///
-/// Holds an RSA key pair loaded from a PEM file and a fresh AES-256
-/// session key generated when the bundle is constructed. The session
-/// key is used for symmetric encryption of DNODE payloads, while the
-/// RSA pair is used to wrap/unwrap session keys during the handshake.
+/// Holds an RSA key pair loaded from a PEM file and a fresh 32-byte
+/// AES session key buffer generated when the bundle is constructed.
+/// The session key is used for symmetric encryption of DNODE
+/// payloads (AES-128-CBC consumes the first 16 bytes; the remaining
+/// 16 bytes match the C `aes_key[AES_KEYLEN]` buffer layout), while
+/// the RSA pair is used to wrap and unwrap session keys during the
+/// handshake.
 ///
 /// # Examples
 ///
@@ -113,8 +118,11 @@ pub struct Crypto {
 
 impl Crypto {
     /// Construct a new bundle by loading an RSA private key from the
-    /// given PEM file and generating a fresh AES-256 key from the
-    /// system CSPRNG.
+    /// given PEM file and generating a fresh 32-byte AES key buffer
+    /// from the system CSPRNG.
+    ///
+    /// AES-128-CBC consumes only the first 16 bytes of the buffer;
+    /// the trailing 16 bytes match the C `aes_key[AES_KEYLEN]` layout.
     ///
     /// # Examples
     ///
@@ -147,9 +155,12 @@ impl Crypto {
         Self { aes_key, rsa }
     }
 
-    /// Generate a fresh AES-256 key from the system CSPRNG.
+    /// Generate a fresh 32-byte AES key buffer from the system
+    /// CSPRNG.
     ///
-    /// The returned slice is 32 random bytes.
+    /// The returned slice is 32 random bytes. AES-128-CBC consumes
+    /// only the first 16 bytes; the trailing 16 bytes are kept to
+    /// match the C `aes_key[AES_KEYLEN]` buffer layout.
     ///
     /// # Examples
     ///
@@ -205,20 +216,24 @@ impl Crypto {
         self.rsa.size() as usize
     }
 
-    /// AES-256-CBC encrypt `msg` with `aes_key`. The output is a fresh
-    /// 16-byte IV followed by the PKCS#7-padded ciphertext.
+    /// AES-128-CBC encrypt `msg` with `aes_key`. The output is the
+    /// PKCS#7-padded ciphertext with no IV prefix.
     ///
     /// # Security
     ///
-    /// * AES-256 in CBC mode with PKCS#7 padding.
-    /// * A fresh 16-byte IV is generated from the system CSPRNG for
-    ///   every call and prepended to the ciphertext. The output is not
-    ///   authenticated; integrity is provided by the surrounding DNODE
-    ///   message framing. Embedders that need authenticated payloads
-    ///   should layer an AEAD on top.
-    /// * The IV is prepended (not derived from the key) so two
-    ///   encryptions of the same plaintext produce different
-    ///   ciphertexts.
+    /// * AES-128 in CBC mode with PKCS#7 padding. The cipher
+    ///   consumes only the first 16 bytes of the 32-byte `aes_key`
+    ///   buffer.
+    /// * The IV is the same 16 bytes as the key, mirroring the C
+    ///   reference (`EVP_EncryptInit_ex(ctx, cipher, NULL, key, key)`
+    ///   in `dyn_crypto.c`). The static IV is a known weakness of
+    ///   the C protocol; the Rust port faithfully reproduces it for
+    ///   wire compatibility. Two encryptions of the same plaintext
+    ///   under the same key produce identical ciphertext.
+    /// * The output is not authenticated. Integrity is provided by
+    ///   the surrounding DNODE message framing. Embedders that need
+    ///   authenticated payloads should treat this as a
+    ///   transport-layer encryption only and layer an AEAD on top.
     ///
     /// # Examples
     ///
@@ -233,10 +248,11 @@ impl Crypto {
         aes::encrypt_to_vec(msg, aes_key)
     }
 
-    /// AES-256-CBC decrypt the output of [`Crypto::aes_encrypt`].
+    /// AES-128-CBC decrypt the output of [`Crypto::aes_encrypt`].
     ///
-    /// `enc` must begin with a 16-byte IV followed by an integral
-    /// number of 16-byte ciphertext blocks.
+    /// `enc` must be a non-empty integral number of 16-byte
+    /// ciphertext blocks. There is no IV prefix; the IV is derived
+    /// from `aes_key` exactly as on the encryption side.
     ///
     /// # Examples
     ///
@@ -251,11 +267,11 @@ impl Crypto {
         aes::decrypt_to_vec(enc, aes_key)
     }
 
-    /// AES-256-CBC encrypt `msg`, writing the result into a fresh
-    /// `MbufQueue` drawn from `pool`. The first chunk of the output
-    /// chain begins with the 16-byte IV, followed by the ciphertext.
-    /// Output spans as many chunks as needed; each chunk is filled up
-    /// to the writable region before allocating the next one.
+    /// AES-128-CBC encrypt `msg`, writing the result into a fresh
+    /// `MbufQueue` drawn from `pool`. The chain holds the raw
+    /// ciphertext; there is no IV prefix. Output spans as many
+    /// chunks as needed; each chunk is filled up to the writable
+    /// region before allocating the next one.
     ///
     /// # Examples
     ///
@@ -277,7 +293,7 @@ impl Crypto {
         aes::encrypt_to_chain(msg, aes_key, pool)
     }
 
-    /// AES-256-CBC decrypt a ciphertext chain produced by
+    /// AES-128-CBC decrypt a ciphertext chain produced by
     /// [`Crypto::dyn_aes_encrypt`], appending the recovered plaintext
     /// to a fresh `MbufQueue` drawn from `pool`.
     ///
@@ -331,7 +347,7 @@ impl Crypto {
         Self::aes_decrypt(&bytes, aes_key)
     }
 
-    /// AES-256-CBC encrypt the readable region of `msg`, returning a
+    /// AES-128-CBC encrypt the readable region of `msg`, returning a
     /// new chain holding the ciphertext along with the total number
     /// of ciphertext bytes written.
     ///
@@ -365,8 +381,9 @@ impl Crypto {
     }
 
     /// RSA encrypt `msg` with the bundle's public key using PKCS#1
-    /// v1.5 padding. The output length is the RSA modulus size in
-    /// bytes (typically 128 for 1024-bit keys, 256 for 2048-bit).
+    /// OAEP padding (with the OpenSSL default SHA-1 hash and MGF1).
+    /// The output length is the RSA modulus size in bytes (typically
+    /// 128 for 1024-bit keys, 256 for 2048-bit).
     ///
     /// # Examples
     ///
@@ -383,7 +400,7 @@ impl Crypto {
     }
 
     /// RSA decrypt `enc` with the bundle's private key using PKCS#1
-    /// v1.5 padding.
+    /// OAEP padding (with the OpenSSL default SHA-1 hash and MGF1).
     ///
     /// # Examples
     ///
@@ -426,7 +443,8 @@ mod tests {
         let key = Crypto::generate_aes_key().unwrap();
         for plain in &[&b""[..], b"a", b"abcdefghij", b"this is a test"] {
             let cipher = Crypto::aes_encrypt(plain, &key).unwrap();
-            assert!(cipher.len() >= AES_IV_LEN + AES_BLOCK_SIZE);
+            assert!(cipher.len() >= AES_BLOCK_SIZE);
+            assert_eq!(cipher.len() % AES_BLOCK_SIZE, 0);
             let round = Crypto::aes_decrypt(&cipher, &key).unwrap();
             assert_eq!(round.as_slice(), *plain);
         }

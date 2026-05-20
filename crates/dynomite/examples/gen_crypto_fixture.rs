@@ -1,11 +1,28 @@
-//! Helper that generates the frozen crypto fixture under
+//! Helper that regenerates the frozen crypto fixture under
 //! `crates/dynomite/tests/fixtures/crypto/`. Run with:
 //!
 //! ```text
 //! cargo run --example gen_crypto_fixture -p dynomite
 //! ```
 //!
-//! The fixture pins the AES wire format we implemented in Stage 6.
+//! The fixture pins the AES wire format implemented in Stage 6.
+//! Because the cipher is AES-128-CBC with the key reused as the IV
+//! (mirroring the C reference at `_/dynomite/src/dyn_crypto.c:277`),
+//! the ciphertext is deterministic and any compliant implementation
+//! produces the same bytes for the same inputs.
+//!
+//! The committed `cipher.bin` was independently verified against
+//! the OpenSSL CLI:
+//!
+//! ```text
+//! printf 'dynomite stage 6 crypto fixture: round-trip me' | \
+//!   openssl enc -aes-128-cbc \
+//!     -K  1032547698badcfe0123456789abcdef \
+//!     -iv 1032547698badcfe0123456789abcdef
+//! ```
+//!
+//! produces the same 48 bytes that `Crypto::aes_encrypt` produces
+//! for the bundled key + plaintext.
 
 use std::fs;
 use std::path::PathBuf;

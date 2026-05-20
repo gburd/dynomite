@@ -1,84 +1,98 @@
-//! AES-256-CBC primitives used by the DNODE peer protocol.
+//! AES-128-CBC primitives used by the DNODE peer protocol.
 //!
 //! The wire format produced by [`encrypt_to_vec`] (and consumed by
-//! [`decrypt_to_vec`]) is the concatenation of:
+//! [`decrypt_to_vec`]) is:
 //!
 //! ```text
-//! [16-byte random IV] [PKCS#7-padded ciphertext (multiple of 16)]
+//! [PKCS#7-padded ciphertext (multiple of 16 bytes)]
 //! ```
 //!
-//! The IV is generated from the system CSPRNG on every encryption.
-//! PKCS#7 padding is mandatory: an empty plaintext encrypts to a
-//! single 16-byte block; a 16-byte plaintext encrypts to 32 bytes.
+//! There is no separate IV in the output. The cipher is AES-128-CBC
+//! and the IV is the same 16 bytes that serve as the key. PKCS#7
+//! padding is mandatory: an empty plaintext encrypts to a single
+//! 16-byte block; a 16-byte plaintext encrypts to 32 bytes.
+//!
+//! The public surface still takes a 32-byte key (the C reference's
+//! `aes_key[AES_KEYLEN]` buffer). AES-128-CBC consumes only the
+//! first 16 bytes; the remaining 16 are unused by the cipher and are
+//! kept solely for byte-for-byte compatibility with the C
+//! `aes_key` buffer layout.
 //!
 //! `encrypt_to_chain` and `decrypt_chain_to_chain` provide the same
-//! primitives wrapped in [`MbufQueue`] flow used by the rest of the
-//! engine.
+//! primitives wrapped in the [`MbufQueue`] flow used by the rest of
+//! the engine.
+//!
+//! # Security
+//!
+//! The C reference reuses the AES key as the IV
+//! (`EVP_EncryptInit_ex(ctx, cipher, NULL, key, key)`), which makes
+//! the cipher deterministic for a given (key, plaintext) pair: two
+//! encryptions of the same plaintext produce identical ciphertext.
+//! This is a known weakness. The Rust port faithfully reproduces it
+//! for wire compatibility with C peers; embedders should treat the
+//! resulting channel as transport-layer encryption only, not as an
+//! authenticated channel. A future hardening pass may layer an AEAD
+//! on top.
 
 use openssl::symm::{Cipher, Crypter, Mode};
 
 use crate::crypto::CryptoError;
 use crate::io::mbuf::{Mbuf, MbufPool, MbufQueue};
 
-/// AES-256 key length in bytes.
+/// AES key buffer length in bytes. Matches the C `AES_KEYLEN`
+/// constant (`dyn_crypto.h`). The cipher itself is AES-128, which
+/// uses only the first 16 bytes; the remaining 16 are unused.
 pub const AES_KEYLEN: usize = 32;
 
 /// AES block size in bytes.
 pub const AES_BLOCK_SIZE: usize = 16;
 
-/// AES-CBC IV length in bytes.
-pub const AES_IV_LEN: usize = 16;
+/// AES-128 key length in bytes (the prefix of the [`AES_KEYLEN`]
+/// buffer that the cipher actually consumes).
+pub const AES_128_KEY_LEN: usize = 16;
 
 fn cipher() -> Cipher {
-    Cipher::aes_256_cbc()
+    Cipher::aes_128_cbc()
 }
 
-fn random_iv() -> Result<[u8; AES_IV_LEN], CryptoError> {
-    let mut iv = [0u8; AES_IV_LEN];
-    openssl::rand::rand_bytes(&mut iv)?;
-    Ok(iv)
-}
-
-/// Encrypt `msg` with AES-256-CBC and PKCS#7 padding using
-/// `aes_key`. The output is a fresh 16-byte IV concatenated with the
-/// ciphertext.
+/// Encrypt `msg` with AES-128-CBC and PKCS#7 padding using the first
+/// 16 bytes of `aes_key` as both the key and the IV. The output is
+/// the raw ciphertext (no IV prefix) and is therefore deterministic
+/// for a given (key, plaintext) pair.
 ///
 /// # Examples
 ///
 /// ```
 /// use dynomite::crypto::Crypto;
-/// use dynomite::crypto::aes::encrypt_to_vec;
+/// use dynomite::crypto::aes::{encrypt_to_vec, AES_BLOCK_SIZE};
 ///
 /// let key = Crypto::generate_aes_key().unwrap();
 /// let cipher = encrypt_to_vec(b"alpha", &key).unwrap();
-/// assert!(cipher.len() >= 32);
+/// assert_eq!(cipher.len() % AES_BLOCK_SIZE, 0);
+/// assert!(cipher.len() >= AES_BLOCK_SIZE);
 /// ```
 pub fn encrypt_to_vec(msg: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>, CryptoError> {
-    let iv = random_iv()?;
-    let cipher = cipher();
-    let mut crypter = Crypter::new(cipher, Mode::Encrypt, aes_key, Some(&iv))?;
+    let key_iv = &aes_key[..AES_128_KEY_LEN];
+    let mut crypter = Crypter::new(cipher(), Mode::Encrypt, key_iv, Some(key_iv))?;
     crypter.pad(true);
 
-    let mut out = Vec::with_capacity(AES_IV_LEN + msg.len() + AES_BLOCK_SIZE);
-    out.extend_from_slice(&iv);
-
-    let prev_len = out.len();
-    out.resize(prev_len + msg.len() + AES_BLOCK_SIZE, 0);
+    let mut out = vec![0u8; msg.len() + AES_BLOCK_SIZE];
     let written = crypter
-        .update(msg, &mut out[prev_len..])
+        .update(msg, &mut out)
         .map_err(|_| CryptoError::EncryptionFailed)?;
     let final_written = crypter
-        .finalize(&mut out[prev_len + written..])
+        .finalize(&mut out[written..])
         .map_err(|_| CryptoError::EncryptionFailed)?;
-    out.truncate(prev_len + written + final_written);
+    out.truncate(written + final_written);
     Ok(out)
 }
 
 /// Decrypt the output of [`encrypt_to_vec`].
 ///
-/// `enc` must begin with a 16-byte IV followed by an integral number
-/// of 16-byte ciphertext blocks. PKCS#7 padding is removed
-/// automatically.
+/// `enc` must be a non-empty integral number of 16-byte ciphertext
+/// blocks. PKCS#7 padding is removed automatically. The first 16
+/// bytes of `aes_key` are used as both the key and the IV, matching
+/// the encryption side.
 ///
 /// # Examples
 ///
@@ -92,20 +106,16 @@ pub fn encrypt_to_vec(msg: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>,
 /// assert_eq!(plain, b"alpha");
 /// ```
 pub fn decrypt_to_vec(enc: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>, CryptoError> {
-    if enc.len() < AES_IV_LEN + AES_BLOCK_SIZE {
+    if enc.is_empty() || enc.len() % AES_BLOCK_SIZE != 0 {
         return Err(CryptoError::DecryptionFailed);
     }
-    if (enc.len() - AES_IV_LEN) % AES_BLOCK_SIZE != 0 {
-        return Err(CryptoError::DecryptionFailed);
-    }
-    let (iv, body) = enc.split_at(AES_IV_LEN);
-    let cipher = cipher();
-    let mut crypter = Crypter::new(cipher, Mode::Decrypt, aes_key, Some(iv))?;
+    let key_iv = &aes_key[..AES_128_KEY_LEN];
+    let mut crypter = Crypter::new(cipher(), Mode::Decrypt, key_iv, Some(key_iv))?;
     crypter.pad(true);
 
-    let mut out = vec![0u8; body.len() + AES_BLOCK_SIZE];
+    let mut out = vec![0u8; enc.len() + AES_BLOCK_SIZE];
     let written = crypter
-        .update(body, &mut out)
+        .update(enc, &mut out)
         .map_err(|_| CryptoError::DecryptionFailed)?;
     let final_written = crypter
         .finalize(&mut out[written..])
@@ -114,25 +124,25 @@ pub fn decrypt_to_vec(enc: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>,
     Ok(out)
 }
 
-/// Encrypt `msg` and write the IV + ciphertext into a fresh chain of
+/// Encrypt `msg` and write the ciphertext into a fresh chain of
 /// pool-backed [`Mbuf`] chunks.
 ///
-/// The first chunk holds the 16-byte IV; subsequent chunks hold
-/// ciphertext blocks. The chain is filled chunk-by-chunk; a new chunk
-/// is allocated only when the previous one runs out of writable
-/// space. The chain is suitable for direct submission to the reactor.
+/// The chain is filled chunk-by-chunk; a new chunk is allocated only
+/// when the previous one runs out of writable space. The output
+/// chain holds the raw ciphertext only; there is no separate IV
+/// prefix, matching the C `dyn_aes_encrypt` path.
 ///
 /// # Examples
 ///
 /// ```
 /// use dynomite::crypto::Crypto;
-/// use dynomite::crypto::aes::encrypt_to_chain;
+/// use dynomite::crypto::aes::{encrypt_to_chain, AES_BLOCK_SIZE};
 /// use dynomite::io::mbuf::MbufPool;
 ///
 /// let pool = MbufPool::default();
 /// let key = Crypto::generate_aes_key().unwrap();
 /// let chain = encrypt_to_chain(b"hello", &key, &pool).unwrap();
-/// assert!(chain.total_len() >= 16);
+/// assert!(chain.total_len() >= AES_BLOCK_SIZE);
 /// ```
 pub fn encrypt_to_chain(
     msg: &[u8],
@@ -159,8 +169,8 @@ pub fn encrypt_to_chain(
 /// and return a chain of plaintext chunks drawn from `pool`.
 ///
 /// All readable bytes across all chunks of `enc` are concatenated and
-/// then decrypted as a single ciphertext. The first 16 bytes are
-/// interpreted as the IV.
+/// then decrypted as a single ciphertext. The total length must be a
+/// non-zero multiple of [`AES_BLOCK_SIZE`].
 ///
 /// # Examples
 ///
@@ -172,7 +182,7 @@ pub fn encrypt_to_chain(
 /// let pool = MbufPool::default();
 /// let key = Crypto::generate_aes_key().unwrap();
 /// let mut chain = encrypt_to_chain(b"hello", &key, &pool).unwrap();
-/// let mut plain = decrypt_chain_to_chain(&mut chain, &key, &pool).unwrap();
+/// let plain = decrypt_chain_to_chain(&mut chain, &key, &pool).unwrap();
 /// assert_eq!(plain.total_len(), 5);
 /// ```
 pub fn decrypt_chain_to_chain(
@@ -209,7 +219,7 @@ mod tests {
     fn empty_plaintext_round_trips() {
         let key = Crypto::generate_aes_key().unwrap();
         let cipher = encrypt_to_vec(b"", &key).unwrap();
-        assert_eq!(cipher.len(), AES_IV_LEN + AES_BLOCK_SIZE);
+        assert_eq!(cipher.len(), AES_BLOCK_SIZE);
         let plain = decrypt_to_vec(&cipher, &key).unwrap();
         assert!(plain.is_empty());
     }
@@ -219,18 +229,46 @@ mod tests {
         let key = Crypto::generate_aes_key().unwrap();
         let msg = vec![0xab; AES_BLOCK_SIZE];
         let cipher = encrypt_to_vec(&msg, &key).unwrap();
-        assert_eq!(cipher.len(), AES_IV_LEN + 2 * AES_BLOCK_SIZE);
+        assert_eq!(cipher.len(), 2 * AES_BLOCK_SIZE);
         let plain = decrypt_to_vec(&cipher, &key).unwrap();
         assert_eq!(plain, msg);
     }
 
     #[test]
-    fn iv_is_random_per_call() {
+    fn encryption_is_deterministic() {
         let key = Crypto::generate_aes_key().unwrap();
         let a = encrypt_to_vec(b"same", &key).unwrap();
         let b = encrypt_to_vec(b"same", &key).unwrap();
-        assert_ne!(a, b, "two encryptions should produce distinct IVs");
-        assert_ne!(&a[..AES_IV_LEN], &b[..AES_IV_LEN]);
+        assert_eq!(a, b, "key-as-IV makes the cipher deterministic");
+    }
+
+    #[test]
+    fn known_vector_pin() {
+        // Fixed-key, fixed-plaintext byte pin. Reproduces the C
+        // `dyn_aes_encrypt` path: AES-128-CBC, PKCS#7 padding, IV
+        // equal to the first 16 bytes of the key, no IV prefix.
+        let key: [u8; AES_KEYLEN] = [
+            0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+            0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10, 0xef, 0xcd, 0xab, 0x89,
+            0x67, 0x45, 0x23, 0x01,
+        ];
+        let plaintext = b"";
+        let cipher = encrypt_to_vec(plaintext, &key).unwrap();
+        assert_eq!(cipher.len(), AES_BLOCK_SIZE);
+
+        // Independently verifiable with:
+        //   openssl enc -aes-128-cbc \
+        //     -K  10325476 98badcfe 01234567 89abcdef \
+        //     -iv 10325476 98badcfe 01234567 89abcdef \
+        //     -in /dev/null
+        let expected: [u8; AES_BLOCK_SIZE] = [
+            0x98, 0xe1, 0x44, 0x32, 0xf6, 0x65, 0x78, 0xb9, 0x45, 0xd6, 0x4f, 0xc4, 0x60, 0x27,
+            0x1b, 0xab,
+        ];
+        assert_eq!(cipher, expected);
+
+        let round = decrypt_to_vec(&cipher, &key).unwrap();
+        assert_eq!(round.as_slice(), plaintext);
     }
 
     #[test]
@@ -239,6 +277,12 @@ mod tests {
         let cipher = encrypt_to_vec(b"abc", &key).unwrap();
         let truncated = &cipher[..cipher.len() - 1];
         assert!(decrypt_to_vec(truncated, &key).is_err());
+    }
+
+    #[test]
+    fn empty_ciphertext_is_rejected() {
+        let key = Crypto::generate_aes_key().unwrap();
+        assert!(decrypt_to_vec(&[], &key).is_err());
     }
 
     #[test]
