@@ -24,6 +24,7 @@
 use std::sync::OnceLock;
 
 pub mod index;
+pub mod keypos;
 pub mod message;
 pub mod msg_type;
 pub mod queue;
@@ -32,6 +33,7 @@ pub mod response;
 pub mod response_mgr;
 
 pub use self::index::MsgIndex;
+pub use self::keypos::{ArgPos, KeyPos};
 pub use self::message::{ConnId, Msg, MsgFlags, MsgParseResult, MsgRouting};
 pub use self::msg_type::MsgType;
 pub use self::queue::MsgQueue;
