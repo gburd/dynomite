@@ -199,18 +199,73 @@ fn dnode_parser_round_trip_proptest() {
 
 #[test]
 fn dispatcher_routes_control_plane_through_bypass() {
+    // The C `dmsg_process` switch in
+    // `_/dynomite/src/dyn_dnode_msg.c:626-656` only short-circuits
+    // these three variants; every other gossip variant must fall
+    // through to the default (forward) branch.
     let mut d = Dmsg::new();
     for ty in [
         DmsgType::CryptoHandshake,
         DmsgType::GossipSyn,
-        DmsgType::GossipShutdown,
+        DmsgType::GossipSynReply,
     ] {
         d.ty = ty;
-        assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
+        assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass, "{ty:?} must bypass",);
     }
-    for ty in [DmsgType::Req, DmsgType::Res, DmsgType::ReqForward] {
+    // The remaining gossip variants and every data-plane variant
+    // must forward.
+    for ty in [
+        DmsgType::GossipAck,
+        DmsgType::GossipDigestSyn,
+        DmsgType::GossipDigestAck,
+        DmsgType::GossipDigestAck2,
+        DmsgType::GossipShutdown,
+        DmsgType::Req,
+        DmsgType::Res,
+        DmsgType::ReqForward,
+    ] {
         d.ty = ty;
-        assert_eq!(dmsg_process(&d), DmsgDispatch::Forward);
+        assert_eq!(
+            dmsg_process(&d),
+            DmsgDispatch::Forward,
+            "{ty:?} must forward",
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// Drive arbitrary byte slices through the streaming DNODE
+    /// parser and assert that no input panics. The contract is
+    /// "parser is total on `Vec<u8>`": every step must return one
+    /// of `HeaderDone`, `NeedMore`, or `Error`. The brief in
+    /// PLAN.md Section 6.3 lists this property explicitly
+    /// ("parsers never panic on arbitrary `Vec<u8>` and either
+    /// return Err or a complete Msg").
+    #[test]
+    fn parser_total_on_arbitrary_bytes(
+        bytes in proptest::collection::vec(any::<u8>(), 0..1024),
+    ) {
+        let mut parser = DnodeParser::new();
+        // The parser may halt before consuming the whole slice
+        // (`HeaderDone`/`Error` both report a `consumed` offset);
+        // feed every remaining byte at most once so a malformed
+        // prefix cannot wedge the loop.
+        let mut idx = 0usize;
+        while idx < bytes.len() {
+            match parser.step(&bytes[idx..]) {
+                ParseStep::HeaderDone { consumed }
+                | ParseStep::Error { consumed } => {
+                    let advance = consumed.max(1);
+                    idx = idx.saturating_add(advance);
+                    parser.reset();
+                }
+                ParseStep::NeedMore { .. } => break,
+            }
+        }
+        // Any of the three outcomes is acceptable; the contract is
+        // that none of the steps above unwound through a panic.
     }
 }
 

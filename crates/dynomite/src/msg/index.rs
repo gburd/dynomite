@@ -22,6 +22,22 @@ use super::message::Msg;
 /// the value directly so dropping the index releases every contained
 /// message. Lookups return references; transferring ownership out of
 /// the index requires [`MsgIndex::remove`].
+///
+/// # Thread safety
+///
+/// `MsgIndex` mirrors the reference engine's `outstanding_msgs_dict`,
+/// which is per-connection and accessed only from the connection's
+/// owning event-loop thread. The Rust port preserves that
+/// single-threaded contract: `MsgIndex` is `Send` (it can be moved
+/// to another task or thread, e.g. when a connection migrates) but
+/// is intentionally not exposed through any synchronisation
+/// primitive. The wrapped [`std::collections::HashMap`] inside
+/// [`DictMap`](crate::util::dict::DictMap) is not `Sync`, so two
+/// tasks cannot share a `&MsgIndex` and call its mutating methods
+/// concurrently. Stages 9 and beyond keep the index private to the
+/// per-connection FSM; if a future caller ever needs cross-thread
+/// shared access, that caller is responsible for wrapping it in a
+/// `Mutex` (or equivalent), not the type itself.
 #[derive(Debug)]
 pub struct MsgIndex {
     inner: DictMap<MsgId, Msg>,

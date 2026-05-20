@@ -562,6 +562,30 @@ when it spans buffers.
 
 ## Deviations
 
+### Stage 7: `DynErrorCode::BadFormat.message()` returns a stable string instead of `strerror(8)`
+
+`_/dynomite/src/dyn_message.h::dn_strerror` (lines 300-332) has
+no explicit arm for `BAD_FORMAT` and falls through to the
+`default: return strerror(err)` branch. `BAD_FORMAT` evaluates
+to enum index 8, so the C path delegates to the platform's
+`strerror(8)`, which on Linux is `"Exec format error"`. That
+string is unrelated to message framing; it is an artefact of the
+C switch's default arm picking up the enum's numeric value as if
+it were an `errno`.
+
+The Rust port returns the constant `"Bad message format"` from
+`DynErrorCode::BadFormat.message()`. Aligning with the C output
+would require either depending on libc's per-platform `strerror`
+table (which makes the message platform- and locale-dependent
+and defeats the rustdoc doctest in `crates/dynomite/src/msg/mod.rs`)
+or freezing the literal string `"Exec format error"` into the
+Rust code (which would commit the Rust port to the C bug). The
+faithful behaviour is to surface the message-framing meaning the
+caller actually wants, and document the deviation here.
+
+Pinned by `crates/dynomite/src/msg/mod.rs::tests::dyn_error_code_strings_match_c`
+(and `DynErrorCode` as a whole).
+
 ### Stage 6: long-lived `EVP_CIPHER_CTX` globals replaced by per-call `Crypter`
 
 The C reference holds two static `EVP_CIPHER_CTX *` (one for
