@@ -6,6 +6,19 @@ use crate::stats::codec::{StatsMetricType, POOL_CODEC, SERVER_CODEC};
 use crate::stats::histogram::Histogram;
 
 /// Engine-wide identifying strings included in every snapshot.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::ServiceInfo;
+/// let info = ServiceInfo {
+///     source: "node-a".into(),
+///     version: "0.0.1".into(),
+///     rack: "r1".into(),
+///     dc: "dc1".into(),
+/// };
+/// assert_eq!(info.source, "node-a");
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct ServiceInfo {
     /// Hostname or address of the local node.
@@ -19,6 +32,14 @@ pub struct ServiceInfo {
 }
 
 /// Pre-computed quantile summary derived from a [`Histogram`].
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::HistogramSummary;
+/// let s = HistogramSummary::default();
+/// assert_eq!(s.max, 0);
+/// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HistogramSummary {
     /// Maximum observation in the window.
@@ -99,6 +120,15 @@ fn ceil_f64_to_u64(x: f64) -> u64 {
 }
 
 /// Per-pool collected metrics.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::PoolStats;
+/// let pool = PoolStats::new("dyn_o_mite");
+/// assert_eq!(pool.name, "dyn_o_mite");
+/// assert!(!pool.metrics.is_empty());
+/// ```
 #[derive(Clone, Debug)]
 pub struct PoolStats {
     /// Pool name as declared in the YAML configuration.
@@ -115,6 +145,14 @@ impl Default for PoolStats {
 
 impl PoolStats {
     /// Construct a fresh `PoolStats` with all metrics zeroed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::PoolStats;
+    /// let p = PoolStats::new("dyn_o_mite");
+    /// assert!(p.metrics.iter().all(|&v| v == 0));
+    /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -124,6 +162,14 @@ impl PoolStats {
 }
 
 /// Per-datastore-server collected metrics.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::ServerStats;
+/// let s = ServerStats::new("redis_local");
+/// assert_eq!(s.name, "redis_local");
+/// ```
 #[derive(Clone, Debug)]
 pub struct ServerStats {
     /// Server name (the host name from the YAML).
@@ -140,6 +186,14 @@ impl Default for ServerStats {
 
 impl ServerStats {
     /// Construct a fresh `ServerStats` with all metrics zeroed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::ServerStats;
+    /// let s = ServerStats::new("redis_local");
+    /// assert!(s.metrics.iter().all(|&v| v == 0));
+    /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -149,6 +203,14 @@ impl ServerStats {
 }
 
 /// Per-peer collected metrics. Mirrors `ServerStats` for cluster peers.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::PeerStats;
+/// let p = PeerStats::new("peer-a");
+/// assert_eq!(p.name, "peer-a");
+/// ```
 #[derive(Clone, Debug)]
 pub struct PeerStats {
     /// Peer name.
@@ -159,6 +221,14 @@ pub struct PeerStats {
 
 impl PeerStats {
     /// Construct a fresh `PeerStats` with all metrics zeroed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::PeerStats;
+    /// let p = PeerStats::new("peer-a");
+    /// assert!(p.metrics.iter().all(|&v| v == 0));
+    /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -254,6 +324,16 @@ impl Snapshot {
     }
 
     /// Render the snapshot as JSON into any [`fmt::Write`] sink.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Snapshot;
+    /// let snap = Snapshot::default();
+    /// let mut s = String::new();
+    /// snap.write_json(&mut s).expect("writing into String never fails");
+    /// assert!(s.starts_with('{'));
+    /// ```
     pub fn write_json<W: Write>(&self, w: &mut W) -> fmt::Result {
         w.write_char('{')?;
         self.write_header(w)?;

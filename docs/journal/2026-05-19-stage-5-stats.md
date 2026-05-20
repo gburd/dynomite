@@ -65,11 +65,12 @@ Integration tests (`crates/dynomite/tests/stage_05_stats.rs`):
   `/cluster_describe`, and a family of mutator commands. Those
   depend on the cluster state structures that ship in Stage 10 and
   are deferred there. Recorded as a Deviation in `docs/parity.md`.
-* JSON layout matches the C output structure: flat scalar fields at
-  the top level followed by a nested pool object that contains a
-  nested server object. The trailing comma before the inner closing
-  brace is omitted, matching `stats_end_nesting`'s comma-trim
-  behavior on the last server metric.
+* JSON layout reproduces the structural shape of the reference
+  output: flat scalar fields at the top level followed by a nested
+  pool object that contains a nested server object. The trailing
+  comma before the inner closing brace is omitted, so the writer
+  agrees with `stats_end_nesting`'s comma-trim behavior on the last
+  server metric.
 
 ## Open questions
 

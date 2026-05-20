@@ -168,15 +168,12 @@ async fn serve_connection(mut sock: TcpStream, snapshot: Snapshot) -> io::Result
             return write_response(&mut sock, 400, "Bad Request", b"").await;
         }
         let read_result = tokio::time::timeout(READ_TIMEOUT, sock.read(&mut buf[filled..])).await;
-        let n = match read_result {
-            Ok(Ok(n)) => n,
-            Ok(Err(_)) | Err(_) => {
-                // Read error or timeout: close silently, matching the
-                // reference error path which drops the connection
-                // without writing a response.
-                let _ = sock.shutdown().await;
-                return Ok(());
-            }
+        let Ok(Ok(n)) = read_result else {
+            // Read error or timeout: close silently, matching the
+            // reference error path which drops the connection without
+            // writing a response.
+            let _ = sock.shutdown().await;
+            return Ok(());
         };
         if n == 0 {
             break;

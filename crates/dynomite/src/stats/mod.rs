@@ -28,7 +28,7 @@ pub use crate::stats::codec::{
     MetricSpec, PoolField, ServerField, StatsMetricType, POOL_CODEC, SERVER_CODEC,
 };
 pub use crate::stats::histogram::{Histogram, BUCKET_COUNT};
-pub use crate::stats::rest::StatsServer;
+pub use crate::stats::rest::{StatsServer, MAX_HEADERS, MAX_REQUEST_BYTES};
 pub use crate::stats::snapshot::{
     describe_stats, HistogramSummary, PeerStats, PoolStats, ServerStats, ServiceInfo, Snapshot,
 };
@@ -37,6 +37,18 @@ pub use crate::stats::snapshot::{
 ///
 /// `Stats` is the writer side; readers consume frozen [`Snapshot`]
 /// values produced by [`Stats::snapshot`].
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::{PoolStats, ServerStats, ServiceInfo, Stats};
+/// let stats = Stats::new(
+///     ServiceInfo::default(),
+///     PoolStats::new("dyn_o_mite"),
+///     ServerStats::new("redis"),
+/// );
+/// assert_eq!(stats.snapshot().pool.name, "dyn_o_mite");
+/// ```
 #[derive(Debug)]
 pub struct Stats {
     inner: Arc<Mutex<StatsInner>>,
@@ -103,6 +115,13 @@ impl StatsInner {
 }
 
 /// Channels used to mutate histogram observations.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::Latency;
+/// let _ = Latency::Request;
+/// ```
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Latency {
     /// Top-level request latency.
@@ -116,6 +135,13 @@ pub enum Latency {
 }
 
 /// Channels used for queue-wait-time observations.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::QueueWait;
+/// let _ = QueueWait::Server;
+/// ```
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum QueueWait {
     /// Cross-region queue wait time.
@@ -128,6 +154,13 @@ pub enum QueueWait {
 
 /// Channels used for queue-length observations (observed at sample
 /// time, not events).
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::QueueGauge;
+/// let _ = QueueGauge::ClientOut;
+/// ```
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum QueueGauge {
     /// Client out-queue length.
@@ -178,6 +211,18 @@ impl Stats {
     }
 
     /// Record a latency observation in the matching histogram.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{Latency, PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.record_latency(Latency::Request, 100);
+    /// ```
     pub fn record_latency(&self, channel: Latency, value: u64) {
         let mut inner = self.inner.lock();
         match channel {
@@ -189,11 +234,35 @@ impl Stats {
     }
 
     /// Record a payload-size observation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.record_payload_size(2048);
+    /// ```
     pub fn record_payload_size(&self, value: u64) {
         self.inner.lock().payload_size.record(value);
     }
 
     /// Record a queue wait time observation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, QueueWait, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.record_queue_wait(QueueWait::Server, 12);
+    /// ```
     pub fn record_queue_wait(&self, channel: QueueWait, value: u64) {
         let mut inner = self.inner.lock();
         match channel {
@@ -204,6 +273,18 @@ impl Stats {
     }
 
     /// Record a queue-length sample.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, QueueGauge, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.record_queue_len(QueueGauge::ClientOut, 4);
+    /// ```
     pub fn record_queue_len(&self, channel: QueueGauge, value: u64) {
         let mut inner = self.inner.lock();
         match channel {
@@ -219,11 +300,38 @@ impl Stats {
     }
 
     /// Increment a pool counter or gauge by one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolField, PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.pool_incr(PoolField::ClientEof);
+    /// assert_eq!(stats.pool_get(PoolField::ClientEof), 1);
+    /// ```
     pub fn pool_incr(&self, field: PoolField) {
         self.pool_incr_by(field, 1);
     }
 
     /// Decrement a pool gauge by one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolField, PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.pool_set(PoolField::ClientConnections, 5);
+    /// stats.pool_decr(PoolField::ClientConnections);
+    /// assert_eq!(stats.pool_get(PoolField::ClientConnections), 4);
+    /// ```
     pub fn pool_decr(&self, field: PoolField) {
         self.pool_incr_by(field, -1);
     }
@@ -240,21 +348,73 @@ impl Stats {
     }
 
     /// Set a pool gauge or timestamp to an absolute value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolField, PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.pool_set(PoolField::PeerEjectedAt, 1_700_000_000);
+    /// assert_eq!(stats.pool_get(PoolField::PeerEjectedAt), 1_700_000_000);
+    /// ```
     pub fn pool_set(&self, field: PoolField, value: i64) {
         self.inner.lock().pool.metrics[field.index()] = value;
     }
 
     /// Read the current value of a pool metric.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolField, PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// assert_eq!(stats.pool_get(PoolField::ClientEof), 0);
+    /// ```
     pub fn pool_get(&self, field: PoolField) -> i64 {
         self.inner.lock().pool.metrics[field.index()]
     }
 
     /// Increment a server counter or gauge by one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, ServerField, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.server_incr(ServerField::ReadRequests);
+    /// assert_eq!(stats.server_get(ServerField::ReadRequests), 1);
+    /// ```
     pub fn server_incr(&self, field: ServerField) {
         self.server_incr_by(field, 1);
     }
 
     /// Decrement a server gauge by one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, ServerField, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.server_set(ServerField::InQueue, 3);
+    /// stats.server_decr(ServerField::InQueue);
+    /// assert_eq!(stats.server_get(ServerField::InQueue), 2);
+    /// ```
     pub fn server_decr(&self, field: ServerField) {
         self.server_incr_by(field, -1);
     }
@@ -271,17 +431,55 @@ impl Stats {
     }
 
     /// Set a server gauge or timestamp to an absolute value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, ServerField, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.server_set(ServerField::ServerEjectedAt, 1_700_000_000);
+    /// assert_eq!(stats.server_get(ServerField::ServerEjectedAt), 1_700_000_000);
+    /// ```
     pub fn server_set(&self, field: ServerField, value: i64) {
         self.inner.lock().server.metrics[field.index()] = value;
     }
 
     /// Read the current value of a server metric.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, ServerField, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// assert_eq!(stats.server_get(ServerField::ReadRequests), 0);
+    /// ```
     pub fn server_get(&self, field: ServerField) -> i64 {
         self.inner.lock().server.metrics[field.index()]
     }
 
-    /// Set the resource usage gauges that the C reference samples once
-    /// per aggregation cycle.
+    /// Set the resource usage gauges that the reference engine samples
+    /// once per aggregation cycle.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.set_resource_usage(0, 0, 0, 0, 0);
+    /// assert_eq!(stats.snapshot().alloc_msgs, 0);
+    /// ```
     pub fn set_resource_usage(
         &self,
         alloc_msgs: i64,
@@ -300,6 +498,19 @@ impl Stats {
 
     /// Build an immutable snapshot of every counter, gauge, and
     /// histogram quantile at the current instant.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// let snap = stats.snapshot();
+    /// assert_eq!(snap.pool.name, "p");
+    /// ```
     pub fn snapshot(&self) -> Snapshot {
         let inner = self.inner.lock();
         let elapsed = self.started.elapsed();
@@ -339,8 +550,22 @@ impl Stats {
         }
     }
 
-    /// Reset every histogram. The C reference does this every five
-    /// minutes from inside the aggregation loop.
+    /// Reset every histogram. The reference engine does this every
+    /// five minutes from inside the aggregation loop.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{Latency, PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let stats = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// stats.record_latency(Latency::Request, 50);
+    /// stats.reset_histograms();
+    /// assert_eq!(stats.snapshot().latency.max, 0);
+    /// ```
     pub fn reset_histograms(&self) {
         let mut inner = self.inner.lock();
         inner.latency.reset();
