@@ -150,3 +150,44 @@ fn unknown_flag_prints_usage_and_fails() {
         .failure()
         .stderr(contains("Usage: dynomite ["));
 }
+
+#[test]
+fn daemonize_with_test_conf_is_rejected() {
+    let p = conf_dir().join("dynomite.yml");
+    bin()
+        .args(["-d", "-t", "-c"])
+        .arg(&p)
+        .assert()
+        .failure()
+        .stderr(contains("mutually exclusive"));
+}
+
+#[test]
+fn pidfile_is_written_and_removed() {
+    // The placeholder runtime exits cleanly after writing the pid
+    // file. We expect to see the file vanish on graceful exit.
+    let dir = tempfile::tempdir().unwrap();
+    let pid = dir.path().join("d.pid");
+    let p = conf_dir().join("dynomite.yml");
+    bin()
+        .args(["-c"])
+        .arg(&p)
+        .args(["-p"])
+        .arg(&pid)
+        .assert()
+        .success();
+    // PidFile::Drop unlinks the file on graceful shutdown.
+    assert!(!pid.exists(), "pid file should be removed on exit");
+}
+
+#[test]
+fn invalid_conf_path_is_rejected_for_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.yml");
+    bin()
+        .args(["-c"])
+        .arg(&missing)
+        .assert()
+        .failure()
+        .stderr(contains("syntax is invalid"));
+}

@@ -9,8 +9,23 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
-[lints]
-workspace = true
+[lints.rust]
+# Inherit and override: the workspace declares `unsafe_code = "forbid"`,
+# but `dynomited` needs `unsafe { fork() }` in [`daemonize`]. We drop
+# the level to `deny` so the daemonize module can wrap that single
+# unsafe block in a justified `#[allow(unsafe_code)]`. See
+# `docs/journal/allowances.md`.
+unsafe_code = "deny"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
 
 [lib]
 name = "dynomited"
@@ -30,6 +45,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+nix = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
