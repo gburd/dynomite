@@ -7,7 +7,7 @@
 //! cause SAFE_QUORUM to fail on an unordered set type.
 
 use crate::io::mbuf::MbufPool;
-use crate::msg::{ConsistencyLevel, KeyPos, Msg, MsgParseResult, MsgType};
+use crate::msg::{ConsistencyLevel, Msg, MsgParseResult, MsgType};
 
 use super::super::parser::redis_parse_req;
 use super::{RepairError, RepairOutcome};
@@ -136,13 +136,10 @@ fn write_into_chain(msg: &mut Msg, pool: &MbufPool, mut buf: &[u8]) {
     msg.recompute_mlen();
 }
 
-fn _clone_keypos(k: &KeyPos) -> KeyPos {
-    KeyPos::new(k.key().to_vec(), k.tag())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::msg::KeyPos;
 
     #[test]
     fn smembers_safe_quorum_rewrites() {

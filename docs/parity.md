@@ -374,7 +374,7 @@ next to its only consumer.
 | `redis_parse_req` | `dynomite::proto::redis::redis_parse_req` (and `redis_parse_req_with_args`) | done (Stage 8); the cross-mbuf argument recording path is collapsed because the Rust parser flattens the chain before driving the state machine (recorded as ambiguity) |
 | `redis_parse_rsp` | `dynomite::proto::redis::redis_parse_rsp` | done (Stage 8) |
 | `redis_copy_bulk` | deferred to Stage 9 (mbuf-level chain manipulation in the conn FSM) | omitted-for-stage |
-| `redis_pre_coalesce` | `dynomite::proto::redis::redis_pre_coalesce` | done (Stage 8) for data-shape; mbuf-level chain mutation deferred to Stage 9 |
+| `redis_pre_coalesce` | `dynomite::proto::redis::redis_pre_coalesce` (response classification) and `dynomite::proto::redis::accumulate_fragment_integer` (parent-running-total accumulation) | done (Stage 8); the C `req->frag_owner->integer += rsp->integer` accumulation is exposed as a separate helper because the Rust `Msg` type does not yet carry the `peer`/`frag_owner` pointer chain (those land with the Stage 9 connection FSM). The dispatcher invokes `accumulate_fragment_integer(parent, rsp)` once both messages are in scope. |
 | `redis_post_coalesce_mset` / `redis_post_coalesce_num` / `redis_post_coalesce_mget` / `redis_post_coalesce` | `dynomite::proto::redis::redis_post_coalesce` | done (Stage 8) for data-shape; per-type chain merge deferred to Stage 9 |
 | `redis_append_key` | folded into `dynomite::proto::redis::fragment::encode_fragment` | done (Stage 8) |
 | `redis_fragment_argx` | folded into `dynomite::proto::redis::redis_fragment` | done (Stage 8) |
@@ -389,7 +389,7 @@ next to its only consumer.
 | C symbol | Rust home | Notes |
 |---|---|---|
 | `proto_cmd_info[]` | folded into `dynomite::proto::redis::repair::make::is_repairable` plus `dynomite::proto::redis::repair::clear::redis_clear_repair_md_for_key` predicates | done (Stage 8) |
-| `SET_SCRIPT` / `GET_SCRIPT` / `DEL_SCRIPT` / `HSET_SCRIPT` / `HDEL_SCRIPT` / `HGET_SCRIPT` / `ZADD_SCRIPT` / `SADD_SCRIPT` | `dynomite::proto::redis::repair::scripts::{SET_SCRIPT, GET_SCRIPT, DEL_SCRIPT, ...}` | done (Stage 8); HSET/HDEL/HGET/ZADD/SADD scripts are folded into the same byte-for-byte constants once the post-parse arg arrays land (Stage 9). The header constants are ported verbatim. |
+| `SET_SCRIPT` / `GET_SCRIPT` / `DEL_SCRIPT` / `HSET_SCRIPT` / `HDEL_SCRIPT` / `HGET_SCRIPT` / `ZADD_SCRIPT` / `SADD_SCRIPT` / `CLEANUP_DEL_SCRIPT` / `CLEANUP_HDEL_SCRIPT` | `dynomite::proto::redis::repair::scripts::{SET_SCRIPT, GET_SCRIPT, DEL_SCRIPT, HSET_SCRIPT, HDEL_SCRIPT, HGET_SCRIPT, ZADD_SCRIPT, SADD_SCRIPT, CLEANUP_DEL_SCRIPT, CLEANUP_HDEL_SCRIPT}` | done (Stage 8) byte-for-byte; ten unit tests pin each script's declared `$<n>` length prefix against its actual body length. |
 | `CLEANUP_DEL_SCRIPT` / `CLEANUP_HDEL_SCRIPT` | `dynomite::proto::redis::repair::scripts::{CLEANUP_DEL_SCRIPT, CLEANUP_HDEL_SCRIPT}` | done (Stage 8) |
 | `ADD_SET_STR` / `REM_SET_STR` | `dynomite::proto::redis::repair::scripts::{ADD_SET_STR, REM_SET_STR}` and `dynomite::proto::redis::verify::{ADD_SET_STR, REM_SET_STR}` | done (Stage 8) |
 | `total_tokens_of_type` / `parse_tokens_of_type` / `get_values_from_source` | folded into the post-parse step that lands with Stage 9; the data-shape side (eligibility predicates, command catalogue) is in place. | omitted-for-stage |
@@ -413,7 +413,7 @@ next to its only consumer.
 | `memcache_parse_rsp` | `dynomite::proto::memcache::memcache_parse_rsp` | done (Stage 8) |
 | `memcache_failure` | omitted: trivial `return false;`; the Rust port has no in-tree caller after the conn FSM lands. |
 | `memcache_append_key` | folded into `dynomite::proto::memcache::fragment::memcache_fragment` | done (Stage 8) |
-| `memcache_fragment_retrieval` / `memcache_fragment` | `dynomite::proto::memcache::memcache_fragment` | done (Stage 8) |
+| `memcache_fragment_retrieval` / `memcache_fragment` | `dynomite::proto::memcache::memcache_fragment` | done (Stage 8); fragments carry fully-formed `get k1 k2 ...\r\n` wire frames in their mbuf chains. |
 | `memcache_verify_request` | `dynomite::proto::memcache::memcache_verify_request` | done (Stage 8) |
 | `memcache_pre_coalesce` | `dynomite::proto::memcache::memcache_pre_coalesce` | done (Stage 8) for data-shape; mbuf-level chain mutation deferred to Stage 9 |
 | `memcache_copy_bulk` | deferred to Stage 9 (mbuf-level chain manipulation) | omitted-for-stage |
