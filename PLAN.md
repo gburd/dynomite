@@ -191,7 +191,7 @@ dynomite/                       # repo root (cwd)
   update):
   `tokio`, `tokio-util`, `bytes`, `serde`, `serde_yaml`, `clap`, `tracing`,
   `tracing-subscriber`, `thiserror`, `anyhow`, `crossbeam-channel`,
-  `parking_lot`, `ahash`, `quiche`, `aws-lc-rs` (or `openssl`), `base64`,
+  `crossbeam-queue` (Stage 2 SPSC ring), `parking_lot`, `ahash`, `quiche`, `aws-lc-rs` (or `openssl`), `base64`,
   `nix` (signals/daemonize), `socket2` (advanced socket opts), `time`,
   `httparse` (only for the stats REST endpoint - if avoidable, hand-roll).
   Dev-only: `criterion`, `proptest`, `cargo-fuzz`/`libfuzzer-sys`,
