@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dynomite::stats::{
-    describe_stats, Histogram, PoolField, PoolStats, ServerField, ServerStats, ServiceInfo,
-    Snapshot, StatsServer, POOL_CODEC, SERVER_CODEC,
+    describe_stats, Histogram, Latency, PoolField, PoolStats, ServerField, ServerStats,
+    ServiceInfo, Snapshot, Stats, StatsServer, BUCKET_COUNT, POOL_CODEC, SERVER_CODEC,
 };
 use parking_lot::Mutex;
 use proptest::prelude::*;
@@ -264,4 +264,50 @@ proptest! {
             "percentile diverged from f64 floor at p={} count={}", p, count
         );
     }
+}
+
+/// Drives a `Stats` instance into histogram overflow via the public
+/// `record_latency` entry point and asserts that the JSON snapshot
+/// layer suppresses every percentile by zeroing them. The histogram
+/// signals overflow with `Histogram::OVERFLOW_SENTINEL`; the
+/// `HistogramSummary::from_histogram` mapping turns that into a
+/// default-valued summary, so the publicly observed values are all
+/// `0`. See `crates/dynomite/src/stats/snapshot.rs` and
+/// `crates/dynomite/src/stats/histogram.rs`.
+#[test]
+fn latency_overflow_zeroes_snapshot_percentiles() {
+    let stats = Stats::new(
+        ServiceInfo {
+            source: "node".into(),
+            version: "0.0.1".into(),
+            rack: "r".into(),
+            dc: "d".into(),
+        },
+        PoolStats::new("dyn_o_mite"),
+        ServerStats::new("redis"),
+    );
+
+    // First, a normal observation lands and shows up in the snapshot.
+    stats.record_latency(Latency::Request, 50);
+    let pre = stats.snapshot();
+    assert!(pre.latency.max >= 1, "baseline observation lost");
+
+    // Now overflow the request-latency histogram. BUCKET_COUNT covers
+    // bucket positions 0..BUCKET_COUNT-1; recording a value strictly
+    // larger than the largest geometric offset routes into the final
+    // bucket and trips the overflow flag. u64::MAX is comfortably
+    // beyond every offset.
+    assert_eq!(BUCKET_COUNT, Histogram::new().buckets().len());
+    stats.record_latency(Latency::Request, u64::MAX);
+
+    let snap = stats.snapshot();
+    assert_eq!(snap.latency.max, 0, "overflow must zero max");
+    assert_eq!(snap.latency.p999, 0, "overflow must zero p999");
+    assert_eq!(snap.latency.p99, 0, "overflow must zero p99");
+    assert_eq!(snap.latency.p95, 0, "overflow must zero p95");
+    assert_eq!(snap.latency.mean, 0, "overflow must zero mean");
+
+    // Other histograms are untouched by an overflow on `latency`.
+    assert_eq!(snap.payload_size.max, 0);
+    assert_eq!(snap.server_latency.max, 0);
 }
