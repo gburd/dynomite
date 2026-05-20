@@ -696,13 +696,116 @@ The port is complete when:
 2. `docs/parity.md` shows every C symbol mapped or justified.
 3. The Stage 14 differential test passes for both transports.
 4. The Stage 15 fuzz soak (1h per target) is clean.
-5. `mdbook build docs/book` is clean and the embedding examples compile
-   and run.
-6. `cargo public-api` shows a stable surface for two consecutive PRs.
-7. The Python conformance harness (ported from `_/dynomite/test/`) is
-   green against `dynomited`.
-8. A "fresh checkout, `nix develop`, `scripts/check.sh`" loop runs
-   end-to-end with no human input.
+5. The Stage 15 coverage gate reports >= 95% line coverage AND
+   >= 95% branch coverage AND >= 95% function coverage workspace-
+   wide via `cargo llvm-cov --workspace --all-features`. Anything
+   below 95% has an explicit Deviation entry in `docs/parity.md`.
+6. The Stage 15 micro and macro benches all run cleanly with
+   committed baselines under `crates/dynomite/benches/baseline/`.
+7. The Stage 16 chaos test runs for the full hour and reports
+   zero invariant violations; the post-test sweep confirms the
+   host is left in its pre-test state (no orphaned netem qdiscs,
+   tokio tasks, child processes, faketime overrides). The
+   `target/chaos/<run-id>/report.md` artifact is committed under
+   `dist/chaos-reports/` for the release tag.
+8. `mdbook build docs/book` is clean and the embedding examples
+   compile and run.
+9. `cargo public-api` shows a stable surface for two consecutive
+   PRs.
+10. The Python conformance harness (ported from
+    `_/dynomite/test/`) is green against `dynomited`.
+11. Both `.github/workflows/ci.yml` (GitHub Actions) and
+    `.forgejo/workflows/ci.yml` (Codeberg Forgejo Actions) pass
+    on the same commit. Both runners exercise the identical
+    `scripts/check.sh` script as the single source of truth.
+12. Every commit on `main` is authored by
+    `Greg Burd <greg@burd.me>` after the Stage 16 history
+    rewrite. Verified by
+    `git log --format='%an <%ae>' | sort -u` returning exactly
+    one line.
+13. The release tag (`v0.1.0`) is signed and pushed to both
+    GitHub origin and the Codeberg Forgejo mirror.
+14. A "fresh checkout, `nix develop`, `scripts/check.sh`" loop
+    runs end-to-end with no human input.
+
+---
+
+## 14a. Commit author normalisation
+
+The project's release tag requires every commit on `main` to be
+authored by `Greg Burd <greg@burd.me>`. Two enforcement points:
+
+1. **Going forward (every new commit)**:
+   * `git config user.name "Greg Burd"` and
+     `git config user.email "greg@burd.me"` are set in the repo's
+     `.git/config` (NOT committed). Subagent workers inherit
+     this when they cd into the worktree because pi-tooling
+     creates worktrees off the same git directory.
+   * Subagent dispatch briefs explicitly direct workers to leave
+     the author config alone; the worker's commits will be
+     attributed to Greg Burd via the inherited config.
+2. **Pre-tag history rewrite (Stage 16)**:
+   * After all stages land, the lead runs
+     `git filter-repo --commit-callback ...` (or
+     `git filter-branch --env-filter ...`) over the entire
+     `main` branch to set every commit's `author` and
+     `committer` to `Greg Burd <greg@burd.me>`.
+   * Pre-rewrite SHAs are recorded in
+     `docs/journal/pre-rewrite-shas.md` for archaeology.
+   * The rewrite is the LAST operation before the signed tag.
+   * After the rewrite, no further commits land on `main` until
+     the tag is pushed.
+
+## 14b. Dual-platform CI
+
+The project ships CI workflows for two forges:
+
+* `.github/workflows/ci.yml`: GitHub Actions. Already exists.
+* `.forgejo/workflows/ci.yml`: Codeberg Forgejo Actions. Created
+  in Stage 16. Mirror of the GitHub workflow; both runners
+  exercise the identical `scripts/check.sh` so divergence is
+  impossible.
+
+The `scripts/check.sh` script remains the single source of truth
+for what "green CI" means. CI workflows are thin wrappers that
+check out the repo, install the Nix flake's dev shell (or the
+minimal dependencies needed by `scripts/check.sh`), and invoke
+the script. Adding a new gate means editing `scripts/check.sh`,
+NOT the workflow files.
+
+Both pipelines run the same matrix:
+* `cargo build --workspace --all-targets --locked`
+* `cargo build --workspace --all-targets --all-features --locked`
+* `cargo nextest run --workspace`
+* `cargo nextest run --workspace --all-features`
+* `cargo test --doc --workspace`
+* `scripts/check.sh` (fmt, clippy, deny, audit, mdbook, hygiene)
+* Stage 15 coverage gate (>= 95%)
+* Stage 15 quickfuzz smoke (60s per target)
+* Stage 14 conformance suite
+
+The Stage 16 chaos test does NOT run in CI (it needs an hour
+and `CAP_NET_ADMIN`). It runs as a manual pre-tag gate by the
+lead.
+
+## 14c. Cleanup discipline
+
+No agent cruft, generated artifacts, or scratch files reach
+`main`. Specifically:
+
+* `target/`, `result*`, `.direnv`, `.cargo/registry`,
+  `.cargo/git` are gitignored.
+* `target/chaos/<run-id>/` chaos test outputs are NOT committed
+  by default; only the final report under
+  `dist/chaos-reports/<run-id>/report.md` is.
+* `crates/fuzz/corpus/` and `crates/fuzz/artifacts/` are
+  gitignored; only the dedup-curated regression seeds are
+  committed under `crates/fuzz/seeds/`.
+* The pi-tool's `.pi/` directory is gitignored.
+* Every release tag is preceded by a manual sweep via
+  `scripts/check_clean.sh` (added in Stage 16) that fails if
+  any of these directories contain files git should track but
+  doesn't, OR if any committed file is in a gitignored path.
 
 ---
 
