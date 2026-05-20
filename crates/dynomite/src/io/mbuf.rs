@@ -797,6 +797,24 @@ mod tests {
     }
 
     #[test]
+    fn mbuf_pool_drops_chunks_beyond_cap() {
+        let cap = 4;
+        let pool = MbufPool::new(MBUF_SIZE, cap);
+        let n = cap * 2;
+        let mut taken = Vec::with_capacity(n);
+        for _ in 0..n {
+            taken.push(pool.get());
+        }
+        for buf in taken.drain(..) {
+            pool.put(buf);
+        }
+        // The pool refuses to grow past `max_free`; the surplus
+        // buffers are dropped on return rather than poisoning the
+        // free list.
+        assert_eq!(pool.free_count(), cap);
+    }
+
+    #[test]
     fn mbuf_queue_push_pop_fifo() {
         let pool = MbufPool::default();
         let mut q = MbufQueue::new();
