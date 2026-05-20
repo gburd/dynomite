@@ -204,19 +204,9 @@ symbol is considered un-ported.
 
 ### dyn_histogram.{c,h}
 
-| C symbol | Rust home | Notes |
-|---|---|---|
-| `BUCKET_SIZE` | `dynomite::util::histogram::BUCKET_SIZE` | done (Stage 1) |
-| `struct histogram` | `dynomite::util::histogram::Histogram` plus `HistogramSummary` | done (Stage 1) |
-| `histo_init` | `Histogram::new` / `Histogram::default` | done (Stage 1) |
-| `histo_reset` | `Histogram::reset` | done (Stage 1) |
-| `histo_add` | `Histogram::add` | done (Stage 1) |
-| `histo_get_bucket` | `Histogram::bucket` | done (Stage 1) |
-| `histo_get_buckets` | `Histogram::buckets` | done (Stage 1) |
-| `histo_percentile` | `Histogram::percentile` | done (Stage 1) |
-| `histo_max` | `Histogram::max` | done (Stage 1) |
-| `histo_compute` | `Histogram::compute` (returns `HistogramSummary`) | done (Stage 1) |
-| `histo_mean` | `HistogramSummary::mean` (computed by `Histogram::compute`) | done (Stage 1) |
+See the Stage 5 [`dyn_histogram.{c,h}`](#dyn_histogramch) entry for the
+canonical mapping. The histogram lives in `dynomite::stats::histogram`
+next to its only consumer.
 
 ### dyn_task.{c,h}
 
