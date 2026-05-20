@@ -42,15 +42,14 @@ use tokio::net::TcpListener;
 pub struct BindOptions {
     /// When the bind address is a v6 wildcard (`[::]`), set the
     /// `IPV6_V6ONLY` flag instead of accepting v4-mapped clients.
-    /// The default (`false`) matches the C reference engine's
-    /// behavior on Linux.
+    /// The default (`false`) accepts both families, which is the
+    /// engine's default behaviour on Linux and matches what the
+    /// reference engine ends up with through `getaddrinfo`.
     pub v6_only: bool,
-    /// `SO_REUSEADDR`. Defaults to `true`, matching
-    /// `dyn_set_reuseaddr` in the C engine.
+    /// `SO_REUSEADDR`. Defaults to `true`.
     pub reuseaddr: bool,
-    /// TCP listen backlog. Defaults to `1024`. The C engine reads
-    /// `pool->backlog` from the YAML config and falls back to its
-    /// own default.
+    /// TCP listen backlog. Defaults to `1024`. The configured pool
+    /// `backlog` knob (Stage 4) feeds this field at startup.
     pub backlog: i32,
 }
 
