@@ -99,3 +99,51 @@ BRANCH: stage/5-stats
 JOURNAL: docs/journal/2026-05-19-stage-5-stats.md
 PARITY_DELTA: 28
 ```
+
+## Review response
+
+Review report: `docs/journal/review-stage-5-claude-sonnet-4.md`
+(verdict `REQUEST_CHANGES`).
+
+All three blockers and recommended items 4 through 10 are addressed.
+
+| # | Item | Commit |
+|---|---|---|
+| Blocker 1 | `floor_p_times_u64` parity (IEEE 754 floor of product). Updated `floor_known_quantiles` to assert reference answers. Added property test (in unit and integration tests) covering scale up to `u32::MAX` and the realistic percentile cutoffs. Allowance for the `as` casts recorded in `docs/journal/allowances.md`. | `331cf92` fix(stats): match reference percentile floor in IEEE 754 |
+| Blocker 2 | Snapshot fixture parity. Took option (b): relaxed PLAN.md Stage 5 exit gate to "structural equivalence" because building the upstream C engine end-to-end is infeasible without provisioning libyaml/libcrypto/libevent. The fixture stays as the Rust output, but the test now reconstructs the expected field set from `POOL_CODEC` and `SERVER_CODEC` so any regression in metric naming, indexing, or nesting is caught. New tests `snapshot_contains_every_pool_metric_with_expected_value` and `snapshot_pool_object_appears_before_server_object`. Deviation entry added to `docs/parity.md`. | `90d035c` test(stats): make snapshot fixture test structural |
+| Blocker 3 | Histogram overflow placement. Took option (i): overflows now land in `BUCKET_COUNT - 1`. New `Histogram::is_overflowing` query; `percentile`, `mean`, and `max` short-circuit and return the `OVERFLOW_SENTINEL` (`u64::MAX` / `f64::INFINITY`). `HistogramSummary::from_histogram` returns a zeroed summary on overflow (mirroring the reference engine refusing to publish percentiles in that state). Per-channel queue p99 fields surface 0 when overflowing. Unit test `overflow_signals_quantile_callers` pins the new behavior. | `4c0ebe1` fix(stats): place histogram overflow values in the last bucket |
+| Recommended 4 | Doctests on every public item under `stats/`. Doctest count rose from 7 to 68. Re-exported `MAX_REQUEST_BYTES` / `MAX_HEADERS` so the consts are reachable from external doctests. | `f807bbf` docs(stats): add doctests, reword journal acknowledgement |
+| Recommended 5 | REST read timeout: 5s `tokio::time::timeout` around the read loop; on timeout or read error the connection is closed silently. | `b4135aa` fix(stats): timeout REST reads, cancel-aware aggregator, wrap counters |
+| Recommended 6 | `Aggregator::run` accepts a `tokio_util::sync::CancellationToken` and `select!`s against it. Cancellation returns from the loop cleanly. | `b4135aa` |
+| Recommended 7 | Counter increments switched from `saturating_add` to `wrapping_add` to match the reference `++` / `+=` semantics. Deviation row in `docs/parity.md`. | `b4135aa` |
+| Recommended 8 | Removed the `path.split('?')` strip; the route now compares literal path strings, matching the reference `strcmp`. Deviation row in `docs/parity.md`. | `b4135aa` |
+| Recommended 9 | Reworded the journal acknowledgement so the cross-tree port-comment grep stays clean. The replacement phrasing is in the Notes / decisions section above. | `f807bbf` |
+| Recommended 10 | Added Deviation entries to `docs/parity.md` for: REST `/` returning the same body as `/info`, query-string strip removal, counter wrap semantics, and the `shadow -> sum` double-buffer collapse. | `90d035c` (initial deviations block) and `b4135aa` (counter wrap row) |
+
+### Blocker 3 footnote
+
+The reference `histo_add` binary search clamps overflow values
+(`val > bucket_offsets[BUCKET_SIZE - 1]`) to bucket `BUCKET_SIZE - 2`
+because the loop's bisect can never select the topmost index. The
+reference `histo_compute` then checks `buckets[last_bucket] > 0` and
+refuses to publish on overflow, which is dead code in the reference
+but documents the intent. Option (i) implements that intent: the
+last bucket is the overflow signal, accessors return a sentinel, and
+the summary writer emits zeroes for the overflowed window. The
+behavioral observable difference relative to the reference engine is
+that overflow values no longer contribute to bucket `BUCKET_SIZE - 2`
+percentiles, but the reference engine wouldn't publish those
+percentiles either (the dead overflow check would short-circuit
+`histo_compute`'s output if it ever fired).
+
+### Verification
+
+```
+scripts/check.sh                    # ends with "OK"
+cargo nextest run -p dynomite       # 44 tests pass (was 36)
+cargo test --doc -p dynomite        # 68 doctests pass (was 7)
+```
+
+The AGENTS.md port-acknowledgement regex (run against this journal
+with case-insensitive grep over the listed phrases) produces no
+output.
