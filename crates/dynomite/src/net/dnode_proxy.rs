@@ -48,7 +48,9 @@ impl DnodeProxy {
     }
 
     /// Drive the accept loop. The supplied `handler_factory` is
-    /// called once per accepted peer; it returns the
+    /// called once per accepted peer; it receives the
+    /// per-connection responder sender (the matching half of the
+    /// channel the inbound driver reads from) and returns the
     /// [`ClientHandler`] the per-peer loop should use.
     ///
     /// # Errors
@@ -59,7 +61,10 @@ impl DnodeProxy {
         mut handler_factory: F,
     ) -> Result<(), NetError>
     where
-        F: FnMut() -> ClientHandler + Send,
+        F: FnMut(
+                tokio::sync::mpsc::Sender<crate::net::dispatcher::OutboundEnvelope>,
+            ) -> ClientHandler
+            + Send,
     {
         let mut cancel = cancel;
         let mut peers: Vec<JoinHandle<Result<(), NetError>>> = Vec::new();
@@ -71,10 +76,10 @@ impl DnodeProxy {
                     let role = ConnRole::DnodePeerClient;
                     let transport = Box::new(TcpTransport::new(sock, role));
                     let conn = Conn::new(transport, role);
-                    let handler = handler_factory();
+                    let (tx, rx) = tokio::sync::mpsc::channel(64);
+                    let handler = handler_factory(tx);
                     tracing::debug!(?peer, "dnode_proxy accepted peer");
                     let h = tokio::spawn(async move {
-                        let (_tx, rx) = tokio::sync::mpsc::channel(64);
                         dnode_client_loop(conn, handler, rx).await
                     });
                     peers.push(h);

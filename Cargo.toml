@@ -67,6 +67,7 @@ assert_cmd = "2.0"
 predicates = "3.1"
 tempfile = "3.13"
 clap_mangen = "0.2"
+rcgen = "0.13"
 
 [profile.release]
 lto = "thin"
