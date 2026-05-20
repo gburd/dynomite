@@ -11,40 +11,44 @@
 use dynomite::io::cbuf::CBuf;
 use dynomite::io::mbuf::{Mbuf, MbufPool, MbufQueue, MBUF_ESIZE, MBUF_SIZE};
 use dynomite::io::reactor::{ConnRole, TcpTransport, Transport};
-use proptest::prelude::*;
+use hegel::generators as gs;
+use hegel::TestCase;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 // Property: splitting an mbuf at every valid offset and appending
 // the tail back yields the original byte sequence.
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
-
-    #[test]
-    fn split_off_then_append_reconstructs(
-        bytes in proptest::collection::vec(any::<u8>(), 0..(MBUF_SIZE - MBUF_ESIZE)),
-        cut_raw in 0usize..(2 * (MBUF_SIZE - MBUF_ESIZE))
-    ) {
-        let pool = MbufPool::default();
-        let mut head = pool.get();
-        let n = head.recv(&bytes);
-        prop_assert_eq!(n, bytes.len());
-        let original = bytes.clone();
-        if cut_raw > head.len() {
-            // k > len: the C contract is to refuse. We reproduce it
-            // by returning None and leaving the source untouched.
-            prop_assert!(head.split_off(cut_raw, &pool).is_none());
-            prop_assert_eq!(head.readable(), original.as_slice());
-        } else {
-            let cut = cut_raw;
-            let tail = head.split_off(cut, &pool).expect("split within len");
-            prop_assert_eq!(head.len(), cut);
-            prop_assert_eq!(head.len() + tail.len(), original.len());
-            let mut concat = Vec::with_capacity(original.len());
-            concat.extend_from_slice(head.readable());
-            concat.extend_from_slice(tail.readable());
-            prop_assert_eq!(concat, original);
-        }
+#[hegel::test(test_cases = 256)]
+fn split_off_then_append_reconstructs(tc: TestCase) {
+    let bytes = tc.draw(
+        gs::vecs(gs::integers::<u8>())
+            .min_size(0)
+            .max_size(MBUF_SIZE - MBUF_ESIZE - 1),
+    );
+    let cut_raw = tc.draw(
+        gs::integers::<usize>()
+            .min_value(0)
+            .max_value(2 * (MBUF_SIZE - MBUF_ESIZE) - 1),
+    );
+    let pool = MbufPool::default();
+    let mut head = pool.get();
+    let n = head.recv(&bytes);
+    assert_eq!(n, bytes.len());
+    let original = bytes.clone();
+    if cut_raw > head.len() {
+        // k > len: the C contract is to refuse. We reproduce it
+        // by returning None and leaving the source untouched.
+        assert!(head.split_off(cut_raw, &pool).is_none());
+        assert_eq!(head.readable(), original.as_slice());
+    } else {
+        let cut = cut_raw;
+        let tail = head.split_off(cut, &pool).expect("split within len");
+        assert_eq!(head.len(), cut);
+        assert_eq!(head.len() + tail.len(), original.len());
+        let mut concat = Vec::with_capacity(original.len());
+        concat.extend_from_slice(head.readable());
+        concat.extend_from_slice(tail.readable());
+        assert_eq!(concat, original);
     }
 }
 

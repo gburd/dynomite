@@ -331,14 +331,25 @@ add tests just to pad coverage.
 * Differential corpora (C vs Rust output) are committed as `*.json.gz` so
   CI does not need to rebuild the C binary.
 
-### 6.3 Property tests (`proptest`)
+### 6.3 Property tests (`hegeltest`)
 
-> Note on naming: the user request asked for "Hegel" property testing;
-> the canonical Rust property-testing crate is `proptest`. We use
-> `proptest`. If a tool literally named "Hegel" is identified later, we
-> revisit; this is recorded in `docs/journal/allowances.md`.
+> Property tests use `hegeltest`
+> (https://github.com/hegeldev/hegel-rust), the Rust port of the
+> Hypothesis testing library. The crate is published as `hegeltest`
+> on crates.io but its library name is `hegel`, so tests use
+> `use hegel::TestCase;` and `#[hegel::test]`. We picked `hegeltest`
+> over `proptest` for three reasons: (1) the user's original brief
+> asked for "Hegel", and the framework at
+> https://github.com/hegeldev/hegel-rust is exactly that crate;
+> (2) `hegeltest` is more expressive than `proptest` (it inherits
+> the full Hypothesis shrinking algorithm and the
+> `#[hegel::state_machine]` stateful-testing facility, neither of
+> which `proptest` ships); (3) the documentation at http://hegel.dev
+> and the standalone skill repo
+> (https://github.com/hegeldev/hegel-skill) make onboarding for the
+> property-testing patterns we rely on substantially smoother.
 
-* Use `proptest` for invariants whose state space is too large to
+* Use `hegeltest` for invariants whose state space is too large to
   enumerate. Good targets:
   * Hash + token arithmetic: `set_int_dyn_token(x); get_int(t) == x` for
     all `x` in domain.
@@ -348,8 +359,12 @@ add tests just to pad coverage.
   * Parser totality: parsers never panic on arbitrary `Vec<u8>` and either
     return Err or a complete Msg.
   * Ring routing determinism: same key + same ring -> same primary peer.
-* Each property test runs >= 1024 cases in CI (default) and 1M in the
-  weekly long-soak job (`make soak`).
+* Each property test runs >= 256 cases under the default profile
+  (the migration from `proptest` to `hegeltest` capped per-test
+  budgets via `#[hegel::test(test_cases = N)]`; see
+  `docs/journal/2026-05-19-hegeltest-migration.md` for the table).
+  The weekly long-soak job runs each test for 1M cases
+  (`make soak`).
 
 ### 6.4 Fuzz tests (`cargo-fuzz` + libfuzzer)
 

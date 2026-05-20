@@ -1428,6 +1428,15 @@ Documented design choices that downstream stages must respect.
 
 ## Project-wide follow-ups (not stage-specific)
 
+* **Property tests use `hegeltest`, not `proptest`.** The crate is
+  https://github.com/hegeldev/hegel-rust, published as `hegeltest`
+  on crates.io and re-exported as `hegel` (so tests use
+  `use hegel::TestCase;` and `#[hegel::test]`). The migration
+  landed on branch `refactor/hegeltest`; the journal at
+  `docs/journal/2026-05-19-hegeltest-migration.md` lists the 24
+  property tests that were translated. AGENTS.md Section 6.3 is
+  the source of truth for the testing convention.
+
 * `# Examples` doctest coverage on public items is currently near
   zero across all crates. Tracked in
   `docs/journal/blocked.md` for resolution by a cross-cutting

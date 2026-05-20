@@ -23,7 +23,8 @@ use dynomite::crypto::aes::{
 use dynomite::crypto::pem::load_rsa_private_key_from_bytes;
 use dynomite::crypto::{base64_decode, base64_encode, Crypto};
 use dynomite::io::mbuf::MbufPool;
-use proptest::prelude::*;
+use hegel::generators as gs;
+use hegel::TestCase;
 
 fn fixture_dir() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -56,47 +57,47 @@ fn aes_round_trip_known_lengths() {
     }
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+#[hegel::test(test_cases = 64)]
+fn aes_round_trip_property(tc: TestCase) {
+    let msg = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(4095));
+    let key = Crypto::generate_aes_key().unwrap();
+    let cipher = Crypto::aes_encrypt(&msg, &key).unwrap();
+    assert!(cipher.len() >= AES_BLOCK_SIZE);
+    let plain = Crypto::aes_decrypt(&cipher, &key).unwrap();
+    assert_eq!(plain, msg);
+}
 
-    #[test]
-    fn aes_round_trip_property(msg in prop::collection::vec(any::<u8>(), 0..4096)) {
-        let key = Crypto::generate_aes_key().unwrap();
-        let cipher = Crypto::aes_encrypt(&msg, &key).unwrap();
-        prop_assert!(cipher.len() >= AES_BLOCK_SIZE);
-        let plain = Crypto::aes_decrypt(&cipher, &key).unwrap();
-        prop_assert_eq!(plain, msg);
-    }
+#[hegel::test(test_cases = 64)]
+fn aes_chain_round_trip_property(tc: TestCase) {
+    let msg = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(4095));
+    let pool = MbufPool::default();
+    let key = Crypto::generate_aes_key().unwrap();
+    let mut chain = encrypt_to_chain(&msg, &key, &pool).unwrap();
+    let plain = Crypto::dyn_aes_decrypt_to_vec(&mut chain, &key).unwrap();
+    assert_eq!(plain, msg);
+}
 
-    #[test]
-    fn aes_chain_round_trip_property(msg in prop::collection::vec(any::<u8>(), 0..4096)) {
-        let pool = MbufPool::default();
-        let key = Crypto::generate_aes_key().unwrap();
-        let mut chain = encrypt_to_chain(&msg, &key, &pool).unwrap();
-        let plain = Crypto::dyn_aes_decrypt_to_vec(&mut chain, &key).unwrap();
-        prop_assert_eq!(plain, msg);
-    }
+#[hegel::test(test_cases = 64)]
+fn aes_chain_to_chain_property(tc: TestCase) {
+    let msg = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(4095));
+    let pool = MbufPool::default();
+    let key = Crypto::generate_aes_key().unwrap();
+    let mut chain = encrypt_to_chain(&msg, &key, &pool).unwrap();
+    let mut plain_chain = decrypt_chain_to_chain(&mut chain, &key, &pool).unwrap();
+    let bytes: Vec<u8> = plain_chain
+        .iter()
+        .flat_map(|m| m.readable().to_vec())
+        .collect();
+    assert_eq!(bytes.as_slice(), msg.as_slice());
+    plain_chain.recycle(&pool);
+}
 
-    #[test]
-    fn aes_chain_to_chain_property(msg in prop::collection::vec(any::<u8>(), 0..4096)) {
-        let pool = MbufPool::default();
-        let key = Crypto::generate_aes_key().unwrap();
-        let mut chain = encrypt_to_chain(&msg, &key, &pool).unwrap();
-        let mut plain_chain = decrypt_chain_to_chain(&mut chain, &key, &pool).unwrap();
-        let bytes: Vec<u8> = plain_chain
-            .iter()
-            .flat_map(|m| m.readable().to_vec())
-            .collect();
-        prop_assert_eq!(bytes.as_slice(), msg.as_slice());
-        plain_chain.recycle(&pool);
-    }
-
-    #[test]
-    fn base64_round_trip_property(bytes in prop::collection::vec(any::<u8>(), 0..2048)) {
-        let encoded = base64_encode(&bytes);
-        let decoded = base64_decode(&encoded).unwrap();
-        prop_assert_eq!(decoded, bytes);
-    }
+#[hegel::test(test_cases = 64)]
+fn base64_round_trip_property(tc: TestCase) {
+    let bytes = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(2047));
+    let encoded = base64_encode(&bytes);
+    let decoded = base64_decode(&encoded).unwrap();
+    assert_eq!(decoded, bytes);
 }
 
 #[test]

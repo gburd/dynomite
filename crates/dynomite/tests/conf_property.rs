@@ -19,62 +19,8 @@ use dynomite::conf::{
     SecureServerOption, Servers, TokenList,
 };
 
-use proptest::prelude::*;
-
-fn arb_pool_name() -> impl Strategy<Value = String> {
-    "[a-z][a-z0-9_]{0,15}".prop_filter("non-empty", |s| !s.is_empty())
-}
-
-fn arb_listen_v4() -> impl Strategy<Value = String> {
-    (1u8..=254u8, 1u32..=65_535u32).prop_map(|(o, p)| format!("127.0.0.{o}:{p}"))
-}
-
-fn arb_token_value() -> impl Strategy<Value = String> {
-    proptest::sample::select(vec![
-        "0".to_string(),
-        "1".to_string(),
-        "12345678".to_string(),
-        "101134286".to_string(),
-        "437425602".to_string(),
-        "1383429731".to_string(),
-    ])
-}
-
-fn arb_consistency() -> impl Strategy<Value = ConsistencyLevel> {
-    proptest::sample::select(vec![
-        ConsistencyLevel::DcOne,
-        ConsistencyLevel::DcQuorum,
-        ConsistencyLevel::DcSafeQuorum,
-        ConsistencyLevel::DcEachSafeQuorum,
-    ])
-}
-
-fn arb_secure() -> impl Strategy<Value = SecureServerOption> {
-    proptest::sample::select(vec![
-        SecureServerOption::None,
-        SecureServerOption::Rack,
-        SecureServerOption::Datacenter,
-        SecureServerOption::All,
-    ])
-}
-
-fn arb_hash() -> impl Strategy<Value = HashType> {
-    proptest::sample::select(vec![
-        HashType::OneAtATime,
-        HashType::Md5,
-        HashType::Crc16,
-        HashType::Crc32,
-        HashType::Crc32a,
-        HashType::Fnv1_64,
-        HashType::Fnv1a64,
-        HashType::Fnv1_32,
-        HashType::Fnv1a32,
-        HashType::Hsieh,
-        HashType::Murmur,
-        HashType::Jenkins,
-        HashType::Murmur3,
-    ])
-}
+use hegel::generators as gs;
+use hegel::{Generator, TestCase};
 
 #[derive(Debug, Clone)]
 struct PoolFacts {
@@ -93,56 +39,93 @@ struct PoolFacts {
     max_msgs: Option<i64>,
 }
 
-fn arb_pool_facts() -> impl Strategy<Value = PoolFacts> {
-    let common = (
-        arb_pool_name(),
-        arb_listen_v4(),
-        arb_listen_v4(),
-        arb_token_value(),
-        (1u8..=254u8, 1u32..=65_535u32, 1u32..=10u32),
-        arb_secure(),
-        arb_consistency(),
-        arb_consistency(),
+#[hegel::composite]
+fn arb_pool_facts(tc: TestCase) -> PoolFacts {
+    let name = tc.draw(
+        gs::from_regex("[a-z][a-z0-9_]{0,15}")
+            .fullmatch(true)
+            .filter(|s: &String| !s.is_empty()),
     );
-    let extra = (
-        arb_hash(),
-        proptest::sample::select(vec![DataStore::Redis, DataStore::Memcache]),
-        1i64..=60_000i64,
-        prop::option::of(prop::sample::select(vec![512i64, 1024, 4096, 16384, 65536])),
-        prop::option::of(100_000i64..=1_000_000i64),
-    );
-    (common, extra).prop_map(
-        |(
-            (
-                name,
-                listen,
-                dyn_listen,
-                tokens,
-                (host, port, weight),
-                secure,
-                read_consistency,
-                write_consistency,
-            ),
-            (hash, data_store, timeout, mbuf_size, max_msgs),
-        )| {
-            let server = format!("127.0.0.{host}:{port}:{weight}");
-            PoolFacts {
-                name,
-                listen,
-                dyn_listen,
-                tokens,
-                server,
-                secure,
-                read_consistency,
-                write_consistency,
-                hash,
-                data_store,
-                timeout,
-                mbuf_size,
-                max_msgs,
-            }
-        },
-    )
+    let listen = {
+        let o = tc.draw(gs::integers::<u8>().min_value(1).max_value(254));
+        let p = tc.draw(gs::integers::<u32>().min_value(1).max_value(65_535));
+        format!("127.0.0.{o}:{p}")
+    };
+    let dyn_listen = {
+        let o = tc.draw(gs::integers::<u8>().min_value(1).max_value(254));
+        let p = tc.draw(gs::integers::<u32>().min_value(1).max_value(65_535));
+        format!("127.0.0.{o}:{p}")
+    };
+    let tokens = tc.draw(gs::sampled_from(&[
+        "0".to_string(),
+        "1".to_string(),
+        "12345678".to_string(),
+        "101134286".to_string(),
+        "437425602".to_string(),
+        "1383429731".to_string(),
+    ]));
+    let host = tc.draw(gs::integers::<u8>().min_value(1).max_value(254));
+    let port = tc.draw(gs::integers::<u32>().min_value(1).max_value(65_535));
+    let weight = tc.draw(gs::integers::<u32>().min_value(1).max_value(10));
+    let server = format!("127.0.0.{host}:{port}:{weight}");
+    let secure = tc.draw(gs::sampled_from(&[
+        SecureServerOption::None,
+        SecureServerOption::Rack,
+        SecureServerOption::Datacenter,
+        SecureServerOption::All,
+    ]));
+    let read_consistency = tc.draw(gs::sampled_from(&[
+        ConsistencyLevel::DcOne,
+        ConsistencyLevel::DcQuorum,
+        ConsistencyLevel::DcSafeQuorum,
+        ConsistencyLevel::DcEachSafeQuorum,
+    ]));
+    let write_consistency = tc.draw(gs::sampled_from(&[
+        ConsistencyLevel::DcOne,
+        ConsistencyLevel::DcQuorum,
+        ConsistencyLevel::DcSafeQuorum,
+        ConsistencyLevel::DcEachSafeQuorum,
+    ]));
+    let hash = tc.draw(gs::sampled_from(&[
+        HashType::OneAtATime,
+        HashType::Md5,
+        HashType::Crc16,
+        HashType::Crc32,
+        HashType::Crc32a,
+        HashType::Fnv1_64,
+        HashType::Fnv1a64,
+        HashType::Fnv1_32,
+        HashType::Fnv1a32,
+        HashType::Hsieh,
+        HashType::Murmur,
+        HashType::Jenkins,
+        HashType::Murmur3,
+    ]));
+    let data_store = tc.draw(gs::sampled_from(&[DataStore::Redis, DataStore::Memcache]));
+    let timeout = tc.draw(gs::integers::<i64>().min_value(1).max_value(60_000));
+    let mbuf_size = tc.draw(gs::optional(gs::sampled_from(&[
+        512i64, 1024, 4096, 16384, 65536,
+    ])));
+    let max_msgs = tc.draw(gs::optional(
+        gs::integers::<i64>()
+            .min_value(100_000)
+            .max_value(1_000_000),
+    ));
+    PoolFacts {
+        name,
+        listen,
+        dyn_listen,
+        tokens,
+        server,
+        secure,
+        read_consistency,
+        write_consistency,
+        hash,
+        data_store,
+        timeout,
+        mbuf_size,
+        max_msgs,
+    }
 }
 
 fn render(facts: &PoolFacts) -> String {
@@ -181,49 +164,41 @@ fn render(facts: &PoolFacts) -> String {
     s
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 256,
-        ..ProptestConfig::default()
-    })]
+#[hegel::test(test_cases = 256)]
+fn parse_finalize_validate_round_trip(tc: TestCase) {
+    let facts = tc.draw(arb_pool_facts());
+    let yaml = render(&facts);
+    let mut cfg = Config::parse_str(&yaml).expect("parse");
+    assert_eq!(cfg.pool_name(), &facts.name);
+    assert_eq!(cfg.pool().listen.as_ref().unwrap().pname(), &facts.listen);
+    assert_eq!(
+        cfg.pool().dyn_listen.as_ref().unwrap().pname(),
+        &facts.dyn_listen
+    );
+    assert_eq!(
+        cfg.pool().tokens.as_ref().unwrap().to_string(),
+        facts.tokens.clone()
+    );
+    assert_eq!(cfg.pool().data_store, Some(facts.data_store.as_int()));
+    assert_eq!(cfg.pool().timeout, Some(facts.timeout));
+    cfg.finalize();
+    cfg.validate().expect("validate");
+}
 
-    #[test]
-    fn parse_finalize_validate_round_trip(facts in arb_pool_facts()) {
-        let yaml = render(&facts);
-        let mut cfg = Config::parse_str(&yaml).expect("parse");
-        prop_assert_eq!(cfg.pool_name(), &facts.name);
-        prop_assert_eq!(
-            cfg.pool().listen.as_ref().unwrap().pname(),
-            &facts.listen
-        );
-        prop_assert_eq!(
-            cfg.pool().dyn_listen.as_ref().unwrap().pname(),
-            &facts.dyn_listen
-        );
-        prop_assert_eq!(
-            cfg.pool().tokens.as_ref().unwrap().to_string(),
-            facts.tokens.clone()
-        );
-        prop_assert_eq!(cfg.pool().data_store, Some(facts.data_store.as_int()));
-        prop_assert_eq!(cfg.pool().timeout, Some(facts.timeout));
-        cfg.finalize();
-        cfg.validate().expect("validate");
-    }
-
-    #[test]
-    fn out_of_range_mbuf_rejected_by_validation(
-        facts in arb_pool_facts(),
-        bogus in proptest::sample::select(vec![-1i64, 0, 100, 200, 511, 700, 99999, 600_000])
-    ) {
-        let mut bad = facts.clone();
-        bad.mbuf_size = Some(bogus);
-        let yaml = render(&bad);
-        let mut cfg = Config::parse_str(&yaml).expect("parse");
-        cfg.finalize();
-        let result = cfg.validate();
-        let is_oor = matches!(result, Err(ConfError::OutOfRange { .. }));
-        prop_assert!(is_oor);
-    }
+#[hegel::test(test_cases = 256)]
+fn out_of_range_mbuf_rejected_by_validation(tc: TestCase) {
+    let facts = tc.draw(arb_pool_facts());
+    let bogus = tc.draw(gs::sampled_from(&[
+        -1i64, 0, 100, 200, 511, 700, 99999, 600_000,
+    ]));
+    let mut bad = facts.clone();
+    bad.mbuf_size = Some(bogus);
+    let yaml = render(&bad);
+    let mut cfg = Config::parse_str(&yaml).expect("parse");
+    cfg.finalize();
+    let result = cfg.validate();
+    let is_oor = matches!(result, Err(ConfError::OutOfRange { .. }));
+    assert!(is_oor);
 }
 
 #[test]

@@ -669,34 +669,35 @@ fn memcache_malformed_inputs_do_not_panic() {
 
 // -------- Property tests --------
 
-use proptest::prelude::*;
+use hegel::generators as gs;
+use hegel::TestCase;
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+#[hegel::test(test_cases = 256)]
+fn redis_parse_req_never_panics(tc: TestCase) {
+    let input = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(255));
+    let mut m = Msg::new(0, MsgType::Unknown, true);
+    let _ = redis::redis_parse_req(&mut m, &input);
+}
 
-    #[test]
-    fn redis_parse_req_never_panics(input in proptest::collection::vec(any::<u8>(), 0..256)) {
-        let mut m = Msg::new(0, MsgType::Unknown, true);
-        let _ = redis::redis_parse_req(&mut m, &input);
-    }
+#[hegel::test(test_cases = 256)]
+fn redis_parse_rsp_never_panics(tc: TestCase) {
+    let input = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(255));
+    let mut m = Msg::new(0, MsgType::Unknown, false);
+    let _ = redis::redis_parse_rsp(&mut m, &input);
+}
 
-    #[test]
-    fn redis_parse_rsp_never_panics(input in proptest::collection::vec(any::<u8>(), 0..256)) {
-        let mut m = Msg::new(0, MsgType::Unknown, false);
-        let _ = redis::redis_parse_rsp(&mut m, &input);
-    }
+#[hegel::test(test_cases = 256)]
+fn memcache_parse_req_never_panics(tc: TestCase) {
+    let input = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(255));
+    let mut m = Msg::new(0, MsgType::Unknown, true);
+    let _ = memcache::memcache_parse_req(&mut m, &input);
+}
 
-    #[test]
-    fn memcache_parse_req_never_panics(input in proptest::collection::vec(any::<u8>(), 0..256)) {
-        let mut m = Msg::new(0, MsgType::Unknown, true);
-        let _ = memcache::memcache_parse_req(&mut m, &input);
-    }
-
-    #[test]
-    fn memcache_parse_rsp_never_panics(input in proptest::collection::vec(any::<u8>(), 0..256)) {
-        let mut m = Msg::new(0, MsgType::Unknown, false);
-        let _ = memcache::memcache_parse_rsp(&mut m, &input);
-    }
+#[hegel::test(test_cases = 256)]
+fn memcache_parse_rsp_never_panics(tc: TestCase) {
+    let input = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(255));
+    let mut m = Msg::new(0, MsgType::Unknown, false);
+    let _ = memcache::memcache_parse_rsp(&mut m, &input);
 }
 
 // -------- Repair surface tests --------

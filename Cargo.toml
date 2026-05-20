@@ -59,7 +59,12 @@ socket2 = "0.5"
 httparse = "1.9"
 
 # Dev / test
-proptest = "1.5"
+# `hegeltest` (re-exported as `hegel`) is the property-testing crate
+# the user originally referred to as "Hegel". Repo:
+# https://github.com/hegeldev/hegel-rust. The `native` feature pulls in
+# the in-process backend (rand + num-bigint + num-traits) so tests do
+# not need an external server.
+hegeltest = { version = "0.14", features = ["native"] }
 hex = "0.4"
 serde_json = "1.0"
 criterion = { version = "0.5", features = ["html_reports"] }

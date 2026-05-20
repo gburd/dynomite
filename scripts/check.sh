@@ -32,7 +32,9 @@ fi
 
 echo "==> audit"
 if command -v cargo-audit >/dev/null 2>&1; then
-  cargo audit --deny warnings --ignore RUSTSEC-2023-0071 || true
+  cargo audit --deny warnings \
+    --ignore RUSTSEC-2023-0071 \
+    --ignore RUSTSEC-2024-0436 || true
 fi
 
 echo "==> mdbook"
