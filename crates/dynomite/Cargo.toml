@@ -41,4 +41,6 @@ httparse = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
 tempfile = { workspace = true }
+hex = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
