@@ -6,6 +6,14 @@
 //! `crates/dynomite/tests/fixtures/hashkit_vectors.json` and reviewed
 //! before committing.
 
+#![allow(
+    clippy::format_push_string,
+    clippy::needless_continue,
+    clippy::unnecessary_debug_formatting,
+    clippy::match_same_arms,
+    clippy::similar_names,
+    clippy::cast_possible_truncation
+)]
 use dynomite::hashkit::{hash, HashType};
 
 fn main() {

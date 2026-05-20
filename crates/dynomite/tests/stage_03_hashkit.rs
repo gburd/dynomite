@@ -60,7 +60,7 @@ fn fixture_path() -> PathBuf {
 }
 
 fn parse_hex(s: &str) -> Vec<u8> {
-    assert!(s.len() % 2 == 0, "odd-length hex {s:?}");
+    assert!(s.len().is_multiple_of(2), "odd-length hex {s:?}");
     let mut out = Vec::with_capacity(s.len() / 2);
     let bytes = s.as_bytes();
     for i in (0..bytes.len()).step_by(2) {

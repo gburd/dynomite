@@ -240,7 +240,7 @@ mod tests {
             rack: "r",
             tokens: &toks,
         };
-        rebuild_continuums(&mut dcs, &[p.clone()]);
+        rebuild_continuums(&mut dcs, std::slice::from_ref(&p));
         rebuild_continuums(&mut dcs, &[p]);
         assert_eq!(dcs[0].racks()[0].ncontinuum(), 1);
     }

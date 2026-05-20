@@ -135,7 +135,7 @@ mod tests {
         let s = SockInfo::resolve("127.0.0.1", 6379).unwrap();
         assert_eq!(
             s.as_socket_addr().unwrap().ip(),
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
         );
         assert!(matches!(s, SockInfo::Inet(_)));
     }
