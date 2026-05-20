@@ -15,6 +15,8 @@ Format:
 
 ## src/
 
+### dyn_types.{c,h}
+
 | C symbol | Rust home | Notes |
 |---|---|---|
 | `rstatus_t` | `dynomite::core::types::Status` (alias for `Result<(), DynError>`) | done (Stage 0) |
@@ -79,6 +81,154 @@ symbol is considered un-ported.
 | `parse_request` / `stats_send_rsp` / `stats_http_rsp` | `dynomite::stats::rest` (single `GET /` JSON endpoint) | done (Stage 5) (deviation: command surface limited to JSON snapshot for Stage 5; cluster-describe and dynamic control endpoints land with Stage 10) |
 | `stats_make_info_rsp` / `stats_add_header` / `stats_add_string` / `stats_add_num` / `stats_begin_nesting` / `stats_end_nesting` / `stats_add_footer` / `stats_copy_metric` / `stats_aggregate_metric` | `Snapshot::write_json` and helpers in `dynomite::stats::snapshot` | done (Stage 5) |
 | `stats_make_cl_desc_rsp` / `stats_add_node_*` / `stats_add_rack_details` / `stats_add_dc_details` | not yet ported | deferred to Stage 10 (gossip data structures live there) |
+| `DN_ENO_IMPL` | `dynomite::core::types::DynError::NotImplemented` | done (Stage 1) |
+| `msgid_t` | `dynomite::core::types::MsgId` (`u64` alias) | done (Stage 1) |
+| `msec_t` | `dynomite::core::types::Msec` (`u64` alias) | done (Stage 1) |
+| `usec_t` | `dynomite::core::types::Usec` (`u64` alias) | done (Stage 1) |
+| `sec_t` | `dynomite::core::types::Sec` (`u64` alias) | done (Stage 1) |
+| `secure_server_option_t` | `dynomite::core::types::SecureServerOption` | done (Stage 1) |
+| `cleanup_charptr` | omitted: scoped `free` is a no-op in Rust where ownership handles it. |
+| `init_object` / `print_obj` / `object_t` / `func_print_t` / `OBJ_*` | omitted: the C `object_t` is a debug-printing tag for diagnostic logging; Rust uses `std::fmt::Debug` derives at every relevant struct, removing the need for a runtime type tag. |
+| `THROW_STATUS` / `IGNORE_RET_VAL` | omitted: macro shapes; Rust uses `?` and explicit `let _ =` discards. |
+
+### dyn_string.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `struct string` | replaced by `bytes::Bytes` (zero-copy borrow) and `String` (owned UTF-8); pname/data parsing uses `&[u8]`. |
+| `string_init`, `string_deinit` | omitted: Rust types are RAII. |
+| `string_empty` | `<[u8]>::is_empty` / `String::is_empty` (stdlib). |
+| `string_duplicate`, `string_copy`, `string_copy_c` | `<[u8]>::to_vec` / `Bytes::copy_from_slice` (stdlib + bytes). |
+| `string_compare` | `dynomite::util::dyn_string::string_compare` | done (Stage 1) |
+| `dn_strchr` | `dynomite::util::dyn_string::strchr` | done (Stage 1) |
+| `dn_strrchr` | `dynomite::util::dyn_string::strrchr` | done (Stage 1) |
+| `dn_strcasecmp` | `dynomite::util::dyn_string::eq_ignore_ascii_case` | done (Stage 1) |
+| `dn_memcpy`, `dn_memmove`, `dn_memchr`, `dn_strlen`, `dn_strncmp`, `dn_strcmp`, `dn_strndup`, `dn_snprintf`, `dn_sprintf`, `dn_scnprintf`, `dn_vscnprintf` | omitted: replaced by stdlib slice and `String`/`format!` operations. |
+
+### dyn_array.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `struct array`, `array_create`, `array_destroy`, `array_init`, `array_deinit`, `array_idx`, `array_push`, `array_pop`, `array_get`, `array_top`, `array_swap`, `array_sort`, `array_each`, `array_each_2`, `array_compare_t`, `array_each_t`, `array_each_2_t` | omitted: replaced by `Vec<T>` and closures at every call site. The two-arg callback shape becomes a closure capturing both data pointers. |
+
+### dyn_util.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `dn_set_blocking`, `dn_set_nonblocking`, `dn_set_reuseaddr`, `dn_set_keepalive`, `dn_set_tcpnodelay`, `dn_set_linger`, `dn_set_sndbuf`, `dn_set_rcvbuf`, `dn_get_soerror`, `dn_get_sndbuf`, `dn_get_rcvbuf`, `_dn_sendn`, `_dn_recvn`, `dn_resolve`, `dn_unresolve_addr`, `dn_unresolve_peer_desc`, `dn_unresolve_desc` | deferred to Stage 2 (I/O substrate); these are wired to `socket2`/`tokio` in the reactor. Tracked as out-of-scope for Stage 1. |
+| `_dn_atoi` | `dynomite::util::atoi::dn_atoi` | done (Stage 1) |
+| `_dn_atoui` | `dynomite::util::atoi::dn_atoui` | done (Stage 1) |
+| `dn_valid_port` | `dynomite::util::atoi::valid_port` | done (Stage 1) |
+| `dn_msec_now` | `dynomite::util::time::msec_now` | done (Stage 1) |
+| `dn_usec_now` | `dynomite::util::time::usec_now` | done (Stage 1) |
+| `current_timestamp_in_millis` | `dynomite::util::time::msec_now` (single helper) | done (Stage 1) |
+| `count_digits` | `dynomite::util::time::count_digits` | done (Stage 1) |
+| `struct sockinfo` | `dynomite::util::sockinfo::SockInfo` | done (Stage 1) |
+| `dict_string_hash`, `dict_string_key_compare`, `dict_string_destructor` | deferred to Stage 10 (gossip dict bindings). |
+| `keypos_elem_len`, `argpos_elem_len` | deferred to Stage 7/8 once `keypos`/`argpos` are introduced. |
+| `_dn_alloc`, `_dn_zalloc`, `_dn_calloc`, `_dn_realloc`, `_dn_free`, `dn_assert`, `dn_stacktrace`, `_scnprintf`, `_vscnprintf`, `dn_gethostname` | omitted: replaced by Rust ownership, `assert!`/`debug_assert!`, `std::backtrace`, and stdlib formatting. |
+| `MIN`, `MAX`, `NELEMS`, `SQUARE`, `VAR`, `STDDEV`, `DN_ALIGN`, `str*cmp`, `str*icmp` | omitted: trivial macros replaced by stdlib (`cmp::min`, `cmp::max`, `slice::len`, `eq_ignore_ascii_case`, etc.). |
+
+### dyn_setting.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `msgs_per_sec` | `dynomite::core::setting::msgs_per_sec` | done (Stage 1) |
+| `set_msgs_per_sec` | `dynomite::core::setting::set_msgs_per_sec` | done (Stage 1) |
+| `CONF_DEFAULT_CONN_MSG_RATE` | `dynomite::core::setting::DEFAULT_MSGS_PER_SEC` | done (Stage 1) |
+
+### dyn_log.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `LOG_EMERG..LOG_PVERB` | `dynomite::core::log::{LOG_EMERG, LOG_ALERT, LOG_CRIT, LOG_ERR, LOG_WARN, LOG_NOTICE, LOG_INFO, LOG_DEBUG, LOG_VERB, LOG_VVERB, LOG_VVVERB, LOG_PVERB}` | done (Stage 1) |
+| `log_init` | `dynomite::core::log::log_init` (signature: `(level: u8, path: Option<&Path>) -> Status`) | done (Stage 1) |
+| `log_deinit` | omitted: Rust drops the writer when the process exits. |
+| `log_reopen` | `dynomite::core::log::reopen_on_sighup` | done (Stage 1) |
+| `log_level_up` | `dynomite::core::log::log_level_increment` | done (Stage 1) |
+| `log_level_down` | `dynomite::core::log::log_level_decrement` | done (Stage 1) |
+| `log_level_set` | `dynomite::core::log::log_level_set` | done (Stage 1) |
+| `log_loggable` | `dynomite::core::log::log_loggable` | done (Stage 1) |
+| `_log`, `_log_stderr`, `_log_hexdump`, `log_debug`, `log_notice`, `log_info`, `log_error`, `log_warn`, `log_panic`, `loga`, `loga_hexdump` | replaced by `tracing::{trace,debug,info,warn,error}` and `tracing::event!`; hexdumps land in Stage 5 (stats output) where they are actually used. |
+
+### dyn_signal.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `struct signal` | `dynomite::core::signal::SignalEntry` | done (Stage 1) |
+| `signals[]` (default table) | `dynomite::core::signal::default_actions` | done (Stage 1) |
+| `signal_init` | deferred to Stage 12 (the binary), which wires tokio `signal::unix::signal` streams onto `dynomite::core::signal::dispatch`. The data table is in place; the wiring uses tokio rather than `sigaction` so it lives next to the runtime. |
+| `signal_deinit` | omitted: tokio drops listeners on shutdown. |
+| `signal_handler` | `dynomite::core::signal::dispatch` (and the convenience wrapper `handle`) | done (Stage 1) |
+
+### dyn_queue.h
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `LIST_*` / `TAILQ_*` / `STAILQ_*` / `CIRCLEQ_*` macros | omitted: replaced by `VecDeque<T>` or `LinkedList<T>` per call site. |
+
+### dyn_cbuf.h
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `CBUF_*` macros (`Init`, `Push`, `Pop`, `Len`, `IsFull`, `IsEmpty`, ...) | replaced by `crossbeam_channel::bounded`, exposed as `dynomite::core::ring_queue::RingChannels`. |
+
+### dyn_ring_queue.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `C2G_InQ_SIZE`, `C2G_OutQ_SIZE` | `dynomite::core::ring_queue::{C2G_IN_CAPACITY, C2G_OUT_CAPACITY}` | done (Stage 1) |
+| `C2G_InQ`, `C2G_OutQ` (volatile globals) | `dynomite::core::ring_queue::RingChannels` (paired bounded channels; capacities preserved) | done (Stage 1) |
+| `callback_t`, `data_func_t` | omitted: closures at the call site. |
+| `struct ring_msg`, `create_ring_msg`, `create_ring_msg_with_data`, `create_ring_msg_with_size`, `ring_msg_init`, `ring_msg_deinit`, `create_node`, `node_init`, `node_deinit`, `node_copy` | deferred to Stage 10 (gossip): the message body is gossip-specific (`gossip_node`, `dyn_token`, `server_pool`) which Stage 1 does not yet have. The transport (channel) is in place. |
+
+### dyn_dict.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `dict`, `dictType`, `dictEntry`, `dictht`, `dictIterator`, `dictScanFunction`, all `dict*` operations | replaced by `dynomite::util::dict::DictMap` (typed wrapper around `ahash::AHashMap`). The C generic-pointer key/value vtable is replaced by Rust generics on `DictMap<K, V>`. |
+| `dictTypeHeapStringCopyKey`, `dictTypeHeapStrings`, `dictTypeHeapStringCopyKeyValue` | deferred to Stage 10 alongside the gossip-specific dict instantiations they belong to. |
+| `dictGenHashFunction`, `dictSetHashFunctionSeed`, `dictGetHashFunctionSeed` | omitted: `ahash` already mixes a per-process seed; the C MurmurHash2 helper has no in-tree caller after the dict is replaced. |
+
+### dyn_dict_msg_id.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `msg_table_dict_type` (and the static helpers `dict_msg_id_hash`, `dict_msg_id_cmp`) | `dynomite::util::dict::MsgIndex` (alias for `DictMap<MsgId, V>`) | done (Stage 1) |
+
+### dyn_rbtree.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `struct rbnode`, `struct rbtree`, `rbtree_init`, `rbtree_node_init`, `rbtree_min`, `rbtree_insert`, `rbtree_delete`, `rbtree_red`/`rbtree_black`/`rbtree_is_red`/`rbtree_is_black`/`rbtree_copy_color` | replaced by `dynomite::util::rbtree::OrderedMap` (a typed `BTreeMap` wrapper exposing `lower_bound`, `min`, and `max`). The C engine uses the tree exclusively for token-ring ordering; `OrderedMap` provides the same operations with `O(log n)` worst-case bounds. |
+
+### dyn_histogram.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `BUCKET_SIZE` | `dynomite::util::histogram::BUCKET_SIZE` | done (Stage 1) |
+| `struct histogram` | `dynomite::util::histogram::Histogram` plus `HistogramSummary` | done (Stage 1) |
+| `histo_init` | `Histogram::new` / `Histogram::default` | done (Stage 1) |
+| `histo_reset` | `Histogram::reset` | done (Stage 1) |
+| `histo_add` | `Histogram::add` | done (Stage 1) |
+| `histo_get_bucket` | `Histogram::bucket` | done (Stage 1) |
+| `histo_get_buckets` | `Histogram::buckets` | done (Stage 1) |
+| `histo_percentile` | `Histogram::percentile` | done (Stage 1) |
+| `histo_max` | `Histogram::max` | done (Stage 1) |
+| `histo_compute` | `Histogram::compute` (returns `HistogramSummary`) | done (Stage 1) |
+| `histo_mean` | `HistogramSummary::mean` (computed by `Histogram::compute`) | done (Stage 1) |
+
+### dyn_task.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `task_handler_1` | `Arc<dyn Fn() + Send + Sync>` (periodic) and `Box<dyn FnOnce() + Send>` (one-shot). |
+| `task_mgr_init` | omitted: tokio drives timers; the runtime entry is provided by Stage 12 (`dynomited`'s `#[tokio::main]`). |
+| `schedule_task_1` | `dynomite::core::task::task_schedule_once` | done (Stage 1) |
+| `time_to_next_task` | omitted: tokio's reactor schedules the next wake-up. |
+| `execute_expired_tasks` | omitted: tokio drives the timer wheel transparently. |
+| `cancel_task` | `TaskHandle::cancel` | done (Stage 1) |
+| `task_register` (PLAN-mandated periodic API) | `dynomite::core::task::task_register` | done (Stage 1) |
 
 ## src/event/
 
@@ -256,3 +406,15 @@ follows the typed-Option model PLAN.md Stage 4 calls for.
   always re-publishes the snapshot on every aggregator tick. The
   observable JSON output is unchanged because the reference's
   short-circuit is purely an optimization to skip a no-op swap.
+* Stage 1 task scheduler: the C code exposes a one-shot, main-loop-driven
+  scheduler (`schedule_task_1` / `execute_expired_tasks`). The Rust port
+  replaces both with tokio-driven primitives because the rest of the
+  port runs under a multi-threaded tokio runtime. The PLAN-mandated
+  periodic API (`task_register`) is provided alongside a one-shot
+  variant (`task_schedule_once`) for parity with `schedule_task_1`. The
+  per-iteration helpers (`time_to_next_task`, `execute_expired_tasks`)
+  have no Rust counterpart because tokio's reactor performs that work.
+* Stage 1 signal handling: the C code installs `sigaction` directly.
+  Rust callers (Stage 12) wire tokio `signal::unix` streams to
+  `dispatch`; the table is the single source of truth and runs the same
+  per-signal action.
