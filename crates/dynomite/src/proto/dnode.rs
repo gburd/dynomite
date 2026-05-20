@@ -340,6 +340,14 @@ pub struct DnodeParser {
     dmsg: Dmsg,
     data_remaining: u32,
     magic_progress: u8,
+    /// Tracks the C reference engine's `isdigit(*(p - 1))` guard.
+    /// `dyn_parse_core` only transitions out of the numeric header
+    /// fields (MSG_ID, TYPE_ID, BIT_FIELD, VERSION, SAME_DC) when
+    /// the byte immediately preceding the field-terminating space
+    /// was a digit; the Rust port reproduces the same guard so
+    /// extra whitespace (or any other non-digit byte) is rejected
+    /// with the same strictness as the C engine.
+    prev_was_digit: bool,
 }
 
 impl DnodeParser {
@@ -360,6 +368,7 @@ impl DnodeParser {
             dmsg: Dmsg::new(),
             data_remaining: 0,
             magic_progress: 0,
+            prev_was_digit: false,
         }
     }
 
@@ -390,6 +399,7 @@ impl DnodeParser {
         self.num = 0;
         self.data_remaining = 0;
         self.magic_progress = 0;
+        self.prev_was_digit = false;
         out
     }
 
@@ -456,21 +466,26 @@ impl DnodeParser {
                     return ParseStep::Error { consumed: idx };
                 }
                 DynParseState::MsgId => {
+                    // Mirrors `dyn_parse_core`'s DYN_MSG_ID arm in
+                    // `_/dynomite/src/dyn_dnode_msg.c`: digits
+                    // accumulate, a single space terminates the
+                    // field but only when the byte immediately
+                    // before it was a digit. Anything else is
+                    // rejected (the C engine resets to DYN_START
+                    // and lets the recovery path retry; the Rust
+                    // streaming parser surfaces an error so the
+                    // caller can drop the buffer).
                     if ch.is_ascii_digit() {
                         self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.prev_was_digit = true;
                         idx += 1;
                         continue;
                     }
-                    if ch == b' ' && self.num != 0 {
+                    if ch == b' ' && self.prev_was_digit {
                         self.dmsg.id = self.num;
                         self.state = DynParseState::TypeId;
                         self.num = 0;
-                        idx += 1;
-                        continue;
-                    }
-                    if ch == b' ' {
-                        // Leading spaces (e.g. after MAGIC_STR)
-                        // before any digit; advance.
+                        self.prev_was_digit = false;
                         idx += 1;
                         continue;
                     }
@@ -479,16 +494,18 @@ impl DnodeParser {
                 DynParseState::TypeId => {
                     if ch.is_ascii_digit() {
                         self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.prev_was_digit = true;
                         idx += 1;
                         continue;
                     }
-                    if ch == b' ' {
+                    if ch == b' ' && self.prev_was_digit {
                         self.dmsg.ty = match DmsgType::from_u8(self.num as u8) {
                             Some(t) => t,
                             None => return ParseStep::Error { consumed: idx },
                         };
                         self.state = DynParseState::BitField;
                         self.num = 0;
+                        self.prev_was_digit = false;
                         idx += 1;
                         continue;
                     }
@@ -497,13 +514,15 @@ impl DnodeParser {
                 DynParseState::BitField => {
                     if ch.is_ascii_digit() {
                         self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.prev_was_digit = true;
                         idx += 1;
                         continue;
                     }
-                    if ch == b' ' {
+                    if ch == b' ' && self.prev_was_digit {
                         self.dmsg.flags = (self.num as u8) & 0xF;
                         self.state = DynParseState::Version;
                         self.num = 0;
+                        self.prev_was_digit = false;
                         idx += 1;
                         continue;
                     }
@@ -512,13 +531,15 @@ impl DnodeParser {
                 DynParseState::Version => {
                     if ch.is_ascii_digit() {
                         self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.prev_was_digit = true;
                         idx += 1;
                         continue;
                     }
-                    if ch == b' ' {
+                    if ch == b' ' && self.prev_was_digit {
                         self.dmsg.version = self.num as u8;
                         self.state = DynParseState::SameDc;
                         self.num = 0;
+                        self.prev_was_digit = false;
                         idx += 1;
                         continue;
                     }
@@ -527,12 +548,14 @@ impl DnodeParser {
                 DynParseState::SameDc => {
                     if ch.is_ascii_digit() {
                         self.dmsg.same_dc = ch != b'0';
+                        self.prev_was_digit = true;
                         idx += 1;
                         continue;
                     }
-                    if ch == b' ' {
+                    if ch == b' ' && self.prev_was_digit {
                         self.state = DynParseState::DataLen;
                         self.num = 0;
+                        self.prev_was_digit = false;
                         idx += 1;
                         continue;
                     }
@@ -886,20 +909,26 @@ pub enum DmsgDispatch {
 /// d.ty = DmsgType::CryptoHandshake;
 /// assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
 ///
+/// // Gossip variants other than SYN / SYN_REPLY fall through.
+/// d.ty = DmsgType::GossipShutdown;
+/// assert_eq!(dmsg_process(&d), DmsgDispatch::Forward);
+///
 /// d.ty = DmsgType::Req;
 /// assert_eq!(dmsg_process(&d), DmsgDispatch::Forward);
 /// ```
 #[must_use]
 pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
+    // Mirrors the C `dmsg_process` switch in
+    // `_/dynomite/src/dyn_dnode_msg.c`: only CRYPTO_HANDSHAKE,
+    // GOSSIP_SYN, and GOSSIP_SYN_REPLY short-circuit; the other
+    // gossip variants (ACK, DIGEST_SYN, DIGEST_ACK, DIGEST_ACK2,
+    // SHUTDOWN) fall through to the default branch and are
+    // forwarded to the cluster handlers (which Stage 10 will wire
+    // up).
     match dmsg.ty {
-        DmsgType::CryptoHandshake
-        | DmsgType::GossipSyn
-        | DmsgType::GossipSynReply
-        | DmsgType::GossipAck
-        | DmsgType::GossipDigestSyn
-        | DmsgType::GossipDigestAck
-        | DmsgType::GossipDigestAck2
-        | DmsgType::GossipShutdown => DmsgDispatch::Bypass,
+        DmsgType::CryptoHandshake | DmsgType::GossipSyn | DmsgType::GossipSynReply => {
+            DmsgDispatch::Bypass
+        }
         _ => DmsgDispatch::Forward,
     }
 }
@@ -1072,15 +1101,28 @@ mod tests {
     #[test]
     fn dispatcher_classifies_control_plane() {
         let mut d = Dmsg::new();
+        // Pin the exact three variants the C `dmsg_process`
+        // bypasses.
         for ty in [
             DmsgType::CryptoHandshake,
             DmsgType::GossipSyn,
-            DmsgType::GossipShutdown,
+            DmsgType::GossipSynReply,
         ] {
             d.ty = ty;
             assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
         }
-        for ty in [DmsgType::Req, DmsgType::ReqForward, DmsgType::Res] {
+        // Every other gossip variant falls through to the default
+        // branch (forward), matching the C switch.
+        for ty in [
+            DmsgType::GossipAck,
+            DmsgType::GossipDigestSyn,
+            DmsgType::GossipDigestAck,
+            DmsgType::GossipDigestAck2,
+            DmsgType::GossipShutdown,
+            DmsgType::Req,
+            DmsgType::ReqForward,
+            DmsgType::Res,
+        ] {
             d.ty = ty;
             assert_eq!(dmsg_process(&d), DmsgDispatch::Forward);
         }
