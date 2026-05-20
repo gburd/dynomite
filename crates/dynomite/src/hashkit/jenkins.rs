@@ -1,3 +1,8 @@
+// The lookup3 spec uses the working-register names a, b, c. Keeping
+// them preserves the spec mapping and the bit-mixing tables read
+// directly against the upstream code.
+#![allow(clippy::many_single_char_names, clippy::similar_names)]
+
 use crate::hashkit::token::DynToken;
 
 const JENKINS_INITVAL: u32 = 13;

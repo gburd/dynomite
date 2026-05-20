@@ -14,6 +14,15 @@
 //! assert_eq!(token.len(), 4);
 //! ```
 
+// Hashing primitives reinterpret bytes across signed/unsigned
+// boundaries and truncate by design; the casts are part of the
+// algorithmic contract and isolated to this subtree.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+
 mod crc16;
 mod crc32;
 mod fnv;
