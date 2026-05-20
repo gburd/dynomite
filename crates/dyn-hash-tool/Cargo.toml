@@ -1,0 +1,25 @@
+[package]
+name = "dyn-hash-tool"
+description = "Command-line hashing utility that mirrors the dynomite hashkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "dyn-hash-tool"
+path = "src/main.rs"
+
+[dependencies]
+dynomite = { path = "../dynomite" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
