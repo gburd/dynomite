@@ -171,7 +171,76 @@ symbol is considered un-ported.
 
 | C symbol | Rust home | Notes |
 |---|---|---|
-| `CBUF_*` macros (`Init`, `Push`, `Pop`, `Len`, `IsFull`, `IsEmpty`, ...) | replaced by `crossbeam_channel::bounded`, exposed as `dynomite::core::ring_queue::RingChannels`. |
+| `CBUF_Init` | `dynomite::io::cbuf::CBuf::new` | done (Stage 2) |
+| `CBUF_Push` | `dynomite::io::cbuf::CBuf::push` | done (Stage 2) (deviation: returns `Err(item)` on full instead of overwriting silently) |
+| `CBUF_Pop` | `dynomite::io::cbuf::CBuf::pop` | done (Stage 2) |
+| `CBUF_Len` | `dynomite::io::cbuf::CBuf::len` | done (Stage 2) |
+| `CBUF_IsEmpty` | `dynomite::io::cbuf::CBuf::is_empty` | done (Stage 2) |
+| `CBUF_IsFull` | `dynomite::io::cbuf::CBuf::is_full` | done (Stage 2) |
+| `CBUF_Error` / `CBUF_Get` / `CBUF_GetEnd` / `CBUF_GetLastEntryPtr` / `CBUF_GetPushEntryPtr` / `CBUF_GetPopEntryPtr` / `CBUF_AdvancePushIdx` / `CBUF_AdvancePopIdx` | omitted: the unchecked-overflow and reservation accessors have no in-tree caller after the channel transport (Stage 1) and the typed `CBuf` (Stage 2) replace the macro pattern. |
+| `dynomite::core::ring_queue::RingChannels` (Stage 1 alias) | retained as the gossip thread coupling; the new typed `CBuf<T>` covers the in-process SPSC use case. |
+
+### dyn_mbuf.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `MBUF_SIZE` / `MBUF_MIN_SIZE` / `MBUF_MAX_SIZE` / `MBUF_ESIZE` | `dynomite::io::mbuf::{MBUF_SIZE, MBUF_MIN_SIZE, MBUF_MAX_SIZE, MBUF_ESIZE}` | done (Stage 2) |
+| `MBUF_HSIZE` / `MBUF_MAGIC` | omitted: the C header was embedded in the buffer tail and used a magic word to catch overruns; the Rust port stores cursors in a separate struct so neither constant has a Rust home. |
+| `MBUF_FLAGS_READ_FLIP` | `dynomite::io::mbuf::MBUF_FLAG_READ_FLIP` | done (Stage 2) |
+| `MBUF_FLAGS_JUST_DECRYPTED` | `dynomite::io::mbuf::MBUF_FLAG_JUST_DECRYPTED` | done (Stage 2) |
+| `struct mbuf` | `dynomite::io::mbuf::Mbuf` | done (Stage 2) |
+| `struct mhdr` (STAILQ head) | `dynomite::io::mbuf::MbufQueue` | done (Stage 2) |
+| `mbuf_init` | `dynomite::io::mbuf::MbufPool::new` | done (Stage 2) |
+| `mbuf_deinit` | implicit (`Drop` of `MbufPool`) | done (Stage 2) |
+| `mbuf_get` | `dynomite::io::mbuf::MbufPool::get` | done (Stage 2) |
+| `mbuf_put` | `dynomite::io::mbuf::MbufPool::put` | done (Stage 2) |
+| `mbuf_alloc` | `dynomite::io::mbuf::Mbuf::with_chunk_size` | done (Stage 2) |
+| `mbuf_dealloc` | implicit (`Drop` of `Mbuf`) | done (Stage 2) |
+| `mbuf_alloc_get_count` | `dynomite::io::mbuf::MbufPool::total_allocated` | done (Stage 2) |
+| `mbuf_free_queue_size` | `dynomite::io::mbuf::MbufPool::free_count` | done (Stage 2) |
+| `mbuf_chunk_sz` | `dynomite::io::mbuf::MbufPool::chunk_size` | done (Stage 2) |
+| `mbuf_data_size` | `dynomite::io::mbuf::Mbuf::data_size` (also accessible per-pool through the chunk size) | done (Stage 2) |
+| `mbuf_length` | `dynomite::io::mbuf::Mbuf::len` | done (Stage 2) |
+| `mbuf_remaining_space` | `dynomite::io::mbuf::Mbuf::remaining` | done (Stage 2) |
+| `mbuf_empty` | `dynomite::io::mbuf::Mbuf::is_empty` | done (Stage 2) |
+| `mbuf_full` | `dynomite::io::mbuf::Mbuf::is_full` | done (Stage 2) |
+| `mbuf_rewind` | `dynomite::io::mbuf::Mbuf::rewind` | done (Stage 2) |
+| `mbuf_insert` | `dynomite::io::mbuf::MbufQueue::push_back` | done (Stage 2) |
+| `mbuf_insert_head` | `dynomite::io::mbuf::MbufQueue::push_front` | done (Stage 2) |
+| `mbuf_insert_after` | omitted: the C call site list is empty; if Stage 7/8 reintroduces a need, the behavior is one `VecDeque::insert` away. |
+| `mbuf_remove` | `dynomite::io::mbuf::MbufQueue::pop_front` (and `pop_back`) | done (Stage 2) |
+| `mbuf_copy` | `dynomite::io::mbuf::Mbuf::copy_from_slice` | done (Stage 2) |
+| `mbuf_split` | `dynomite::io::mbuf::Mbuf::split_off` | done (Stage 2) (deviation: takes a byte offset rather than a raw pointer, and the C `cb`/`cbarg` precopy callback is dropped because the Rust caller can prepend bytes to the returned `Mbuf` directly) |
+| `mbuf_write_char` / `mbuf_write_string` / `mbuf_write_uint8` / `mbuf_write_uint32` / `mbuf_write_uint64` / `mbuf_write_mbuf` / `mbuf_write_bytes` | replaced by `Mbuf::recv` and `Mbuf::copy_from_slice` plus `format!` / `itoa` at call sites; the recursive C decimal writers have no callers that cannot use the standard formatter. |
+| `mbuf_dump` | omitted: replaced by `tracing` events that hex-dump through `tracing::debug!(?slice)`. |
+| (new) | `dynomite::io::mbuf::Mbuf::recv` | Rust-only convenience wrapping `mbuf_copy` for the read direction. |
+| (new) | `dynomite::io::mbuf::Mbuf::send` | Rust-only convenience draining `pos..last` into a destination slice for outbound writes. |
+| (new) | `dynomite::io::mbuf::Mbuf::append` | Rust-only convenience used by parsers and tests to chain mbufs without going through the pool. |
+| (new) | `dynomite::io::mbuf::Mbuf::advance_pos` / `advance_last` | Rust-only cursor advance helpers used when callers write directly into the writable region (for example through `AsyncReadBuf`). |
+| (new) | `dynomite::io::mbuf::MBUF_POOL_MAX_FREE` | Rust-only cap on the free list size to bound resident memory; the C engine has no equivalent bound. |
+| (new) | `dynomite::io::mbuf::MbufQueue::recycle` | Rust-only helper that drains a chain back into a pool. |
+
+## src/event/
+
+The per-platform reactor (`dyn_event.h`, `dyn_epoll.c`, `dyn_kqueue.c`,
+`dyn_evport.c`) is replaced wholesale by tokio. Stage 2 introduces the
+[`dynomite::io::reactor`] transport boundary that downstream stages
+use instead of the C `event_*` API.
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `event_cb_t` / `event_stats_cb_t` / `event_entropy_cb_t` | omitted: replaced by tokio task spawns plus `tokio::sync::watch` / `select!` arms (idiomatic async). |
+| `EVENT_READ` / `EVENT_WRITE` / `EVENT_ERR` | omitted: tokio surfaces readability and writability through `AsyncRead` / `AsyncWrite` poll readiness; errors are surfaced as `io::Error`. |
+| `struct event_base` | omitted: replaced by the tokio runtime. |
+| `event_base_create` / `event_base_destroy` | omitted: the runtime is owned by `dynomited`'s `#[tokio::main]`. |
+| `event_add_in` / `event_del_in` / `event_add_out` / `event_del_out` / `event_add_conn` / `event_del_conn` | omitted: registration is implicit when a tokio task awaits an `AsyncRead` / `AsyncWrite`. The Stage 6 connection state machine spawns and shuts down tasks instead. |
+| `event_wait` | omitted: tokio's reactor is the runtime's responsibility; user code awaits futures directly. |
+| `event_loop_stats` / `event_loop_entropy` | omitted: replaced by `tokio::time::interval` ticks driven from Stage 5 (stats) and Stage 11 (entropy). |
+| `event_fd` | omitted: tokio-internal. |
+| (new) | `dynomite::io::reactor::ConnRole` | Replaces the role discriminants on `struct conn` (`client`, `server`, `proxy`, plus the dnode peer variants). |
+| (new) | `dynomite::io::reactor::Transport` | Trait abstracting `AsyncRead + AsyncWrite + Send + Unpin` so the Stage 9 QUIC transport can drop in beside the TCP one. |
+| (new) | `dynomite::io::reactor::TcpTransport` | TCP implementation of `Transport`, newtype around `tokio::net::TcpStream`. |
+
 
 ### dyn_ring_queue.{c,h}
 
@@ -219,10 +288,6 @@ next to its only consumer.
 | `execute_expired_tasks` | omitted: tokio drives the timer wheel transparently. |
 | `cancel_task` | `TaskHandle::cancel` | done (Stage 1) |
 | `task_register` (PLAN-mandated periodic API) | `dynomite::core::task::task_register` | done (Stage 1) |
-
-## src/event/
-
-(Stage 2 - replaced wholesale by tokio-based reactor.)
 
 ## src/hashkit/
 
