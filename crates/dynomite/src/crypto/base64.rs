@@ -14,8 +14,7 @@ use base64::Engine;
 use crate::crypto::CryptoError;
 
 /// Encode `bytes` to a base64 string using the standard alphabet
-/// with trailing `=` padding (RFC 4648). Matches the C
-/// `base64_encode` output.
+/// with trailing `=` padding (RFC 4648).
 ///
 /// # Examples
 ///
