@@ -28,7 +28,7 @@ pub mod parser;
 pub mod repair;
 pub mod verify;
 
-pub use self::coalesce::{redis_post_coalesce, redis_pre_coalesce};
+pub use self::coalesce::{accumulate_fragment_integer, redis_post_coalesce, redis_pre_coalesce};
 pub use self::commands::CommandClass;
 pub use self::fragment::{redis_fragment, FragmentDispatcher, FragmentOutcome};
 pub use self::multikey::redis_is_multikey_request;
