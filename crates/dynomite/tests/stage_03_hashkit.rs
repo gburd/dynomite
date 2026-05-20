@@ -10,6 +10,32 @@
 //! length`, Bob Jenkins lookup3 in byte-by-byte mode, and MurmurHash3
 //! x86_128 with the seed `0xc0a1e5ce` chosen by the C source).
 //!
+//! # Self-anchoring
+//!
+//! The JSON corpus is **self-anchored** for most rows: the generator
+//! invokes the Rust implementation and freezes its output, so a
+//! subtle bug in the Rust code would be baked into the fixture.
+//! Externally-anchored rows are limited to:
+//!
+//! * RFC 1321 MD5 vectors (`md5::tests::rfc_*` and
+//!   [`rfc_1321_md5_signatures_are_intact`]).
+//! * Canonical FNV-1a-32 vectors (`fnv::tests::fnv1a_32_known_vectors`
+//!   and [`fnv1a_32_canonical_vectors`]).
+//! * The standard CRC-32 vector `123456789 -> 0xCBF43926`
+//!   (`crc32::tests::crc32a_known_vectors`).
+//! * MurmurHash3 x86_128 of the empty string with seed 0 = `[0;4]`
+//!   (algorithmic property).
+//!
+//! PLAN.md Stage 3 also suggested anchoring against the C
+//! `dyn_hash_tool` as an oracle. That tool exists
+//! (`_/dynomite/src/tools/dyn_hash_tool.c`) but only supports the
+//! `murmur` algorithm, so it can anchor only one of the thirteen
+//! columns. Once a host with the C build environment is available,
+//! piping a small key set through it and diffing against
+//! `dyn-hash-tool --c-compat -H murmur` is the intended next step.
+//! For now, the murmur column shares the self-anchored treatment
+//! described above.
+//!
 //! Once committed, the fixture is the regression contract: any change
 //! that breaks even one row blocks merge.
 
