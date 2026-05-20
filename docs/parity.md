@@ -570,7 +570,169 @@ next to its only consumer.
 
 | C symbol | Rust home | Notes |
 |---|---|---|
-| `dnode_req_forward_error` / `dnode_peer_req_forward` / `dnode_peer_gossip_forward` / `dnode_peer_req_forward_stats` | deferred to Stage 9 (conn FSM) and Stage 10 (gossip plumbing) | omitted-for-stage |
+| `dnode_req_forward_error` / `dnode_peer_req_forward` / `dnode_peer_gossip_forward` / `dnode_peer_req_forward_stats` | deferred to Stage 10 (peer / gossip plumbing) | omitted-for-stage |
+
+### dyn_connection.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `MAX_CONN_QUEUE_SIZE` | `dynomite::net::conn::MAX_CONN_QUEUE_SIZE` | done (Stage 9) |
+| `MAX_CONN_ALLOWABLE_NON_RECV` / `MAX_CONN_ALLOWABLE_NON_SEND` | omitted: the C constants are referenced only by commented-out heuristic code paths in `dyn_connection.c`. |
+| `connection_type_t` (`CONN_PROXY` / `CONN_CLIENT` / `CONN_SERVER` / `CONN_DNODE_PEER_PROXY` / `CONN_DNODE_PEER_CLIENT` / `CONN_DNODE_PEER_SERVER`) | `dynomite::io::reactor::ConnRole` (Stage 2 placed the discriminants; Stage 9 wires them into the FSM dispatch) | done (Stage 9) |
+| `struct conn_ops` (`recv` / `recv_next` / `recv_done` / `send` / `send_next` / `send_done` / `close` / `active` / `ref` / `unref` / `enqueue_inq` / `dequeue_inq` / `enqueue_outq` / `dequeue_outq` / `rsp_handler`) | replaced by per-role driver functions (`dynomite::net::client::client_loop`, `dynomite::net::server::ServerConn::run`, `dynomite::net::dnode_client::dnode_client_loop`, `dynomite::net::dnode_server::DnodeServerConn::run`) plus the `dynomite::net::dispatcher::Dispatcher` trait. | done (Stage 9) |
+| `struct conn` | `dynomite::net::conn::Conn` | done (Stage 9) (data-shape; per-conn `outstanding_msgs_dict` is a `HashMap<MsgId, MsgId>` placeholder until Stage 10 wires the cluster-side response router) |
+| `conn_cant_handle_response` | omitted: the C engine uses it as a vtable poison; the Rust port does not install dispatchers on listener-only roles, so the slot has no equivalent. |
+| `conn_handle_response` (macro) | folded into the per-role driver loops; the dispatcher channel performs the same routing without a separate dispatch fn. |
+| `conn_recv` / `conn_recv_next` / `conn_recv_done` / `conn_send` / `conn_send_next` / `conn_send_done` (macros) | folded into the per-role drivers (`client::client_loop`, `server::ServerConn::run`, `dnode_client::dnode_client_loop`, `dnode_server::DnodeServerConn::run`). | done (Stage 9) |
+| `conn_close` (macro) | `dynomite::net::conn::Conn::close` | done (Stage 9) |
+| `conn_active` (macro) | folded: each driver tests its own queues + transport state directly. |
+| `conn_ref` / `conn_unref` (macros) | omitted: Rust ownership replaces the manual ref/unref dance. The owner pointer the C engine threaded through the vtable is the dispatcher arc held by the driver task. |
+| `conn_enqueue_inq` / `conn_dequeue_inq` / `conn_enqueue_outq` / `conn_dequeue_outq` (macros) | `dynomite::net::conn::Conn::enqueue_in` / pop on `imsg_q_mut` / `enqueue_out` / pop on `omsg_q_mut` | done (Stage 9) |
+| `g_read_consistency` / `g_write_consistency` (globals) | `dynomite::net::conn::Conn::read_consistency` / `write_consistency` (per-conn fields seeded from config; the global default lives in `crate::msg::ConsistencyLevel`) | done (Stage 9) |
+| `conn_is_req_first_in_outqueue` | folded into per-role drivers via direct front-of-queue inspection. |
+| `conn_to_ctx` | omitted: Rust drivers receive the cluster context through the supplied `Dispatcher` rather than a per-conn back-pointer. |
+| `conn_set_read_consistency` / `conn_get_read_consistency` / `conn_set_write_consistency` / `conn_get_write_consistency` | `Conn::set_read_consistency` / `read_consistency` / `set_write_consistency` / `write_consistency` | done (Stage 9) |
+| `conn_event_del_conn` / `conn_event_add_out` / `conn_event_add_conn` / `conn_event_del_out` | omitted: tokio's reactor handles event registration implicitly (Stage 2). |
+| `conn_get` / `conn_put` | replaced by `Conn::new` and `Drop` (Rust ownership; the C engine's free list is unnecessary). |
+| `conn_init` / `conn_deinit` | omitted: Rust types are RAII. |
+| `conn_listen` | `dynomite::net::listener::bind_dual_stack` plus the role-specific `Proxy::bind` / `DnodeProxy::bind` constructors. | done (Stage 9) |
+| `conn_connect` | folded into the `ConnFactory` closure callers register with `dynomite::net::ConnPool::with_factory`. | done (Stage 9) |
+| `conn_recv_data` / `conn_sendv_data` | replaced by the tokio `AsyncRead` / `AsyncWrite` impls on `dynomite::io::reactor::TcpTransport` and `crate::net::quic::QuicTransport`. | done (Stage 9) |
+| `DYN_KEEPALIVE_INTERVAL_S` (constant) | `dynomite::net::conn::DYN_KEEPALIVE_INTERVAL_S` is not yet exposed; the per-stream keepalive is delegated to tokio + the OS defaults. | omitted: tokio's TCP socket honors the OS keepalive default; explicit tuning lands with Stage 12 binary wiring. |
+
+### dyn_connection_internal.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `nfree_connq` / `free_connq` | omitted: replaced by Rust ownership (no free list). |
+| `_conn_get_type_string` | `dynomite::io::reactor::ConnRole` Debug impl. |
+| `_print_conn` / `print_obj` (per-conn) | replaced by `#[derive(Debug)]` on `Conn` plus the manual `Debug` impl in `net::conn`. |
+| `_conn_get` / `_conn_put` / `_conn_free` / `_conn_init` / `_conn_deinit` | replaced by `Conn::new` and `Drop`. |
+| `_add_to_ready_q` / `_remove_from_ready_q` | omitted: tokio drives readiness through `select!`; there is no per-pool ready queue. |
+| `_conn_reuse` | folded into `dynomite::net::listener::BindOptions::reuseaddr` + `socket2::Socket::set_reuse_address`. |
+
+### dyn_connection_pool.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `MIN_WAIT_BEFORE_RECONNECT_IN_SECS` | folded into `dynomite::net::pool::Backoff::record_failure` (initial 1s, doubling). | done (Stage 9) |
+| `struct conn_pool` | `dynomite::net::pool::ConnPool` | done (Stage 9) |
+| `_print_conn_pool` | replaced by `Debug` impl. |
+| `_create_missing_connections` | replaced by `ConnPool::get`'s lazy fill (the factory is invoked only when an idle slot is missing). |
+| `conn_pool_create` | `ConnPool::new` and `ConnPool::with_factory` | done (Stage 9) |
+| `conn_pool_preconnect` | folded into `ConnPool::with_factory` + caller-driven `get` loop; an explicit eager-preconnect helper lands with Stage 12 startup wiring. |
+| `conn_pool_get` | `ConnPool::get` | done (Stage 9) (deviation: returns a typed `ConnHandle` whose `Drop` returns the connection to the pool, eliminating the C `conn_pool_notify_conn_close` callback shape) |
+| `conn_pool_destroy` | `ConnPool::shutdown` | done (Stage 9) |
+| `conn_pool_notify_conn_close` | folded into `ConnHandle::release` and `ConnHandle::discard`. |
+| `conn_pool_notify_conn_errored` | folded into `ConnPool::get`'s failure-arm + `Backoff::record_failure`. |
+| `conn_pool_connected` | folded into the success arm of `ConnPool::get` (`auto_eject.record_success` + `backoff.record_success`). |
+| `conn_pool_active_count` | `ConnPool::idle_count` + `ConnPool::in_flight` (sum) | done (Stage 9) |
+| `_conn_pool_reconnect_task` | replaced by the `tokio::sync::Notify` + retry loop inside `ConnPool::get`; the C engine's task scheduler is replaced by tokio. |
+
+### dyn_proxy.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `proxy_ref` | folded into `Proxy::bind` (the bound listener becomes the pool's `p_conn`-equivalent owner). |
+| `proxy_unref` | folded into `Proxy::run`'s shutdown arm. |
+| `proxy_close` | folded into `Proxy::run`'s exit. |
+| `proxy_init` | `dynomite::net::proxy::Proxy::bind` | done (Stage 9) |
+| `proxy_deinit` | folded into `Proxy::run`'s cancel branch. |
+| `proxy_accept` | folded into `Proxy::run`'s accept loop. | done (Stage 9) |
+| `proxy_recv` | folded into `Proxy::run`'s accept loop (tokio replaces the level-triggered recv-ready spin). |
+| `proxy_ops` (vtable) | replaced by the per-role driver pattern; PROXY only needs an accept loop, which is `Proxy::run`. |
+| `init_proxy_conn` | folded into `Proxy::bind`. |
+
+### dyn_client.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `client_ref` / `client_unref` / `client_unref_internal_try_put` / `client_unref_and_try_put` | replaced by Rust ownership: the per-client tokio task owns the `Conn` and drops it when the loop exits. The `outstanding_msgs_dict` is a `HashMap` field on `Conn` cleared in `client_loop`. |
+| `client_active` | folded into `client_loop`'s exit conditions (recv_chain + send_chain + queues empty + EOF). |
+| `client_close_stats` | deferred to Stage 12 (stats wiring) | omitted-for-stage |
+| `client_close` | folded into `client_loop`'s exit. |
+| `client_handle_response` | folded into `client_loop::handle_response`; the C engine's per-conn dictionary lookup is replaced by the dispatcher's response channel. | done (Stage 9) |
+| `req_recv_next` | folded into `client_loop::drive_parser`. |
+| `req_filter` | folded into `client_loop::drive_parser`'s `MsgParseResult::Noop` branch (covers empty, quit, dyno-config). | done (Stage 9) for shape; quit-emit + dyno-config response synthesis depend on Stage 10 dispatcher hooks. |
+| `req_forward_error` | deferred to Stage 10 (cluster routing) | omitted-for-stage |
+| `req_redis_stats` / `req_forward_stats` | deferred to Stage 12 (stats wiring) | omitted-for-stage |
+| `req_forward_local_datastore` / `req_forward_to_peer` / `req_forward_all_racks_for_dc` / `req_forward_all_dcs_all_racks_all_nodes` / `req_forward_remote_dc` / `req_forward_local_dc` / `req_forward` | deferred to Stage 10 (cluster routing) | omitted-for-stage |
+| `rewrite_query_if_necessary` / `rewrite_query_with_timestamp_md` / `fragment_query_if_necessary` | folded into Stage 8's `redis_rewrite_query` / `redis_rewrite_query_with_timestamp_md` / `redis_fragment` plus the equivalents for memcache; Stage 10 invokes them through the dispatcher. |
+| `req_recv_done` | folded into `client_loop::drive_parser` + dispatcher hand-off. |
+| `msg_get_rsp_handler` / `msg_local_one_rsp_handler` / `swallow_extra_rsp` / `msg_quorum_rsp_handler` / `find_rspmgr_idx` / `all_rspmgrs_done` / `all_rspmgrs_get_response` / `msg_each_quorum_rsp_handler` | deferred to Stage 10 (per-DC quorum machinery) | omitted-for-stage |
+| `req_client_enqueue_omsgq` / `req_client_dequeue_omsgq` | folded into `Conn::enqueue_out` and `Conn::omsg_q_mut().pop_front`. |
+| `client_ops` (vtable) | replaced by `client_loop`. |
+| `init_client_conn` | folded into `Proxy::run`'s spawn arm (`Conn::new(transport, ConnRole::Client)`). |
+| `admin_req_forward_local_datastore` | deferred to Stage 12 (admin mode) | omitted-for-stage |
+| `request_send_to_all_dcs` / `request_send_to_all_local_racks` | deferred to Stage 10 (routing policy) | omitted-for-stage |
+
+### dyn_dnode_client.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `dnode_client_ref` / `dnode_client_unref_internal_try_put` / `dnode_client_unref_and_try_put` / `dnode_client_unref` | replaced by Rust ownership: the dnode-client tokio task owns the `Conn`. |
+| `dnode_client_active` | folded into `dnode_client_loop`'s exit conditions. |
+| `dnode_client_close_stats` | deferred to Stage 12 (stats wiring). |
+| `dnode_client_close` | folded into `dnode_client_loop`'s exit. |
+| `dnode_client_handle_response` | folded into `dnode_client_loop`'s response branch. | done (Stage 9) |
+| `dnode_req_filter` | folded into `dnode_client_loop::drive_dnode_parser` (the `dmsg_process` classification arm). | done (Stage 9) |
+| `dnode_req_forward` | deferred to Stage 10 (cluster routing of inbound peer requests). | omitted-for-stage |
+| `dnode_req_recv_next` / `dnode_req_recv_done` | folded into `dnode_client_loop::drive_dnode_parser`. | done (Stage 9) for parse-and-decode; routing depends on Stage 10. |
+| `dnode_req_client_enqueue_omsgq` / `dnode_req_client_dequeue_omsgq` | folded into `Conn::enqueue_out` and `omsg_q_mut().pop_front`. |
+| `dnode_rsp_send_next` | folded into `dnode_server::DnodeServerConn::run`'s response-prepend path. | done (Stage 9) |
+| `dnode_rsp_send_done` | folded into `dnode_server::DnodeServerConn::run`'s post-send arm. | done (Stage 9) |
+| `dnode_client_ops` (vtable) | replaced by `dnode_client_loop`. |
+| `init_dnode_client_conn` | folded into `DnodeProxy::run`'s spawn arm (`Conn::new(transport, ConnRole::DnodePeerClient)`). |
+
+### dyn_dnode_proxy.{c,h}
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `dnode_ref` / `dnode_unref` / `dnode_close` | folded into `DnodeProxy::run`'s lifecycle (Rust ownership replaces ref/unref). |
+| `dnode_proxy_init` | `dynomite::net::dnode_proxy::DnodeProxy::bind` | done (Stage 9) |
+| `dnode_proxy_deinit` | folded into `DnodeProxy::run`'s cancel branch. |
+| `dnode_accept` | folded into `DnodeProxy::run`'s accept loop. |
+| `dnode_recv` | folded into `DnodeProxy::run`'s accept loop. |
+| `dnode_server_ops` (vtable) | replaced by `dnode_client_loop` for accepted peer connections. |
+| `init_dnode_proxy_conn` | folded into `DnodeProxy::bind`. |
+
+### dyn_request.c (Stage 9 portion)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `req_get` / `req_put` | replaced by `Msg::new` + Rust ownership (`Drop` releases the message). |
+| `req_done` (sibling-walk that flips `fdone` on every fragment) | deferred to Stage 10 (walks the connection's client tail-queue threaded with the cluster-supplied frag id). | omitted-for-stage |
+| `req_error` (sibling-walk) | deferred to Stage 10. | omitted-for-stage |
+| `req_make_reply` | folded into `client_loop`'s response arm: the dispatcher delivers the `Msg` and the loop writes it. |
+| `req_recv_next` / `req_recv_done` / `req_send_next` / `req_send_done` | folded into `client_loop::drive_parser` and `dnode_client_loop::drive_dnode_parser`. | done (Stage 9) |
+
+### dyn_response.c (Stage 9 portion)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `rsp_get` / `rsp_put` | replaced by `Msg::new` + Rust ownership. |
+| `rsp_make_error` (fragment dequeue side) | deferred to Stage 10 (fragment-walk depends on the cluster's frag-id bookkeeping). | omitted-for-stage |
+| `rsp_recv_next` / `server_rsp_recv_done` / `rsp_send_next` / `rsp_send_done` | folded into `server::ServerConn::run` and `dnode_server::DnodeServerConn::run`. | done (Stage 9) |
+
+### Stage-9 new types
+
+| New type | Rust home | Notes |
+|---|---|---|
+| `dynomite::net::conn::Conn` | the per-connection state struct. |
+| `dynomite::net::conn::ConnHandle` | stable connection identifier (replaces the C engine's socket-fd-based identification). |
+| `dynomite::net::conn::ConnStats` | rolling per-conn counters (recv/send bytes + events + msg counts). |
+| `dynomite::net::dispatcher::Dispatcher` / `DispatchOutcome` / `OutboundEnvelope` / `ServerSink` / `NoopDispatcher` | cluster-side seam (Stage 10 plug-in point). |
+| `dynomite::net::pool::ConnPool` / `ConnPoolConfig` / `ConnHandle` / `ConnFactory` / `ConnFuture` | bounded outbound pool with backoff. |
+| `dynomite::net::auto_eject::AutoEject` / `AutoEjectState` | consecutive-failure auto-eject decision. |
+| `dynomite::net::listener::bind_dual_stack` / `BindOptions` | dual-stack v4+v6 binder via `socket2::Socket::set_only_v6(false)`. |
+| `dynomite::net::client::ClientHandler` / `ClientLoopOutcome` / `client_loop` | CLIENT FSM driver. |
+| `dynomite::net::server::ServerConn` / `OutboundRequest` | SERVER outbound driver. |
+| `dynomite::net::dnode_client::dnode_client_loop` | DNODE_PEER_CLIENT inbound driver. |
+| `dynomite::net::dnode_server::DnodeServerConn` | DNODE_PEER_SERVER outbound driver. |
+| `dynomite::net::dnode_proxy::DnodeProxy` | DNODE_PEER_PROXY listener. |
+| `dynomite::net::proxy::Proxy` | PROXY listener. |
+| `dynomite::net::quic::QuicTransport` / `QuicListener` / `QuicConfig` / `connect` | QUIC transport (feature-gated). |
+| `dynomite::net::NetError` | top-level error type. |
 
 ## Ambiguities
 
@@ -740,6 +902,44 @@ silently replaced with `1` during `apply_defaults`. The Rust
 explicit zero is preserved (and then rejected by
 `validate_numeric_ranges` because the lower bound is `1`). This
 follows the typed-Option model PLAN.md Stage 4 calls for.
+
+### Stage 9: `ConnPool` ownership replaces the C ref/unref dance
+
+The C `dyn_connection_pool.c` threads ref/unref calls through
+the per-conn ops vtable (`conn_ref` / `conn_unref`) and uses the
+`conn_pool_notify_conn_close` callback to remove the conn from
+the active array on close. The Rust port replaces both with
+ordinary ownership: `ConnPool::get` returns a `ConnHandle` whose
+`Drop` impl returns the connection to the pool (or, with
+`ConnHandle::discard`, retires the slot). The behaviour is
+identical at the observable level (the same number of
+connections live in the same configurations); the API shape
+diverges to fit Rust's RAII model.
+
+### Stage 9: `auto_eject` lifted out of `dyn_server.c`
+
+`datastore_check_autoeject` and the symmetric peer-side guard
+(`dnode_peer_check_autoeject`) implement the same flow over
+different owner structs in the C reference. The Rust port
+factors the policy into [`net::auto_eject::AutoEject`] so the
+pool and the Stage 10 cluster code share a single
+implementation. Behaviour is preserved.
+
+### Stage 9: QUIC + openssl-vendored static-link conflict
+
+The `quic` cargo feature enables `quiche`, which bundles its own
+BoringSSL. The `openssl` workspace dependency is configured
+with the `vendored` feature, which statically links a copy of
+OpenSSL's libcrypto. A binary that links both static archives
+(test binaries built with `--all-features`) sees duplicate
+symbol definitions and fails the link. The Stage 9 QUIC code
+compiles cleanly as a library (`cargo build -p dynomite
+--features quic`) but the integration test cannot run with the
+crypto stack in the same artifact. Resolution requires either
+dropping `openssl-vendored` in favor of the system
+openssl-sys, or moving Stage 6 crypto onto a different backend
+(`aws-lc-rs`, BoringSSL via `boring`). Tracked as a Stage 12 /
+binary-wiring decision in `docs/journal/blocked.md`.
 
 ## Caveats
 

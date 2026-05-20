@@ -47,3 +47,39 @@ The Stage 6 review recommended a one-line `proptest!` case in
 `Vec<u8>` inputs of length 0..4096. Low-cost coverage for the
 panic-free contract; track alongside the `crypto_aes_decrypt`
 fuzz target above so the additions land together.
+
+### Stage 9: QUIC + openssl-vendored link conflict
+
+The `quic` cargo feature pulls in `quiche`, which bundles its
+own BoringSSL. The `openssl` workspace dependency is configured
+with the `vendored` feature, which statically links a copy of
+OpenSSL's libcrypto. Binaries that link both static archives
+(test artifacts built with `--all-features`) fail with
+`multiple definition` linker errors on every shared symbol
+(`EVP_*`, `BIO_*`, `RSA_*`, ...).
+
+The Stage 9 QUIC code compiles cleanly as a library (`cargo
+build -p dynomite --features quic`) but the integration test
+that exercises the QUIC end-to-end loopback cannot link in
+the same artifact as the Stage 6 crypto code. Stage 9 ships
+the transport behind `#[cfg(feature = "quic")]`; the
+end-to-end test is documented as deferred until either the
+`openssl-vendored` feature is replaced with system
+`openssl-sys` (Stage 12 binary-wiring decision) or the Stage 6
+crypto module is migrated to a non-OpenSSL backend
+(`aws-lc-rs` or `boring`).
+
+Non-QUIC Stage 9 surfaces (TCP loopback echo, `ConnPool`,
+`AutoEject`, IPv6 dual-stack, role-specific FSMs) ship and
+test cleanly without the conflict.
+
+### Stage 9: cluster-side dispatcher seam
+
+The per-role FSMs (CLIENT, SERVER, DNODE_PEER_*) hand parsed
+requests to a `Dispatcher` trait. Stage 10 implements the
+cluster-aware dispatcher (DC/rack routing, quorum, fragment
+bookkeeping); Stage 9 ships the seam plus a `NoopDispatcher`
+so integration tests can exercise the framing without the
+cluster stack. The C-equivalent functions deferred here are
+listed in the per-file parity rows under Stage 9 with the
+phrase `deferred to Stage 10 (cluster routing)`.
