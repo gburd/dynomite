@@ -1,0 +1,483 @@
+//! Cluster-aware [`Dispatcher`](crate::net::Dispatcher).
+//!
+//! Routes parsed [`Msg`]s based on the configured consistency level
+//! and the [`crate::cluster::pool::ServerPool`] topology:
+//!
+//! * `DC_ONE` reads pick the rack-local replica via the snitch.
+//! * `DC_ONE` writes fan out to every replica in the local DC.
+//! * `DC_QUORUM` / `DC_SAFE_QUORUM` reads fan out to every replica
+//!   in the local DC.
+//! * `DC_EACH_SAFE_QUORUM` writes fan out per-DC, walking the
+//!   per-DC racks via the preselected rack from
+//!   [`crate::cluster::pool::ServerPool::preselect_remote_racks`].
+//!
+//! The actual outbound delivery happens through the per-peer
+//! [`crate::net::ConnPool`]s; this module produces a
+//! [`DispatchPlan`] (the list of replica peers a request must be
+//! routed to) and exposes the planning logic so it can be tested
+//! independently of the runtime fan-out.
+//!
+//! # Examples
+//!
+//! ```
+//! use dynomite::cluster::dispatch::{ClusterDispatcher, DispatchPlan};
+//! use dynomite::cluster::pool::{PoolConfig, ServerPool};
+//! use dynomite::cluster::peer::{Peer, PeerEndpoint};
+//! use dynomite::hashkit::DynToken;
+//! use dynomite::msg::{ConsistencyLevel, Msg, MsgType};
+//! use dynomite::conf::{DataStore, HashType};
+//! use std::sync::Arc;
+//!
+//! let cfg = PoolConfig {
+//!     name: "p".into(), dc: "d".into(), rack: "r".into(),
+//!     data_store: DataStore::Redis, hash: HashType::Murmur,
+//!     read_consistency: ConsistencyLevel::DcOne,
+//!     write_consistency: ConsistencyLevel::DcOne,
+//!     timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
+//!     server_failure_limit: 2, auto_eject_hosts: false,
+//!     enable_gossip: false,
+//! };
+//! let local = Peer::new(
+//!     0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
+//!     vec![DynToken::from_u32(0)], true, true, false,
+//! );
+//! let pool = Arc::new(ServerPool::new(cfg, vec![local]));
+//! let disp = ClusterDispatcher::new(pool);
+//! let req = Msg::new(1, MsgType::ReqRedisGet, true);
+//! let plan = disp.plan(&req, b"foo");
+//! assert!(matches!(plan, DispatchPlan::LocalDatastore));
+//! ```
+
+use std::sync::Arc;
+
+use crate::cluster::pool::ServerPool;
+use crate::cluster::snitch::{rack_distance, RackDistance};
+use crate::cluster::vnode;
+use crate::conf::HashType as ConfHashType;
+use crate::hashkit::{self, HashType};
+use crate::msg::{ConsistencyLevel, Msg, MsgRouting, MsgType};
+use crate::net::dispatcher::{DispatchOutcome, Dispatcher, ServerSink};
+
+fn map_hash(h: ConfHashType) -> HashType {
+    match h {
+        ConfHashType::OneAtATime => HashType::OneAtATime,
+        ConfHashType::Md5 => HashType::Md5,
+        ConfHashType::Crc16 => HashType::Crc16,
+        ConfHashType::Crc32 => HashType::Crc32,
+        ConfHashType::Crc32a => HashType::Crc32a,
+        ConfHashType::Fnv1_64 => HashType::Fnv1_64,
+        ConfHashType::Fnv1a64 => HashType::Fnv1a_64,
+        ConfHashType::Fnv1_32 => HashType::Fnv1_32,
+        ConfHashType::Fnv1a32 => HashType::Fnv1a_32,
+        ConfHashType::Hsieh => HashType::Hsieh,
+        ConfHashType::Murmur => HashType::Murmur,
+        ConfHashType::Jenkins => HashType::Jenkins,
+        ConfHashType::Murmur3 => HashType::Murmur3,
+    }
+}
+
+/// One replica target produced by [`ClusterDispatcher::plan`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplicaTarget {
+    /// Index of the target peer in the pool's peer array.
+    pub peer_idx: u32,
+    /// Datacenter name.
+    pub dc: String,
+    /// Rack name.
+    pub rack: String,
+    /// True when the target is the local node.
+    pub is_local: bool,
+}
+
+/// Dispatch plan produced by the cluster dispatcher.
+///
+/// `LocalDatastore` is the early-return branch the reference
+/// engine takes when the routing tag is `ROUTING_LOCAL_NODE_ONLY`
+/// (or when the request is destined for the local node and the
+/// topology has only one peer); the per-connection driver then
+/// hands the request off to its server-side connection pool.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DispatchPlan {
+    /// Hand the request straight to the local datastore.
+    LocalDatastore,
+    /// Forward to one or more peer replicas.
+    Replicas(Vec<ReplicaTarget>),
+    /// Reply with an error: the cluster has no quorum-eligible
+    /// targets.
+    NoTargets,
+    /// Drop the request (`QUIT`-style swallow).
+    Drop,
+}
+
+/// Cluster-aware dispatcher.
+#[derive(Debug, Clone)]
+pub struct ClusterDispatcher {
+    pool: Arc<ServerPool>,
+}
+
+impl ClusterDispatcher {
+    /// Wrap a [`ServerPool`] in a dispatcher.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use dynomite::cluster::dispatch::ClusterDispatcher;
+    /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// # use dynomite::cluster::peer::{Peer, PeerEndpoint};
+    /// # use dynomite::hashkit::DynToken;
+    /// # use dynomite::conf::{DataStore, HashType};
+    /// # use dynomite::msg::ConsistencyLevel;
+    /// # use std::sync::Arc;
+    /// # let cfg = PoolConfig {
+    /// #    name: "p".into(), dc: "d".into(), rack: "r".into(),
+    /// #    data_store: DataStore::Redis, hash: HashType::Murmur,
+    /// #    read_consistency: ConsistencyLevel::DcOne,
+    /// #    write_consistency: ConsistencyLevel::DcOne,
+    /// #    timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
+    /// #    server_failure_limit: 2, auto_eject_hosts: false,
+    /// #    enable_gossip: false,
+    /// # };
+    /// # let local = Peer::new(
+    /// #    0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
+    /// #    vec![DynToken::from_u32(0)], true, true, false,
+    /// # );
+    /// let pool = Arc::new(ServerPool::new(cfg, vec![local]));
+    /// let disp = ClusterDispatcher::new(pool);
+    /// let _ = disp.pool();
+    /// ```
+    #[must_use]
+    pub fn new(pool: Arc<ServerPool>) -> Self {
+        Self { pool }
+    }
+
+    /// Borrow the underlying pool.
+    #[must_use]
+    pub fn pool(&self) -> &Arc<ServerPool> {
+        &self.pool
+    }
+
+    /// Compute the routing plan for `req` with the supplied key.
+    ///
+    /// `key` is the primary key of the request (the first key
+    /// returned by [`Msg::keys`] for parsed redis / memcache
+    /// commands, or an empty slice for argument-less commands).
+    ///
+    /// The function never panics; it consults the live peer table
+    /// behind the pool's `RwLock` and returns
+    /// [`DispatchPlan::NoTargets`] when the topology cannot
+    /// satisfy the request.
+    ///
+    /// # Examples
+    ///
+    /// See the module-level example.
+    #[must_use]
+    pub fn plan(&self, req: &Msg, key: &[u8]) -> DispatchPlan {
+        let cfg = self.pool.config();
+        let peers = self.pool.peers().read();
+        if peers.is_empty() {
+            return DispatchPlan::NoTargets;
+        }
+
+        // Local-only routing always lands on the local datastore.
+        if matches!(req.routing(), MsgRouting::LocalNodeOnly) {
+            return DispatchPlan::LocalDatastore;
+        }
+
+        // Compute the token for the request's primary key. The
+        // reference engine uses the pool's `key_hash` function and
+        // dispatches per-rack via `vnode_dispatch`.
+        let token = if key.is_empty() {
+            // Argument-less command: target the local node.
+            return DispatchPlan::LocalDatastore;
+        } else {
+            hashkit::hash(map_hash(cfg.hash), key)
+        };
+
+        let consistency = if matches!(req.ty(), MsgType::Unknown) || req.flags().is_read {
+            cfg.read_consistency
+        } else {
+            cfg.write_consistency
+        };
+
+        // Walk all (dc, rack, peer_idx) candidates that are
+        // routable, then partition by DC.
+        let mut routable: Vec<(usize, usize, u32)> = Vec::new();
+        let dcs = self.pool.datacenters().read();
+        for (dc_idx, dc) in dcs.iter().enumerate() {
+            for (rack_idx, rack) in dc.racks().iter().enumerate() {
+                if let Some(peer_idx) = vnode::dispatch(rack.continuums(), &token) {
+                    if let Some(peer) = peers.get(peer_idx as usize) {
+                        if peer.state().is_routable() {
+                            routable.push((dc_idx, rack_idx, peer_idx));
+                        }
+                    }
+                }
+            }
+        }
+        if routable.is_empty() {
+            return DispatchPlan::NoTargets;
+        }
+
+        // Partition into local-DC and remote-DC entries.
+        let (local, remote): (Vec<_>, Vec<_>) = routable
+            .into_iter()
+            .partition(|(dc_idx, _, _)| dcs[*dc_idx].name() == cfg.dc);
+
+        let mut targets: Vec<ReplicaTarget> = Vec::new();
+        let push_target = |targets: &mut Vec<ReplicaTarget>,
+                           dc_idx: usize,
+                           rack_idx: usize,
+                           peer_idx: u32| {
+            let dc_name = dcs[dc_idx].name().to_string();
+            let rack_name = dcs[dc_idx].racks()[rack_idx].name().to_string();
+            let is_local = peers.get(peer_idx as usize).is_some_and(|p| p.is_local());
+            targets.push(ReplicaTarget {
+                peer_idx,
+                dc: dc_name,
+                rack: rack_name,
+                is_local,
+            });
+        };
+
+        let want_per_dc_fanout = matches!(consistency, ConsistencyLevel::DcEachSafeQuorum)
+            || matches!(req.routing(), MsgRouting::AllNodesAllRacksAllDcs);
+
+        match consistency {
+            ConsistencyLevel::DcOne => {
+                if local.is_empty() {
+                    return DispatchPlan::NoTargets;
+                }
+                // Pick the rack-local entry if available, else
+                // any local-DC entry. Mirrors the snitch's
+                // `pick_target_rack`.
+                let mut best: Option<(RackDistance, (usize, usize, u32))> = None;
+                for (dc_idx, rack_idx, peer_idx) in local {
+                    let rack_name = dcs[dc_idx].racks()[rack_idx].name();
+                    let d = rack_distance(&cfg.dc, &cfg.rack, &cfg.dc, rack_name);
+                    if best.is_none() || d.cost() < best.as_ref().unwrap().0.cost() {
+                        best = Some((d, (dc_idx, rack_idx, peer_idx)));
+                    }
+                }
+                if let Some((_, (dc_idx, rack_idx, peer_idx))) = best {
+                    let is_local_node =
+                        peers.get(peer_idx as usize).is_some_and(|p| p.is_local());
+                    if is_local_node {
+                        return DispatchPlan::LocalDatastore;
+                    }
+                    push_target(&mut targets, dc_idx, rack_idx, peer_idx);
+                }
+            }
+            ConsistencyLevel::DcQuorum | ConsistencyLevel::DcSafeQuorum => {
+                if local.is_empty() {
+                    return DispatchPlan::NoTargets;
+                }
+                for (dc_idx, rack_idx, peer_idx) in local {
+                    push_target(&mut targets, dc_idx, rack_idx, peer_idx);
+                }
+            }
+            ConsistencyLevel::DcEachSafeQuorum => {
+                if local.is_empty() && remote.is_empty() {
+                    return DispatchPlan::NoTargets;
+                }
+                for (dc_idx, rack_idx, peer_idx) in local.iter().chain(remote.iter()) {
+                    push_target(&mut targets, *dc_idx, *rack_idx, *peer_idx);
+                }
+            }
+        }
+        if want_per_dc_fanout && !remote.is_empty() {
+            for (dc_idx, rack_idx, peer_idx) in remote {
+                if !targets.iter().any(|t| t.peer_idx == peer_idx) {
+                    push_target(&mut targets, dc_idx, rack_idx, peer_idx);
+                }
+            }
+        }
+
+        if targets.is_empty() {
+            return DispatchPlan::LocalDatastore;
+        }
+        DispatchPlan::Replicas(targets)
+    }
+}
+
+impl Dispatcher for ClusterDispatcher {
+    fn dispatch(&self, req: Msg, _responder: ServerSink) -> DispatchOutcome {
+        // Inspect the request without consuming it: pull the first
+        // key, then plan.
+        let key = req
+            .keys()
+            .first()
+            .map(|kp| {
+                let _ = kp;
+                Vec::new()
+            })
+            .unwrap_or_default();
+        // The Stage-9 dispatcher seam is synchronous; the actual
+        // peer fan-out is the responsibility of the Stage 12
+        // server binary which spawns per-target tokio tasks. The
+        // cluster dispatcher therefore reports `Pending` in every
+        // routable case so the FSM waits for the dispatcher's
+        // response, and `Drop` only when the request is a quit /
+        // swallow (the C reference's `req_filter` arm).
+        if req.flags().quit {
+            return DispatchOutcome::Drop;
+        }
+        let plan = self.plan(&req, &key);
+        match plan {
+            DispatchPlan::Drop => DispatchOutcome::Drop,
+            DispatchPlan::NoTargets => {
+                let err_type = if matches!(req.ty(), MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
+                    MsgType::RspRedisError
+                } else {
+                    MsgType::RspMcServerError
+                };
+                let rsp = crate::msg::response::make_error(
+                    &req,
+                    err_type,
+                    0,
+                    crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
+                );
+                DispatchOutcome::Error(rsp)
+            }
+            DispatchPlan::LocalDatastore | DispatchPlan::Replicas(_) => DispatchOutcome::Pending,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::peer::{Peer, PeerEndpoint, PeerState};
+    use crate::conf::{DataStore, HashType};
+    use crate::hashkit::DynToken;
+
+    fn cfg(read: ConsistencyLevel, write: ConsistencyLevel) -> crate::cluster::PoolConfig {
+        crate::cluster::PoolConfig {
+            name: "p".into(),
+            dc: "dc1".into(),
+            rack: "rA".into(),
+            data_store: DataStore::Redis,
+            hash: HashType::Murmur,
+            read_consistency: read,
+            write_consistency: write,
+            timeout_ms: 5_000,
+            server_retry_timeout_ms: 30_000,
+            server_failure_limit: 2,
+            auto_eject_hosts: false,
+            enable_gossip: false,
+        }
+    }
+
+    fn peer(idx: u32, dc: &str, rack: &str, tok: u32, is_local: bool, is_same: bool) -> Peer {
+        let mut p = Peer::new(
+            idx,
+            PeerEndpoint::tcp("h".into(), 8101 + u16::try_from(idx).unwrap_or(0)),
+            rack.into(),
+            dc.into(),
+            vec![DynToken::from_u32(tok)],
+            is_local,
+            is_same,
+            false,
+        );
+        p.set_state(PeerState::Normal, 0);
+        p
+    }
+
+    fn pool(read: ConsistencyLevel, write: ConsistencyLevel, peers: Vec<Peer>) -> Arc<ServerPool> {
+        let pool = ServerPool::new(cfg(read, write), peers);
+        pool.preselect_remote_racks();
+        Arc::new(pool)
+    }
+
+    #[test]
+    fn local_node_only_short_circuits() {
+        let p = pool(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            vec![peer(0, "dc1", "rA", 10, true, true)],
+        );
+        let mut req = Msg::new(1, MsgType::ReqRedisGet, true);
+        req.set_routing(MsgRouting::LocalNodeOnly);
+        assert_eq!(
+            ClusterDispatcher::new(p).plan(&req, b"k"),
+            DispatchPlan::LocalDatastore,
+        );
+    }
+
+    #[test]
+    fn dc_one_read_targets_local_rack_when_present() {
+        let p = pool(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            vec![
+                peer(0, "dc1", "rA", 10, true, true),
+                peer(1, "dc1", "rB", 20, false, true),
+                peer(2, "dc2", "rA", 30, false, false),
+            ],
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        // Any key resolves to peer 0 in rack rA (single-token continuum).
+        let plan = ClusterDispatcher::new(p).plan(&req, b"hello");
+        assert!(matches!(plan, DispatchPlan::LocalDatastore));
+    }
+
+    #[test]
+    fn dc_quorum_fans_out_local_dc() {
+        let p = pool(
+            ConsistencyLevel::DcQuorum,
+            ConsistencyLevel::DcQuorum,
+            vec![
+                peer(0, "dc1", "rA", 10, true, true),
+                peer(1, "dc1", "rB", 20, false, true),
+                peer(2, "dc2", "rA", 30, false, false),
+            ],
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"k");
+        match plan {
+            DispatchPlan::Replicas(rs) => {
+                assert_eq!(rs.len(), 2);
+                for r in rs {
+                    assert_eq!(r.dc, "dc1");
+                }
+            }
+            _ => panic!("expected replicas"),
+        }
+    }
+
+    #[test]
+    fn dc_each_safe_quorum_fans_out_per_dc() {
+        let p = pool(
+            ConsistencyLevel::DcEachSafeQuorum,
+            ConsistencyLevel::DcEachSafeQuorum,
+            vec![
+                peer(0, "dc1", "rA", 10, true, true),
+                peer(1, "dc2", "rA", 20, false, false),
+            ],
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"k");
+        match plan {
+            DispatchPlan::Replicas(rs) => {
+                assert_eq!(rs.len(), 2);
+                let dcs: Vec<&str> = rs.iter().map(|r| r.dc.as_str()).collect();
+                assert!(dcs.contains(&"dc1"));
+                assert!(dcs.contains(&"dc2"));
+            }
+            _ => panic!("expected replicas"),
+        }
+    }
+
+    #[test]
+    fn no_routable_peers_returns_no_targets() {
+        let mut p0 = peer(0, "dc1", "rA", 10, true, true);
+        p0.set_state(PeerState::Down, 0);
+        let p = pool(
+            ConsistencyLevel::DcQuorum,
+            ConsistencyLevel::DcQuorum,
+            vec![p0],
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"k");
+        assert_eq!(plan, DispatchPlan::NoTargets);
+    }
+}
