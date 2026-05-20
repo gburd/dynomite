@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use dynomite::core::ring_queue::RingChannels;
-use dynomite::util::histogram::Histogram;
+use dynomite::stats::Histogram;
 use proptest::prelude::*;
 
 proptest! {
@@ -14,7 +14,7 @@ proptest! {
     fn histogram_percentile_is_monotone(samples in proptest::collection::vec(1u64..1_000_000, 1..256)) {
         let mut h = Histogram::new();
         for v in &samples {
-            h.add(*v);
+            h.record(*v);
         }
         let probes = [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 0.999, 1.0];
         let mut prev = 0u64;
@@ -30,7 +30,7 @@ proptest! {
         let mut h = Histogram::new();
         let mut max = 0u64;
         for v in &samples {
-            h.add(*v);
+            h.record(*v);
             if *v > max { max = *v; }
         }
         let p = h.percentile(0.99);
