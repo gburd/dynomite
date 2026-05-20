@@ -20,6 +20,17 @@ use super::tokens::TokenList;
 const KETAMA_DEFAULT_PORT: u16 = 11_211;
 
 /// A `servers:` entry: a single backing datastore endpoint.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::ConfServer;
+/// let s = ConfServer::parse("127.0.0.1:6379:1 redis_a").unwrap();
+/// assert_eq!(s.host(), "127.0.0.1");
+/// assert_eq!(s.port(), 6379);
+/// assert_eq!(s.weight(), 1);
+/// assert_eq!(s.name(), "redis_a");
+/// ```
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ConfServer {
     pname: String,
@@ -32,6 +43,16 @@ pub struct ConfServer {
 
 impl ConfServer {
     /// Parse a `host:port:weight [name]` (or `/path:weight [name]`) string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfServer;
+    /// let unix = ConfServer::parse("/tmp/redis.sock:1").unwrap();
+    /// assert!(unix.is_unix());
+    /// assert_eq!(unix.port(), 0);
+    /// assert!(ConfServer::parse("").is_err());
+    /// ```
     pub fn parse(raw: &str) -> Result<Self, ConfError> {
         let bad = |reason: &str| ConfError::BadServer {
             field: "servers",
@@ -98,27 +119,74 @@ impl ConfServer {
     }
 
     /// The original `host:port:weight` portion (without any friendly name).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfServer;
+    /// let s = ConfServer::parse("127.0.0.1:6379:1 redis_a").unwrap();
+    /// assert_eq!(s.pname(), "127.0.0.1:6379:1");
+    /// ```
     pub fn pname(&self) -> &str {
         &self.pname
     }
     /// The hashing-key name for this server.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfServer;
+    /// // Port 11211 is treated as a default and dropped from the name.
+    /// assert_eq!(ConfServer::parse("10.0.0.1:11211:1").unwrap().name(), "10.0.0.1");
+    /// assert_eq!(ConfServer::parse("10.0.0.1:6379:1").unwrap().name(), "10.0.0.1:6379");
+    /// ```
     pub fn name(&self) -> &str {
         &self.name
     }
     /// Hostname or IP address for an inet entry, or the Unix socket path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfServer;
+    /// assert_eq!(ConfServer::parse("127.0.0.1:6379:1").unwrap().host(), "127.0.0.1");
+    /// ```
     pub fn host(&self) -> &str {
         &self.host
     }
     /// TCP port; `0` for Unix socket entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfServer;
+    /// assert_eq!(ConfServer::parse("127.0.0.1:6379:1").unwrap().port(), 6379);
+    /// assert_eq!(ConfServer::parse("/var/run/r.sock:1").unwrap().port(), 0);
+    /// ```
     pub fn port(&self) -> u16 {
         self.port
     }
     /// Configured weight (parsed for backward compatibility; the engine
-    /// ignores it once parsed, mirroring the C reference).
+    /// ignores it once parsed).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfServer;
+    /// assert_eq!(ConfServer::parse("127.0.0.1:6379:42").unwrap().weight(), 42);
+    /// ```
     pub fn weight(&self) -> u32 {
         self.weight
     }
     /// Whether this entry refers to a Unix domain socket.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfServer;
+    /// assert!(ConfServer::parse("/var/run/r.sock:1").unwrap().is_unix());
+    /// assert!(!ConfServer::parse("127.0.0.1:6379:1").unwrap().is_unix());
+    /// ```
     pub fn is_unix(&self) -> bool {
         self.is_unix
     }
@@ -153,6 +221,15 @@ impl<'de> Deserialize<'de> for ConfServer {
 }
 
 /// A `dyn_seeds:` entry: a peer dynomite node with rack / dc / tokens.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::ConfDynSeed;
+/// let s = ConfDynSeed::parse("127.0.0.2:8101:rack2:dc2:1383429731").unwrap();
+/// assert_eq!(s.rack(), "rack2");
+/// assert_eq!(s.dc(), "dc2");
+/// ```
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ConfDynSeed {
     pname: String,
@@ -166,6 +243,16 @@ pub struct ConfDynSeed {
 
 impl ConfDynSeed {
     /// Parse a `host:port:rack:dc:tokens [name]` entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfDynSeed;
+    /// let s = ConfDynSeed::parse("h:1:r:d:1,2,3 friendly").unwrap();
+    /// assert_eq!(s.tokens().len(), 3);
+    /// assert_eq!(s.name(), "friendly");
+    /// assert!(ConfDynSeed::parse("a:b:c:d").is_err());
+    /// ```
     pub fn parse(raw: &str) -> Result<Self, ConfError> {
         let bad = |reason: &str| ConfError::BadServer {
             field: "dyn_seeds",
@@ -232,31 +319,85 @@ impl ConfDynSeed {
         })
     }
 
-    /// The colon-joined entry without any friendly name.
+    /// The colon-joined `host:port` portion (rack, dc and tokens are
+    /// stripped from the input during parsing).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfDynSeed;
+    /// let s = ConfDynSeed::parse("h:1:r:d:1 friendly").unwrap();
+    /// assert_eq!(s.pname(), "h:1");
+    /// ```
     pub fn pname(&self) -> &str {
         &self.pname
     }
     /// Hashing-key name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfDynSeed;
+    /// assert_eq!(
+    ///     ConfDynSeed::parse("h:1:r:d:1 friendly").unwrap().name(),
+    ///     "friendly",
+    /// );
+    /// ```
     pub fn name(&self) -> &str {
         &self.name
     }
     /// Hostname or IP.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfDynSeed;
+    /// assert_eq!(ConfDynSeed::parse("node-a:1:r:d:1").unwrap().host(), "node-a");
+    /// ```
     pub fn host(&self) -> &str {
         &self.host
     }
     /// TCP port.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfDynSeed;
+    /// assert_eq!(ConfDynSeed::parse("h:8101:r:d:1").unwrap().port(), 8101);
+    /// ```
     pub fn port(&self) -> u16 {
         self.port
     }
     /// Logical rack.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfDynSeed;
+    /// assert_eq!(ConfDynSeed::parse("h:1:rack-x:d:1").unwrap().rack(), "rack-x");
+    /// ```
     pub fn rack(&self) -> &str {
         &self.rack
     }
     /// Logical datacenter.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfDynSeed;
+    /// assert_eq!(ConfDynSeed::parse("h:1:r:dc-x:1").unwrap().dc(), "dc-x");
+    /// ```
     pub fn dc(&self) -> &str {
         &self.dc
     }
     /// Token list owned by this seed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfDynSeed;
+    /// assert_eq!(ConfDynSeed::parse("h:1:r:d:1,2,3").unwrap().tokens().len(), 3);
+    /// ```
     pub fn tokens(&self) -> &TokenList {
         &self.tokens
     }

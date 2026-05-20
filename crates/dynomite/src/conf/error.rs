@@ -7,6 +7,14 @@ use thiserror::Error;
 /// Errors that can occur while loading or validating a [`Config`].
 ///
 /// [`Config`]: crate::conf::Config
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::{Config, ConfError};
+/// let err = Config::parse_str("").unwrap_err();
+/// assert!(matches!(err, ConfError::Yaml { .. } | ConfError::EmptyDocument));
+/// ```
 #[derive(Debug, Error)]
 pub enum ConfError {
     /// I/O error while reading a configuration file.

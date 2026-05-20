@@ -17,9 +17,17 @@ use super::error::ConfError;
 
 /// A parsed `listen:` / `dyn_listen:` / `stats_listen:` endpoint.
 ///
-/// Mirrors `struct conf_listen` in the C reference; the resolved
-/// `sockinfo` is intentionally not represented here because address
-/// resolution is deferred to the runtime layer (Stage 9).
+/// Resolution to a `sockinfo` is intentionally not represented here
+/// because address resolution is deferred to the runtime layer.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::ConfListen;
+/// let l = ConfListen::parse("listen", "127.0.0.1:8102").unwrap();
+/// assert_eq!(l.name(), "127.0.0.1");
+/// assert_eq!(l.port(), 8102);
+/// ```
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ConfListen {
     pname: String,
@@ -29,6 +37,20 @@ pub struct ConfListen {
 }
 
 /// Address family of a [`ConfListen`].
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::{ConfListen, EndpointKind};
+/// assert_eq!(
+///     ConfListen::parse("listen", "[::1]:8101").unwrap().kind(),
+///     EndpointKind::V6,
+/// );
+/// assert_eq!(
+///     ConfListen::parse("listen", "/tmp/d.sock").unwrap().kind(),
+///     EndpointKind::UnixPath,
+/// );
+/// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum EndpointKind {
     /// IPv4 numeric address.
@@ -46,6 +68,16 @@ impl ConfListen {
     ///
     /// `field` names the directive; it is folded into the error so
     /// callers can produce helpful diagnostics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::{ConfListen, EndpointKind};
+    /// let l = ConfListen::parse("dyn_listen", "node-1.example.com:8101").unwrap();
+    /// assert_eq!(l.kind(), EndpointKind::Hostname);
+    /// assert_eq!(l.port(), 8101);
+    /// assert!(ConfListen::parse("dyn_listen", "node-1.example.com").is_err());
+    /// ```
     pub fn parse(field: &'static str, raw: &str) -> Result<Self, ConfError> {
         if raw.is_empty() {
             return Err(ConfError::BadAddr {
@@ -95,21 +127,53 @@ impl ConfListen {
     }
 
     /// The original textual value (`name:port`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfListen;
+    /// let l = ConfListen::parse("listen", "127.0.0.1:8102").unwrap();
+    /// assert_eq!(l.pname(), "127.0.0.1:8102");
+    /// ```
     pub fn pname(&self) -> &str {
         &self.pname
     }
 
     /// The host portion (without surrounding brackets, if any).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfListen;
+    /// let l = ConfListen::parse("listen", "[::1]:8101").unwrap();
+    /// assert_eq!(l.name(), "::1");
+    /// ```
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// The port number; `0` for Unix socket paths.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfListen;
+    /// assert_eq!(ConfListen::parse("listen", "127.0.0.1:8102").unwrap().port(), 8102);
+    /// assert_eq!(ConfListen::parse("listen", "/tmp/d.sock").unwrap().port(), 0);
+    /// ```
     pub fn port(&self) -> u16 {
         self.port
     }
 
     /// The endpoint kind classification.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::{ConfListen, EndpointKind};
+    /// let l = ConfListen::parse("listen", "127.0.0.1:8102").unwrap();
+    /// assert_eq!(l.kind(), EndpointKind::V4);
+    /// ```
     pub fn kind(&self) -> EndpointKind {
         self.kind
     }

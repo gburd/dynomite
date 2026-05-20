@@ -42,8 +42,13 @@ string_enum_serde!(HashType);
 
 /// Datastore family selected by `data_store:`.
 ///
-/// The C reference stores this as an `int` with values 0 (Redis) and
-/// 1 (Memcache).
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::DataStore;
+/// assert_eq!(DataStore::from_int(0).unwrap(), DataStore::Redis);
+/// assert_eq!(DataStore::Redis.as_int(), 0);
+/// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum DataStore {
     /// Redis (RESP) datastore. Encoded as `0` in YAML.
@@ -54,6 +59,14 @@ pub enum DataStore {
 
 impl DataStore {
     /// Parse a `data_store:` value as it appears in YAML.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::DataStore;
+    /// assert_eq!(DataStore::from_int(1).unwrap(), DataStore::Memcache);
+    /// assert!(DataStore::from_int(7).is_err());
+    /// ```
     pub fn from_int(v: i64) -> Result<Self, ConfError> {
         match v {
             0 => Ok(DataStore::Redis),
@@ -63,6 +76,13 @@ impl DataStore {
     }
 
     /// Encode back to the small integer used in YAML.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::DataStore;
+    /// assert_eq!(DataStore::Memcache.as_int(), 1);
+    /// ```
     pub fn as_int(self) -> i64 {
         match self {
             DataStore::Redis => 0,
@@ -72,6 +92,16 @@ impl DataStore {
 }
 
 /// Inter-node security mode selected by `secure_server_option:`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::SecureServerOption;
+/// assert_eq!(
+///     SecureServerOption::parse("datacenter").unwrap(),
+///     SecureServerOption::Datacenter,
+/// );
+/// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum SecureServerOption {
     /// No inter-node TLS.
@@ -85,8 +115,15 @@ pub enum SecureServerOption {
 }
 
 impl SecureServerOption {
-    /// Parse a `secure_server_option:` value, case-sensitively (the C
-    /// code uses `dn_strcmp`).
+    /// Parse a `secure_server_option:` value, case-sensitively.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::SecureServerOption;
+    /// assert_eq!(SecureServerOption::parse("none").unwrap(), SecureServerOption::None);
+    /// assert!(SecureServerOption::parse("NONE").is_err());
+    /// ```
     pub fn parse(s: &str) -> Result<Self, ConfError> {
         match s {
             "none" => Ok(SecureServerOption::None),
@@ -98,6 +135,13 @@ impl SecureServerOption {
     }
 
     /// Render back to the YAML string form.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::SecureServerOption;
+    /// assert_eq!(SecureServerOption::All.as_str(), "all");
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             SecureServerOption::None => "none",
@@ -115,6 +159,14 @@ impl fmt::Display for SecureServerOption {
 }
 
 /// Quorum policy for read or write paths.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::ConsistencyLevel;
+/// let lvl = ConsistencyLevel::parse("read_consistency", "DC_QUORUM").unwrap();
+/// assert_eq!(lvl, ConsistencyLevel::DcQuorum);
+/// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum ConsistencyLevel {
     /// Single replica acknowledgement.
@@ -130,9 +182,20 @@ pub enum ConsistencyLevel {
 impl ConsistencyLevel {
     /// Parse a `read_consistency` or `write_consistency` value.
     ///
-    /// The C reference uses `dn_strcasecmp`, so this is case-insensitive
-    /// against the canonical names `DC_ONE`, `DC_QUORUM`, `DC_SAFE_QUORUM`,
-    /// and `DC_EACH_SAFE_QUORUM`.
+    /// Comparison is case-insensitive against the canonical names
+    /// `DC_ONE`, `DC_QUORUM`, `DC_SAFE_QUORUM`, and
+    /// `DC_EACH_SAFE_QUORUM`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConsistencyLevel;
+    /// assert_eq!(
+    ///     ConsistencyLevel::parse("read_consistency", "dc_one").unwrap(),
+    ///     ConsistencyLevel::DcOne,
+    /// );
+    /// assert!(ConsistencyLevel::parse("read_consistency", "nope").is_err());
+    /// ```
     pub fn parse(field: &'static str, s: &str) -> Result<Self, ConfError> {
         if s.eq_ignore_ascii_case("dc_one") {
             Ok(ConsistencyLevel::DcOne)
@@ -151,6 +214,13 @@ impl ConsistencyLevel {
     }
 
     /// Render back to the canonical YAML name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConsistencyLevel;
+    /// assert_eq!(ConsistencyLevel::DcSafeQuorum.as_str(), "DC_SAFE_QUORUM");
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             ConsistencyLevel::DcOne => "DC_ONE",
@@ -169,10 +239,18 @@ impl fmt::Display for ConsistencyLevel {
 
 /// Hash algorithm selected by `hash:`.
 ///
-/// The C reference uses `enum hash_type` from `hashkit/dyn_hashkit.h`;
-/// this mirrors the same set of names. Stage 3 owns the hashing math
-/// itself; we model the configured choice here so the parser can echo
-/// it back without depending on the hashkit module.
+/// The names mirror the algorithm tags accepted by the YAML parser.
+/// Stage 3 owns the hashing math; this enum models only the configured
+/// choice so the parser can echo it back without depending on the
+/// hashkit module.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::HashType;
+/// assert_eq!(HashType::parse("murmur3").unwrap(), HashType::Murmur3);
+/// assert_eq!(HashType::Md5.as_str(), "md5");
+/// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum HashType {
     /// One-at-a-time hash.
@@ -204,7 +282,15 @@ pub enum HashType {
 }
 
 impl HashType {
-    /// Parse a `hash:` value (case-sensitive, matching C's `string_compare`).
+    /// Parse a `hash:` value (case-sensitive).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::HashType;
+    /// assert_eq!(HashType::parse("fnv1a_64").unwrap(), HashType::Fnv1a64);
+    /// assert!(HashType::parse("FNV1A_64").is_err());
+    /// ```
     pub fn parse(s: &str) -> Result<Self, ConfError> {
         Ok(match s {
             "one_at_a_time" => HashType::OneAtATime,
@@ -225,6 +311,13 @@ impl HashType {
     }
 
     /// Render back to the canonical YAML name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::HashType;
+    /// assert_eq!(HashType::Crc32a.as_str(), "crc32a");
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             HashType::OneAtATime => "one_at_a_time",

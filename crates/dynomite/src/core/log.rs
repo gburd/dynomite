@@ -62,6 +62,13 @@ pub const LOG_VVVERB: u8 = 10;
 pub const LOG_PVERB: u8 = 11;
 
 /// Largest accepted verbosity level.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{clamp_level, LOG_LEVEL_MAX};
+/// assert_eq!(clamp_level(LOG_LEVEL_MAX + 5), LOG_LEVEL_MAX);
+/// ```
 pub const LOG_LEVEL_MAX: u8 = LOG_PVERB;
 
 /// Map a Dynomite numeric verbosity to a `tracing::Level`.
@@ -90,7 +97,15 @@ pub fn tracing_level_for(level: u8) -> Level {
 }
 
 /// Clamp the supplied verbosity to the inclusive `[0, LOG_LEVEL_MAX]`
-/// window the C engine uses.
+/// window.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{clamp_level, LOG_LEVEL_MAX};
+/// assert_eq!(clamp_level(3), 3);
+/// assert_eq!(clamp_level(255), LOG_LEVEL_MAX);
+/// ```
 pub fn clamp_level(level: u8) -> u8 {
     level.min(LOG_LEVEL_MAX)
 }
@@ -238,12 +253,26 @@ pub fn reopen_on_sighup() -> Status {
 
 /// Number of write errors observed by the underlying sink.
 ///
-/// Exposes the equivalent of the C `logger.nerror` counter.
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::write_error_count;
+/// // Before logging is initialised the count is zero.
+/// let _: u64 = write_error_count();
+/// ```
 pub fn write_error_count() -> u64 {
     STATE.get().map_or(0, |s| *s.nerror.lock())
 }
 
 /// Return the current numeric verbosity stored by [`log_init`].
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{current_level, log_level_set, LOG_INFO};
+/// log_level_set(LOG_INFO);
+/// assert_eq!(current_level(), LOG_INFO);
+/// ```
 pub fn current_level() -> u8 {
     CURRENT_LEVEL.load(Ordering::Relaxed)
 }
@@ -253,6 +282,14 @@ pub fn current_level() -> u8 {
 /// The actual `tracing` filter is set once at [`log_init`] time; this
 /// updates a numeric counter that downstream subsystems read to gate
 /// periodic-verbose output.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{log_level_increment, log_level_set};
+/// log_level_set(3);
+/// assert_eq!(log_level_increment(), 4);
+/// ```
 pub fn log_level_increment() -> u8 {
     let prev = CURRENT_LEVEL.load(Ordering::Relaxed);
     let next = clamp_level(prev.saturating_add(1));
@@ -261,6 +298,16 @@ pub fn log_level_increment() -> u8 {
 }
 
 /// Drop the stored verbosity by one, saturating at zero.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{log_level_decrement, log_level_set};
+/// log_level_set(0);
+/// assert_eq!(log_level_decrement(), 0);
+/// log_level_set(5);
+/// assert_eq!(log_level_decrement(), 4);
+/// ```
 pub fn log_level_decrement() -> u8 {
     let prev = CURRENT_LEVEL.load(Ordering::Relaxed);
     let next = prev.saturating_sub(1);
@@ -269,6 +316,14 @@ pub fn log_level_decrement() -> u8 {
 }
 
 /// Set the stored verbosity directly, clamped to `[0, LOG_LEVEL_MAX]`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{current_level, log_level_set, LOG_LEVEL_MAX};
+/// log_level_set(255);
+/// assert_eq!(current_level(), LOG_LEVEL_MAX);
+/// ```
 pub fn log_level_set(level: u8) {
     CURRENT_LEVEL.store(clamp_level(level), Ordering::Relaxed);
 }
@@ -276,6 +331,16 @@ pub fn log_level_set(level: u8) {
 /// Return whether a given numeric level is loud enough to be logged.
 ///
 /// A message at `level` is loggable iff `level <= current_level()`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{log_level_set, log_loggable};
+/// log_level_set(5);
+/// assert!(log_loggable(0));
+/// assert!(log_loggable(5));
+/// assert!(!log_loggable(6));
+/// ```
 pub fn log_loggable(level: u8) -> bool {
     level <= current_level()
 }

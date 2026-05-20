@@ -9,7 +9,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Default value for [`msgs_per_sec`].
 ///
-/// Matches `CONF_DEFAULT_CONN_MSG_RATE` in the C config header.
+/// # Examples
+///
+/// ```
+/// use dynomite::core::setting::DEFAULT_MSGS_PER_SEC;
+/// assert_eq!(DEFAULT_MSGS_PER_SEC, 50_000);
+/// ```
 pub const DEFAULT_MSGS_PER_SEC: u32 = 50_000;
 
 static MSGS_PER_SEC: AtomicU32 = AtomicU32::new(DEFAULT_MSGS_PER_SEC);

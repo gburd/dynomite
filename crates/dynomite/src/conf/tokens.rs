@@ -15,6 +15,17 @@ use serde::{Deserialize, Serialize};
 use super::error::ConfError;
 
 /// One element of a comma-separated token list.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::TokenComponent;
+/// let pos = TokenComponent::parse("42").unwrap();
+/// assert_eq!(pos.signum, 1);
+/// assert_eq!(pos.digits, "42");
+/// let zero = TokenComponent::parse("0").unwrap();
+/// assert_eq!(zero.signum, 0);
+/// ```
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct TokenComponent {
     /// `-1` for negative, `0` for zero, `1` for positive.
@@ -25,6 +36,18 @@ pub struct TokenComponent {
 
 impl TokenComponent {
     /// Parse a single component (no commas, no surrounding whitespace).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::TokenComponent;
+    /// let neg = TokenComponent::parse("-7").unwrap();
+    /// assert_eq!(neg.signum, -1);
+    /// assert_eq!(neg.digits, "7");
+    /// assert!(TokenComponent::parse("").is_err());
+    /// assert!(TokenComponent::parse("-").is_err());
+    /// assert!(TokenComponent::parse("12a").is_err());
+    /// ```
     pub fn parse(raw: &str) -> Result<Self, ConfError> {
         if raw.is_empty() {
             return Err(ConfError::BadToken {
@@ -71,6 +94,15 @@ impl fmt::Display for TokenComponent {
 }
 
 /// A list of [`TokenComponent`]s parsed from a comma-separated string.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::TokenList;
+/// let t = TokenList::parse("0,1,2").unwrap();
+/// assert_eq!(t.len(), 3);
+/// assert_eq!(t.to_string(), "0,1,2");
+/// ```
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct TokenList {
     components: Vec<TokenComponent>,
@@ -79,7 +111,16 @@ pub struct TokenList {
 
 impl TokenList {
     /// Parse a comma-separated list. Leading or trailing whitespace
-    /// inside each component is rejected to mirror the C parser.
+    /// inside each component is rejected.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::TokenList;
+    /// assert_eq!(TokenList::parse("-7,0,9").unwrap().len(), 3);
+    /// assert!(TokenList::parse("").is_err());
+    /// assert!(TokenList::parse("1,,2").is_err());
+    /// ```
     pub fn parse(raw: &str) -> Result<Self, ConfError> {
         if raw.is_empty() {
             return Err(ConfError::BadToken {
@@ -98,22 +139,52 @@ impl TokenList {
     }
 
     /// Borrow the parsed components.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::TokenList;
+    /// let t = TokenList::parse("1,2,3").unwrap();
+    /// assert_eq!(t.components().len(), 3);
+    /// ```
     pub fn components(&self) -> &[TokenComponent] {
         &self.components
     }
 
     /// Number of components in the list.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::TokenList;
+    /// assert_eq!(TokenList::parse("5").unwrap().len(), 1);
+    /// ```
     pub fn len(&self) -> usize {
         self.components.len()
     }
 
     /// Whether the list is empty (only constructible via the
     /// `Default` impl).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::TokenList;
+    /// assert!(TokenList::default().is_empty());
+    /// assert!(!TokenList::parse("1").unwrap().is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.components.is_empty()
     }
 
     /// The original input string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::TokenList;
+    /// assert_eq!(TokenList::parse("1,2").unwrap().raw(), "1,2");
+    /// ```
     pub fn raw(&self) -> &str {
         &self.raw
     }

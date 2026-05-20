@@ -34,12 +34,30 @@ pub enum SockInfo {
 
 impl SockInfo {
     /// Whether this endpoint refers to an Internet socket (v4 or v6).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::sockinfo::SockInfo;
+    /// assert!(SockInfo::resolve("127.0.0.1", 6379).unwrap().is_inet());
+    /// assert!(!SockInfo::resolve("/tmp/x.sock", 0).unwrap().is_inet());
+    /// ```
     pub fn is_inet(&self) -> bool {
         matches!(self, Self::Inet(_) | Self::Inet6(_))
     }
 
     /// Return the underlying [`SocketAddr`] when the endpoint is an
     /// Internet socket.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::sockinfo::SockInfo;
+    /// let s = SockInfo::resolve("127.0.0.1", 6379).unwrap();
+    /// assert_eq!(s.as_socket_addr().unwrap().port(), 6379);
+    /// let u = SockInfo::resolve("/tmp/x.sock", 0).unwrap();
+    /// assert!(u.as_socket_addr().is_none());
+    /// ```
     pub fn as_socket_addr(&self) -> Option<SocketAddr> {
         match self {
             Self::Inet(s) | Self::Inet6(s) => Some(*s),
@@ -80,11 +98,29 @@ impl SockInfo {
     }
 
     /// Construct a `SockInfo` from an explicit IPv4 address and port.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use dynomite::util::sockinfo::SockInfo;
+    /// let s = SockInfo::from_v4(Ipv4Addr::new(10, 0, 0, 1), 6379);
+    /// assert!(s.is_inet());
+    /// ```
     pub fn from_v4(addr: Ipv4Addr, port: u16) -> Self {
         Self::Inet(SocketAddr::new(IpAddr::V4(addr), port))
     }
 
     /// Construct a `SockInfo` from an explicit IPv6 address and port.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv6Addr;
+    /// use dynomite::util::sockinfo::SockInfo;
+    /// let s = SockInfo::from_v6(Ipv6Addr::LOCALHOST, 6379);
+    /// assert!(s.is_inet());
+    /// ```
     pub fn from_v6(addr: Ipv6Addr, port: u16) -> Self {
         Self::Inet6(SocketAddr::new(IpAddr::V6(addr), port))
     }

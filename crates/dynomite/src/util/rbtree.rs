@@ -29,6 +29,14 @@ pub struct OrderedMap<K: Ord, V> {
 
 impl<K: Ord, V> OrderedMap<K, V> {
     /// Construct an empty map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// assert!(m.is_empty());
+    /// ```
     pub fn new() -> Self {
         Self {
             inner: BTreeMap::new(),
@@ -36,41 +44,115 @@ impl<K: Ord, V> OrderedMap<K, V> {
     }
 
     /// Insert `value` at `key`, returning the previous value (if any).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let mut m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// assert_eq!(m.insert(1, 10), None);
+    /// assert_eq!(m.insert(1, 20), Some(10));
+    /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.inner.insert(key, value)
     }
 
     /// Remove the entry at `key`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let mut m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// m.insert(1, 10);
+    /// assert_eq!(m.remove(&1), Some(10));
+    /// ```
     pub fn remove(&mut self, key: &K) -> Option<V> {
         self.inner.remove(key)
     }
 
     /// Look up the value at `key`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let mut m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// m.insert(1, 10);
+    /// assert_eq!(m.get(&1), Some(&10));
+    /// ```
     pub fn get(&self, key: &K) -> Option<&V> {
         self.inner.get(key)
     }
 
     /// Number of entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let mut m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// m.insert(1, 1);
+    /// assert_eq!(m.len(), 1);
+    /// ```
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
     /// Whether the map is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// assert!(m.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
     /// Drop every entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let mut m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// m.insert(1, 1);
+    /// m.clear();
+    /// assert!(m.is_empty());
+    /// ```
     pub fn clear(&mut self) {
         self.inner.clear();
     }
 
     /// Smallest entry, or [`None`] if the map is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let mut m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// m.insert(3, 30);
+    /// m.insert(1, 10);
+    /// assert_eq!(m.min(), Some((&1, &10)));
+    /// ```
     pub fn min(&self) -> Option<(&K, &V)> {
         self.inner.iter().next()
     }
 
     /// Largest entry, or [`None`] if the map is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let mut m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// m.insert(3, 30);
+    /// m.insert(1, 10);
+    /// assert_eq!(m.max(), Some((&3, &30)));
+    /// ```
     pub fn max(&self) -> Option<(&K, &V)> {
         self.inner.iter().next_back()
     }
@@ -94,6 +176,17 @@ impl<K: Ord, V> OrderedMap<K, V> {
     }
 
     /// In-order iterator over the entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::rbtree::OrderedMap;
+    /// let mut m: OrderedMap<u32, u32> = OrderedMap::new();
+    /// m.insert(2, 0);
+    /// m.insert(1, 0);
+    /// let keys: Vec<u32> = m.iter().map(|(k, _)| *k).collect();
+    /// assert_eq!(keys, vec![1, 2]);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.inner.iter()
     }

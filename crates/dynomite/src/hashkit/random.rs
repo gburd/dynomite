@@ -20,6 +20,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Linear congruential generator with the parameters used by glibc's
 /// non-secure `random()` family. Sufficient for ring dispatch (the only
 /// caller); not cryptographically strong.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::PseudoRng;
+/// let mut rng = PseudoRng::from_seed(42);
+/// let value = rng.next_u32();
+/// // Same seed reproduces the same stream.
+/// let mut rng2 = PseudoRng::from_seed(42);
+/// assert_eq!(value, rng2.next_u32());
+/// ```
 #[derive(Clone, Debug)]
 pub struct PseudoRng {
     state: u64,
@@ -67,6 +78,14 @@ impl PseudoRng {
     }
 
     /// Advance the generator and return the next 32-bit value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::PseudoRng;
+    /// let mut rng = PseudoRng::from_seed(1);
+    /// let _: u32 = rng.next_u32();
+    /// ```
     pub fn next_u32(&mut self) -> u32 {
         // Knuth's MMIX LCG parameters; long-period and full 64-bit state.
         self.state = self
@@ -80,6 +99,17 @@ impl PseudoRng {
 
     /// Pick a uniform value in `[0, modulus)`. Returns `0` when modulus
     /// is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::PseudoRng;
+    /// let mut rng = PseudoRng::from_seed(7);
+    /// for _ in 0..16 {
+    ///     assert!(rng.next_index(13) < 13);
+    /// }
+    /// assert_eq!(rng.next_index(0), 0);
+    /// ```
     pub fn next_index(&mut self, modulus: u32) -> u32 {
         if modulus == 0 {
             0

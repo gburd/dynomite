@@ -47,6 +47,14 @@ pub use crate::hashkit::token::DynToken;
 /// configuration files and the `dyn-hash-tool` CLI rely on the integer
 /// ordering of these variants when they round-trip through other
 /// systems.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::HashType;
+/// assert_eq!(HashType::all().len(), 13);
+/// assert_eq!(HashType::Murmur3.as_str(), "murmur3");
+/// ```
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum HashType {
@@ -107,6 +115,13 @@ impl HashType {
     }
 
     /// All variants, in declaration order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::HashType;
+    /// assert!(HashType::all().contains(&HashType::Murmur3));
+    /// ```
     #[must_use]
     pub const fn all() -> &'static [HashType] {
         &[
@@ -179,6 +194,16 @@ pub fn hash(ty: HashType, key: &[u8]) -> DynToken {
 ///
 /// Exposed so the `ketama` continuum can build per-server points using the
 /// same digest layout as the original implementation.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::md5_signature;
+/// // The empty string has a known MD5 digest.
+/// let d = md5_signature(b"");
+/// assert_eq!(d[0], 0xd4);
+/// assert_eq!(d.len(), 16);
+/// ```
 #[must_use]
 pub fn md5_signature(key: &[u8]) -> [u8; 16] {
     md5::digest(key)
@@ -186,8 +211,16 @@ pub fn md5_signature(key: &[u8]) -> [u8; 16] {
 
 /// CRC-32 over a buffer, lower-cased before mixing.
 ///
-/// Mirrors the C `crc32_sz` helper used by the entropy reconciliation
-/// path: each byte is forced to lower case before being fed to the table.
+/// Each byte is forced to lower case before being fed to the table; the
+/// helper is used by the entropy reconciliation path.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::crc32_sz;
+/// // Lower-casing means "ABC" and "abc" produce the same digest.
+/// assert_eq!(crc32_sz(b"ABC", 0), crc32_sz(b"abc", 0));
+/// ```
 #[must_use]
 pub fn crc32_sz(buf: &[u8], in_crc32: u32) -> u32 {
     crc32::crc32_sz(buf, in_crc32)
