@@ -142,9 +142,7 @@ pub async fn client_loop(
         // Flush any buffered response bytes first so the loop
         // exit conditions never block on a full peer.
         if !pending_writes.is_empty() {
-            let transport = conn
-                .transport_mut()
-                .ok_or(NetError::Closed)?;
+            let transport = conn.transport_mut().ok_or(NetError::Closed)?;
             transport.write_all(&pending_writes).await?;
             conn.record_send(pending_writes.len());
             pending_writes.clear();
@@ -229,12 +227,18 @@ async fn drive_parser(
                         // mirrors this in `req_filter`.
                     }
                     DispatchOutcome::Inline(rsp) | DispatchOutcome::Error(rsp) => {
-                        let env = OutboundEnvelope { req_id: rsp.id(), rsp };
+                        let env = OutboundEnvelope {
+                            req_id: rsp.id(),
+                            rsp,
+                        };
                         let _ = handler.response_tx.send(env).await;
                     }
                 }
             }
-            MsgParseResult::Again | MsgParseResult::Repair | MsgParseResult::Fragment | MsgParseResult::Noop => {
+            MsgParseResult::Again
+            | MsgParseResult::Repair
+            | MsgParseResult::Fragment
+            | MsgParseResult::Noop => {
                 let consumed = msg.parser_pos();
                 if consumed > 0 {
                     accumulated.drain(0..consumed);

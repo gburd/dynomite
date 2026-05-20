@@ -129,9 +129,7 @@ fn drive_dnode_parser(
                     } else {
                         // Without a key we cannot continue; drop the
                         // request rather than panic.
-                        tracing::warn!(
-                            "dnode_client received encrypted payload without aes key"
-                        );
+                        tracing::warn!("dnode_client received encrypted payload without aes key");
                         continue;
                     }
                 } else {
