@@ -170,7 +170,9 @@ dynomite/                       # repo root (cwd)
     Stage 7.
   * Both transports support v4 and v6 listeners (configurable; bind syntax
     accepts `[::1]:8101` and `0.0.0.0:8101`).
-* **Crypto**: `aws-lc-rs` (preferred) or `openssl` crate. AES-256-CBC and RSA
+* **Crypto**: pure-Rust RustCrypto stack: `aes` + `cbc` for
+  AES-128-CBC, `rsa` + `sha1` for RSA OAEP, `rand` for the CSPRNG,
+  and the rsa crate's PKCS#1/PKCS#8 PEM helpers. AES-128-CBC
   PKCS#1v1.5 wrapping are required to match `dyn_crypto.c`. Pick one and stick
   with it; record the choice in AGENTS.md once Stage 6 begins.
 * **Config**: `serde` + `serde_yaml`. The C parser walks libyaml events and
@@ -191,7 +193,8 @@ dynomite/                       # repo root (cwd)
   update):
   `tokio`, `tokio-util`, `bytes`, `serde`, `serde_yaml`, `clap`, `tracing`,
   `tracing-subscriber`, `thiserror`, `anyhow`, `crossbeam-channel`,
-  `crossbeam-queue` (Stage 2 SPSC ring), `parking_lot`, `ahash`, `quiche`, `aws-lc-rs` (or `openssl`), `base64`,
+  `crossbeam-queue` (Stage 2 SPSC ring), `parking_lot`, `ahash`, `quiche`,
+  `aes`, `cbc`, `cipher`, `rsa`, `sha1`, `rand`, `rand_core`, `base64`,
   `nix` (signals/daemonize), `socket2` (advanced socket opts), `time`,
   `httparse` (only for the stats REST endpoint - if avoidable, hand-roll).
   Dev-only: `criterion`, `proptest`, `cargo-fuzz`/`libfuzzer-sys`,
@@ -215,7 +218,7 @@ a reproducible dev shell.
 * `Cargo.toml` workspace with the four crates listed above.
 * `rust-toolchain.toml` pinning a stable toolchain.
 * `flake.nix` providing: rustc/cargo, clippy, rustfmt, cargo-nextest,
-  cargo-fuzz, cargo-criterion, mdbook, openssl, pkg-config, quiche build deps
+  cargo-fuzz, cargo-criterion, mdbook, pkg-config, quiche build deps
   (cmake, perl), iproute2 (`tc`), netcat, redis-server and memcached for
   integration tests, python3 with PyYAML for the legacy harness.
 * `.github/workflows/ci.yml`: build, fmt, clippy `-D warnings`, nextest, doc.
@@ -381,8 +384,11 @@ Depends on Stage 1. **Parallelizable with Stages 2-4.**
 * `generate_aes_key`: 32 bytes from a CSPRNG.
 * RSA wrap/unwrap during the DNODE handshake (CRYPTO_HANDSHAKE message).
 
-Pick one of `aws-lc-rs` or `openssl` (we default to `openssl` because the
-existing PEM tooling and key formats match its semantics out of the box).
+Use the pure-Rust RustCrypto stack (`aes`, `cbc`, `rsa`, `sha1`,
+`rand`). It avoids the linker-symbol clash with quiche's bundled
+BoringSSL that any C-backed OpenSSL binding triggers, keeps the
+workspace `forbid(unsafe_code)`-clean, and stays portable across
+the Nix dev shell and stock Linux/macOS dev hosts.
 
 **Tests**:
 * Round-trip property tests (encrypt -> decrypt = identity for arbitrary

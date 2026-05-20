@@ -34,10 +34,15 @@
 //! authenticated channel. A future hardening pass may layer an AEAD
 //! on top.
 
-use openssl::symm::{Cipher, Crypter, Mode};
+use aes::Aes128;
+use cbc::cipher::block_padding::Pkcs7;
+use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 
 use crate::crypto::CryptoError;
 use crate::io::mbuf::{Mbuf, MbufPool, MbufQueue};
+
+type Aes128CbcEnc = cbc::Encryptor<Aes128>;
+type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
 /// AES key buffer length in bytes (the `AES_KEYLEN` constant from
 /// `dyn_crypto.h`). The cipher itself is AES-128, which uses only
@@ -51,8 +56,10 @@ pub const AES_BLOCK_SIZE: usize = 16;
 /// buffer that the cipher actually consumes).
 pub const AES_128_KEY_LEN: usize = 16;
 
-fn cipher() -> Cipher {
-    Cipher::aes_128_cbc()
+fn key_iv(aes_key: &[u8; AES_KEYLEN]) -> &[u8; AES_128_KEY_LEN] {
+    aes_key
+        .first_chunk::<AES_128_KEY_LEN>()
+        .expect("AES_KEYLEN >= AES_128_KEY_LEN by construction")
 }
 
 /// Encrypt `msg` with AES-128-CBC and PKCS#7 padding using the first
@@ -72,19 +79,9 @@ fn cipher() -> Cipher {
 /// assert!(cipher.len() >= AES_BLOCK_SIZE);
 /// ```
 pub fn encrypt_to_vec(msg: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>, CryptoError> {
-    let key_iv = &aes_key[..AES_128_KEY_LEN];
-    let mut crypter = Crypter::new(cipher(), Mode::Encrypt, key_iv, Some(key_iv))?;
-    crypter.pad(true);
-
-    let mut out = vec![0u8; msg.len() + AES_BLOCK_SIZE];
-    let written = crypter
-        .update(msg, &mut out)
-        .map_err(|_| CryptoError::EncryptionFailed)?;
-    let final_written = crypter
-        .finalize(&mut out[written..])
-        .map_err(|_| CryptoError::EncryptionFailed)?;
-    out.truncate(written + final_written);
-    Ok(out)
+    let kiv = key_iv(aes_key);
+    let cipher = Aes128CbcEnc::new(kiv.into(), kiv.into());
+    Ok(cipher.encrypt_padded_vec_mut::<Pkcs7>(msg))
 }
 
 /// Decrypt the output of [`encrypt_to_vec`].
@@ -109,19 +106,11 @@ pub fn decrypt_to_vec(enc: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>,
     if enc.is_empty() || enc.len() % AES_BLOCK_SIZE != 0 {
         return Err(CryptoError::DecryptionFailed);
     }
-    let key_iv = &aes_key[..AES_128_KEY_LEN];
-    let mut crypter = Crypter::new(cipher(), Mode::Decrypt, key_iv, Some(key_iv))?;
-    crypter.pad(true);
-
-    let mut out = vec![0u8; enc.len() + AES_BLOCK_SIZE];
-    let written = crypter
-        .update(enc, &mut out)
-        .map_err(|_| CryptoError::DecryptionFailed)?;
-    let final_written = crypter
-        .finalize(&mut out[written..])
-        .map_err(|_| CryptoError::BadPadding)?;
-    out.truncate(written + final_written);
-    Ok(out)
+    let kiv = key_iv(aes_key);
+    let cipher = Aes128CbcDec::new(kiv.into(), kiv.into());
+    cipher
+        .decrypt_padded_vec_mut::<Pkcs7>(enc)
+        .map_err(|_| CryptoError::BadPadding)
 }
 
 /// Encrypt `msg` and write the ciphertext into a fresh chain of

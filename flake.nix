@@ -40,12 +40,11 @@
             # Docs
             mdbook
 
-            # Build deps for native crates (openssl, quiche)
+            # Build deps for native crates (quiche bundles its own BoringSSL)
             clang_18
             cmake
             perl
             pkg-config
-            openssl
 
             # Networking + failure-injection tooling
             iproute2
@@ -72,7 +71,6 @@
           shellHook = ''
             export RUST_BACKTRACE=1
             export DYNOMITE_C_REF="$PWD/_/dynomite"
-            export OPENSSL_NO_VENDOR=1
             echo "dynomite dev shell ready"
             echo "  C reference at: $DYNOMITE_C_REF"
             echo "  run: scripts/check.sh"

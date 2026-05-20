@@ -225,10 +225,10 @@ symbol is considered un-ported.
 | C symbol | Rust home | Notes |
 |---|---|---|
 | `AES_KEYLEN` | `dynomite::crypto::aes::AES_KEYLEN` | done (Stage 6) |
-| `aes_cipher` (static `EVP_CIPHER *`) | replaced by `openssl::symm::Cipher::aes_128_cbc()` returned by `dynomite::crypto::aes::cipher` | done (Stage 6) |
+| `aes_cipher` (static `EVP_CIPHER *`) | replaced by the `cbc::Encryptor<Aes128>` / `cbc::Decryptor<Aes128>` types constructed per call in `dynomite::crypto::aes` | done (Stage 6) |
 | `rsa` (static `RSA *`) | `dynomite::crypto::Crypto::rsa` field | done (Stage 6) |
 | `aes_key` (static buffer) | `dynomite::crypto::Crypto::aes_key` field | done (Stage 6) |
-| `aes_encrypt_ctx` / `aes_decrypt_ctx` | replaced by per-call `openssl::symm::Crypter` instances | done (Stage 6) (deviation: per-call contexts replace the long-lived globals; see Deviations) |
+| `aes_encrypt_ctx` / `aes_decrypt_ctx` | replaced by per-call `cbc::Encryptor<Aes128>` / `cbc::Decryptor<Aes128>` instances | done (Stage 6) (deviation: per-call contexts replace the long-lived globals; see Deviations) |
 | `load_private_rsa_key_by_file` | `dynomite::crypto::pem::load_rsa_private_key` | done (Stage 6) |
 | `load_private_rsa_key` | folded into `Crypto::from_pem` | done (Stage 6) |
 | `aes_init` | folded into `Crypto::from_pem` (the AES key generation half) and `Crypto::generate_aes_key` (the standalone half) | done (Stage 6) |
@@ -822,12 +822,12 @@ encryption, one for decryption) for the entire process lifetime
 and re-keys them on every call. This is incompatible with the
 tokio-driven multi-task model: two worker tasks could re-key the
 shared context concurrently. The Rust port allocates a fresh
-`openssl::symm::Crypter` per call, which is functionally
-equivalent but lock-free.
+`cbc::Encryptor<Aes128>` / `cbc::Decryptor<Aes128>` per call,
+which is functionally equivalent but lock-free.
 
 ### Stage 6: RSA padding choice
 
-The Rust port uses PKCS#1 OAEP padding (with the OpenSSL default
+The Rust port uses PKCS#1 OAEP padding (with the SHA-1 hash and
 SHA-1 hash and MGF1) for both `Crypto::rsa_encrypt` and
 `Crypto::rsa_decrypt`. This matches `_/dynomite/src/dyn_crypto.c`
 lines 521-538 which call `RSA_public_encrypt` /
@@ -925,21 +925,24 @@ factors the policy into [`net::auto_eject::AutoEject`] so the
 pool and the Stage 10 cluster code share a single
 implementation. Behaviour is preserved.
 
-### Stage 9: QUIC + openssl-vendored static-link conflict
+### Stage 9: QUIC + crypto coexistence (resolved)
 
-The `quic` cargo feature enables `quiche`, which bundles its own
-BoringSSL. The `openssl` workspace dependency is configured
-with the `vendored` feature, which statically links a copy of
-OpenSSL's libcrypto. A binary that links both static archives
-(test binaries built with `--all-features`) sees duplicate
-symbol definitions and fails the link. The Stage 9 QUIC code
-compiles cleanly as a library (`cargo build -p dynomite
---features quic`) but the integration test cannot run with the
-crypto stack in the same artifact. Resolution requires either
-dropping `openssl-vendored` in favor of the system
-openssl-sys, or moving Stage 6 crypto onto a different backend
-(`aws-lc-rs`, BoringSSL via `boring`). Tracked as a Stage 12 /
-binary-wiring decision in `docs/journal/blocked.md`.
+The original Stage 6 port used the `openssl` C-binding crate with
+the `vendored` feature, which statically links a copy of
+OpenSSL's libcrypto. The `quic` cargo feature enables `quiche`,
+which bundles its own BoringSSL. A binary that links both static
+archives (test binaries built with `--all-features`) saw duplicate
+symbol definitions (`EVP_rc2_40_cbc`, `EVP_rc4`, `EVP_BytesToKey`,
+and others) and failed the link. The resolution was to migrate
+Stage 6 crypto onto the pure-Rust RustCrypto stack
+(`aes`/`cbc`/`rsa`/`sha1`/`rand`); there is no longer any
+C-binding crypto in the workspace, and `cargo build --workspace
+--all-features` plus `cargo nextest run --workspace --all-features`
+both succeed. The `rsa` crate carries RUSTSEC-2023-0071 (Marvin
+Attack timing sidechannel); `dynomite::crypto` uses OAEP, not the
+affected PKCS#1 v1.5 path, and the advisory is documented and
+ignored in `deny.toml` and `scripts/check.sh` per
+`docs/journal/blocked.md`.
 
 ## Caveats
 
