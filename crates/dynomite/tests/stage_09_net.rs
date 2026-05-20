@@ -321,12 +321,9 @@ async fn client_server_redis_round_trip() {
 
     // 3. Spawn the proxy with the forwarding dispatcher.
     let dispatcher = Arc::new(ForwardingDispatcher { out: req_tx });
-    let proxy = Proxy::bind(
-        "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
-        dispatcher,
-    )
-    .unwrap()
-    .with_data_store(DataStore::Redis);
+    let proxy = Proxy::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap(), dispatcher)
+        .unwrap()
+        .with_data_store(DataStore::Redis);
     let proxy_addr = proxy.local_addr().unwrap();
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     let cancel_fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
@@ -447,9 +444,10 @@ async fn dnode_peer_round_trip() {
                 break std::mem::take(&mut *g);
             }
         }
-        if Instant::now() > deadline {
-            panic!("inbound dnode_client did not dispatch within 2s");
-        }
+        assert!(
+            Instant::now() <= deadline,
+            "inbound dnode_client did not dispatch within 2s"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     };
 
@@ -582,9 +580,10 @@ async fn dnode_client_decrypt_round_trip() {
                 break std::mem::take(&mut *g);
             }
         }
-        if Instant::now() > deadline {
-            panic!("inbound dnode_client did not dispatch decrypted request within 2s");
-        }
+        assert!(
+            Instant::now() <= deadline,
+            "inbound dnode_client did not dispatch decrypted request within 2s"
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     };
 
