@@ -538,6 +538,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "dynomite",
+ "nix",
  "predicates",
  "tempfile",
  "tokio",
