@@ -1189,6 +1189,43 @@ Pinned by
 `dynomite::seeds::florida::tests::ok_response_parsed` and
 `tests/stage_10_cluster.rs::florida_seeds_via_canned_listener`.
 
+### Stage 10: `is_aws_env` interprets `env` as the string
+
+`_/dynomite/src/dyn_node_snitch.c:21-23` calls
+`dn_strncmp(&sp->env.data, CONF_DEFAULT_ENV, 3)`. The `&` on
+`sp->env.data` produces the address of the `data` POINTER
+field rather than the string it references, so the C compares
+the first three bytes of a `unsigned char *` against `"aws"`,
+which is almost never equal regardless of the configured `env`.
+This is a likely bug in the reference engine.
+
+The Rust `cluster::snitch::is_aws_env` interprets the configured
+environment label as the string the C author meant to compare
+(`label.starts_with("aws")`). This is the only place Stage 10
+diverges from a literal byte-faithful port; the chosen behaviour
+matches the engine's intended semantics rather than its
+dereference bug. Pinned by `cluster::snitch::tests::aws_env_*`.
+
+### Stage 10: `init_response_mgrs` clamps to MAX_REPLICAS_PER_DC
+
+`init_response_mgr_each_quorum_helper`
+(`_/dynomite/src/dyn_response_mgr.c:81-95`) passes
+`(uint8_t) array_n(&dc->racks)` straight through to
+`init_response_mgr` with no upper bound. The C
+`struct response_mgr` has a static
+`responses[MAX_REPLICAS_PER_DC]` storage array, so any DC
+configuration with more than 3 racks writes past the array on
+response submission - a buffer-bound bug in the reference.
+
+The Rust `cluster::pool::ServerPool::init_response_mgrs`
+clamps `max_responses` to
+`crate::msg::response_mgr::MAX_REPLICAS_PER_DC` (3). Real
+Dynomite deployments do not exceed three replicas per DC, so
+the practical impact of the divergence is zero, and the Rust
+clamp prevents the C buffer-bound bug from being reproduced.
+Pinned by
+`cluster::pool::tests::init_response_mgrs_clamps_to_max_replicas_per_dc`.
+
 ## Caveats
 
 Documented design choices that downstream stages must respect.

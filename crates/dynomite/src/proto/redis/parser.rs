@@ -20,6 +20,7 @@
 #![allow(clippy::cast_possible_wrap)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::match_same_arms)]
+#![allow(clippy::needless_continue)]
 #![allow(clippy::manual_let_else)]
 
 use super::commands::{classify, error_lookup, lookup, CommandClass, RoutingOverride};
@@ -587,7 +588,7 @@ pub fn redis_parse_req_with_args(
                         state = ReqState::KeyLen;
                     }
                     CommandClass::ArgKvX => {
-                        if ntokens % 2 == 0 {
+                        if ntokens.is_multiple_of(2) {
                             return finish_req_error(
                                 r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
                                 quit, routing,

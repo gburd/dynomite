@@ -16,6 +16,14 @@
 //! link clash that originally blocked this combination was
 //! resolved by the RustCrypto migration in commit `da36535`.
 
+#![allow(
+    clippy::format_push_string,
+    clippy::needless_continue,
+    clippy::unnecessary_debug_formatting,
+    clippy::match_same_arms,
+    clippy::similar_names,
+    clippy::cast_possible_truncation
+)]
 #![cfg(feature = "quic")]
 
 use std::net::SocketAddr;

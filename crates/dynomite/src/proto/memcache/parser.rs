@@ -18,6 +18,7 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::match_same_arms)]
+#![allow(clippy::needless_continue)]
 // The state machine deliberately keeps the C `if (token == NULL)`
 // guard pattern; rewriting as `let-else` collapses two branches
 // the reference engine treats independently.
@@ -564,7 +565,7 @@ pub fn memcache_parse_req_tagged(
                 }
             },
             ReqState::Val => {
-                let m = p.checked_add(vlen as usize).unwrap_or(usize::MAX);
+                let m = p.saturating_add(vlen as usize);
                 if m >= input.len() {
                     let consumed = input.len() - p;
                     vlen = vlen.saturating_sub(consumed as u32);
@@ -922,7 +923,7 @@ pub fn memcache_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                 }
             },
             RspState::Val => {
-                let m = p.checked_add(vlen as usize).unwrap_or(usize::MAX);
+                let m = p.saturating_add(vlen as usize);
                 if m >= input.len() {
                     let consumed = input.len() - p;
                     vlen = vlen.saturating_sub(consumed as u32);
@@ -1122,7 +1123,7 @@ mod tests {
     #[test]
     fn parse_too_long_key_errors() {
         let mut input = b"get ".to_vec();
-        input.extend(std::iter::repeat(b'k').take(MEMCACHE_MAX_KEY_LENGTH + 1));
+        input.extend(std::iter::repeat_n(b'k', MEMCACHE_MAX_KEY_LENGTH + 1));
         input.extend_from_slice(b"\r\n");
         let m = parse_req(&input);
         assert_eq!(m.parse_result(), MsgParseResult::Error);

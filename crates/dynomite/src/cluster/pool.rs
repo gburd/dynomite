@@ -1,6 +1,14 @@
 //! Server pool owner.
 //!
-//! Placeholder shape; full pool wiring lands later in this stage.
+//! [`ServerPool`] is the cluster-level container that holds the
+//! local datastore endpoint, the dnode listener configuration, the
+//! datacenter and rack tables, the per-peer connection pools, the
+//! consistency settings, and the response-manager constructors used
+//! by [`crate::cluster::dispatch::ClusterDispatcher`]. It owns the
+//! data-shape side of `struct server_pool` from the reference engine
+//! and is the entry point that the `dynomited` binary (Stage 12)
+//! and the embedding API (Stage 13) construct from a parsed
+//! [`crate::conf::Config`].
 
 use std::sync::Arc;
 use std::time::Duration;

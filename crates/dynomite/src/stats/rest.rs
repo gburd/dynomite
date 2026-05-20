@@ -5,6 +5,8 @@
 //! that returns the latest snapshot. Every other request returns an
 //! empty `200 OK` with body `OK\r\n`, matching the C fallback path.
 
+#![allow(clippy::needless_continue)]
+
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;

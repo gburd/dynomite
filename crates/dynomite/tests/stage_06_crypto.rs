@@ -5,6 +5,14 @@
 //! `mbuf`-piped AES round-trip, and a frozen-output regression test
 //! that pins the wire format.
 
+#![allow(
+    clippy::format_push_string,
+    clippy::needless_continue,
+    clippy::unnecessary_debug_formatting,
+    clippy::match_same_arms,
+    clippy::similar_names,
+    clippy::cast_possible_truncation
+)]
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -35,6 +35,7 @@
 // and `(uint32_t)num` casts; out-of-range numerals are surfaced as
 // parse errors elsewhere in the state machine.
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::needless_continue)]
 
 use std::net::SocketAddr;
 

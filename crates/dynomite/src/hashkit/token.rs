@@ -310,9 +310,10 @@ impl DynToken {
     /// ```
     #[must_use]
     pub fn to_hex(&self) -> String {
+        use std::fmt::Write;
         let mut out = String::with_capacity(8 * self.len);
         for w in &self.mag[..self.len] {
-            out.push_str(&format!("{w:08x}"));
+            let _ = write!(out, "{w:08x}");
         }
         out
     }

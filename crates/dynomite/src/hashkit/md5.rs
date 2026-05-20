@@ -265,9 +265,10 @@ mod tests {
     use super::*;
 
     fn hex(d: &[u8; 16]) -> String {
+        use std::fmt::Write;
         let mut s = String::new();
         for b in d {
-            s.push_str(&format!("{b:02x}"));
+            let _ = write!(s, "{b:02x}");
         }
         s
     }

@@ -6,6 +6,14 @@
 //! both succeed and that key fields survive the round-trip
 //! unchanged.
 
+#![allow(
+    clippy::format_push_string,
+    clippy::needless_continue,
+    clippy::unnecessary_debug_formatting,
+    clippy::match_same_arms,
+    clippy::similar_names,
+    clippy::cast_possible_truncation
+)]
 use dynomite::conf::{
     ConfError, ConfListen, ConfPool, Config, ConsistencyLevel, DataStore, HashType,
     SecureServerOption, Servers, TokenList,

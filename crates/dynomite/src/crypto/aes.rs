@@ -103,7 +103,7 @@ pub fn encrypt_to_vec(msg: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>,
 /// assert_eq!(plain, b"alpha");
 /// ```
 pub fn decrypt_to_vec(enc: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>, CryptoError> {
-    if enc.is_empty() || enc.len() % AES_BLOCK_SIZE != 0 {
+    if enc.is_empty() || !enc.len().is_multiple_of(AES_BLOCK_SIZE) {
         return Err(CryptoError::DecryptionFailed);
     }
     let kiv = key_iv(aes_key);

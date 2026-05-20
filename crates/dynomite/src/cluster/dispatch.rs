@@ -312,26 +312,21 @@ fn plan_with_consistency(
 
 impl Dispatcher for ClusterDispatcher {
     fn dispatch(&self, req: Msg, _responder: ServerSink) -> DispatchOutcome {
-        // Inspect the request without consuming it: pull the first
-        // key, then plan.
-        let key = req
-            .keys()
-            .first()
-            .map(|kp| {
-                let _ = kp;
-                Vec::new()
-            })
-            .unwrap_or_default();
-        // The Stage-9 dispatcher seam is synchronous; the actual
-        // peer fan-out is the responsibility of the Stage 12
-        // server binary which spawns per-target tokio tasks. The
-        // cluster dispatcher therefore reports `Pending` in every
-        // routable case so the FSM waits for the dispatcher's
-        // response, and `Drop` only when the request is a quit /
-        // swallow (the C reference's `req_filter` arm).
         if req.flags().quit {
             return DispatchOutcome::Drop;
         }
+        // Inspect the request without consuming it: pull the routing
+        // bytes from the first parsed key. `KeyPos::tag_bytes` returns
+        // the hash-tag-aware sub-range when one was parsed and the full
+        // key otherwise, which is the slice shape `plan` expects.
+        // Requests with no parsed keys (e.g. PING, INFO) fall through
+        // with an empty slice; `plan` handles that by routing to the
+        // local datastore.
+        let key: Vec<u8> = req
+            .keys()
+            .first()
+            .map(|kp| kp.tag_bytes().to_vec())
+            .unwrap_or_default();
         let plan = self.plan(&req, &key);
         match plan {
             DispatchPlan::Drop => DispatchOutcome::Drop,
