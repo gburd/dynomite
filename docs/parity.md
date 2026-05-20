@@ -47,6 +47,38 @@ Format:
 
 Stages 1 onward populate the rest of this table. Until a row exists, the
 symbol is considered un-ported.
+| `BUCKET_SIZE` | `dynomite::stats::BUCKET_COUNT` | done (Stage 5) |
+| `struct histogram` | `dynomite::stats::Histogram` | done (Stage 5) |
+| `histo_init` | `Histogram::new` / `Default::default` | done (Stage 5) |
+| `histo_reset` | `Histogram::reset` | done (Stage 5) |
+| `histo_add` | `Histogram::record` | done (Stage 5) |
+| `histo_percentile` (commented out in C) | `Histogram::percentile` | done (Stage 5) |
+| `histo_mean` (commented out in C) | `Histogram::mean` | done (Stage 5) |
+| `histo_max` (commented out in C) | `Histogram::max` | done (Stage 5) |
+| `histo_compute` | `dynomite::stats::HistogramSummary::from_histogram` | done (Stage 5) |
+| `histo_get_bucket` / `histo_get_buckets` | `Histogram::buckets` | done (Stage 5) |
+| `enum stats_type` | `dynomite::stats::StatsMetricType` | done (Stage 5) (omits `INVALID`/`STRING`/`SENTINEL` placeholders) |
+| `STATS_POOL_CODEC` | `dynomite::stats::POOL_CODEC` and `PoolField` | done (Stage 5) |
+| `STATS_SERVER_CODEC` | `dynomite::stats::SERVER_CODEC` and `ServerField` | done (Stage 5) |
+| `struct stats_metric` | `dynomite::stats::MetricSpec` (descriptor) and `Vec<i64>` per-pool/server | done (Stage 5) |
+| `struct stats_pool` | `dynomite::stats::PoolStats` | done (Stage 5) |
+| `struct stats_server` | `dynomite::stats::ServerStats` | done (Stage 5) |
+| `struct stats_dnode` | `dynomite::stats::PeerStats` | done (Stage 5) |
+| `struct stats` | `dynomite::stats::Stats` (live) and `dynomite::stats::Snapshot` (frozen) | done (Stage 5) |
+| `stats_describe` | `dynomite::stats::describe_stats` | done (Stage 5) |
+| `stats_create` / `stats_destroy` | `Stats::new` (ownership through Drop) | done (Stage 5) |
+| `stats_swap` / `stats_aggregate` / `stats_loop` | `dynomite::stats::Aggregator::run` | done (Stage 5) |
+| `_stats_pool_incr` / `_stats_pool_decr` / `_stats_pool_incr_by` / `_stats_pool_decr_by` | `Stats::pool_incr` / `pool_decr` / `pool_incr_by` | done (Stage 5) |
+| `_stats_pool_set_ts` / `_stats_pool_set_val` | `Stats::pool_set` | done (Stage 5) |
+| `_stats_pool_get_ts` / `_stats_pool_get_val` | `Stats::pool_get` | done (Stage 5) |
+| `_stats_server_incr` / `_stats_server_decr` / `_stats_server_incr_by` / `_stats_server_decr_by` | `Stats::server_incr` / `server_decr` / `server_incr_by` | done (Stage 5) |
+| `_stats_server_set_ts` / `_stats_server_set_val` | `Stats::server_set` | done (Stage 5) |
+| `_stats_server_get_ts` / `_stats_server_get_val` | `Stats::server_get` | done (Stage 5) |
+| `stats_histo_add_latency` / `stats_histo_add_payloadsize` | `Stats::record_latency` / `record_payload_size` | done (Stage 5) |
+| `stats_listen` / `stats_start_aggregator` / `stats_stop_aggregator` | `dynomite::stats::StatsServer::bind` and `run` | done (Stage 5) |
+| `parse_request` / `stats_send_rsp` / `stats_http_rsp` | `dynomite::stats::rest` (single `GET /` JSON endpoint) | done (Stage 5) (deviation: command surface limited to JSON snapshot for Stage 5; cluster-describe and dynamic control endpoints land with Stage 10) |
+| `stats_make_info_rsp` / `stats_add_header` / `stats_add_string` / `stats_add_num` / `stats_begin_nesting` / `stats_end_nesting` / `stats_add_footer` / `stats_copy_metric` / `stats_aggregate_metric` | `Snapshot::write_json` and helpers in `dynomite::stats::snapshot` | done (Stage 5) |
+| `stats_make_cl_desc_rsp` / `stats_add_node_*` / `stats_add_rack_details` / `stats_add_dc_details` | not yet ported | deferred to Stage 10 (gossip data structures live there) |
 
 ## src/event/
 
@@ -183,3 +215,10 @@ follows the typed-Option model PLAN.md Stage 4 calls for.
   `proto_redis_parse`, and `proto_memcache_parse` once Stage 7
   / Stage 8 land (those parsers are the targets that need
   fuzzing first).
+* The Stage 5 stats REST endpoint exposes only the JSON snapshot path
+  (`GET /` and `GET /info`). The C implementation also accepts
+  `/help`, `/ping`, `/cluster_describe`, and a family of mutator
+  commands that adjust runtime state (log level, consistency knobs,
+  peer state, read-repair toggle). Those endpoints depend on cluster
+  state structures that arrive in Stage 10; they are intentionally
+  deferred and tracked there.

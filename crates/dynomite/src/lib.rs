@@ -11,6 +11,7 @@
 
 pub mod conf;
 pub mod core;
+pub mod stats;
 pub mod util;
 
 pub use crate::core::types::{DynError, Status};
