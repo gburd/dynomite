@@ -120,7 +120,11 @@ impl StatsInner {
 ///
 /// ```
 /// use dynomite::stats::Latency;
-/// let _ = Latency::Request;
+/// assert_ne!(Latency::Request, Latency::Server);
+/// assert_eq!(Latency::Request, Latency::Request);
+/// // The variant set is small and copy-able.
+/// let copied = Latency::CrossRegion;
+/// assert_eq!(copied, Latency::CrossRegion);
 /// ```
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Latency {
@@ -140,7 +144,12 @@ pub enum Latency {
 ///
 /// ```
 /// use dynomite::stats::QueueWait;
-/// let _ = QueueWait::Server;
+/// assert_ne!(QueueWait::CrossRegion, QueueWait::CrossZone);
+/// assert_ne!(QueueWait::CrossZone, QueueWait::Server);
+/// // Variants implement Copy, so a binding survives a move.
+/// let original = QueueWait::Server;
+/// let copy = original;
+/// assert_eq!(original, copy);
 /// ```
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum QueueWait {
@@ -159,7 +168,23 @@ pub enum QueueWait {
 ///
 /// ```
 /// use dynomite::stats::QueueGauge;
-/// let _ = QueueGauge::ClientOut;
+/// // Each variant is distinct so the dispatch in `record_queue_len`
+/// // routes to a unique histogram.
+/// let all = [
+///     QueueGauge::ClientOut,
+///     QueueGauge::ServerIn,
+///     QueueGauge::ServerOut,
+///     QueueGauge::DnodeClientOut,
+///     QueueGauge::PeerIn,
+///     QueueGauge::PeerOut,
+///     QueueGauge::RemotePeerIn,
+///     QueueGauge::RemotePeerOut,
+/// ];
+/// for (i, lhs) in all.iter().enumerate() {
+///     for rhs in &all[i + 1..] {
+///         assert_ne!(lhs, rhs);
+///     }
+/// }
 /// ```
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum QueueGauge {
