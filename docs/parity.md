@@ -273,7 +273,7 @@ next to its only consumer.
 
 | C symbol | Rust home | Notes |
 |---|---|---|
-| `dyn_hash_tool` | `crates/dyn-hash-tool/` | done; the C source tree under `_/dynomite/src/` does not actually contain a `tools/dyn_hash_tool.c` despite the original PLAN reference, so the Rust binary defines its own one-line-per-key output format documented in the crate. See deviation below. |
+| `dyn_hash_tool` | `crates/dyn-hash-tool/` | done; the C tool (`_/dynomite/src/tools/dyn_hash_tool.c`, 3486 bytes) supports only `hash_murmur` and exposes `-h/-k/-i/-o`. The Rust binary keeps that surface under `--c-compat` (with `-i/--input`, `-o/--output`, and `-k` as the `KEY:` prefix toggle) and additionally offers a multi-algorithm default mode. See deviation below. |
 
 ## contrib/
 
@@ -495,3 +495,25 @@ Documented design choices that downstream stages must respect.
   `dyn_hash_tool.c` referenced in the original PLAN. The flag set
   (`-H/--hash`, `-k/--key`, `--stdin`, `--list`) and one-line-per-key
   output are documented in the binary's crate-level rustdoc.
+* `crates/dyn-hash-tool/` deliberately broadens the surface of the C
+  `dyn_hash_tool`. The C tool (`_/dynomite/src/tools/dyn_hash_tool.c`)
+  exposes `--help`, `-k`/`--outputkey` (boolean: emit `KEY:<key>` lines
+  before each token), `-i <file>` / `--keyfile` (input, `-` is stdin),
+  and `-o <file>` / `--tokenfile` (output, `-` is stdout). It only
+  supports `hash_murmur` and emits one decimal token per line.
+
+  The Rust binary preserves that on-the-wire surface behind
+  `--c-compat`: when set, it requires `murmur` (the default if `-H` is
+  omitted), reads keys one per line from `-i`/`--input` (default
+  stdin, `-` also means stdin), writes decimals to `-o`/`--output`
+  (default stdout, `-` also means stdout), and emits `KEY:<key>` lines
+  before each token when `-k` is passed. Other algorithms are
+  rejected with an explicit error.
+
+  Outside `--c-compat`, the Rust binary adds a multi-algorithm
+  convenience mode (`-H/--hash`, `--key`, `--stdin`, `--list`) with
+  the format `<algorithm>:<key>:<token-hex>` for ad-hoc invocation
+  against any of the thirteen algorithms. The short flag `-k` is
+  intentionally repurposed as the C-compat KEY-prefix toggle, so
+  inline keys must be passed via the long flag `--key` to avoid
+  ambiguity.

@@ -37,7 +37,7 @@ fn list_prints_all_algorithms() {
 fn hashes_a_single_key() {
     Command::cargo_bin("dyn-hash-tool")
         .unwrap()
-        .args(["-H", "md5", "-k", "abc"])
+        .args(["-H", "md5", "--key", "abc"])
         .assert()
         .success()
         .stdout(predicate::str::starts_with("md5:abc:"))
@@ -48,7 +48,7 @@ fn hashes_a_single_key() {
 fn rejects_unknown_algorithm() {
     Command::cargo_bin("dyn-hash-tool")
         .unwrap()
-        .args(["-H", "no-such-algo", "-k", "abc"])
+        .args(["-H", "no-such-algo", "--key", "abc"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unknown hash algorithm"));
@@ -68,7 +68,9 @@ fn rejects_no_keys() {
 fn hashes_multiple_keys_in_order() {
     let assertion = Command::cargo_bin("dyn-hash-tool")
         .unwrap()
-        .args(["-H", "crc32a", "-k", "abc", "-k", "xyz", "-k", "hello"])
+        .args([
+            "-H", "crc32a", "--key", "abc", "--key", "xyz", "--key", "hello",
+        ])
         .assert()
         .success();
     let out = String::from_utf8(assertion.get_output().stdout.clone()).unwrap();
@@ -83,7 +85,7 @@ fn hashes_multiple_keys_in_order() {
 fn murmur3_emits_four_words() {
     let assertion = Command::cargo_bin("dyn-hash-tool")
         .unwrap()
-        .args(["-H", "murmur3", "-k", "hello"])
+        .args(["-H", "murmur3", "--key", "hello"])
         .assert()
         .success();
     let out = String::from_utf8(assertion.get_output().stdout.clone()).unwrap();
