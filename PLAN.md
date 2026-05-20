@@ -197,7 +197,10 @@ dynomite/                       # repo root (cwd)
   `aes`, `cbc`, `cipher`, `rsa`, `sha1`, `rand`, `rand_core`, `base64`,
   `nix` (signals/daemonize), `socket2` (advanced socket opts), `time`,
   `httparse` (only for the stats REST endpoint - if avoidable, hand-roll).
-  Dev-only: `criterion`, `proptest`, `cargo-fuzz`/`libfuzzer-sys`,
+  Dev-only: `criterion`, `hegeltest` (the property-testing crate the
+  user originally referred to as "Hegel";
+  https://github.com/hegeldev/hegel-rust),
+  `cargo-fuzz`/`libfuzzer-sys`,
   `assert_cmd`, `predicates`, `tempfile`, `clap_mangen`.
 
 ---

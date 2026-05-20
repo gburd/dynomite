@@ -151,27 +151,29 @@ mod tests {
         assert!(u64_to_f64(0).abs() < f64::EPSILON);
     }
 
-    proptest::proptest! {
-        /// For every realistic `(scale, p)` pair the helper must match the
-        /// reference IEEE 754 expression `(p * scale as f64).floor() as u64`.
-        #[test]
-        fn floor_p_times_u64_matches_f64_floor(
-            scale in 0u64..=u64::from(u32::MAX),
-            p_idx in 0usize..7,
-        ) {
-            let ps = [0.0f64, 0.5, 0.9, 0.95, 0.99, 0.999, 1.0];
-            let p = ps[p_idx];
-            #[allow(
-                clippy::cast_precision_loss,
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss
-            )]
-            let reference = (p * (scale as f64)).floor() as u64;
-            proptest::prop_assert_eq!(
-                floor_p_times_u64(p, scale),
-                reference,
-                "helper diverged from f64 reference at p={} scale={}", p, scale
-            );
-        }
+    /// For every realistic `(scale, p)` pair the helper must match the
+    /// reference IEEE 754 expression `(p * scale as f64).floor() as u64`.
+    #[hegel::test]
+    fn floor_p_times_u64_matches_f64_floor(tc: hegel::TestCase) {
+        use hegel::generators as gs;
+        let scale = tc.draw(
+            gs::integers::<u64>()
+                .min_value(0)
+                .max_value(u64::from(u32::MAX)),
+        );
+        let p_idx = tc.draw(gs::integers::<usize>().min_value(0).max_value(6));
+        let ps = [0.0f64, 0.5, 0.9, 0.95, 0.99, 0.999, 1.0];
+        let p = ps[p_idx];
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let reference = (p * (scale as f64)).floor() as u64;
+        assert_eq!(
+            floor_p_times_u64(p, scale),
+            reference,
+            "helper diverged from f64 reference at p={p} scale={scale}"
+        );
     }
 }

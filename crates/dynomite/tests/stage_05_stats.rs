@@ -10,8 +10,9 @@ use dynomite::stats::{
     describe_stats, Histogram, Latency, PoolField, PoolStats, ServerField, ServerStats,
     ServiceInfo, Snapshot, Stats, StatsServer, BUCKET_COUNT, POOL_CODEC, SERVER_CODEC,
 };
+use hegel::generators as gs;
+use hegel::TestCase;
 use parking_lot::Mutex;
-use proptest::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -169,101 +170,120 @@ async fn rest_endpoint_serves_snapshot_json() {
         .expect("server completed without error");
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 256,
-        ..ProptestConfig::default()
-    })]
-
-    #[test]
-    fn histogram_percentile_is_monotone_non_decreasing(values in proptest::collection::vec(0u64..=1_000_000u64, 1..256)) {
-        let mut h = Histogram::new();
-        for v in &values {
-            h.record(*v);
-        }
-        let mut last = 0u64;
-        for i in 0..=20 {
-            let p = f64::from(i) / 20.0;
-            let q = h.percentile(p);
-            prop_assert!(q >= last, "percentile decreased at p={p}: {q} < {last}");
-            last = q;
-        }
+#[hegel::test(test_cases = 256)]
+fn histogram_percentile_is_monotone_non_decreasing(tc: TestCase) {
+    let values = tc.draw(
+        gs::vecs(gs::integers::<u64>().min_value(0).max_value(1_000_000))
+            .min_size(1)
+            .max_size(255),
+    );
+    let mut h = Histogram::new();
+    for v in &values {
+        h.record(*v);
     }
-
-    #[test]
-    fn histogram_uniform_percentile_within_bucket_resolution(n in 100u64..2_000u64) {
-        let mut h = Histogram::new();
-        for v in 0..n {
-            h.record(v);
-        }
-        let percentiles: [(f64, u64); 9] = [
-            (0.1, 1),
-            (0.2, 2),
-            (0.3, 3),
-            (0.4, 4),
-            (0.5, 5),
-            (0.6, 6),
-            (0.7, 7),
-            (0.8, 8),
-            (0.9, 9),
-        ];
-        for (p, num) in percentiles {
-            let q = h.percentile(p);
-            // For uniform [0..n] inputs the true percentile is num*n/10.
-            // Bucket resolution at this scale is bounded; allow a
-            // generous tolerance of 25% plus a small floor.
-            let expected = (n * num) / 10;
-            let tolerance = (expected / 4) + 2;
-            let lo = expected.saturating_sub(tolerance);
-            let hi = expected.saturating_add(tolerance);
-            prop_assert!(
-                q >= lo && q <= hi,
-                "p={p}: expected~={expected}, got {q}, tol={tolerance}"
-            );
-        }
+    let mut last = 0u64;
+    for i in 0..=20 {
+        let p = f64::from(i) / 20.0;
+        let q = h.percentile(p);
+        assert!(q >= last, "percentile decreased at p={p}: {q} < {last}");
+        last = q;
     }
+}
 
-    #[test]
-    fn histogram_merge_preserves_count_sum(
-        xs in proptest::collection::vec(0u64..=100_000u64, 0..128),
-        ys in proptest::collection::vec(0u64..=100_000u64, 0..128),
-    ) {
-        let mut a = Histogram::new();
-        let mut b = Histogram::new();
-        for v in &xs { a.record(*v); }
-        for v in &ys { b.record(*v); }
-        let total = a.count() + b.count();
-        a.merge(&b);
-        prop_assert_eq!(a.count(), total);
+#[hegel::test(test_cases = 256)]
+fn histogram_uniform_percentile_within_bucket_resolution(tc: TestCase) {
+    let n = tc.draw(gs::integers::<u64>().min_value(100).max_value(1_999));
+    let mut h = Histogram::new();
+    for v in 0..n {
+        h.record(v);
     }
-
-    /// Differential check: for any count of identical zero observations
-    /// the histogram's percentile threshold matches the reference
-    /// expression `(p * count as f64).floor() as u64`. The helper
-    /// `floor_p_times_u64` is internal to the engine so this test
-    /// pins the observable behavior at the public API.
-    #[test]
-    fn percentile_threshold_matches_f64_floor(
-        count in 1u64..=u64::from(u16::MAX),
-        p_idx in 0usize..7,
-    ) {
-        let ps = [0.0f64, 0.5, 0.9, 0.95, 0.99, 0.999, 1.0];
-        let p = ps[p_idx];
-        let mut h = Histogram::new();
-        for _ in 0..count { h.record(0); }
-        // Bucket 0 has offset 1, so percentile is 1 when the floor
-        // threshold is >= 1 and 0 otherwise. p=1.0 in the engine
-        // returns 0 because the percentile gate excludes p > 1.0
-        // wraps; here p=1.0 is in range and yields the offset.
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let reference_floor = (p * (count as f64)).floor() as u64;
-        let expected = u64::from(reference_floor >= 1);
-        prop_assert_eq!(
-            h.percentile(p),
-            expected,
-            "percentile diverged from f64 floor at p={} count={}", p, count
+    let percentiles: [(f64, u64); 9] = [
+        (0.1, 1),
+        (0.2, 2),
+        (0.3, 3),
+        (0.4, 4),
+        (0.5, 5),
+        (0.6, 6),
+        (0.7, 7),
+        (0.8, 8),
+        (0.9, 9),
+    ];
+    for (p, num) in percentiles {
+        let q = h.percentile(p);
+        // For uniform [0..n] inputs the true percentile is num*n/10.
+        // Bucket resolution at this scale is bounded; allow a
+        // generous tolerance of 25% plus a small floor.
+        let expected = (n * num) / 10;
+        let tolerance = (expected / 4) + 2;
+        let lo = expected.saturating_sub(tolerance);
+        let hi = expected.saturating_add(tolerance);
+        assert!(
+            q >= lo && q <= hi,
+            "p={p}: expected~={expected}, got {q}, tol={tolerance}"
         );
     }
+}
+
+#[hegel::test(test_cases = 256)]
+fn histogram_merge_preserves_count_sum(tc: TestCase) {
+    let xs = tc.draw(
+        gs::vecs(gs::integers::<u64>().min_value(0).max_value(100_000))
+            .min_size(0)
+            .max_size(127),
+    );
+    let ys = tc.draw(
+        gs::vecs(gs::integers::<u64>().min_value(0).max_value(100_000))
+            .min_size(0)
+            .max_size(127),
+    );
+    let mut a = Histogram::new();
+    let mut b = Histogram::new();
+    for v in &xs {
+        a.record(*v);
+    }
+    for v in &ys {
+        b.record(*v);
+    }
+    let total = a.count() + b.count();
+    a.merge(&b);
+    assert_eq!(a.count(), total);
+}
+
+/// Differential check: for any count of identical zero observations
+/// the histogram's percentile threshold matches the reference
+/// expression `(p * count as f64).floor() as u64`. The helper
+/// `floor_p_times_u64` is internal to the engine so this test
+/// pins the observable behavior at the public API.
+#[hegel::test(test_cases = 256)]
+fn percentile_threshold_matches_f64_floor(tc: TestCase) {
+    let count = tc.draw(
+        gs::integers::<u64>()
+            .min_value(1)
+            .max_value(u64::from(u16::MAX)),
+    );
+    let p_idx = tc.draw(gs::integers::<usize>().min_value(0).max_value(6));
+    let ps = [0.0f64, 0.5, 0.9, 0.95, 0.99, 0.999, 1.0];
+    let p = ps[p_idx];
+    let mut h = Histogram::new();
+    for _ in 0..count {
+        h.record(0);
+    }
+    // Bucket 0 has offset 1, so percentile is 1 when the floor
+    // threshold is >= 1 and 0 otherwise. p=1.0 in the engine
+    // returns 0 because the percentile gate excludes p > 1.0
+    // wraps; here p=1.0 is in range and yields the offset.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let reference_floor = (p * (count as f64)).floor() as u64;
+    let expected = u64::from(reference_floor >= 1);
+    assert_eq!(
+        h.percentile(p),
+        expected,
+        "percentile diverged from f64 floor at p={p} count={count}"
+    );
 }
 
 /// Drives a `Stats` instance into histogram overflow via the public

@@ -16,7 +16,8 @@ use dynomite::proto::dnode::{
     DnodeParser, DynParseState, ParseStep, DMSG_FLAG_ENCRYPTED,
 };
 
-use proptest::prelude::*;
+use hegel::generators as gs;
+use hegel::TestCase;
 
 /// Canonical multi-message blob used as the cross-implementation
 /// fixture for Stage 7.
@@ -138,64 +139,52 @@ fn msg_type_index_round_trip_full_table() {
     assert!(MsgType::from_index(count).is_none());
 }
 
-#[test]
-fn dnode_parser_round_trip_proptest() {
-    // Hand-rolled proptest runner with case count >= 256 (per the
-    // brief). Generates valid Dmsg shapes and asserts the encoded
-    // bytes parse back to the same field set.
-    let mut runner = proptest::test_runner::TestRunner::new(proptest::test_runner::Config {
-        cases: 256,
-        ..Default::default()
-    });
-    runner
-        .run(
-            &(
-                any::<u64>(),
-                proptest::sample::select(vec![
-                    DmsgType::Req,
-                    DmsgType::ReqForward,
-                    DmsgType::Res,
-                    DmsgType::CryptoHandshake,
-                    DmsgType::GossipSyn,
-                    DmsgType::GossipShutdown,
-                ]),
-                0u8..=15,
-                any::<bool>(),
-                proptest::collection::vec(any::<u8>(), 0..=200),
-                0u32..=100_000,
-            ),
-            |(id, ty, flags, same_dc, payload, plen)| {
-                let pool = MbufPool::default();
-                let mut buf = pool.get();
-                let aes = if payload.is_empty() {
-                    None
-                } else {
-                    Some(payload.as_slice())
-                };
-                dmsg_write(&mut buf, id, ty, flags, same_dc, aes, plen).expect("encode succeeds");
-                let bytes = buf.readable().to_vec();
-                let mut parser = DnodeParser::new();
-                match parser.step(&bytes) {
-                    ParseStep::HeaderDone { consumed } => {
-                        prop_assert_eq!(consumed, bytes.len());
-                    }
-                    other => prop_assert!(false, "unexpected {:?}", other),
-                }
-                let d = parser.take_dmsg();
-                prop_assert_eq!(d.id, id);
-                prop_assert_eq!(d.ty, ty);
-                prop_assert_eq!(d.flags, flags & 0xF);
-                prop_assert_eq!(d.same_dc, same_dc);
-                prop_assert_eq!(d.plen, plen);
-                if let Some(p) = aes {
-                    prop_assert_eq!(d.data.as_slice(), p);
-                } else {
-                    prop_assert_eq!(d.data.as_slice(), b"d".as_slice());
-                }
-                Ok(())
-            },
-        )
-        .expect("dnode encode/decode round-trip holds");
+#[hegel::test(test_cases = 256)]
+fn dnode_parser_round_trip_proptest(tc: TestCase) {
+    // Generates valid Dmsg shapes and asserts the encoded
+    // bytes parse back to the same field set. Originally a
+    // hand-rolled `proptest::TestRunner::new` loop with 256 cases.
+    let id = tc.draw(gs::integers::<u64>());
+    let ty = tc.draw(gs::sampled_from(&[
+        DmsgType::Req,
+        DmsgType::ReqForward,
+        DmsgType::Res,
+        DmsgType::CryptoHandshake,
+        DmsgType::GossipSyn,
+        DmsgType::GossipShutdown,
+    ]));
+    let flags = tc.draw(gs::integers::<u8>().min_value(0).max_value(15));
+    let same_dc = tc.draw(gs::booleans());
+    let payload = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(200));
+    let plen = tc.draw(gs::integers::<u32>().min_value(0).max_value(100_000));
+
+    let pool = MbufPool::default();
+    let mut buf = pool.get();
+    let aes = if payload.is_empty() {
+        None
+    } else {
+        Some(payload.as_slice())
+    };
+    dmsg_write(&mut buf, id, ty, flags, same_dc, aes, plen).expect("encode succeeds");
+    let bytes = buf.readable().to_vec();
+    let mut parser = DnodeParser::new();
+    match parser.step(&bytes) {
+        ParseStep::HeaderDone { consumed } => {
+            assert_eq!(consumed, bytes.len());
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let d = parser.take_dmsg();
+    assert_eq!(d.id, id);
+    assert_eq!(d.ty, ty);
+    assert_eq!(d.flags, flags & 0xF);
+    assert_eq!(d.same_dc, same_dc);
+    assert_eq!(d.plen, plen);
+    if let Some(p) = aes {
+        assert_eq!(d.data.as_slice(), p);
+    } else {
+        assert_eq!(d.data.as_slice(), b"d".as_slice());
+    }
 }
 
 #[test]
@@ -233,40 +222,34 @@ fn dispatcher_routes_control_plane_through_bypass() {
     }
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(512))]
-
-    /// Drive arbitrary byte slices through the streaming DNODE
-    /// parser and assert that no input panics. The contract is
-    /// "parser is total on `Vec<u8>`": every step must return one
-    /// of `HeaderDone`, `NeedMore`, or `Error`. The brief in
-    /// PLAN.md Section 6.3 lists this property explicitly
-    /// ("parsers never panic on arbitrary `Vec<u8>` and either
-    /// return Err or a complete Msg").
-    #[test]
-    fn parser_total_on_arbitrary_bytes(
-        bytes in proptest::collection::vec(any::<u8>(), 0..1024),
-    ) {
-        let mut parser = DnodeParser::new();
-        // The parser may halt before consuming the whole slice
-        // (`HeaderDone`/`Error` both report a `consumed` offset);
-        // feed every remaining byte at most once so a malformed
-        // prefix cannot wedge the loop.
-        let mut idx = 0usize;
-        while idx < bytes.len() {
-            match parser.step(&bytes[idx..]) {
-                ParseStep::HeaderDone { consumed }
-                | ParseStep::Error { consumed } => {
-                    let advance = consumed.max(1);
-                    idx = idx.saturating_add(advance);
-                    parser.reset();
-                }
-                ParseStep::NeedMore { .. } => break,
+/// Drive arbitrary byte slices through the streaming DNODE
+/// parser and assert that no input panics. The contract is
+/// "parser is total on `Vec<u8>`": every step must return one
+/// of `HeaderDone`, `NeedMore`, or `Error`. The brief in
+/// PLAN.md Section 6.3 lists this property explicitly
+/// ("parsers never panic on arbitrary `Vec<u8>` and either
+/// return Err or a complete Msg").
+#[hegel::test(test_cases = 512)]
+fn parser_total_on_arbitrary_bytes(tc: TestCase) {
+    let bytes = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(1023));
+    let mut parser = DnodeParser::new();
+    // The parser may halt before consuming the whole slice
+    // (`HeaderDone`/`Error` both report a `consumed` offset);
+    // feed every remaining byte at most once so a malformed
+    // prefix cannot wedge the loop.
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        match parser.step(&bytes[idx..]) {
+            ParseStep::HeaderDone { consumed } | ParseStep::Error { consumed } => {
+                let advance = consumed.max(1);
+                idx = idx.saturating_add(advance);
+                parser.reset();
             }
+            ParseStep::NeedMore { .. } => break,
         }
-        // Any of the three outcomes is acceptable; the contract is
-        // that none of the steps above unwound through a panic.
     }
+    // Any of the three outcomes is acceptable; the contract is
+    // that none of the steps above unwound through a panic.
 }
 
 #[test]
