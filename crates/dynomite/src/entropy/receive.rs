@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 use crate::entropy::util::EntropyMaterial;
 use crate::entropy::{
     BoxedSnapshotSink, EntropyConfig, EntropyError, EntropyResult, NegotiationHeader,
-    SnapshotHeader, SnapshotSink, MAX_CIPHER_SIZE,
+    SnapshotHeader, SnapshotSink, MAX_CIPHER_SIZE, MAX_SNAPSHOT_SIZE, SAFE_PREALLOC,
 };
 
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
@@ -174,7 +174,15 @@ async fn read_chunks(
     material: Option<&EntropyMaterial>,
 ) -> EntropyResult<Vec<u8>> {
     let total_len = snap.total_len as usize;
-    let mut plaintext = Vec::with_capacity(total_len);
+    if total_len > MAX_SNAPSHOT_SIZE {
+        return Err(EntropyError::Protocol(format!(
+            "snapshot total_len {total_len} exceeds MAX_SNAPSHOT_SIZE"
+        )));
+    }
+    // Cap the upfront allocation to avoid a malicious or malformed
+    // total_len triggering an oversized prealloc; the Vec grows as
+    // plaintext arrives if the snapshot is genuinely larger.
+    let mut plaintext = Vec::with_capacity(total_len.min(SAFE_PREALLOC));
     let mut len_buf = [0u8; 4];
     while plaintext.len() < total_len {
         stream.read_exact(&mut len_buf).await?;
