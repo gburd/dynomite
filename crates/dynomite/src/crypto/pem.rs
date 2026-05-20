@@ -9,26 +9,29 @@
 use std::fs;
 use std::path::Path;
 
-use openssl::pkey::Private;
-use openssl::rsa::Rsa;
+use rsa::pkcs1::DecodeRsaPrivateKey;
+use rsa::pkcs8::DecodePrivateKey;
+use rsa::RsaPrivateKey;
 
 use crate::crypto::CryptoError;
 
 /// Load an RSA private key from a PEM file at `path`.
 ///
 /// The file content is sniffed: PKCS#1 framing is decoded directly,
-/// PKCS#8 framing is decoded via [`openssl::pkey::PKey`] and then
-/// extracted as RSA. Anything else is rejected with
+/// PKCS#8 framing is decoded as a `PrivateKeyInfo` and then
+/// downgraded to `RsaPrivateKey`. Anything else is rejected with
 /// [`CryptoError::InvalidPem`].
 ///
 /// # Examples
 ///
 /// ```no_run
 /// use dynomite::crypto::pem::load_rsa_private_key;
+/// use rsa::traits::PublicKeyParts;
+///
 /// let key = load_rsa_private_key("conf/dynomite.pem".as_ref()).unwrap();
 /// assert!(key.size() > 0);
 /// ```
-pub fn load_rsa_private_key(path: &Path) -> Result<Rsa<Private>, CryptoError> {
+pub fn load_rsa_private_key(path: &Path) -> Result<RsaPrivateKey, CryptoError> {
     let bytes = fs::read(path)?;
     load_rsa_private_key_from_bytes(&bytes)
 }
@@ -39,54 +42,59 @@ pub fn load_rsa_private_key(path: &Path) -> Result<Rsa<Private>, CryptoError> {
 ///
 /// ```
 /// use dynomite::crypto::pem::load_rsa_private_key_from_bytes;
+/// use rsa::pkcs1::EncodeRsaPrivateKey;
+/// use rsa::traits::PublicKeyParts;
+/// use rsa::RsaPrivateKey;
+/// use rand::rngs::OsRng;
 ///
-/// let rsa = openssl::rsa::Rsa::generate(2048).unwrap();
-/// let pem = rsa.private_key_to_pem().unwrap();
-/// let parsed = load_rsa_private_key_from_bytes(&pem).unwrap();
+/// let mut rng = OsRng;
+/// let rsa = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+/// let pem = rsa.to_pkcs1_pem(rsa::pkcs8::LineEnding::LF).unwrap();
+/// let parsed = load_rsa_private_key_from_bytes(pem.as_bytes()).unwrap();
 /// assert_eq!(parsed.size(), rsa.size());
 /// ```
-pub fn load_rsa_private_key_from_bytes(bytes: &[u8]) -> Result<Rsa<Private>, CryptoError> {
-    if find_marker(bytes, b"-----BEGIN RSA PRIVATE KEY-----") {
-        return Rsa::private_key_from_pem(bytes)
+pub fn load_rsa_private_key_from_bytes(bytes: &[u8]) -> Result<RsaPrivateKey, CryptoError> {
+    let pem = std::str::from_utf8(bytes)
+        .map_err(|e| CryptoError::InvalidPem(format!("PEM is not UTF-8: {e}")))?;
+    if pem.contains("-----BEGIN RSA PRIVATE KEY-----") {
+        return RsaPrivateKey::from_pkcs1_pem(pem)
             .map_err(|e| CryptoError::InvalidPem(format!("PKCS#1 parse failed: {e}")));
     }
-    if find_marker(bytes, b"-----BEGIN PRIVATE KEY-----") {
-        let pkey = openssl::pkey::PKey::private_key_from_pem(bytes)
-            .map_err(|e| CryptoError::InvalidPem(format!("PKCS#8 parse failed: {e}")))?;
-        return pkey
-            .rsa()
-            .map_err(|e| CryptoError::InvalidPem(format!("PKCS#8 not RSA: {e}")));
+    if pem.contains("-----BEGIN PRIVATE KEY-----") {
+        return RsaPrivateKey::from_pkcs8_pem(pem)
+            .map_err(|e| CryptoError::InvalidPem(format!("PKCS#8 parse failed: {e}")));
     }
     Err(CryptoError::InvalidPem(
         "no RSA private key marker found".to_string(),
     ))
 }
 
-fn find_marker(haystack: &[u8], needle: &[u8]) -> bool {
-    if haystack.len() < needle.len() {
-        return false;
-    }
-    haystack.windows(needle.len()).any(|w| w == needle)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::rngs::OsRng;
+    use rsa::pkcs1::EncodeRsaPrivateKey;
+    use rsa::pkcs8::{EncodePrivateKey, LineEnding};
+    use rsa::traits::PublicKeyParts;
+
+    fn fresh_key() -> RsaPrivateKey {
+        let mut rng = OsRng;
+        RsaPrivateKey::new(&mut rng, 2048).unwrap()
+    }
 
     #[test]
     fn pkcs1_round_trips() {
-        let rsa = Rsa::generate(2048).unwrap();
-        let pem = rsa.private_key_to_pem().unwrap();
-        let loaded = load_rsa_private_key_from_bytes(&pem).unwrap();
+        let rsa = fresh_key();
+        let pem = rsa.to_pkcs1_pem(LineEnding::LF).unwrap();
+        let loaded = load_rsa_private_key_from_bytes(pem.as_bytes()).unwrap();
         assert_eq!(loaded.size(), rsa.size());
     }
 
     #[test]
     fn pkcs8_round_trips() {
-        let rsa = Rsa::generate(2048).unwrap();
-        let pkey = openssl::pkey::PKey::from_rsa(rsa).unwrap();
-        let pem = pkey.private_key_to_pem_pkcs8().unwrap();
-        let loaded = load_rsa_private_key_from_bytes(&pem).unwrap();
+        let rsa = fresh_key();
+        let pem = rsa.to_pkcs8_pem(LineEnding::LF).unwrap();
+        let loaded = load_rsa_private_key_from_bytes(pem.as_bytes()).unwrap();
         assert!(loaded.size() > 0);
     }
 

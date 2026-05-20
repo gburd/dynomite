@@ -1,5 +1,18 @@
 [advisories]
 yanked = "warn"
+# RUSTSEC-2023-0071 (Marvin Attack on the rsa crate): no fixed
+# version is available upstream. The advisory targets PKCS#1 v1.5
+# padding oracle attacks; the dynomite::crypto module uses OAEP
+# (matching dyn_crypto.c lines 521-538). The non-constant-time
+# arithmetic in the rsa crate is still a theoretical concern for
+# adversaries that can observe inter-peer DNODE handshake timing,
+# and is documented as a Stage 15 hardening item in
+# docs/journal/blocked.md. The advisory cannot be eliminated
+# without an upstream fix or a switch to a different crypto stack;
+# tracked by https://github.com/RustCrypto/RSA/issues/626.
+ignore = [
+    "RUSTSEC-2023-0071",
+]
 
 [bans]
 multiple-versions = "allow"

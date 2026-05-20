@@ -35,10 +35,11 @@
 use std::io;
 use std::path::Path;
 
-use openssl::error::ErrorStack;
-use openssl::pkey::Private;
-use openssl::rsa::Rsa;
+use rand::RngCore;
 use thiserror::Error;
+
+use ::rsa::traits::PublicKeyParts;
+use ::rsa::RsaPrivateKey;
 
 pub mod aes;
 pub mod base64;
@@ -84,10 +85,6 @@ pub enum CryptoError {
     /// Underlying I/O failure (file open, read, write).
     #[error(transparent)]
     Io(#[from] io::Error),
-
-    /// Underlying OpenSSL failure with the original error stack.
-    #[error("openssl: {0}")]
-    OpenSsl(#[from] ErrorStack),
 }
 
 /// Bundle of crypto state used by a Dynomite peer instance.
@@ -113,7 +110,7 @@ pub enum CryptoError {
 /// ```
 pub struct Crypto {
     aes_key: [u8; AES_KEYLEN],
-    rsa: Rsa<Private>,
+    rsa: RsaPrivateKey,
 }
 
 impl Crypto {
@@ -145,13 +142,16 @@ impl Crypto {
     ///
     /// ```
     /// use dynomite::crypto::Crypto;
+    /// use rsa::RsaPrivateKey;
+    /// use rand::rngs::OsRng;
     ///
     /// let aes_key = Crypto::generate_aes_key().unwrap();
-    /// let rsa = openssl::rsa::Rsa::generate(2048).unwrap();
+    /// let mut rng = OsRng;
+    /// let rsa = RsaPrivateKey::new(&mut rng, 2048).unwrap();
     /// let crypto = Crypto::from_parts(rsa, aes_key);
     /// assert_eq!(crypto.aes_key().len(), 32);
     /// ```
-    pub fn from_parts(rsa: Rsa<Private>, aes_key: [u8; AES_KEYLEN]) -> Self {
+    pub fn from_parts(rsa: RsaPrivateKey, aes_key: [u8; AES_KEYLEN]) -> Self {
         Self { aes_key, rsa }
     }
 
@@ -173,7 +173,7 @@ impl Crypto {
     /// ```
     pub fn generate_aes_key() -> Result<[u8; AES_KEYLEN], CryptoError> {
         let mut key = [0u8; AES_KEYLEN];
-        openssl::rand::rand_bytes(&mut key)?;
+        rand::rngs::OsRng.fill_bytes(&mut key);
         Ok(key)
     }
 
@@ -199,7 +199,7 @@ impl Crypto {
     /// let crypto = Crypto::from_pem("conf/dynomite.pem").unwrap();
     /// assert!(crypto.rsa_size() > 0);
     /// ```
-    pub fn rsa_private_key(&self) -> &Rsa<Private> {
+    pub fn rsa_private_key(&self) -> &RsaPrivateKey {
         &self.rsa
     }
 
@@ -213,7 +213,7 @@ impl Crypto {
     /// assert!(crypto.rsa_size() >= 128);
     /// ```
     pub fn rsa_size(&self) -> usize {
-        self.rsa.size() as usize
+        self.rsa.size()
     }
 
     /// AES-128-CBC encrypt `msg` with `aes_key`. The output is the
@@ -453,7 +453,8 @@ mod tests {
     #[test]
     fn debug_does_not_leak_key() {
         let aes = [0u8; AES_KEYLEN];
-        let rsa = openssl::rsa::Rsa::generate(2048).unwrap();
+        let mut rng = rand::rngs::OsRng;
+        let rsa = RsaPrivateKey::new(&mut rng, 2048).unwrap();
         let c = Crypto::from_parts(rsa, aes);
         let s = format!("{c:?}");
         assert!(s.contains("Crypto"));

@@ -83,3 +83,33 @@ so integration tests can exercise the framing without the
 cluster stack. The C-equivalent functions deferred here are
 listed in the per-file parity rows under Stage 9 with the
 phrase `deferred to Stage 10 (cluster routing)`.
+
+### Stage 6 follow-up: RSA timing sidechannel (RUSTSEC-2023-0071)
+
+The Stage 6 crypto migration from the `openssl` C-binding crate to
+the pure-Rust RustCrypto stack (`aes`/`cbc`/`rsa`/`sha1`/`rand`) was
+required to resolve the Stage 9 link-time symbol clash between the
+openssl-vendored static archive and quiche's bundled BoringSSL. The
+two static archives both export the OpenSSL ABI symbols
+(`EVP_rc2_40_cbc`, `EVP_rc4`, `EVP_BytesToKey`, etc.), causing
+`ld: multiple definition` errors when the `quic` feature is on.
+
+The migration leaves us on `rsa` 0.9.10 which carries
+RUSTSEC-2023-0071 (Marvin Attack: potential key recovery through
+timing sidechannels). Upstream has not yet released a constant-time
+implementation; the issue is tracked at
+https://github.com/RustCrypto/RSA/issues/626.
+
+Mitigation status:
+* The advisory targets PKCS#1 v1.5 padding-oracle attacks
+  specifically. The dynomite::crypto module uses OAEP, matching the
+  `RSA_PKCS1_OAEP_PADDING` choice in dyn_crypto.c lines 521-538.
+* The non-constant-time underlying arithmetic is still a theoretical
+  concern for adversaries that can observe inter-peer DNODE
+  handshake timing.
+* deny.toml ignores RUSTSEC-2023-0071 with a written justification.
+* scripts/check.sh passes `--ignore RUSTSEC-2023-0071` to `cargo audit`.
+* The advisory is recorded as a Stage 15 hardening item: when
+  RustCrypto ships a fix or we add an HSM/KMS adapter via the
+  CryptoProvider trait (Stage 13 embedding API), the override goes
+  away.
