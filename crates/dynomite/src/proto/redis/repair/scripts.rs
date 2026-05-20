@@ -1,10 +1,11 @@
 //! Lua script templates used by the read-repair engine.
 //!
 //! Each constant is a complete Redis wire-format `EVAL` invocation
-//! shell preceded by the `$<n>\r\n` length prefix. They match the
-//! corresponding macros in `_/dynomite/src/proto/dyn_proto_repair.h`
-//! byte for byte so a side-by-side diff between the C macros and
-//! these constants is straightforward.
+//! shell preceded by the `$<n>\r\n` length prefix. The bytes are
+//! treated as opaque payloads by the parser and as fixed templates
+//! by the rewrite path; tests in this module pin the declared
+//! length prefix against the actual body length so any drift is
+//! caught at build time.
 
 /// Set-key write script (`SET`-shaped commands).
 pub const SET_SCRIPT: &str = "$4\r\nEVAL\r\n$640\r\n\
