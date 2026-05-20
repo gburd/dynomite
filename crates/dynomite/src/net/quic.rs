@@ -345,8 +345,8 @@ fn spawn_driver(
     let task = tokio::spawn(async move {
         let mut buf = vec![0u8; 65535];
         let mut out_buf = vec![0u8; MAX_DATAGRAM_SIZE];
+        let mut pending_app_bytes: Vec<u8> = Vec::new();
 
-        // Feed any priming Initial packet.
         if let Some(mut pkt) = prime {
             let info = quiche::RecvInfo {
                 from: peer,
@@ -357,35 +357,43 @@ fn spawn_driver(
 
         let mut done = false;
         while !done {
-            let mut had_app_data = false;
-            // Drive outgoing application bytes onto streams.
             loop {
                 match app_to_driver_rx.try_recv() {
-                    Ok(bytes) => {
-                        had_app_data = true;
-                        let mut off = 0;
-                        while off < bytes.len() {
-                            match conn.stream_send(STREAM_ID, &bytes[off..], false) {
-                                Ok(written) => off += written,
-                                Err(quiche::Error::Done) => break,
-                                Err(_) => {
-                                    done = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                    Ok(bytes) => pending_app_bytes.extend_from_slice(&bytes),
                     Err(mpsc::error::TryRecvError::Empty) => break,
                     Err(mpsc::error::TryRecvError::Disconnected) => {
                         done = true;
                         break;
                     }
                 }
-                if done {
-                    break;
+            }
+            if done {
+                break;
+            }
+
+            // Drain the pending buffer onto stream 0 once the
+            // handshake is up. Errors that mean "not ready yet"
+            // (Done, StreamLimit, FlowControl) leave the bytes in
+            // the buffer and we retry on the next iteration.
+            if conn.is_established() && !pending_app_bytes.is_empty() {
+                let mut off = 0;
+                while off < pending_app_bytes.len() {
+                    match conn.stream_send(STREAM_ID, &pending_app_bytes[off..], false) {
+                        Ok(written) => off += written,
+                        Err(quiche::Error::Done)
+                        | Err(quiche::Error::StreamLimit)
+                        | Err(quiche::Error::FlowControl) => break,
+                        Err(e) => {
+                            tracing::debug!(?role, ?e, "quic stream_send error");
+                            done = true;
+                            break;
+                        }
+                    }
+                }
+                if off > 0 {
+                    pending_app_bytes.drain(..off);
                 }
             }
-            let _ = had_app_data;
 
             // Drain any readable streams to the app.
             for sid in conn.readable().collect::<Vec<_>>() {
@@ -393,6 +401,7 @@ fn spawn_driver(
                     if read == 0 {
                         break;
                     }
+                    tracing::trace!(?role, read, "stream_recv -> app");
                     if driver_to_app_tx.send(buf[..read].to_vec()).await.is_err() {
                         done = true;
                         break;
@@ -410,7 +419,8 @@ fn spawn_driver(
                         let _ = socket.send_to(&out_buf[..written], info.to).await;
                     }
                     Err(quiche::Error::Done) => break,
-                    Err(_) => {
+                    Err(e) => {
+                        tracing::debug!(?role, ?e, "quic conn.send error");
                         done = true;
                         break;
                     }
@@ -421,7 +431,15 @@ fn spawn_driver(
                 break;
             }
 
-            let timeout = conn.timeout().unwrap_or(Duration::from_millis(50));
+            // Cap the loop wake interval so newly-queued application
+            // bytes are picked up promptly. Without this the driver
+            // would only re-enter the try_recv block at the QUIC
+            // idle-timeout cadence (multiple seconds), which is far
+            // too coarse for an interactive proxy.
+            let timeout = conn
+                .timeout()
+                .unwrap_or(Duration::from_millis(50))
+                .min(Duration::from_millis(10));
             tokio::select! {
                 () = closed_for_driver.notified() => {
                     done = true;
@@ -432,7 +450,9 @@ fn spawn_driver(
                 res = socket.recv_from(&mut buf) => {
                     if let Ok((n, from)) = res {
                         let info = quiche::RecvInfo { from, to: local_addr };
-                        let _ = conn.recv(&mut buf[..n], info);
+                        if let Err(e) = conn.recv(&mut buf[..n], info) {
+                            tracing::debug!(?role, ?e, "quic conn.recv error");
+                        }
                     } else {
                         done = true;
                     }
