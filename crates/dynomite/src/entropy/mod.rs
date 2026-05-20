@@ -158,6 +158,27 @@ pub const MAX_BUFFER_SIZE: usize = 5 * 1024 * 1024;
 /// Mirrors the reference engine's `MAX_CIPHER_SIZE` validation.
 pub const MAX_CIPHER_SIZE: usize = 5 * 1024 * 1024;
 
+/// Hard ceiling on a single snapshot's plaintext size, in bytes (4 GiB).
+///
+/// The reference engine does not bound this explicitly because its
+/// receiver consumes per-key chunks and never allocates the whole
+/// snapshot in one call. The Rust port stages every chunk into a
+/// `Vec<u8>` for replay and so MUST cap the upfront allocation. A
+/// malicious sender that completes the negotiation handshake could
+/// otherwise declare `total_len = u32::MAX` and trigger a 4 GiB
+/// allocation attempt before any payload bytes arrive. The cap below
+/// is a generous practical ceiling (4 GiB minus 1) that still lets
+/// large RDB snapshots through; embedders can plug their own
+/// `SnapshotSink` to apply tighter bounds.
+pub const MAX_SNAPSHOT_SIZE: usize = u32::MAX as usize - 1;
+
+/// Cap the receiver's pre-allocation hint to avoid a malicious or
+/// malformed `total_len` triggering an oversized allocation up
+/// front. Real RDB snapshots stream chunk-by-chunk; the receiver
+/// reallocates as plaintext arrives if the snapshot is genuinely
+/// larger than the hint.
+pub const SAFE_PREALLOC: usize = 16 * 1024 * 1024;
+
 /// Operator-facing configuration for the entropy worker.
 ///
 /// # Examples

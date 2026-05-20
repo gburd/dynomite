@@ -325,3 +325,48 @@ async fn run_spawns_accept_loop() {
     handle.abort();
     let _ = handle.await;
 }
+
+#[tokio::test]
+async fn wrong_key_decryption_rejected() {
+    // The receiver is configured with the bundled recon_key.pem,
+    // but the sender uses a different key file (a tempfile holding
+    // 16 bytes that differ from the C-compatible literal). The
+    // receiver must reject the decrypted payload because the
+    // padding check will fail.
+    use std::io::Write;
+    let mut bad_key = tempfile::NamedTempFile::new().unwrap();
+    bad_key.write_all(b"deadbeefdeadbeef").unwrap();
+    bad_key.flush().unwrap();
+    let bad_iv = bundled_iv_path();
+
+    let recv_cfg = cfg(
+        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().unwrap(),
+        true,
+    );
+    let sink = Arc::new(MemorySink::default());
+    let receiver = EntropyReceiver::bind(recv_cfg.clone(), boxed_sink(sink.clone()))
+        .await
+        .unwrap();
+    let bound = receiver.local_addr().unwrap();
+    let recv_handle = tokio::spawn(async move { receiver.accept_one().await });
+
+    let mut send_cfg = recv_cfg.clone();
+    send_cfg.peer_endpoint = bound;
+    send_cfg.key_file = bad_key.path().to_path_buf();
+    send_cfg.iv_file = bad_iv;
+    let source = boxed_source(StaticSnapshot::new(b"this should not be readable".to_vec()));
+    // The sender is allowed to complete (it does not know the
+    // receiver's key); the receiver is expected to reject.
+    let _ = EntropySender::push(send_cfg, source).await;
+    let outcome = recv_handle.await.unwrap();
+    assert!(
+        outcome.is_err(),
+        "receiver should have failed to decrypt with wrong key"
+    );
+    // The mock sink must not have observed any plaintext.
+    assert!(
+        sink.snapshot().is_empty(),
+        "no plaintext should reach the sink"
+    );
+}
