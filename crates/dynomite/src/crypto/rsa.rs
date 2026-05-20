@@ -1,24 +1,24 @@
 //! RSA wrap and unwrap for AES session keys.
 //!
-//! Uses PKCS#1 v1.5 padding for both directions. The handshake wraps
-//! a 32-byte AES key with the recipient's public key; the recipient
-//! unwraps with its private key and uses the result as the session
-//! key for AES-CBC traffic.
-//!
-//! PKCS#1 v1.5 is not constant-time-safe against Bleichenbacher
-//! attacks. Embedders that need stronger guarantees should layer
-//! their own AEAD on top of the resulting AES session, or replace
-//! [`encrypt`] / [`decrypt`] with OAEP equivalents.
+//! Uses PKCS#1 OAEP padding (with the OpenSSL default SHA-1 hash and
+//! MGF) for both directions. The handshake wraps a 32-byte AES key
+//! with the recipient's public key; the recipient unwraps with its
+//! private key and uses the result as the session key for AES-CBC
+//! traffic.
 
 use openssl::pkey::Private;
 use openssl::rsa::{Padding, Rsa};
 
 use crate::crypto::CryptoError;
 
-/// Encrypt `msg` with the public half of `rsa` using PKCS#1 v1.5
+/// Maximum plaintext length for OAEP-SHA1 padding given an RSA modulus
+/// of `n` bytes is `n - 2 * hash_len - 2 = n - 42`.
+const OAEP_SHA1_OVERHEAD: usize = 42;
+
+/// Encrypt `msg` with the public half of `rsa` using PKCS#1 OAEP
 /// padding. The output length equals the RSA modulus size in bytes.
 ///
-/// `msg.len()` must be at most `rsa.size() - 11` (the PKCS#1 v1.5
+/// `msg.len()` must be at most `rsa.size() - 42` (the OAEP-SHA1
 /// constraint).
 ///
 /// # Examples
@@ -34,18 +34,18 @@ use crate::crypto::CryptoError;
 /// ```
 pub fn encrypt(rsa: &Rsa<Private>, msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let n = rsa.size() as usize;
-    if msg.len() + 11 > n {
+    if msg.len() + OAEP_SHA1_OVERHEAD > n {
         return Err(CryptoError::EncryptionFailed);
     }
     let mut out = vec![0u8; n];
     let written = rsa
-        .public_encrypt(msg, &mut out, Padding::PKCS1)
+        .public_encrypt(msg, &mut out, Padding::PKCS1_OAEP)
         .map_err(|_| CryptoError::EncryptionFailed)?;
     out.truncate(written);
     Ok(out)
 }
 
-/// Decrypt `enc` with the private half of `rsa` using PKCS#1 v1.5
+/// Decrypt `enc` with the private half of `rsa` using PKCS#1 OAEP
 /// padding.
 ///
 /// `enc.len()` must equal the RSA modulus size in bytes.
@@ -68,7 +68,7 @@ pub fn decrypt(rsa: &Rsa<Private>, enc: &[u8]) -> Result<Vec<u8>, CryptoError> {
     }
     let mut out = vec![0u8; n];
     let written = rsa
-        .private_decrypt(enc, &mut out, Padding::PKCS1)
+        .private_decrypt(enc, &mut out, Padding::PKCS1_OAEP)
         .map_err(|_| CryptoError::DecryptionFailed)?;
     out.truncate(written);
     Ok(out)

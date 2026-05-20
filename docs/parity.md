@@ -243,8 +243,8 @@ symbol is considered un-ported.
 | `dyn_aes_encrypt_msg` | `dynomite::crypto::Crypto::dyn_aes_encrypt_msg` | done (Stage 6); takes a single `&Mbuf` instead of a `struct msg` because the Rust msg layer (Stage 7) is not yet wired. The handshake call site re-binds against the eventual `Msg` struct in Stage 7 |
 | `generate_aes_key` | `dynomite::crypto::Crypto::generate_aes_key` | done (Stage 6) (deviation: returns `Result<[u8; 32], CryptoError>` rather than a static-buffer pointer) |
 | `dyn_rsa_size` | `dynomite::crypto::Crypto::rsa_size` | done (Stage 6) |
-| `dyn_rsa_encrypt` | `dynomite::crypto::Crypto::rsa_encrypt` (delegates to `crypto::rsa::encrypt`) | done (Stage 6) (deviation: PKCS#1 v1.5 instead of the C reference's PKCS#1 OAEP; see Deviations) |
-| `dyn_rsa_decrypt` | `dynomite::crypto::Crypto::rsa_decrypt` (delegates to `crypto::rsa::decrypt`) | done (Stage 6) (deviation: PKCS#1 v1.5; see Deviations) |
+| `dyn_rsa_encrypt` | `dynomite::crypto::Crypto::rsa_encrypt` (delegates to `crypto::rsa::encrypt`) | done (Stage 6) |
+| `dyn_rsa_decrypt` | `dynomite::crypto::Crypto::rsa_decrypt` (delegates to `crypto::rsa::decrypt`) | done (Stage 6) |
 | (new) | `dynomite::crypto::CryptoError` | Typed error enum returned by every fallible crypto API. The C engine reports a single `rstatus_t` with logging side effects. |
 | (new) | `dynomite::crypto::Crypto::from_parts` | Test-only constructor that builds a bundle from caller-supplied RSA key + AES key without touching the filesystem. |
 | (new) | `dynomite::crypto::Crypto::dyn_aes_decrypt_to_vec` | Convenience that flattens an encrypted mbuf chain into a `Vec<u8>` for the DNODE handshake parser. |
@@ -438,16 +438,15 @@ equivalent but lock-free.
 
 ### Stage 6: RSA padding choice
 
-The C reference `dyn_rsa_encrypt` and `dyn_rsa_decrypt` both call
-OpenSSL with `RSA_PKCS1_OAEP_PADDING`. The Stage 6 brief directs
-the Rust port to use PKCS#1 v1.5 instead, citing parity with C;
-in practice the C source uses OAEP. The Rust port follows the
-brief and uses PKCS#1 v1.5 because (a) the wire format is not yet
-shared with a C peer in the in-flight stages and (b) the brief is
-the authoritative task spec. PKCS#1 v1.5 is not constant-time-
-safe against Bleichenbacher attacks; the rustdoc on
-`crypto::rsa::encrypt` states this. If Stage 9 needs to
-inter-operate with a C peer the padding choice will be revisited.
+The Rust port uses PKCS#1 OAEP padding (with the OpenSSL default
+SHA-1 hash and MGF1) for both `Crypto::rsa_encrypt` and
+`Crypto::rsa_decrypt`. This matches `_/dynomite/src/dyn_crypto.c`
+lines 521-538 which call `RSA_public_encrypt` /
+`RSA_private_decrypt` with `RSA_PKCS1_OAEP_PADDING`. The original
+Stage 6 dispatch brief mistakenly directed PKCS#1 v1.5; the worker
+followed the brief and recorded the discrepancy, and a follow-up
+commit corrected the padding to OAEP per AGENTS.md non-negotiable
+#6 ("reproduce C behavior; no reimagining").
 
 Pinned by `crypto::rsa::tests::round_trip_short` and
 `crypto::rsa::tests::round_trip_aes_keylen`.
