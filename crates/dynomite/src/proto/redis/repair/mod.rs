@@ -1,8 +1,9 @@
 //! Redis read-repair plumbing.
 //!
-//! The reference engine implements read repair through a family of
-//! helpers in `dyn_redis_repair.c`. This module ports the surface
-//! the cluster layer calls into:
+//! Read repair adapts mismatched replica responses into a single
+//! authoritative answer and, where supported, schedules a write
+//! to bring stragglers back into sync. The cluster layer calls
+//! into this module through the following surface:
 //!
 //! * [`rewrite::redis_rewrite_query`] - command-level rewrites
 //!   (the `SMEMBERS -> SORT ALPHA` case under DC_SAFE_QUORUM).
@@ -16,8 +17,8 @@
 //!   response from the per-replica set, optionally producing a
 //!   read-repair side effect.
 //!
-//! The generated Lua scripts live as compile-time constants in
-//! [`scripts`] and match the reference engine byte for byte.
+//! The Lua templates the rewrite path renders into outgoing
+//! requests live as compile-time constants in [`scripts`].
 
 pub mod clear;
 pub mod make;

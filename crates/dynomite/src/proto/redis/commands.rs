@@ -133,6 +133,7 @@ pub fn classify(ty: MsgType) -> CommandClass {
         | M::ReqRedisSetnx
         | M::ReqRedisHexists
         | M::ReqRedisHget
+        | M::ReqRedisHstrlen
         | M::ReqRedisLindex
         | M::ReqRedisLpushx
         | M::ReqRedisRpoplpush
