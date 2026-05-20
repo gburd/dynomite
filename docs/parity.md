@@ -226,7 +226,36 @@ next to its only consumer.
 
 ## src/hashkit/
 
-(Stage 3.)
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `hash_type_t` / `HASH_CODEC` | `dynomite::hashkit::HashType` | done (Stage 3) |
+| `get_hash_func` | `dynomite::hashkit::hash` | done |
+| `get_hash_type` | `dynomite::hashkit::HashType::from_name` | done |
+| `hash_one_at_a_time` | `dynomite::hashkit::one_at_a_time::hash` | done |
+| `hash_md5` / `md5_signature` / `MD5_Init` / `MD5_Update` / `MD5_Final` | `dynomite::hashkit::md5::*` | done; passes RFC 1321 test vectors |
+| `hash_crc16` | `dynomite::hashkit::crc16::hash` | done |
+| `hash_crc32` | `dynomite::hashkit::crc32::hash_libmemcached` | done |
+| `hash_crc32a` | `dynomite::hashkit::crc32::hash_standard` | done; passes 0xCBF43926 vector |
+| `crc32_sz` | `dynomite::hashkit::crc32_sz` | done |
+| `hash_fnv1_64` | `dynomite::hashkit::fnv::hash_fnv1_64` | done |
+| `hash_fnv1a_64` | `dynomite::hashkit::fnv::hash_fnv1a_64` | done; reproduces the C 32-bit-accumulator behavior (recorded as a deviation below) |
+| `hash_fnv1_32` | `dynomite::hashkit::fnv::hash_fnv1_32` | done |
+| `hash_fnv1a_32` | `dynomite::hashkit::fnv::hash_fnv1a_32` | done; passes canonical FNV-1a 32 vectors |
+| `hash_hsieh` | `dynomite::hashkit::hsieh::hash` | done |
+| `hash_murmur` | `dynomite::hashkit::murmur::hash` | done |
+| `hash_jenkins` | `dynomite::hashkit::jenkins::hash` | done |
+| `hash_murmur3` (+ `MurmurHash3_x86_128` from contrib/) | `dynomite::hashkit::murmur3::hash` | done; deviation: the C call is commented out, the Rust impl produces the bytes the contrib code would produce |
+| `init_dyn_token` / `deinit_dyn_token` | `dynomite::hashkit::DynToken::default` | done |
+| `size_dyn_token` | `dynomite::hashkit::DynToken::size` | done |
+| `set_int_dyn_token` | `dynomite::hashkit::DynToken::set_int` | done |
+| `cmp_dyn_token` | `<DynToken as Ord>::cmp` | done |
+| `parse_dyn_token` | `dynomite::hashkit::token::parse_token` | done |
+| `derive_token` / `derive_tokens` | folded into `parse_token` + caller-side iteration | done |
+| `print_dyn_token` | `<DynToken as Display>` | done |
+| `copy_dyn_token` | `<DynToken as Clone>::clone` | done (Rust derives the trait) |
+| `ketama_update` / `ketama_dispatch` (+ static `ketama_hash`/`ketama_item_cmp`) | `dynomite::hashkit::ketama::Continuum::{build, dispatch}` | done |
+| `modula_update` / `modula_dispatch` | `dynomite::hashkit::modula::Continuum::{build, dispatch}` | done |
+| `random_update` / `random_dispatch` | `dynomite::hashkit::PseudoRng` + caller-side modulus | done; the `random_update` ring layout is identical to modula and folded into the same Continuum builder |
 
 ## src/proto/
 
@@ -242,7 +271,9 @@ next to its only consumer.
 
 ## src/tools/
 
-(Stage 3 ships `crates/dyn-hash-tool/`.)
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `dyn_hash_tool` | `crates/dyn-hash-tool/` | done; the C source tree under `_/dynomite/src/` does not actually contain a `tools/dyn_hash_tool.c` despite the original PLAN reference, so the Rust binary defines its own one-line-per-key output format documented in the crate. See deviation below. |
 
 ## contrib/
 
@@ -442,3 +473,25 @@ Documented design choices that downstream stages must respect.
   Rust callers (Stage 12) wire tokio `signal::unix` streams to
   `dispatch`; the table is the single source of truth and runs the same
   per-signal action.
+* `hashkit::murmur3` produces a real 128-bit hash. The C
+  `hash_murmur3` is a no-op (the call to `MurmurHash3_x86_128` is
+  commented out in `dyn_murmur3.c`), so the C binary effectively writes
+  uninitialized memory into the token. The Rust port implements the
+  contrib MurmurHash3 x86_128 function directly with seed `0xc0a1e5ce`
+  so the algorithm produces reproducible bytes; this matches the
+  obvious upstream intent.
+* `hashkit::fnv::hash_fnv1a_64` keeps the C reference's 32-bit
+  accumulator and 32-bit prime even though the canonical FNV-1a-64
+  algorithm uses a 64-bit accumulator. This is a faithful reproduction
+  of `dyn_fnv.c` so existing token rings continue to land on the same
+  servers; the misnamed entry is documented in the algorithm doc
+  comment.
+* `hashkit::token::DynToken::cmp` is a total order, so it can act as
+  the key in a `BTreeMap` continuum. The C `cmp_dyn_token` returned
+  `int32_t {-1, 0, 1}` and was used only as a sort comparator;
+  semantics are identical for the values that can actually appear.
+* `crates/dyn-hash-tool/` defines its own `<algo>:<key>:<token-hex>`
+  output format because the C source tree does not contain the
+  `dyn_hash_tool.c` referenced in the original PLAN. The flag set
+  (`-H/--hash`, `-k/--key`, `--stdin`, `--list`) and one-line-per-key
+  output are documented in the binary's crate-level rustdoc.
