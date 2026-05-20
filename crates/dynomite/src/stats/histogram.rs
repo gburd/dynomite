@@ -77,9 +77,10 @@ impl Histogram {
 
     /// Record a single observation, placing it in the appropriate bucket.
     ///
-    /// Values larger than the largest bucket offset are placed in the
-    /// final non-overflow bucket so that quantile estimates remain
-    /// well-defined.
+    /// Values larger than the largest bucket offset land in the final
+    /// bucket and signal histogram overflow. Once the overflow bucket is
+    /// non-empty, [`Histogram::percentile`], [`Histogram::mean`], and
+    /// [`Histogram::max`] all return [`Histogram::OVERFLOW_SENTINEL`].
     ///
     /// # Examples
     ///
@@ -93,14 +94,48 @@ impl Histogram {
     pub fn record(&mut self, val: u64) {
         let offsets = bucket_offsets();
         let next = offsets.partition_point(|&o| o <= val);
-        let bucket = next.saturating_sub(1).min(BUCKET_COUNT - 2);
+        let bucket = next.saturating_sub(1).min(BUCKET_COUNT - 1);
         self.buckets[bucket] = self.buckets[bucket].saturating_add(1);
         if val > self.val_max {
             self.val_max = val;
         }
     }
 
+    /// Sentinel value returned by [`Histogram::percentile`],
+    /// [`Histogram::mean`], and [`Histogram::max`] when the overflow
+    /// bucket is non-empty.
+    pub const OVERFLOW_SENTINEL: u64 = u64::MAX;
+
+    /// Returns `true` when the final (overflow) bucket is non-empty.
+    ///
+    /// The reference implementation logs an error and refuses to publish
+    /// quantiles in this case; the Rust port surfaces the same signal
+    /// through this method and through the [`Histogram::OVERFLOW_SENTINEL`]
+    /// returned from quantile accessors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Histogram;
+    /// let mut h = Histogram::new();
+    /// h.record(10);
+    /// assert!(!h.is_overflowing());
+    /// ```
+    pub fn is_overflowing(&self) -> bool {
+        self.buckets[BUCKET_COUNT - 1] > 0
+    }
+
     /// Total number of observations recorded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Histogram;
+    /// let mut h = Histogram::new();
+    /// h.record(1);
+    /// h.record(2);
+    /// assert_eq!(h.count(), 2);
+    /// ```
     pub fn count(&self) -> u64 {
         self.buckets.iter().copied().fold(0u64, u64::saturating_add)
     }
@@ -109,10 +144,24 @@ impl Histogram {
     /// `[0.0, 1.0]`. Inputs outside the range or NaN return `0`.
     ///
     /// The result is the offset of the first bucket whose cumulative
-    /// count meets or exceeds `floor(count * p)`.
+    /// count meets or exceeds `floor(count * p)`. Returns
+    /// [`Histogram::OVERFLOW_SENTINEL`] if the histogram is
+    /// [`Histogram::is_overflowing`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Histogram;
+    /// let mut h = Histogram::new();
+    /// for v in 0..1_000 { h.record(v); }
+    /// assert!(h.percentile(0.95) >= h.percentile(0.5));
+    /// ```
     pub fn percentile(&self, p: f64) -> u64 {
         if !p.is_finite() || !(0.0..=1.0).contains(&p) {
             return 0;
+        }
+        if self.is_overflowing() {
+            return Self::OVERFLOW_SENTINEL;
         }
         let total = self.count();
         if total == 0 {
@@ -134,8 +183,21 @@ impl Histogram {
     }
 
     /// Arithmetic mean of all observations using bucket offsets as
-    /// representative values. Returns `0.0` for an empty histogram.
+    /// representative values. Returns `0.0` for an empty histogram and
+    /// `f64::INFINITY` when the histogram is [`Histogram::is_overflowing`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Histogram;
+    /// let mut h = Histogram::new();
+    /// h.record(10);
+    /// assert!(h.mean() > 0.0);
+    /// ```
     pub fn mean(&self) -> f64 {
+        if self.is_overflowing() {
+            return f64::INFINITY;
+        }
         let offsets = bucket_offsets();
         let mut sum: u64 = 0;
         let mut elements: u64 = 0;
@@ -152,11 +214,35 @@ impl Histogram {
     }
 
     /// Maximum observation seen since the last [`Histogram::reset`].
+    /// Returns [`Histogram::OVERFLOW_SENTINEL`] when the histogram is
+    /// [`Histogram::is_overflowing`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Histogram;
+    /// let mut h = Histogram::new();
+    /// h.record(99);
+    /// assert_eq!(h.max(), 99);
+    /// ```
     pub fn max(&self) -> u64 {
+        if self.is_overflowing() {
+            return Self::OVERFLOW_SENTINEL;
+        }
         self.val_max
     }
 
     /// Reset all bucket counts and the recorded maximum to zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Histogram;
+    /// let mut h = Histogram::new();
+    /// h.record(7);
+    /// h.reset();
+    /// assert_eq!(h.count(), 0);
+    /// ```
     pub fn reset(&mut self) {
         self.buckets = [0; BUCKET_COUNT];
         self.val_max = 0;
@@ -188,6 +274,14 @@ impl Histogram {
     }
 
     /// Borrow the raw bucket counts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{Histogram, BUCKET_COUNT};
+    /// let h = Histogram::new();
+    /// assert_eq!(h.buckets().len(), BUCKET_COUNT);
+    /// ```
     pub fn buckets(&self) -> &[u64; BUCKET_COUNT] {
         &self.buckets
     }
@@ -276,6 +370,21 @@ mod tests {
         assert_eq!(h.percentile(-0.1), 0);
         assert_eq!(h.percentile(1.1), 0);
         assert_eq!(h.percentile(f64::NAN), 0);
+    }
+
+    #[test]
+    fn overflow_signals_quantile_callers() {
+        let mut h = Histogram::new();
+        // Record a value larger than every bucket offset.
+        let last_offset = *bucket_offsets().last().expect("non-empty offsets");
+        h.record(last_offset.saturating_add(1));
+        assert!(h.is_overflowing(), "expected overflow signal");
+        assert_eq!(h.percentile(0.5), Histogram::OVERFLOW_SENTINEL);
+        assert_eq!(h.max(), Histogram::OVERFLOW_SENTINEL);
+        assert!(h.mean().is_infinite());
+        // After reset the overflow signal clears.
+        h.reset();
+        assert!(!h.is_overflowing());
     }
 
     #[test]

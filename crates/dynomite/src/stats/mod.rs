@@ -312,14 +312,14 @@ impl Stats {
             ),
             cross_zone_queue_wait: HistogramSummary::from_histogram(&inner.cross_zone_queue_wait),
             server_queue_wait: HistogramSummary::from_histogram(&inner.server_queue_wait),
-            client_out_queue_p99: inner.client_out_queue.percentile(0.99),
-            server_in_queue_p99: inner.server_in_queue.percentile(0.99),
-            server_out_queue_p99: inner.server_out_queue.percentile(0.99),
-            dnode_client_out_queue_p99: inner.dnode_client_out_queue.percentile(0.99),
-            peer_in_queue_p99: inner.peer_in_queue.percentile(0.99),
-            peer_out_queue_p99: inner.peer_out_queue.percentile(0.99),
-            remote_peer_in_queue_p99: inner.remote_peer_in_queue.percentile(0.99),
-            remote_peer_out_queue_p99: inner.remote_peer_out_queue.percentile(0.99),
+            client_out_queue_p99: queue_p99(&inner.client_out_queue),
+            server_in_queue_p99: queue_p99(&inner.server_in_queue),
+            server_out_queue_p99: queue_p99(&inner.server_out_queue),
+            dnode_client_out_queue_p99: queue_p99(&inner.dnode_client_out_queue),
+            peer_in_queue_p99: queue_p99(&inner.peer_in_queue),
+            peer_out_queue_p99: queue_p99(&inner.peer_out_queue),
+            remote_peer_in_queue_p99: queue_p99(&inner.remote_peer_in_queue),
+            remote_peer_out_queue_p99: queue_p99(&inner.remote_peer_out_queue),
             alloc_msgs: inner.alloc_msgs,
             free_msgs: inner.free_msgs,
             alloc_mbufs: inner.alloc_mbufs,
@@ -350,6 +350,18 @@ impl Stats {
         inner.peer_out_queue.reset();
         inner.remote_peer_in_queue.reset();
         inner.remote_peer_out_queue.reset();
+    }
+}
+
+/// Returns the queue p99 from `h`, or `0` when the histogram is
+/// overflowing. The reference implementation suppresses percentile
+/// publishing in the overflow path; mirroring that keeps overflow
+/// values from leaking into the JSON output as `u64::MAX`.
+fn queue_p99(h: &Histogram) -> u64 {
+    if h.is_overflowing() {
+        0
+    } else {
+        h.percentile(0.99)
     }
 }
 

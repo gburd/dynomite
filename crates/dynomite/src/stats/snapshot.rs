@@ -35,7 +35,25 @@ pub struct HistogramSummary {
 
 impl HistogramSummary {
     /// Compute the standard quantile summary from a histogram.
+    ///
+    /// When the histogram is in overflow (a value larger than the
+    /// largest bucket offset has been recorded), the summary is
+    /// zeroed: the reference implementation refuses to publish
+    /// percentiles in that state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{Histogram, HistogramSummary};
+    /// let mut h = Histogram::new();
+    /// for v in 0..100 { h.record(v); }
+    /// let s = HistogramSummary::from_histogram(&h);
+    /// assert!(s.p99 >= s.p95);
+    /// ```
     pub fn from_histogram(h: &Histogram) -> Self {
+        if h.is_overflowing() {
+            return Self::default();
+        }
         let mean_f = h.mean();
         let mean = if mean_f.is_finite() && mean_f > 0.0 {
             // Round mean up to the nearest integer.
