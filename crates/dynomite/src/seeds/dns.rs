@@ -1,13 +1,13 @@
 //! DNS-backed seeds provider.
 //!
-//! The reference `dns_get_seeds` (`dyn_dns.c`) issues a `T_TXT`
-//! query (or `T_A` when `DYNOMITE_DNS_TYPE=A`) against
-//! `_dynomite.<host>` and returns each TXT record's contents (or
-//! one synthesised seed per A record). The Rust port abstracts the
-//! resolver behind the [`Resolver`] trait so the unit test can
-//! drive a deterministic in-memory resolver. The caller is
-//! expected to wire `tokio::net::lookup_host` (or a similar
-//! resolver) when building the production provider.
+//! The reference engine issues a `T_TXT` query (or `T_A` when
+//! `DYNOMITE_DNS_TYPE=A`) against `_dynomite.<host>` and returns
+//! each TXT record's contents (or one synthesised seed per A
+//! record). The Rust port abstracts the resolver behind the
+//! [`Resolver`] trait so the unit test can drive a deterministic
+//! in-memory resolver. The caller is expected to wire
+//! `tokio::net::lookup_host` (or a similar resolver) when
+//! building the production provider.
 //!
 //! # Examples
 //!
@@ -125,8 +125,8 @@ impl SeedsProvider for DnsSeedsProvider {
             ResolvedSeeds::Txt(entries) => {
                 let mut out = Vec::with_capacity(entries.len());
                 for raw in entries {
-                    let seed = ConfDynSeed::parse(&raw)
-                        .map_err(|e| SeedsError::Parse(e.to_string()))?;
+                    let seed =
+                        ConfDynSeed::parse(&raw).map_err(|e| SeedsError::Parse(e.to_string()))?;
                     out.push(seed);
                 }
                 Ok(out)
@@ -141,8 +141,8 @@ impl SeedsProvider for DnsSeedsProvider {
                 let mut out = Vec::with_capacity(ips.len());
                 for ip in ips {
                     let raw = format!("{ip}:{port}:{rack}:{dc}:{tokens}");
-                    let seed = ConfDynSeed::parse(&raw)
-                        .map_err(|e| SeedsError::Parse(e.to_string()))?;
+                    let seed =
+                        ConfDynSeed::parse(&raw).map_err(|e| SeedsError::Parse(e.to_string()))?;
                     out.push(seed);
                 }
                 Ok(out)

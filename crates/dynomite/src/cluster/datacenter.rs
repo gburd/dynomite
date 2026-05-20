@@ -133,8 +133,7 @@ impl Rack {
     /// ```
     pub fn add_peer_tokens(&mut self, peer_idx: u32, tokens: &[DynToken]) {
         for tok in tokens {
-            self.continuums
-                .push(Continuum::new(tok.clone(), peer_idx));
+            self.continuums.push(Continuum::new(tok.clone(), peer_idx));
             self.ncontinuum = self.ncontinuum.saturating_add(1);
             self.nserver_continuum = self.nserver_continuum.saturating_add(1);
         }

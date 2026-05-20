@@ -1,7 +1,7 @@
 //! Florida HTTP seeds provider.
 //!
-//! The reference `florida_get_seeds` (`dyn_florida.c`) opens a
-//! TCP socket to `127.0.0.1:8080`, writes
+//! The reference engine opens a TCP socket to
+//! `127.0.0.1:8080`, writes
 //! `GET /REST/v1/admin/get_seeds HTTP/1.0`, looks for `200 OK`,
 //! drains the response, and treats the body as a
 //! `host:port:rack:dc:tokens|...` blob. The Rust port preserves
@@ -138,18 +138,13 @@ impl FloridaSeedsProvider {
         if body_str.is_empty() {
             return Err(SeedsError::NoFreshSeeds);
         }
-        let records =
-            parse_seed_blob(body_str).map_err(SeedsError::Parse)?;
+        let records = parse_seed_blob(body_str).map_err(SeedsError::Parse)?;
         let mut out = Vec::with_capacity(records.len());
         for rec in records {
             // Render back into the canonical pname format and
             // re-parse so the result is a fully-validated
             // ConfDynSeed.
-            let tokens: Vec<String> = rec
-                .tokens
-                .iter()
-                .map(|t| t.get_int().to_string())
-                .collect();
+            let tokens: Vec<String> = rec.tokens.iter().map(|t| t.get_int().to_string()).collect();
             let raw = format!(
                 "{}:{}:{}:{}:{}",
                 rec.host,
@@ -209,8 +204,7 @@ mod tests {
             if let Ok((mut sock, _)) = listener.accept().await {
                 let mut buf = [0u8; 1024];
                 let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
-                let header =
-                    format!("HTTP/1.0 {status}\r\nContent-Type: text/plain\r\n\r\n");
+                let header = format!("HTTP/1.0 {status}\r\nContent-Type: text/plain\r\n\r\n");
                 let _ = sock.write_all(header.as_bytes()).await;
                 let _ = sock.write_all(body).await;
                 let _ = sock.shutdown().await;
@@ -221,8 +215,8 @@ mod tests {
 
     #[tokio::test]
     async fn ok_response_parsed() {
-        let port = canned_server(b"127.0.0.1:8101:rA:dc1:1|127.0.0.2:8101:rA:dc1:2", "200 OK")
-            .await;
+        let port =
+            canned_server(b"127.0.0.1:8101:rA:dc1:1|127.0.0.2:8101:rA:dc1:2", "200 OK").await;
         let p = FloridaSeedsProvider::new("127.0.0.1".into(), port);
         let v = p.fetch().await.unwrap();
         assert_eq!(v.len(), 2);

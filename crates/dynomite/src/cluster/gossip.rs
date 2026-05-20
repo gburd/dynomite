@@ -1,14 +1,14 @@
 //! Gossip state machine and seed-list bookkeeping.
 //!
-//! The reference engine's `dyn_gossip.c` runs a dedicated pthread
-//! that wakes on a fixed interval, queries the seeds provider,
-//! parses returned `host:port:rack:dc:tokens|...` blobs, and
-//! reconciles the resulting nodes against the per-DC / per-rack
-//! tables. Nodes are added when absent, replaced when their IP
-//! changes, and gossip-updated when only the timestamp / state
-//! moves. Once per round, the engine forwards either a
-//! `GOSSIP_SYN` (if joining) or the local state digest (if normal)
-//! to a randomly chosen peer.
+//! The reference engine runs a dedicated pthread that wakes on a
+//! fixed interval, queries the seeds provider, parses returned
+//! `host:port:rack:dc:tokens|...` blobs, and reconciles the
+//! resulting nodes against the per-DC / per-rack tables. Nodes
+//! are added when absent, replaced when their IP changes, and
+//! gossip-updated when only the timestamp / state moves. Once
+//! per round, the engine forwards either a `GOSSIP_SYN` (if
+//! joining) or the local state digest (if normal) to a randomly
+//! chosen peer.
 //!
 //! This module ports the data shape, the seed-list parser, and a
 //! deterministic state machine that the dispatcher / a tokio
@@ -275,8 +275,8 @@ pub enum GossipStep {
 
 /// Parse one `host:port:rack:dc:tokens` seed string.
 ///
-/// Mirrors `parse_seeds` in `dyn_gossip.c`. The token list may be
-/// a single big-int or a comma-separated list.
+/// Mirrors the reference engine's `parse_seeds` routine. The token
+/// list may be a single big-int or a comma-separated list.
 ///
 /// # Examples
 ///
@@ -372,7 +372,10 @@ mod tests {
     #[test]
     fn add_then_update_state() {
         let mut s = GossipState::new();
-        assert_eq!(s.add_or_update(node("d", "r", "h", 7, 1)), GossipStep::Added);
+        assert_eq!(
+            s.add_or_update(node("d", "r", "h", 7, 1)),
+            GossipStep::Added
+        );
         let mut n2 = node("d", "r", "h", 7, 2);
         n2.state = PeerState::Down;
         assert_eq!(s.add_or_update(n2), GossipStep::StateChanged);

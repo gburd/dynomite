@@ -187,6 +187,7 @@ impl Peer {
     /// assert_eq!(p.state(), PeerState::Down);
     /// ```
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         idx: u32,
         endpoint: PeerEndpoint,

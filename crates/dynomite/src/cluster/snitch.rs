@@ -1,21 +1,21 @@
 //! Node snitch: environment-driven address resolution and rack
 //! proximity helpers.
 //!
-//! The reference engine's `dyn_node_snitch.{c,h}` is intentionally
-//! small: it caches the local node's broadcast address, public
-//! hostname, public IPv4, and private IPv4, looked up from
-//! environment variables (`EC2_*` in the AWS environment, plain
-//! `PUBLIC_*`/`LOCAL_IPV4` otherwise) with a fallback to the first
-//! peer's name. The proximity ordering used by the dispatcher
-//! (`pick_target_rack`, `rack_distance`) is not in `dyn_node_snitch.c`
-//! at all; the reference engine's only DC/rack proximity decision
-//! lives in `preselect_remote_rack_for_replication`
-//! (`dyn_dnode_peer.c`). Per AGENTS.md non-negotiable #6 we honor the
-//! C source: this module ports the env-var/hostname helpers and adds
-//! a small set of pure rack-distance utilities used by
-//! [`crate::cluster::dispatch`]. The proximity helpers are flagged as
-//! a Stage-10 deviation in `docs/parity.md` because the brief asked
-//! for them.
+//! The reference engine's snitch module is intentionally small:
+//! it caches the local node's broadcast address, public hostname,
+//! public IPv4, and private IPv4, looked up from environment
+//! variables (`EC2_*` in the AWS environment, plain
+//! `PUBLIC_*`/`LOCAL_IPV4` otherwise) with a fallback to the
+//! first peer's name. The proximity ordering used by the
+//! dispatcher (`pick_target_rack`, `rack_distance`) is not part
+//! of the reference snitch unit at all; the reference engine's
+//! only DC/rack proximity decision lives in the peer-side
+//! `preselect_remote_rack_for_replication` routine. Per AGENTS.md
+//! non-negotiable #6 we honor that source: this module ports the
+//! env-var/hostname helpers and adds a small set of pure
+//! rack-distance utilities used by [`crate::cluster::dispatch`].
+//! The proximity helpers are flagged as a Stage-10 deviation in
+//! `docs/parity.md` because the original brief asked for them.
 //!
 //! # Examples
 //!
@@ -239,7 +239,6 @@ pub fn private_ip4(
 /// // PATH is almost always set; if not, the closure simply returns None.
 /// let _ = f("PATH");
 /// ```
-#[must_use]
 pub fn process_env_lookup() -> impl FnMut(&str) -> Option<String> {
     |key: &str| env::var(key).ok()
 }
@@ -298,7 +297,10 @@ mod tests {
     #[test]
     fn broadcast_falls_back_to_peer_name() {
         let mut envs = |_: &str| None;
-        assert_eq!(broadcast_address("aws", "127.0.0.1", &mut envs), "127.0.0.1");
+        assert_eq!(
+            broadcast_address("aws", "127.0.0.1", &mut envs),
+            "127.0.0.1"
+        );
     }
 
     #[test]

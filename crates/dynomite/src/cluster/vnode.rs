@@ -31,6 +31,8 @@
 //! assert_eq!(dispatch(r.continuums(), &DynToken::from_u32(35)), Some(0));
 //! ```
 
+use std::cmp::Ordering;
+
 use crate::cluster::datacenter::Continuum;
 use crate::hashkit::DynToken;
 
@@ -56,7 +58,6 @@ pub fn dispatch(continuums: &[Continuum], token: &DynToken) -> Option<u32> {
     }
     let first = &continuums[0];
     let last = &continuums[n - 1];
-    use std::cmp::Ordering;
 
     // Wraparound: token greater than the largest continuum token, or
     // less than or equal to the first one. Reference returns
@@ -144,13 +145,11 @@ pub fn rebuild_continuums(
     let mut applied = 0usize;
     let mut touched: Vec<(usize, usize)> = Vec::new();
     for peer in peers {
-        let dc_idx = match dcs.iter().position(|d| d.name() == peer.dc) {
-            Some(i) => i,
-            None => continue,
+        let Some(dc_idx) = dcs.iter().position(|d| d.name() == peer.dc) else {
+            continue;
         };
-        let rack_idx = match dcs[dc_idx].rack_idx(peer.rack) {
-            Some(i) => i,
-            None => continue,
+        let Some(rack_idx) = dcs[dc_idx].rack_idx(peer.rack) else {
+            continue;
         };
         let dc = &mut dcs[dc_idx];
         let rack = &mut dc.racks_mut()[rack_idx];
