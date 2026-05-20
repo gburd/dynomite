@@ -12,9 +12,9 @@
 //! and so the cluster layer can call into either protocol via the
 //! same trait set.
 
-use crate::msg::{ConsistencyLevel, DynErrorCode, Msg, ResponseMgr};
 #[cfg(test)]
 use crate::msg::MsgType;
+use crate::msg::{ConsistencyLevel, DynErrorCode, Msg, ResponseMgr};
 
 /// Repair-surface result type. Matches the Redis repair return
 /// shape so the cluster dispatcher can use a single

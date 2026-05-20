@@ -10,6 +10,18 @@
 //! [`Msg`]'s key and argument buffers. It must not panic on any
 //! input.
 
+// The parser truncates ASCII-decimal accumulators into the same
+// fixed-width counters the reference engine uses (`uint32_t` for
+// rlen / rntokens / nkeys, `usize` for cursor positions). The
+// allowance keeps the Rust port faithful to the C casts; the
+// out-of-range numerals surface as parse errors elsewhere in the
+// state machine.
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::match_same_arms)]
+#![allow(clippy::manual_let_else)]
+
 use super::commands::{classify, error_lookup, lookup, CommandClass, RoutingOverride};
 use crate::io::mbuf::MBUF_MAX_SIZE;
 use crate::msg::{ArgPos, KeyPos, Msg, MsgParseResult, MsgRouting, MsgType};
@@ -219,8 +231,10 @@ pub fn redis_parse_req_with_args(
                         continue;
                     }
                     if ch != b'*' {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                     token = Some(p);
                     rntokens = 0;
@@ -233,16 +247,20 @@ pub fn redis_parse_req_with_args(
                     p += 1;
                 } else if ch == CR {
                     if rntokens == 0 {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                     ntokens = rntokens;
                     token = None;
                     state = ReqState::NargLf;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::InlinePing => {
@@ -260,23 +278,28 @@ pub fn redis_parse_req_with_args(
                     p += 5;
                     return finish_req_ok(r, p, ty, is_read, quit, routing, ntokens, nkeys);
                 }
-                return finish_req_error(r, state, p, token, rlen, rntokens, ntokens, nkeys,
-                    ty, is_read, quit, routing);
+                return finish_req_error(
+                    r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit, routing,
+                );
             }
             ReqState::NargLf => {
                 if ch == LF {
                     state = ReqState::ReqTypeLen;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::ReqTypeLen => {
                 if token.is_none() {
                     if ch != b'$' {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                     token = Some(p);
                     rlen = 0;
@@ -286,16 +309,20 @@ pub fn redis_parse_req_with_args(
                     p += 1;
                 } else if ch == CR {
                     if rlen == 0 || rntokens == 0 {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                     rntokens -= 1;
                     token = None;
                     state = ReqState::ReqTypeLenLf;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::ReqTypeLenLf => {
@@ -303,8 +330,10 @@ pub fn redis_parse_req_with_args(
                     state = ReqState::ReqType;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::ReqType => {
@@ -319,8 +348,10 @@ pub fn redis_parse_req_with_args(
                     break;
                 }
                 if input[needed] != CR {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
                 let cmd_bytes = &input[start..needed];
                 p = needed + 1;
@@ -352,12 +383,22 @@ pub fn redis_parse_req_with_args(
                     if ty == MsgType::ReqRedisPing {
                         // The C parser short-circuits the inline form here.
                         // p was advanced to needed+1 (the LF position).
-                        return finish_req_ok(r, p + 1, ty, true, quit,
-                            MsgRouting::LocalNodeOnly, ntokens, nkeys);
+                        return finish_req_ok(
+                            r,
+                            p + 1,
+                            ty,
+                            true,
+                            quit,
+                            MsgRouting::LocalNodeOnly,
+                            ntokens,
+                            nkeys,
+                        );
                     }
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
                 state = ReqState::ReqTypeLf;
                 continue;
@@ -374,8 +415,10 @@ pub fn redis_parse_req_with_args(
                     continue;
                 }
                 if ch != LF {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
                 p += 1;
                 let class = classify(ty);
@@ -389,7 +432,10 @@ pub fn redis_parse_req_with_args(
                     state = ReqState::Arg1Len;
                     continue;
                 }
-                if matches!(ty, MsgType::ReqRedisScriptLoad | MsgType::ReqRedisScriptExists) {
+                if matches!(
+                    ty,
+                    MsgType::ReqRedisScriptLoad | MsgType::ReqRedisScriptExists
+                ) {
                     state = ReqState::Arg1Len;
                     continue;
                 }
@@ -402,8 +448,10 @@ pub fn redis_parse_req_with_args(
             ReqState::KeyLen => {
                 if token.is_none() {
                     if ch != b'$' {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                     token = Some(p);
                     rlen = 0;
@@ -413,16 +461,20 @@ pub fn redis_parse_req_with_args(
                     p += 1;
                 } else if ch == CR {
                     if rlen == 0 || rlen as usize >= MBUF_MAX_SIZE || rntokens == 0 {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                     rntokens -= 1;
                     token = None;
                     state = ReqState::KeyLenLf;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::KeyLenLf => {
@@ -430,8 +482,10 @@ pub fn redis_parse_req_with_args(
                     state = ReqState::Key;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::Key => {
@@ -445,8 +499,10 @@ pub fn redis_parse_req_with_args(
                     break;
                 }
                 if input[needed] != CR {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
                 let kbytes = input[start..needed].to_vec();
                 p = needed + 1;
@@ -474,37 +530,47 @@ pub fn redis_parse_req_with_args(
             }
             ReqState::KeyLf => {
                 if ch != LF {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
                 p += 1;
                 let class = classify(ty);
                 match class {
                     CommandClass::Arg0 => {
                         if rntokens != 0 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         return finish_req_ok(r, p, ty, is_read, quit, routing, ntokens, nkeys);
                     }
                     CommandClass::Arg1 => {
                         if rntokens != 1 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         state = ReqState::Arg1Len;
                     }
                     CommandClass::Arg2 => {
                         if rntokens != 2 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         state = ReqState::Arg1Len;
                     }
                     CommandClass::Arg3 => {
                         if rntokens != 3 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         state = ReqState::Arg1Len;
                     }
@@ -522,8 +588,10 @@ pub fn redis_parse_req_with_args(
                     }
                     CommandClass::ArgKvX => {
                         if ntokens % 2 == 0 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         state = ReqState::Arg1Len;
                     }
@@ -538,27 +606,35 @@ pub fn redis_parse_req_with_args(
                         }
                     }
                     _ => {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                 }
             }
-            ReqState::Arg1Len => match read_bulk_len(input, &mut p, &mut token, &mut rlen, &mut rntokens) {
-                BulkLenStep::More => {}
-                BulkLenStep::Done => state = ReqState::Arg1LenLf,
-                BulkLenStep::Error => {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens, nkeys,
-                        ty, is_read, quit, routing);
+            ReqState::Arg1Len => {
+                match read_bulk_len(input, &mut p, &mut token, &mut rlen, &mut rntokens) {
+                    BulkLenStep::More => {}
+                    BulkLenStep::Done => state = ReqState::Arg1LenLf,
+                    BulkLenStep::Error => {
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
+                    }
+                    BulkLenStep::Eof => break,
                 }
-                BulkLenStep::Eof => break,
-            },
+            }
             ReqState::Arg1LenLf => {
                 if ch == LF {
                     state = ReqState::Arg1;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::Arg1 => match read_bulk_arg(input, p, rlen, record_args, r) {
@@ -574,36 +650,46 @@ pub fn redis_parse_req_with_args(
                     state = ReqState::Arg1Lf;
                 }
                 ArgStep::Error => {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             },
             ReqState::Arg1Lf => {
                 if ch != LF {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
                 p += 1;
                 let class = classify(ty);
                 match class {
                     CommandClass::ArgUpto1 | CommandClass::Arg1 => {
                         if rntokens != 0 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         return finish_req_ok(r, p, ty, is_read, quit, routing, ntokens, nkeys);
                     }
                     CommandClass::Arg2 => {
                         if rntokens != 1 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         state = ReqState::Arg2Len;
                     }
                     CommandClass::Arg3 => {
                         if rntokens != 2 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         state = ReqState::Arg2Len;
                     }
@@ -615,8 +701,10 @@ pub fn redis_parse_req_with_args(
                     }
                     CommandClass::ArgEval => {
                         if rntokens < 2 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         state = ReqState::Arg2Len;
                     }
@@ -627,27 +715,35 @@ pub fn redis_parse_req_with_args(
                         state = ReqState::KeyLen;
                     }
                     _ => {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                 }
             }
-            ReqState::Arg2Len => match read_bulk_len(input, &mut p, &mut token, &mut rlen, &mut rntokens) {
-                BulkLenStep::More => {}
-                BulkLenStep::Done => state = ReqState::Arg2LenLf,
-                BulkLenStep::Error => {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens, nkeys,
-                        ty, is_read, quit, routing);
+            ReqState::Arg2Len => {
+                match read_bulk_len(input, &mut p, &mut token, &mut rlen, &mut rntokens) {
+                    BulkLenStep::More => {}
+                    BulkLenStep::Done => state = ReqState::Arg2LenLf,
+                    BulkLenStep::Error => {
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
+                    }
+                    BulkLenStep::Eof => break,
                 }
-                BulkLenStep::Eof => break,
-            },
+            }
             ReqState::Arg2LenLf => {
                 if ch == LF {
                     state = ReqState::Arg2;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::Arg2 => {
@@ -669,23 +765,28 @@ pub fn redis_parse_req_with_args(
                             // Token holds the start of the integer.
                             let start = token.unwrap_or(0);
                             if start >= p {
-                                return finish_req_error(r, state, p, token, rlen, rntokens,
-                                    ntokens, nkeys, ty, is_read, quit, routing);
+                                return finish_req_error(
+                                    r, state, p, token, rlen, rntokens, ntokens, nkeys, ty,
+                                    is_read, quit, routing,
+                                );
                             }
                             let mut nkey: u32 = 0;
                             for &b in &input[start..p] {
                                 if b.is_ascii_digit() {
-                                    nkey = nkey
-                                        .saturating_mul(10)
-                                        .saturating_add(u32::from(b - b'0'));
+                                    nkey =
+                                        nkey.saturating_mul(10).saturating_add(u32::from(b - b'0'));
                                 } else {
-                                    return finish_req_error(r, state, p, token, rlen, rntokens,
-                                        ntokens, nkeys, ty, is_read, quit, routing);
+                                    return finish_req_error(
+                                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty,
+                                        is_read, quit, routing,
+                                    );
                                 }
                             }
                             if nkey == 0 || rntokens < nkey {
-                                return finish_req_error(r, state, p, token, rlen, rntokens,
-                                    ntokens, nkeys, ty, is_read, quit, routing);
+                                return finish_req_error(
+                                    r, state, p, token, rlen, rntokens, ntokens, nkeys, ty,
+                                    is_read, quit, routing,
+                                );
                             }
                             nkeys = nkey;
                             token = None;
@@ -694,30 +795,38 @@ pub fn redis_parse_req_with_args(
                         state = ReqState::Arg2Lf;
                     }
                     ArgStep::Error => {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                 }
             }
             ReqState::Arg2Lf => {
                 if ch != LF {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
                 p += 1;
                 let class = classify(ty);
                 match class {
                     CommandClass::Arg2 => {
                         if rntokens != 0 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         return finish_req_ok(r, p, ty, is_read, quit, routing, ntokens, nkeys);
                     }
                     CommandClass::Arg3 => {
                         if rntokens != 1 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         state = ReqState::Arg3Len;
                     }
@@ -729,33 +838,43 @@ pub fn redis_parse_req_with_args(
                     }
                     CommandClass::ArgEval => {
                         if rntokens < 1 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         state = ReqState::KeyLen;
                     }
                     _ => {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                 }
             }
-            ReqState::Arg3Len => match read_bulk_len(input, &mut p, &mut token, &mut rlen, &mut rntokens) {
-                BulkLenStep::More => {}
-                BulkLenStep::Done => state = ReqState::Arg3LenLf,
-                BulkLenStep::Error => {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens, nkeys,
-                        ty, is_read, quit, routing);
+            ReqState::Arg3Len => {
+                match read_bulk_len(input, &mut p, &mut token, &mut rlen, &mut rntokens) {
+                    BulkLenStep::More => {}
+                    BulkLenStep::Done => state = ReqState::Arg3LenLf,
+                    BulkLenStep::Error => {
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
+                    }
+                    BulkLenStep::Eof => break,
                 }
-                BulkLenStep::Eof => break,
-            },
+            }
             ReqState::Arg3LenLf => {
                 if ch == LF {
                     state = ReqState::Arg3;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::Arg3 => match read_bulk_arg(input, p, rlen, record_args, r) {
@@ -769,22 +888,28 @@ pub fn redis_parse_req_with_args(
                     state = ReqState::Arg3Lf;
                 }
                 ArgStep::Error => {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens, nkeys,
-                        ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             },
             ReqState::Arg3Lf => {
                 if ch != LF {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
                 p += 1;
                 let class = classify(ty);
                 match class {
                     CommandClass::Arg3 => {
                         if rntokens != 0 {
-                            return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                                nkeys, ty, is_read, quit, routing);
+                            return finish_req_error(
+                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
+                                quit, routing,
+                            );
                         }
                         return finish_req_ok(r, p, ty, is_read, quit, routing, ntokens, nkeys);
                     }
@@ -795,27 +920,35 @@ pub fn redis_parse_req_with_args(
                         state = ReqState::ArgnLen;
                     }
                     _ => {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                 }
             }
-            ReqState::ArgnLen => match read_bulk_len(input, &mut p, &mut token, &mut rlen, &mut rntokens) {
-                BulkLenStep::More => {}
-                BulkLenStep::Done => state = ReqState::ArgnLenLf,
-                BulkLenStep::Error => {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens, nkeys,
-                        ty, is_read, quit, routing);
+            ReqState::ArgnLen => {
+                match read_bulk_len(input, &mut p, &mut token, &mut rlen, &mut rntokens) {
+                    BulkLenStep::More => {}
+                    BulkLenStep::Done => state = ReqState::ArgnLenLf,
+                    BulkLenStep::Error => {
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
+                    }
+                    BulkLenStep::Eof => break,
                 }
-                BulkLenStep::Eof => break,
-            },
+            }
             ReqState::ArgnLenLf => {
                 if ch == LF {
                     state = ReqState::Argn;
                     p += 1;
                 } else {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             }
             ReqState::Argn => match read_bulk_arg(input, p, rlen, record_args, r) {
@@ -829,14 +962,18 @@ pub fn redis_parse_req_with_args(
                     state = ReqState::ArgnLf;
                 }
                 ArgStep::Error => {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
             },
             ReqState::ArgnLf => {
                 if ch != LF {
-                    return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                        nkeys, ty, is_read, quit, routing);
+                    return finish_req_error(
+                        r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                        routing,
+                    );
                 }
                 p += 1;
                 let class = classify(ty);
@@ -848,8 +985,10 @@ pub fn redis_parse_req_with_args(
                         state = ReqState::ArgnLen;
                     }
                     _ => {
-                        return finish_req_error(r, state, p, token, rlen, rntokens, ntokens,
-                            nkeys, ty, is_read, quit, routing);
+                        return finish_req_error(
+                            r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
+                            routing,
+                        );
                     }
                 }
             }
@@ -1075,8 +1214,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                         state = RspState::Multibulk;
                     }
                     _ => {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                 }
             }
@@ -1086,8 +1235,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
             RspState::Error => {
                 if token.is_none() {
                     if ch != b'-' {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                     token = Some(p);
                     p += 1;
@@ -1124,8 +1283,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                         .saturating_add(i64::from(ch - b'0'));
                     p += 1;
                 } else {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
             }
             RspState::Simple => {
@@ -1145,8 +1314,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
             }
             RspState::AlmostDone => {
                 if ch != LF {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
                 p += 1;
                 return finish_rsp_ok(r, p, ty, integer, ntoken_start, ntoken_end);
@@ -1154,8 +1333,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
             RspState::Bulk => {
                 if token.is_none() {
                     if ch != b'$' {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                     token = Some(p);
                     rlen = 0;
@@ -1169,15 +1358,35 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                 } else if ch == CR {
                     let start = token.expect("token recorded");
                     if p - start <= 1 {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                     token = None;
                     state = RspState::BulkLf;
                     p += 1;
                 } else {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
             }
             RspState::BulkLf => {
@@ -1185,16 +1394,36 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     state = RspState::BulkArg;
                     p += 1;
                 } else {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
             }
             RspState::BulkArg => {
                 let needed = match p.checked_add(rlen as usize) {
                     Some(n) => n,
                     None => {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                 };
                 if needed >= input.len() {
@@ -1202,8 +1431,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     break;
                 }
                 if input[needed] != CR {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
                 p = needed + 1;
                 rlen = 0;
@@ -1211,8 +1450,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
             }
             RspState::BulkArgLf => {
                 if ch != CR && ch != LF {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
                 if ch == CR {
                     p += 1;
@@ -1224,8 +1473,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
             RspState::Multibulk => {
                 if token.is_none() {
                     if ch != b'*' {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                     token = Some(p);
                     ntoken_start = Some(p);
@@ -1235,27 +1494,59 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     state = RspState::RuntoCrlf;
                     p += 1;
                 } else if ch.is_ascii_digit() {
-                    rntokens = rntokens.saturating_mul(10).saturating_add(u32::from(ch - b'0'));
+                    rntokens = rntokens
+                        .saturating_mul(10)
+                        .saturating_add(u32::from(ch - b'0'));
                     p += 1;
                 } else if ch == CR {
                     let start = token.expect("token recorded");
                     if p - start <= 1 {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                     ntoken_end = Some(p);
                     token = None;
                     state = RspState::MultibulkNargLf;
                     p += 1;
                 } else {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
             }
             RspState::MultibulkNargLf => {
                 if ch != LF {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
                 p += 1;
                 if rntokens == 0 {
@@ -1276,8 +1567,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                         continue;
                     }
                     if ch != b'$' {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                     token = Some(p);
                     rlen = 0;
@@ -1290,8 +1591,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                 } else if ch == CR {
                     let start = token.expect("token recorded");
                     if p - start <= 1 || rntokens == 0 {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                     if rlen == 1 && p - start == 3 {
                         rlen = 0;
@@ -1303,8 +1614,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     token = None;
                     p += 1;
                 } else {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
             }
             RspState::MultibulkArgnLenLf => {
@@ -1312,16 +1633,36 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     state = RspState::MultibulkArgn;
                     p += 1;
                 } else {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
             }
             RspState::MultibulkArgn => {
                 let needed = match p.checked_add(rlen as usize) {
                     Some(n) => n,
                     None => {
-                        return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                            integer, ntoken_start, ntoken_end);
+                        return finish_rsp_error(
+                            r,
+                            state,
+                            p,
+                            token,
+                            rlen,
+                            rntokens,
+                            ty,
+                            integer,
+                            ntoken_start,
+                            ntoken_end,
+                        );
                     }
                 };
                 if needed >= input.len() {
@@ -1329,8 +1670,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     break;
                 }
                 if input[needed] != CR {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
                 if rlen > 0 {
                     r.push_arg(ArgPos::new(input[p..needed].to_vec()));
@@ -1341,8 +1692,18 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
             }
             RspState::MultibulkArgnLf => {
                 if ch != LF {
-                    return finish_rsp_error(r, state, p, token, rlen, rntokens, ty,
-                        integer, ntoken_start, ntoken_end);
+                    return finish_rsp_error(
+                        r,
+                        state,
+                        p,
+                        token,
+                        rlen,
+                        rntokens,
+                        ty,
+                        integer,
+                        ntoken_start,
+                        ntoken_end,
+                    );
                 }
                 p += 1;
                 if rntokens == 0 {
@@ -1456,7 +1817,7 @@ mod tests {
         let m = parse_req(b"*4\r\n$3\r\nDEL\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n");
         assert_eq!(m.parse_result(), MsgParseResult::Ok);
         assert_eq!(m.ty(), MsgType::ReqRedisDel);
-        let keys: Vec<&[u8]> = m.keys().iter().map(|k| k.key()).collect();
+        let keys: Vec<&[u8]> = m.keys().iter().map(crate::msg::KeyPos::key).collect();
         assert_eq!(keys, vec![&b"a"[..], b"b", b"c"]);
     }
 
@@ -1465,7 +1826,7 @@ mod tests {
         let m = parse_req(b"*5\r\n$4\r\nMSET\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$1\r\n2\r\n");
         assert_eq!(m.parse_result(), MsgParseResult::Ok);
         assert_eq!(m.ty(), MsgType::ReqRedisMset);
-        let keys: Vec<&[u8]> = m.keys().iter().map(|k| k.key()).collect();
+        let keys: Vec<&[u8]> = m.keys().iter().map(crate::msg::KeyPos::key).collect();
         assert_eq!(keys, vec![&b"a"[..], b"b"]);
     }
 

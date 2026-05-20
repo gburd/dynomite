@@ -354,7 +354,74 @@ next to its only consumer.
 
 ## src/proto/
 
-(Stage 8.)
+### dyn_redis.c
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `redis_argz` | folded into `dynomite::proto::redis::commands::classify` (`CommandClass::Argz`) | done (Stage 8) |
+| `redis_arg0` | folded into `commands::classify` (`CommandClass::Arg0`) | done (Stage 8) |
+| `redis_arg1` | folded into `commands::classify` (`CommandClass::Arg1`) | done (Stage 8) |
+| `redis_arg2` | folded into `commands::classify` (`CommandClass::Arg2`) | done (Stage 8) |
+| `redis_arg3` | folded into `commands::classify` (`CommandClass::Arg3`) | done (Stage 8) |
+| `redis_argn` | folded into `commands::classify` (`CommandClass::ArgN`) | done (Stage 8) |
+| `redis_argx` | folded into `commands::classify` (`CommandClass::ArgX`) | done (Stage 8) |
+| `redis_argkvx` | folded into `commands::classify` (`CommandClass::ArgKvX`) | done (Stage 8) |
+| `redis_arg_upto1` | folded into `commands::classify` (`CommandClass::ArgUpto1`) | done (Stage 8) |
+| `redis_argeval` | folded into `commands::classify` (`CommandClass::ArgEval`) | done (Stage 8) |
+| `redis_error` | `dynomite::proto::redis::commands::is_redis_error` | done (Stage 8) |
+| `record_arg` | `dynomite::proto::redis::parser::read_bulk_arg` (private; pushes onto `Msg::args`) | done (Stage 8) |
+| `redis_rewrite_query` | `dynomite::proto::redis::redis_rewrite_query` | done (Stage 8) (SMEMBERS / DC_SAFE_QUORUM rewrite verbatim) |
+| `redis_parse_req` | `dynomite::proto::redis::redis_parse_req` (and `redis_parse_req_with_args`) | done (Stage 8); the cross-mbuf argument recording path is collapsed because the Rust parser flattens the chain before driving the state machine (recorded as ambiguity) |
+| `redis_parse_rsp` | `dynomite::proto::redis::redis_parse_rsp` | done (Stage 8) |
+| `redis_copy_bulk` | deferred to Stage 9 (mbuf-level chain manipulation in the conn FSM) | omitted-for-stage |
+| `redis_pre_coalesce` | `dynomite::proto::redis::redis_pre_coalesce` | done (Stage 8) for data-shape; mbuf-level chain mutation deferred to Stage 9 |
+| `redis_post_coalesce_mset` / `redis_post_coalesce_num` / `redis_post_coalesce_mget` / `redis_post_coalesce` | `dynomite::proto::redis::redis_post_coalesce` | done (Stage 8) for data-shape; per-type chain merge deferred to Stage 9 |
+| `redis_append_key` | folded into `dynomite::proto::redis::fragment::encode_fragment` | done (Stage 8) |
+| `redis_fragment_argx` | folded into `dynomite::proto::redis::redis_fragment` | done (Stage 8) |
+| `redis_fragment` | `dynomite::proto::redis::redis_fragment` | done (Stage 8); sharding delegated to a `FragmentDispatcher` trait so the cluster-layer coupling stays out of the proto module |
+| `redis_verify_request` | `dynomite::proto::redis::redis_verify_request` | done (Stage 8); takes a `FragmentDispatcher` for parity |
+| `redis_is_multikey_request` | `dynomite::proto::redis::redis_is_multikey_request` | done (Stage 8) |
+| `consume_numargs_from_response` / `consume_numargs_from_responses` / `redis_append_nargs` / `get_next_response_fragment` / `redis_get_fragment_quorum` / `free_rsp_each` / `redis_reconcile_multikey_responses` | folded into `dynomite::proto::redis::repair::reconcile::redis_reconcile_responses` data-shape arm; the per-fragment chain walker is deferred to Stage 9 because it requires the conn-coupled response-mgr clone path | done (Stage 8) for data-shape; per-fragment quorum walker deferred to Stage 9 |
+| `redis_reconcile_responses` | `dynomite::proto::redis::redis_reconcile_responses` | done (Stage 8) |
+
+### dyn_redis_repair.c
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `proto_cmd_info[]` | folded into `dynomite::proto::redis::repair::make::is_repairable` plus `dynomite::proto::redis::repair::clear::redis_clear_repair_md_for_key` predicates | done (Stage 8) |
+| `SET_SCRIPT` / `GET_SCRIPT` / `DEL_SCRIPT` / `HSET_SCRIPT` / `HDEL_SCRIPT` / `HGET_SCRIPT` / `ZADD_SCRIPT` / `SADD_SCRIPT` | `dynomite::proto::redis::repair::scripts::{SET_SCRIPT, GET_SCRIPT, DEL_SCRIPT, ...}` | done (Stage 8); HSET/HDEL/HGET/ZADD/SADD scripts are folded into the same byte-for-byte constants once the post-parse arg arrays land (Stage 9). The header constants are ported verbatim. |
+| `CLEANUP_DEL_SCRIPT` / `CLEANUP_HDEL_SCRIPT` | `dynomite::proto::redis::repair::scripts::{CLEANUP_DEL_SCRIPT, CLEANUP_HDEL_SCRIPT}` | done (Stage 8) |
+| `ADD_SET_STR` / `REM_SET_STR` | `dynomite::proto::redis::repair::scripts::{ADD_SET_STR, REM_SET_STR}` and `dynomite::proto::redis::verify::{ADD_SET_STR, REM_SET_STR}` | done (Stage 8) |
+| `total_tokens_of_type` / `parse_tokens_of_type` / `get_values_from_source` | folded into the post-parse step that lands with Stage 9; the data-shape side (eligibility predicates, command catalogue) is in place. | omitted-for-stage |
+| `post_parse_optional_args` / `post_parse_msg` | deferred to Stage 9 (per-command argument layout walker) | omitted-for-stage |
+| `obtain_info_from_latest_rsp` | deferred to Stage 9 | omitted-for-stage |
+| `update_total_num_tokens` | deferred to Stage 9 (folded into the script-builder step that runs once the post-parse arrays are walkable) | omitted-for-stage |
+| `create_redis_prtcl_script` / `finalize_repair_msg` | deferred to Stage 9 | omitted-for-stage |
+| `find_most_updated_rsp` / `adjust_rsp_buffers_for_client` | deferred to Stage 9 (per-response argument walker) | omitted-for-stage |
+| `redis_make_repair_query` | `dynomite::proto::redis::redis_make_repair_query` | done (Stage 8); data-shape side checks the eligibility predicate (`is_repairable` plus `is_read_repairs_enabled`) and returns `RepairOutcome::NoOp` when the script-builder is not reachable. The script-emit arm depends on Stage 9. |
+| `redis_rewrite_query_with_timestamp_md` | `dynomite::proto::redis::redis_rewrite_query_with_timestamp_md` | done (Stage 8) for the eligibility predicate; the Lua-script generation lands once Stage 9 walks the post-parsed argument list. |
+| `create_cleanup_script` | folded into `dynomite::proto::redis::repair::clear::redis_clear_repair_md_for_key` (which delegates to the script-builder once Stage 9 lands) | done (Stage 8) for data-shape |
+| `redis_clear_repair_md_for_key` | `dynomite::proto::redis::redis_clear_repair_md_for_key` | done (Stage 8) for data-shape |
+
+### dyn_memcache.c
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `MEMCACHE_MAX_KEY_LENGTH` | `dynomite::proto::memcache::parser::MEMCACHE_MAX_KEY_LENGTH` | done (Stage 8) |
+| `memcache_storage` / `memcache_cas` / `memcache_retrieval` / `memcache_arithmetic` / `memcache_delete` / `memcache_touch` | `dynomite::proto::memcache::commands::{memcache_storage, memcache_cas, memcache_retrieval, memcache_arithmetic, memcache_delete, memcache_touch}` | done (Stage 8) |
+| `memcache_parse_req` | `dynomite::proto::memcache::memcache_parse_req` (and `memcache_parse_req_tagged` for the hash-tag variant) | done (Stage 8) |
+| `memcache_parse_rsp` | `dynomite::proto::memcache::memcache_parse_rsp` | done (Stage 8) |
+| `memcache_failure` | omitted: trivial `return false;`; the Rust port has no in-tree caller after the conn FSM lands. |
+| `memcache_append_key` | folded into `dynomite::proto::memcache::fragment::memcache_fragment` | done (Stage 8) |
+| `memcache_fragment_retrieval` / `memcache_fragment` | `dynomite::proto::memcache::memcache_fragment` | done (Stage 8) |
+| `memcache_verify_request` | `dynomite::proto::memcache::memcache_verify_request` | done (Stage 8) |
+| `memcache_pre_coalesce` | `dynomite::proto::memcache::memcache_pre_coalesce` | done (Stage 8) for data-shape; mbuf-level chain mutation deferred to Stage 9 |
+| `memcache_copy_bulk` | deferred to Stage 9 (mbuf-level chain manipulation) | omitted-for-stage |
+| `memcache_post_coalesce` | `dynomite::proto::memcache::memcache_post_coalesce` | done (Stage 8) for data-shape; per-fragment payload concatenation deferred to Stage 9 |
+| `memcache_post_connect` / `memcache_swallow_msg` / `memcache_add_auth` / `memcache_reply` | omitted: the C reference defines these as no-ops or `NOT_REACHED()` stubs. The Rust port has no in-tree caller after the Stage 9 conn FSM lands; matching no-op shape is documented in the conn FSM rather than the protocol module. |
+| `memcache_is_multikey_request` | `dynomite::proto::memcache::memcache_is_multikey_request` | done (Stage 8); always returns `false` (matches C source) |
+| `memcache_reconcile_responses` | `dynomite::proto::memcache::memcache_reconcile_responses` | done (Stage 8); returns `ReconcileOutcome::PickFirst` under `DC_QUORUM` and `ReconcileOutcome::Error(...)` otherwise |
+| `memcache_rewrite_query` / `memcache_rewrite_query_with_timestamp_md` / `memcache_make_repair_query` / `memcache_clear_repair_md_for_key` | `dynomite::proto::memcache::repair::{memcache_rewrite_query, memcache_rewrite_query_with_timestamp_md, memcache_make_repair_query, memcache_clear_repair_md_for_key}` | done (Stage 8); intentional no-ops matching the C source. Documented in module rustdoc. |
 
 ## src/seedsprovider/
 
@@ -392,33 +459,33 @@ next to its only consumer.
 | `get_consistency_string` / `get_consistency_enum_from_string` | `ConsistencyLevel::name` / `from_name` | done (Stage 7) |
 | `enum msg_routing` | `dynomite::msg::MsgRouting` | done (Stage 7) |
 | `get_msg_routing_string` | `MsgRouting::name` | done (Stage 7) |
-| `struct keypos` / `struct argpos` | deferred to Stage 8 (introduced by the redis/memcache parsers) | omitted-for-stage |
-| `struct write_with_ts` | deferred to Stage 8 (read-repair metadata is rewritten by the redis parser) | omitted-for-stage |
+| `struct keypos` / `struct argpos` | `dynomite::msg::keypos::{KeyPos, ArgPos}` (re-exported from `dynomite::msg`) | done (Stage 8) |
+| `struct write_with_ts` | folded into `dynomite::proto::redis::repair::scripts` constants plus the eligibility predicates in `dynomite::proto::redis::repair::{make, clear, rewrite}` | done (Stage 8) for the data-shape side; the post-parse argument walker that the C engine populates lands with Stage 9 |
 | `struct msg` | `dynomite::msg::Msg` | done (Stage 7) (data shape; recv/send paths defer to Stage 9) |
 | `MSG_TYPE_CODEC` strings (`msg_type_strings`) | `MsgType::name` | done (Stage 7) |
 | `g_read_repairs_enabled` | `dynomite::msg::is_read_repairs_enabled` / `set_read_repairs_enabled` (backed by `OnceLock<bool>`) | done (Stage 7) |
-| `g_pre_coalesce` / `g_post_coalesce` / `g_fragment` / `g_verify_request` / `g_is_multikey_request` / `g_reconcile_responses` / `g_rewrite_query` / `g_rewrite_query_with_timestamp_md` / `g_make_repair_query` / `g_clear_repair_md_for_key` | deferred to Stage 8 (redis/memcache parser dispatch tables) | omitted-for-stage |
-| `set_datastore_ops` | deferred to Stage 8 | omitted-for-stage |
+| `g_pre_coalesce` / `g_post_coalesce` / `g_fragment` / `g_verify_request` / `g_is_multikey_request` / `g_reconcile_responses` / `g_rewrite_query` / `g_rewrite_query_with_timestamp_md` / `g_make_repair_query` / `g_clear_repair_md_for_key` | `dynomite::proto::{redis, memcache}::*` (per-protocol entry points) | done (Stage 8) |
+| `set_datastore_ops` | folded into the per-protocol entry points; the Stage 9 conn FSM picks the protocol based on the configured `data_store` discriminator. | done (Stage 8) for the data-shape side; per-conn dispatch deferred to Stage 9 |
 | `g_read_consistency` / `g_write_consistency` / `g_timeout_factor` | deferred to Stage 9 (consumed by the conn FSM) | omitted-for-stage |
 | `msg_init` / `msg_deinit` | replaced by `Msg::new` and `Drop` (Rust ownership replaces the free queue) | done (Stage 7) |
 | `msg_get` / `_msg_get` / `msg_put` / `msg_free` | replaced by `Msg::new` + `Drop`; the alloc-budget cap moves to `dynomited` startup wiring (Stage 12) | done (Stage 7) for the data-shape side; cap deferred to Stage 12 |
 | `msg_get_error` | `dynomite::msg::response::make_error` | done (Stage 7) |
-| `msg_get_rsp_integer` | deferred to Stage 8 (redis-shape integer reply) | omitted-for-stage |
+| `msg_get_rsp_integer` | folded into `Msg::set_integer` (the parser populates `integer` directly on the response message) | done (Stage 8) |
 | `msg_clone` | deferred to Stage 9 (uses connection ownership) | omitted-for-stage |
 | `msg_type_string` | `MsgType::name` | done (Stage 7) |
 | `msg_empty` | `Msg::mlen() == 0` (the BAD_FORMAT side is folded into `dyn_error_code`) | done (Stage 7) |
 | `msg_dump` | omitted: replaced by `tracing::debug!(?msg)` once tracing is wired across the engine. |
 | `msg_length` / `msg_mbuf_size` | `Msg::recompute_mlen` and `MbufQueue::len` | done (Stage 7) |
 | `msg_alloc_msgs` / `msg_free_queue_size` | omitted: the C alloc cap is replaced by ownership and a Stage 12 budget knob. |
-| `msg_payload_crc32` | deferred to Stage 8 (uses `crc32_sz` over the payload region defined by the redis parser) | omitted-for-stage |
-| `msg_gen_frag_id` | deferred to Stage 8 | omitted-for-stage |
-| `msg_ensure_mbuf` / `msg_append` / `msg_append_format` / `msg_prepend` / `msg_prepend_format` | deferred to Stage 8 (callers are protocol parsers and error paths that emit redis/memcache replies) | omitted-for-stage |
-| `msg_get_full_key` / `msg_get_tagged_key` / `msg_get_full_key_copy` / `msg_get_arg_copy` / `msg_get_key` / `msg_get_arg` | deferred to Stage 8 (consumes `keypos`/`argpos`) | omitted-for-stage |
+| `msg_payload_crc32` | deferred to Stage 9 (uses `crc32_sz` over the payload region defined by the redis parser; the multikey reconciler that consumes it lives in Stage 9) | omitted-for-stage |
+| `msg_gen_frag_id` | folded into `dynomite::proto::redis::fragment` and `dynomite::proto::memcache::fragment` (each owns a private monotonic counter) | done (Stage 8) |
+| `msg_ensure_mbuf` / `msg_append` / `msg_append_format` / `msg_prepend` / `msg_prepend_format` | folded into `dynomite::proto::redis::fragment::write_buf_into_chain` and `dynomite::proto::redis::repair::rewrite::write_into_chain` (each writes the formatted payload into a fresh mbuf chain on the message). | done (Stage 8) for the parser/repair callsites; the conn-coupled error-reply emitters land with Stage 9 |
+| `msg_get_full_key` / `msg_get_tagged_key` / `msg_get_full_key_copy` / `msg_get_arg_copy` / `msg_get_key` / `msg_get_arg` | folded into `Msg::keys()` and `Msg::args()` accessors (the parsed `KeyPos`/`ArgPos` carry the byte ranges directly). | done (Stage 8) |
 | `msg_recv` / `msg_recv_chain` / `msg_send` / `msg_send_chain` / `msg_parse` / `msg_parsed` / `msg_repair` | deferred to Stage 9 (conn FSM + reactor wiring) | omitted-for-stage |
 | `msg_tmo_min` / `msg_tmo_insert` / `msg_tmo_delete` / `msg_from_rbe` | deferred to Stage 9 (timeout queue is conn-coupled) | omitted-for-stage |
 | `msg_incr_awaiting_rsps` / `msg_decr_awaiting_rsps` | `Msg::incr_awaiting_rsps` / `decr_awaiting_rsps` | done (Stage 7) |
 | `msg_handle_response` | deferred to Stage 9 (rsp_handler vtable lives on `Conn`) | omitted-for-stage |
-| `craft_ok_rsp` / `simulate_ok_rsp` / `msg_apply_config` | deferred to Stage 8 (redis-specific reply text) | omitted-for-stage |
+| `craft_ok_rsp` / `simulate_ok_rsp` / `msg_apply_config` | deferred to Stage 9 (conn-coupled OK-response synthesis); the data-shape side (`HACK_SETTING_CONN_CONSISTENCY` discriminator) is recognised by the parser. | omitted-for-stage |
 | `is_msg_type_dyno_config` | `MsgType::HackSettingConnConsistency` discriminator (caller compares directly) | done (Stage 7) |
 | `print_req` / `print_rsp` / `init_object` | omitted: replaced by `#[derive(Debug)]` on `Msg`. |
 | `parse_int_arg_for_formatting` / `parse_llu_arg_for_formatting` / `parse_string_arg_for_formatting` | omitted: replaced by `format!` and `write!` at the call sites in Stage 8. |

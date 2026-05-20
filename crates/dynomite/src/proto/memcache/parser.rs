@@ -11,6 +11,19 @@
 //! The parsers MUST NOT panic on any input. Invalid bytes are
 //! reported via [`MsgParseResult::Error`].
 
+// The parser truncates ASCII-decimal accumulators into fixed-width
+// counters that match the reference engine (`uint32_t` for vlen,
+// `usize` for cursor offsets). The allowance keeps the Rust port
+// faithful to the C casts.
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::match_same_arms)]
+// The state machine deliberately keeps the C `if (token == NULL)`
+// guard pattern; rewriting as `let-else` collapses two branches
+// the reference engine treats independently.
+#![allow(clippy::manual_let_else)]
+#![allow(clippy::redundant_else)]
+
 use super::commands::{
     memcache_arithmetic, memcache_cas, memcache_delete, memcache_retrieval, memcache_storage,
     memcache_touch,
@@ -218,8 +231,7 @@ fn make_keypos(input: &[u8], start: usize, end: usize, hash_tag: Option<HashTag>
     let bytes = input[start..end].to_vec();
     if let Some(tag) = hash_tag {
         if let Some(open_idx) = bytes.iter().position(|&b| b == tag.open) {
-            if let Some(close_offset) = bytes[open_idx + 1..].iter().position(|&b| b == tag.close)
-            {
+            if let Some(close_offset) = bytes[open_idx + 1..].iter().position(|&b| b == tag.close) {
                 let tag_start = open_idx + 1;
                 let tag_end = open_idx + 1 + close_offset;
                 return KeyPos::new(bytes, tag_start..tag_end);
@@ -327,7 +339,10 @@ pub fn memcache_parse_req_tagged(
                     token = None;
                     ty = classify_command(cmd);
                     ntokens = ntokens.saturating_add(1);
-                    is_read = matches!(ty, MsgType::ReqMcGet | MsgType::ReqMcGets | MsgType::ReqMcQuit);
+                    is_read = matches!(
+                        ty,
+                        MsgType::ReqMcGet | MsgType::ReqMcGets | MsgType::ReqMcQuit
+                    );
                     if matches!(ty, MsgType::ReqMcQuit) {
                         quit = true;
                         // The C parser sets state to SW_CRLF and steps p back by one.
@@ -391,9 +406,7 @@ pub fn memcache_parse_req_tagged(
                     let start = token.expect("token recorded");
                     let keylen = p - start;
                     if keylen == 0 || keylen > MEMCACHE_MAX_KEY_LENGTH {
-                        return finish_error(
-                            r, state, p, token, vlen, ty, is_read, quit, ntokens,
-                        );
+                        return finish_error(r, state, p, token, vlen, ty, is_read, quit, ntokens);
                     }
                     let kp = make_keypos(input, start, p, hash_tag);
                     r.push_key(kp);
@@ -506,9 +519,7 @@ pub fn memcache_parse_req_tagged(
                     p += 1;
                 } else if memcache_cas(ty) {
                     if ch != b' ' {
-                        return finish_error(
-                            r, state, p, token, vlen, ty, is_read, quit, ntokens,
-                        );
+                        return finish_error(r, state, p, token, vlen, ty, is_read, quit, ntokens);
                     }
                     token = None;
                     state = ReqState::SpacesBeforeCas;
@@ -553,9 +564,7 @@ pub fn memcache_parse_req_tagged(
                 }
             },
             ReqState::Val => {
-                let m = p
-                    .checked_add(vlen as usize)
-                    .unwrap_or(usize::MAX);
+                let m = p.checked_add(vlen as usize).unwrap_or(usize::MAX);
                 if m >= input.len() {
                     let consumed = input.len() - p;
                     vlen = vlen.saturating_sub(consumed as u32);
@@ -604,9 +613,7 @@ pub fn memcache_parse_req_tagged(
                         state = ReqState::Noreply;
                         p += 1;
                     } else {
-                        return finish_error(
-                            r, state, p, token, vlen, ty, is_read, quit, ntokens,
-                        );
+                        return finish_error(r, state, p, token, vlen, ty, is_read, quit, ntokens);
                     }
                 }
                 CR => {
@@ -637,9 +644,7 @@ pub fn memcache_parse_req_tagged(
                         state = ReqState::AfterNoreply;
                         // Do not advance.
                     } else {
-                        return finish_error(
-                            r, state, p, token, vlen, ty, is_read, quit, ntokens,
-                        );
+                        return finish_error(r, state, p, token, vlen, ty, is_read, quit, ntokens);
                     }
                 }
                 _ => {
@@ -676,16 +681,7 @@ pub fn memcache_parse_req_tagged(
             },
             ReqState::AlmostDone => match ch {
                 LF => {
-                    return finish_done(
-                        r,
-                        p + 1,
-                        ty,
-                        is_read,
-                        quit,
-                        expect_reply,
-                        ntokens,
-                        vlen,
-                    );
+                    return finish_done(r, p + 1, ty, is_read, quit, expect_reply, ntokens, vlen);
                 }
                 _ => {
                     return finish_error(r, state, p, token, vlen, ty, is_read, quit, ntokens);
@@ -1113,7 +1109,7 @@ mod tests {
     fn parse_get_multikey() {
         let m = parse_req(b"get a b c\r\n");
         assert_eq!(m.parse_result(), MsgParseResult::Ok);
-        let keys: Vec<&[u8]> = m.keys().iter().map(|k| k.key()).collect();
+        let keys: Vec<&[u8]> = m.keys().iter().map(crate::msg::KeyPos::key).collect();
         assert_eq!(keys, vec![&b"a"[..], b"b", b"c"]);
     }
 

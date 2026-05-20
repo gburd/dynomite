@@ -8,6 +8,15 @@
 //!
 //! All lookups are case-insensitive ASCII.
 
+// Both [`classify`] and [`lookup`] dispatch on dozens of arms; the
+// parity walk requires that the variants stay in this single
+// function. The match-same-arm and match-wildcard-arm warnings
+// arise from the long `match` blocks; suppressing them keeps the
+// per-command rows aligned with the reference engine's switch
+// statements.
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::match_same_arms)]
+
 use crate::msg::MsgType;
 
 /// Argument-shape classification for a Redis request command.
@@ -82,10 +91,9 @@ pub fn classify(ty: MsgType) -> CommandClass {
     use MsgType as M;
     match ty {
         // argz
-        M::ReqRedisPing
-        | M::ReqRedisQuit
-        | M::ReqRedisScriptFlush
-        | M::ReqRedisScriptKill => CommandClass::Argz,
+        M::ReqRedisPing | M::ReqRedisQuit | M::ReqRedisScriptFlush | M::ReqRedisScriptKill => {
+            CommandClass::Argz
+        }
 
         // arg0
         M::ReqRedisPersist
@@ -436,12 +444,7 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
         // length 6
         b"append" => (MsgType::ReqRedisAppend, false, false, RoutingOverride::None),
         b"decrby" => (MsgType::ReqRedisDecrby, false, false, RoutingOverride::None),
-        b"exists" => (
-            MsgType::ReqRedisExists,
-            true,
-            false,
-            RoutingOverride::None,
-        ),
+        b"exists" => (MsgType::ReqRedisExists, true, false, RoutingOverride::None),
         b"expire" => (MsgType::ReqRedisExpire, false, false, RoutingOverride::None),
         b"getbit" => (MsgType::ReqRedisGetbit, true, false, RoutingOverride::None),
         b"getset" => (MsgType::ReqRedisGetset, false, false, RoutingOverride::None),
@@ -483,12 +486,7 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
             false,
             RoutingOverride::None,
         ),
-        b"hexists" => (
-            MsgType::ReqRedisHexists,
-            true,
-            false,
-            RoutingOverride::None,
-        ),
+        b"hexists" => (MsgType::ReqRedisHexists, true, false, RoutingOverride::None),
         b"hgetall" => (
             MsgType::ReqRedisHgetall,
             true,
@@ -537,24 +535,9 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
             false,
             RoutingOverride::None,
         ),
-        b"geohash" => (
-            MsgType::ReqRedisGeohash,
-            true,
-            false,
-            RoutingOverride::None,
-        ),
-        b"geodist" => (
-            MsgType::ReqRedisGeodist,
-            true,
-            false,
-            RoutingOverride::None,
-        ),
-        b"hstrlen" => (
-            MsgType::ReqRedisHstrlen,
-            true,
-            false,
-            RoutingOverride::None,
-        ),
+        b"geohash" => (MsgType::ReqRedisGeohash, true, false, RoutingOverride::None),
+        b"geodist" => (MsgType::ReqRedisGeodist, true, false, RoutingOverride::None),
+        b"hstrlen" => (MsgType::ReqRedisHstrlen, true, false, RoutingOverride::None),
         // length 8
         b"expireat" => (
             MsgType::ReqRedisExpireat,
@@ -598,12 +581,7 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
             false,
             RoutingOverride::None,
         ),
-        b"json.get" => (
-            MsgType::ReqRedisJsonget,
-            true,
-            false,
-            RoutingOverride::None,
-        ),
+        b"json.get" => (MsgType::ReqRedisJsonget, true, false, RoutingOverride::None),
         b"json.del" => (
             MsgType::ReqRedisJsondel,
             false,
@@ -876,6 +854,9 @@ mod tests {
 
     #[test]
     fn error_lookup_wrongtype() {
-        assert_eq!(error_lookup(b"-WRONGTYPE"), Some(MsgType::RspRedisErrorWrongtype));
+        assert_eq!(
+            error_lookup(b"-WRONGTYPE"),
+            Some(MsgType::RspRedisErrorWrongtype)
+        );
     }
 }

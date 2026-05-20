@@ -9,7 +9,16 @@
 //!
 //! # Examples
 //!
-//! ```\n//! use dynomite::msg::{Msg, MsgType};\n//! use dynomite::proto::memcache;\n//!\n//! let mut req = Msg::new(0, MsgType::Unknown, true);\n//! let r = memcache::memcache_parse_req(&mut req, b\"get user:42\\r\\n\");\n//! assert_eq!(r, dynomite::msg::MsgParseResult::Ok);\n//! assert_eq!(req.ty(), MsgType::ReqMcGet);\n//! assert_eq!(req.keys()[0].key(), b\"user:42\");\n//! ```
+//! ```
+//! use dynomite::msg::{Msg, MsgType};
+//! use dynomite::proto::memcache;
+//!
+//! let mut req = Msg::new(0, MsgType::Unknown, true);
+//! let r = memcache::memcache_parse_req(&mut req, b"get user:42\r\n");
+//! assert_eq!(r, dynomite::msg::MsgParseResult::Ok);
+//! assert_eq!(req.ty(), MsgType::ReqMcGet);
+//! assert_eq!(req.keys()[0].key(), b"user:42");
+//! ```
 
 pub mod coalesce;
 pub mod commands;
