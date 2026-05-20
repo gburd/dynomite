@@ -1,24 +1,22 @@
-//! DNODE_PEER_CLIENT-role connection driver.
+//! Inbound peer-connection driver for the dnode peer plane.
 //!
-//! Inbound peer connection: the local node is the receiver. The
-//! driver:
+//! The local node is the receiver. The driver:
 //!
 //! 1. Reads bytes off the transport into a contiguous buffer.
-//! 2. Drives the DNODE parser ([`crate::proto::dnode::DnodeParser`])
+//! 2. Drives the dnode header parser ([`crate::proto::dnode::DnodeParser`])
 //!    over the buffer until a full `Dmsg` header has been observed.
 //! 3. If the header marks the payload as encrypted, decrypts it
 //!    using the per-connection AES key bound during the handshake
-//!    via [`crate::crypto::Crypto`].
+//!    via [`crate::crypto::Crypto`]. When the header indicates a
+//!    plaintext payload (the peer-plane was negotiated unsecured),
+//!    the bytes pass through unchanged.
 //! 4. Drives the datastore parser over the (decrypted) payload to
 //!    reconstruct a [`Msg`].
 //! 5. Hands the parsed [`Msg`] to the supplied
-//!    [`ClientHandler`]'s dispatcher.
-//!
-//! Mirrors `dyn_dnode_client.{c,h}` plus the encryption hookup the
-//! C reference performs in `dyn_parse_core` once
-//! `dnode_secured == 1`.
+//!    [`ClientHandler`]'s dispatcher and routes the dispatcher's
+//!    response back through the per-connection responder channel.
 
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 use crate::msg::Msg;
@@ -71,22 +69,38 @@ pub async fn dnode_client_loop(
                 }
                 conn.record_recv(n);
                 accumulated.extend_from_slice(&read_buf[..n]);
-                drive_dnode_parser(&mut conn, &handler, &mut accumulated, &mut parser)?;
+                drive_dnode_parser(&mut conn, &handler, &mut accumulated, &mut parser).await?;
             }
-            Some(_env) = rx.recv() => {
-                // Stage 9 routes responses through the dispatcher
-                // wiring; full DNODE response framing is handled by
-                // `dnode_server::DnodeServerConn` on the outbound
-                // side. The inbound (peer-client) FSM only forwards
-                // requests upstream, so an inbound responder
-                // envelope is a no-op until Stage 10 wires the
-                // peer-client to its dispatcher's response channel.
+            Some(env) = rx.recv() => {
+                // Forward dispatcher-produced responses back to
+                // the peer over this same transport. The wire
+                // framing already lives in the response's mbuf
+                // chain; the peer-server side prepends its own
+                // dnode header for outbound writes.
+                let bytes: Vec<u8> = env
+                    .rsp
+                    .mbufs()
+                    .iter()
+                    .flat_map(|b| b.readable().to_vec())
+                    .collect();
+                if !bytes.is_empty() {
+                    if let Some(t) = conn.transport_mut() {
+                        t.write_all(&bytes).await?;
+                        conn.record_send(bytes.len());
+                    }
+                }
+                conn.outstanding_mut().remove(&env.req_id);
+                if let Some(front) = conn.omsg_q_mut().front() {
+                    if front.id() == env.req_id {
+                        let _ = conn.omsg_q_mut().pop_front();
+                    }
+                }
             }
         }
     }
 }
 
-fn drive_dnode_parser(
+async fn drive_dnode_parser(
     conn: &mut Conn,
     handler: &ClientHandler,
     accumulated: &mut Vec<u8>,
@@ -124,14 +138,17 @@ fn drive_dnode_parser(
                 // Decrypt if the dnode header indicates the payload
                 // is encrypted and we have an AES key.
                 let decoded = if dmsg.is_encrypted() {
-                    if let Some(key) = conn.aes_key() {
-                        decrypt_dnode_payload(key, &payload)
-                    } else {
-                        // Without a key we cannot continue; drop the
-                        // request rather than panic.
-                        tracing::warn!("dnode_client received encrypted payload without aes key");
-                        continue;
-                    }
+                    let Some(key) = conn.aes_key() else {
+                        // No key has been negotiated yet; the
+                        // peer-plane handshake should have run
+                        // first. Surface a single opaque parse
+                        // error and let the driver close the
+                        // connection.
+                        return Err(NetError::Dnode(
+                            "dnode payload marked encrypted but no aes key bound".into(),
+                        ));
+                    };
+                    decrypt_dnode_payload(key, &payload)?
                 } else {
                     payload
                 };
@@ -155,14 +172,30 @@ fn drive_dnode_parser(
                         buf.recv(&decoded);
                         msg.mbufs_mut().push_back(buf);
                         msg.recompute_mlen();
-                        // We have a parsed peer request. Stage 10
-                        // routes it through the dispatcher; for
-                        // Stage 9 the handler is the seam.
-                        // Construct a sender clone so the dispatcher
-                        // can reply on the per-conn channel.
-                        // The handler itself owns the sender; we
-                        // just forward through the dispatch hook.
-                        let _ = handler;
+                        conn.outstanding_mut().insert(msg.id(), msg.id());
+                        conn.enqueue_out(Msg::new(msg.id(), msg.ty(), true))?;
+                        // Hand the parsed peer request to the
+                        // configured dispatcher. The dispatcher
+                        // either takes ownership and replies
+                        // asynchronously through `responder`, or it
+                        // returns an inline / error response that
+                        // we forward immediately, or it asks the
+                        // FSM to drop the request.
+                        let outcome = handler
+                            .dispatcher()
+                            .dispatch(msg, handler.response_tx().clone());
+                        match outcome {
+                            crate::net::dispatcher::DispatchOutcome::Pending
+                            | crate::net::dispatcher::DispatchOutcome::Drop => {}
+                            crate::net::dispatcher::DispatchOutcome::Inline(rsp)
+                            | crate::net::dispatcher::DispatchOutcome::Error(rsp) => {
+                                let env = OutboundEnvelope {
+                                    req_id: rsp.id(),
+                                    rsp,
+                                };
+                                let _ = handler.response_tx().send(env).await;
+                            }
+                        }
                     }
                     MsgParseResult::Again => return Ok(()),
                     other => {
@@ -174,15 +207,21 @@ fn drive_dnode_parser(
     }
 }
 
-fn decrypt_dnode_payload(_key: &[u8; 32], payload: &[u8]) -> Vec<u8> {
-    // Stage 6 exposes Crypto::dyn_aes_decrypt over an mbuf chain;
-    // the in-memory shape we have here is already a Vec<u8>. The
-    // Stage 9 path therefore feeds the bytes through a transient
-    // Mbuf chain and returns the decrypted Vec. Until Stage 10
-    // wires a real AES key into the Conn, the Stage 9 driver
-    // returns the bytes unchanged so the loopback test does not
-    // need a live key handshake.
-    payload.to_vec()
+/// Decrypt a dnode peer-plane payload using the per-connection AES
+/// key.
+///
+/// AES-128-CBC with PKCS#7 padding, IV from the trailing 16 bytes
+/// of the 32-byte key buffer. Returns a single opaque
+/// [`NetError::Dnode`] on failure regardless of whether the
+/// underlying error was bad padding, a length mismatch, or a
+/// key/iv mismatch, so peers cannot distinguish the cases (the
+/// padding-oracle surface flagged in the Stage 6 review).
+fn decrypt_dnode_payload(
+    key: &[u8; crate::crypto::AES_KEYLEN],
+    payload: &[u8],
+) -> Result<Vec<u8>, NetError> {
+    crate::crypto::Crypto::aes_decrypt(payload, key)
+        .map_err(|_| NetError::Dnode("dnode payload decrypt failed".into()))
 }
 
 #[cfg(test)]
