@@ -15,6 +15,7 @@ pub mod crypto;
 pub mod hashkit;
 pub mod io;
 pub mod msg;
+pub mod net;
 pub mod proto;
 pub mod stats;
 pub mod util;
