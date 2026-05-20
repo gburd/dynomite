@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  check:
+    name: build / lint / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.83.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: install nextest
+        uses: taiki-e/install-action@nextest
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: build
+        run: cargo build --workspace --all-targets --locked
+      - name: nextest
+        run: cargo nextest run --workspace --all-features
+      - name: doctests
+        run: cargo test --doc --workspace
+      - name: hygiene
+        run: |
+          scripts/check_no_todos.sh
+          scripts/check_no_port_comments.sh
+          scripts/check_ascii.sh

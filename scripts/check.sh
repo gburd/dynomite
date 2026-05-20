@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Local CI gate. Mirrors .github/workflows/ci.yml. Run before declaring
+# any stage done.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+echo "==> rustfmt"
+cargo fmt --all -- --check
+
+echo "==> clippy"
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+echo "==> build"
+cargo build --workspace --all-targets --locked
+
+echo "==> nextest"
+if command -v cargo-nextest >/dev/null 2>&1; then
+  cargo nextest run --workspace --all-features
+else
+  cargo test --workspace --all-features
+fi
+
+echo "==> doctests"
+cargo test --doc --workspace
+
+echo "==> deny"
+if command -v cargo-deny >/dev/null 2>&1; then
+  cargo deny check || true
+fi
+
+echo "==> audit"
+if command -v cargo-audit >/dev/null 2>&1; then
+  cargo audit --deny warnings || true
+fi
+
+echo "==> mdbook"
+if [ -d docs/book ] && command -v mdbook >/dev/null 2>&1; then
+  mdbook build docs/book
+fi
+
+echo "==> repo hygiene"
+"$ROOT/scripts/check_no_todos.sh"
+"$ROOT/scripts/check_no_port_comments.sh"
+"$ROOT/scripts/check_ascii.sh"
+
+echo "OK"
