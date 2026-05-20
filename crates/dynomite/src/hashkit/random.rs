@@ -1,0 +1,130 @@
+//! Pseudo-random integer source used by the `random` distribution.
+//!
+//! The C reference seeds glibc `srandom` with `time(NULL)` and dispatches
+//! requests to live servers using `random() % ncontinuum`. We replace that
+//! with a small, deterministic-when-seeded LCG so the engine can run on
+//! platforms whose libc does not provide BSD `random()`. The default seed
+//! still draws entropy from a monotonic clock, matching the spirit of the
+//! C version.
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Linear congruential generator with the parameters used by glibc's
+/// non-secure `random()` family. Sufficient for ring dispatch (the only
+/// caller); not cryptographically strong.
+#[derive(Clone, Debug)]
+pub struct PseudoRng {
+    state: u64,
+}
+
+impl PseudoRng {
+    /// Construct a generator seeded from a monotonic clock.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::PseudoRng;
+    /// let mut rng = PseudoRng::from_monotonic();
+    /// let _ = rng.next_u32();
+    /// ```
+    #[must_use]
+    pub fn from_monotonic() -> Self {
+        let seed = clock_seed();
+        Self::from_seed(seed)
+    }
+
+    /// Construct a generator from an explicit seed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::PseudoRng;
+    /// let mut a = PseudoRng::from_seed(7);
+    /// let mut b = PseudoRng::from_seed(7);
+    /// assert_eq!(a.next_u32(), b.next_u32());
+    /// ```
+    #[must_use]
+    pub fn from_seed(seed: u64) -> Self {
+        // A zero seed in the LCG is a degenerate fixed point; nudge it.
+        let s = if seed == 0 {
+            0x9E37_79B9_7F4A_7C15
+        } else {
+            seed
+        };
+        Self { state: s }
+    }
+
+    /// Advance the generator and return the next 32-bit value.
+    pub fn next_u32(&mut self) -> u32 {
+        // Knuth's MMIX LCG parameters; long-period and full 64-bit state.
+        self.state = self
+            .state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        // High bits of the LCG state have better statistical properties
+        // than the low bits, so return the upper half.
+        (self.state >> 32) as u32
+    }
+
+    /// Pick a uniform value in `[0, modulus)`. Returns `0` when modulus
+    /// is zero.
+    pub fn next_index(&mut self, modulus: u32) -> u32 {
+        if modulus == 0 {
+            0
+        } else {
+            self.next_u32() % modulus
+        }
+    }
+}
+
+fn clock_seed() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| {
+        let secs = d.as_secs();
+        let nanos = u64::from(d.subsec_nanos());
+        secs.wrapping_mul(1_000_000_000).wrapping_add(nanos)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deterministic_for_same_seed() {
+        let mut a = PseudoRng::from_seed(123);
+        let mut b = PseudoRng::from_seed(123);
+        for _ in 0..32 {
+            assert_eq!(a.next_u32(), b.next_u32());
+        }
+    }
+
+    #[test]
+    fn distinct_seeds_diverge() {
+        let mut a = PseudoRng::from_seed(1);
+        let mut b = PseudoRng::from_seed(2);
+        let av: Vec<u32> = (0..16).map(|_| a.next_u32()).collect();
+        let bv: Vec<u32> = (0..16).map(|_| b.next_u32()).collect();
+        assert_ne!(av, bv);
+    }
+
+    #[test]
+    fn next_index_bounded() {
+        let mut rng = PseudoRng::from_seed(42);
+        for _ in 0..256 {
+            let i = rng.next_index(13);
+            assert!(i < 13);
+        }
+    }
+
+    #[test]
+    fn next_index_zero_modulus() {
+        let mut rng = PseudoRng::from_seed(42);
+        assert_eq!(rng.next_index(0), 0);
+    }
+
+    #[test]
+    fn monotonic_seed_produces_values() {
+        let mut rng = PseudoRng::from_monotonic();
+        let _ = rng.next_u32();
+    }
+}

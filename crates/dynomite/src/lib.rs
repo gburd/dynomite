@@ -11,6 +11,7 @@
 
 pub mod conf;
 pub mod core;
+pub mod hashkit;
 pub mod stats;
 pub mod util;
 
