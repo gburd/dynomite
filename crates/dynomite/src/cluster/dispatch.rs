@@ -177,126 +177,137 @@ impl ClusterDispatcher {
         if peers.is_empty() {
             return DispatchPlan::NoTargets;
         }
-
-        // Local-only routing always lands on the local datastore.
         if matches!(req.routing(), MsgRouting::LocalNodeOnly) {
             return DispatchPlan::LocalDatastore;
         }
-
-        // Compute the token for the request's primary key. The
-        // reference engine uses the pool's `key_hash` function and
-        // dispatches per-rack via `vnode_dispatch`.
-        let token = if key.is_empty() {
-            // Argument-less command: target the local node.
+        if key.is_empty() {
             return DispatchPlan::LocalDatastore;
-        } else {
-            hashkit::hash(map_hash(cfg.hash), key)
-        };
-
+        }
+        let token = hashkit::hash(map_hash(cfg.hash), key);
         let consistency = if matches!(req.ty(), MsgType::Unknown) || req.flags().is_read {
             cfg.read_consistency
         } else {
             cfg.write_consistency
         };
-
-        // Walk all (dc, rack, peer_idx) candidates that are
-        // routable, then partition by DC.
-        let mut routable: Vec<(usize, usize, u32)> = Vec::new();
         let dcs = self.pool.datacenters().read();
-        for (dc_idx, dc) in dcs.iter().enumerate() {
-            for (rack_idx, rack) in dc.racks().iter().enumerate() {
-                if let Some(peer_idx) = vnode::dispatch(rack.continuums(), &token) {
-                    if let Some(peer) = peers.get(peer_idx as usize) {
-                        if peer.state().is_routable() {
-                            routable.push((dc_idx, rack_idx, peer_idx));
-                        }
-                    }
-                }
-            }
-        }
+        let routable = collect_routable(&dcs, &peers, &token);
         if routable.is_empty() {
             return DispatchPlan::NoTargets;
         }
-
-        // Partition into local-DC and remote-DC entries.
         let (local, remote): (Vec<_>, Vec<_>) = routable
             .into_iter()
             .partition(|(dc_idx, _, _)| dcs[*dc_idx].name() == cfg.dc);
-
-        let mut targets: Vec<ReplicaTarget> = Vec::new();
-        let push_target = |targets: &mut Vec<ReplicaTarget>,
-                           dc_idx: usize,
-                           rack_idx: usize,
-                           peer_idx: u32| {
-            let dc_name = dcs[dc_idx].name().to_string();
-            let rack_name = dcs[dc_idx].racks()[rack_idx].name().to_string();
-            let is_local = peers.get(peer_idx as usize).is_some_and(|p| p.is_local());
-            targets.push(ReplicaTarget {
-                peer_idx,
-                dc: dc_name,
-                rack: rack_name,
-                is_local,
-            });
-        };
-
-        let want_per_dc_fanout = matches!(consistency, ConsistencyLevel::DcEachSafeQuorum)
-            || matches!(req.routing(), MsgRouting::AllNodesAllRacksAllDcs);
-
-        match consistency {
-            ConsistencyLevel::DcOne => {
-                if local.is_empty() {
-                    return DispatchPlan::NoTargets;
-                }
-                // Pick the rack-local entry if available, else
-                // any local-DC entry. Mirrors the snitch's
-                // `pick_target_rack`.
-                let mut best: Option<(RackDistance, (usize, usize, u32))> = None;
-                for (dc_idx, rack_idx, peer_idx) in local {
-                    let rack_name = dcs[dc_idx].racks()[rack_idx].name();
-                    let d = rack_distance(&cfg.dc, &cfg.rack, &cfg.dc, rack_name);
-                    if best.is_none() || d.cost() < best.as_ref().unwrap().0.cost() {
-                        best = Some((d, (dc_idx, rack_idx, peer_idx)));
-                    }
-                }
-                if let Some((_, (dc_idx, rack_idx, peer_idx))) = best {
-                    let is_local_node =
-                        peers.get(peer_idx as usize).is_some_and(|p| p.is_local());
-                    if is_local_node {
-                        return DispatchPlan::LocalDatastore;
-                    }
-                    push_target(&mut targets, dc_idx, rack_idx, peer_idx);
-                }
-            }
-            ConsistencyLevel::DcQuorum | ConsistencyLevel::DcSafeQuorum => {
-                if local.is_empty() {
-                    return DispatchPlan::NoTargets;
-                }
-                for (dc_idx, rack_idx, peer_idx) in local {
-                    push_target(&mut targets, dc_idx, rack_idx, peer_idx);
-                }
-            }
-            ConsistencyLevel::DcEachSafeQuorum => {
-                if local.is_empty() && remote.is_empty() {
-                    return DispatchPlan::NoTargets;
-                }
-                for (dc_idx, rack_idx, peer_idx) in local.iter().chain(remote.iter()) {
-                    push_target(&mut targets, *dc_idx, *rack_idx, *peer_idx);
-                }
-            }
-        }
-        if want_per_dc_fanout && !remote.is_empty() {
-            for (dc_idx, rack_idx, peer_idx) in remote {
-                if !targets.iter().any(|t| t.peer_idx == peer_idx) {
-                    push_target(&mut targets, dc_idx, rack_idx, peer_idx);
-                }
-            }
-        }
-
-        if targets.is_empty() {
-            return DispatchPlan::LocalDatastore;
-        }
-        DispatchPlan::Replicas(targets)
+        plan_with_consistency(cfg, &dcs, &peers, consistency, req.routing(), local, remote)
     }
+}
+
+fn collect_routable(
+    dcs: &[crate::cluster::Datacenter],
+    peers: &[crate::cluster::peer::Peer],
+    token: &crate::hashkit::DynToken,
+) -> Vec<(usize, usize, u32)> {
+    let mut routable: Vec<(usize, usize, u32)> = Vec::new();
+    for (dc_idx, dc) in dcs.iter().enumerate() {
+        for (rack_idx, rack) in dc.racks().iter().enumerate() {
+            if let Some(peer_idx) = vnode::dispatch(rack.continuums(), token) {
+                if let Some(peer) = peers.get(peer_idx as usize) {
+                    if peer.state().is_routable() {
+                        routable.push((dc_idx, rack_idx, peer_idx));
+                    }
+                }
+            }
+        }
+    }
+    routable
+}
+
+fn build_target(
+    dcs: &[crate::cluster::Datacenter],
+    peers: &[crate::cluster::peer::Peer],
+    dc_idx: usize,
+    rack_idx: usize,
+    peer_idx: u32,
+) -> ReplicaTarget {
+    let dc_name = dcs[dc_idx].name().to_string();
+    let rack_name = dcs[dc_idx].racks()[rack_idx].name().to_string();
+    let is_local = peers
+        .get(peer_idx as usize)
+        .is_some_and(crate::cluster::peer::Peer::is_local);
+    ReplicaTarget {
+        peer_idx,
+        dc: dc_name,
+        rack: rack_name,
+        is_local,
+    }
+}
+
+fn plan_with_consistency(
+    cfg: &crate::cluster::pool::PoolConfig,
+    dcs: &[crate::cluster::Datacenter],
+    peers: &[crate::cluster::peer::Peer],
+    consistency: ConsistencyLevel,
+    routing: MsgRouting,
+    local: Vec<(usize, usize, u32)>,
+    remote: Vec<(usize, usize, u32)>,
+) -> DispatchPlan {
+    let want_per_dc_fanout = matches!(consistency, ConsistencyLevel::DcEachSafeQuorum)
+        || matches!(routing, MsgRouting::AllNodesAllRacksAllDcs);
+    let mut targets: Vec<ReplicaTarget> = Vec::new();
+    match consistency {
+        ConsistencyLevel::DcOne => {
+            if local.is_empty() {
+                return DispatchPlan::NoTargets;
+            }
+            let mut best: Option<(RackDistance, (usize, usize, u32))> = None;
+            for (dc_idx, rack_idx, peer_idx) in local {
+                let rack_name = dcs[dc_idx].racks()[rack_idx].name();
+                let d = rack_distance(&cfg.dc, &cfg.rack, &cfg.dc, rack_name);
+                let take = match best {
+                    None => true,
+                    Some((bd, _)) => d.cost() < bd.cost(),
+                };
+                if take {
+                    best = Some((d, (dc_idx, rack_idx, peer_idx)));
+                }
+            }
+            if let Some((_, (dc_idx, rack_idx, peer_idx))) = best {
+                let is_local_node = peers
+                    .get(peer_idx as usize)
+                    .is_some_and(crate::cluster::peer::Peer::is_local);
+                if is_local_node {
+                    return DispatchPlan::LocalDatastore;
+                }
+                targets.push(build_target(dcs, peers, dc_idx, rack_idx, peer_idx));
+            }
+        }
+        ConsistencyLevel::DcQuorum | ConsistencyLevel::DcSafeQuorum => {
+            if local.is_empty() {
+                return DispatchPlan::NoTargets;
+            }
+            for (dc_idx, rack_idx, peer_idx) in local {
+                targets.push(build_target(dcs, peers, dc_idx, rack_idx, peer_idx));
+            }
+        }
+        ConsistencyLevel::DcEachSafeQuorum => {
+            if local.is_empty() && remote.is_empty() {
+                return DispatchPlan::NoTargets;
+            }
+            for (dc_idx, rack_idx, peer_idx) in local.iter().chain(remote.iter()) {
+                targets.push(build_target(dcs, peers, *dc_idx, *rack_idx, *peer_idx));
+            }
+        }
+    }
+    if want_per_dc_fanout && !remote.is_empty() {
+        for (dc_idx, rack_idx, peer_idx) in remote {
+            if !targets.iter().any(|t| t.peer_idx == peer_idx) {
+                targets.push(build_target(dcs, peers, dc_idx, rack_idx, peer_idx));
+            }
+        }
+    }
+    if targets.is_empty() {
+        return DispatchPlan::LocalDatastore;
+    }
+    DispatchPlan::Replicas(targets)
 }
 
 impl Dispatcher for ClusterDispatcher {

@@ -74,7 +74,6 @@ impl PoolConfig {
                 .unwrap_or(ConsistencyLevel::DcOne)
         };
         let data_store = match pool.data_store {
-            Some(0) => DataStore::Redis,
             Some(1) => DataStore::Memcache,
             _ => DataStore::Redis,
         };
@@ -86,7 +85,10 @@ impl PoolConfig {
             hash: pool.hash.unwrap_or(HashType::Murmur),
             read_consistency: parse_consistency(&pool.read_consistency),
             write_consistency: parse_consistency(&pool.write_consistency),
-            timeout_ms: pool.timeout.and_then(|n| u64::try_from(n).ok()).unwrap_or(5_000),
+            timeout_ms: pool
+                .timeout
+                .and_then(|n| u64::try_from(n).ok())
+                .unwrap_or(5_000),
             server_retry_timeout_ms: pool
                 .server_retry_timeout
                 .and_then(|n| u64::try_from(n).ok())
@@ -185,12 +187,11 @@ impl ServerPool {
     pub fn new(config: PoolConfig, peers: Vec<Peer>) -> Self {
         let mut dcs: Vec<Datacenter> = Vec::new();
         for p in &peers {
-            let dc_idx = match dcs.iter().position(|d| d.name() == p.dc()) {
-                Some(i) => i,
-                None => {
-                    dcs.push(Datacenter::new(p.dc().to_string()));
-                    dcs.len() - 1
-                }
+            let dc_idx = if let Some(i) = dcs.iter().position(|d| d.name() == p.dc()) {
+                i
+            } else {
+                dcs.push(Datacenter::new(p.dc().to_string()));
+                dcs.len() - 1
             };
             dcs[dc_idx].upsert_rack(p.rack().to_string());
         }
@@ -250,12 +251,11 @@ impl ServerPool {
         let mut dcs = self.datacenters.write();
         // Make sure all (dc, rack) pairs exist.
         for p in peers.iter() {
-            let dc_idx = match dcs.iter().position(|d| d.name() == p.dc()) {
-                Some(i) => i,
-                None => {
-                    dcs.push(Datacenter::new(p.dc().to_string()));
-                    dcs.len() - 1
-                }
+            let dc_idx = if let Some(i) = dcs.iter().position(|d| d.name() == p.dc()) {
+                i
+            } else {
+                dcs.push(Datacenter::new(p.dc().to_string()));
+                dcs.len() - 1
             };
             dcs[dc_idx].upsert_rack(p.rack().to_string());
         }
@@ -341,9 +341,13 @@ impl ServerPool {
         let mut out = Vec::with_capacity(dcs.len());
         for dc in dcs.iter() {
             let rack_count = dc.racks().len();
-            let max_responses =
-                rack_count.clamp(1, MAX_REPLICAS_PER_DC) as u8;
-            out.push(ResponseMgr::new(req, max_responses, Some(dc.name().to_string())));
+            let max_responses = u8::try_from(rack_count.clamp(1, MAX_REPLICAS_PER_DC))
+                .unwrap_or(u8::try_from(MAX_REPLICAS_PER_DC).unwrap_or(1));
+            out.push(ResponseMgr::new(
+                req,
+                max_responses,
+                Some(dc.name().to_string()),
+            ));
         }
         out
     }
@@ -395,9 +399,8 @@ mod tests {
                 peer(2, "dc2", "r1", 30, false, false),
             ],
         );
-        let dcs = pool.datacenters().read();
-        assert_eq!(dcs.len(), 2);
-        let dc1 = dcs.iter().find(|d| d.name() == "dc1").unwrap();
+        let topology = pool.datacenters().read();
+        let dc1 = topology.iter().find(|d| d.name() == "dc1").unwrap();
         assert_eq!(dc1.racks().len(), 2);
     }
 
@@ -412,11 +415,15 @@ mod tests {
             ],
         );
         pool.preselect_remote_racks();
-        let dcs = pool.datacenters().read();
-        let dc2 = dcs.iter().find(|d| d.name() == "dc2").unwrap();
+        let topology = pool.datacenters().read();
+        let dc2 = topology.iter().find(|d| d.name() == "dc2").unwrap();
         // Local rack "rA" is at sorted index 0, dc2 has 2 racks, so
         // preselected idx is 0 -> "rA".
-        assert_eq!(dc2.preselected_rack().map(|r| r.name()), Some("rA"));
+        assert_eq!(
+            dc2.preselected_rack()
+                .map(super::super::datacenter::Rack::name),
+            Some("rA")
+        );
     }
 
     #[test]
