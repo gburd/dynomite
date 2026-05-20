@@ -844,10 +844,31 @@ fn memcache_fragment_get_partitions_keys() {
     for k in [b"a".as_slice(), b"b", b"c"] {
         m.push_key(KeyPos::without_tag(k.to_vec()));
     }
-    let outcome = memcache::memcache_fragment(&mut m, &OddEven)
+    let pool = MbufPool::default();
+    let outcome = memcache::memcache_fragment(&mut m, &OddEven, &pool)
         .unwrap()
         .unwrap();
     assert_eq!(outcome.fragments.len(), 2);
+
+    // Wire-frame assertion: each fragment carries its own
+    // `get k1 k2...\r\n` byte sequence in the mbuf chain. The
+    // OddEven dispatcher routes b'a' (97) -> shard 1 and b'b' (98)
+    // -> shard 0, b'c' (99) -> shard 1.
+    let mut wire_frames: Vec<Vec<u8>> = outcome
+        .fragments
+        .iter()
+        .map(|f| {
+            let mut bytes = Vec::new();
+            for mb in f.mbufs() {
+                bytes.extend_from_slice(mb.readable());
+            }
+            bytes
+        })
+        .collect();
+    wire_frames.sort();
+    let mut expected = vec![b"get b\r\n".to_vec(), b"get a c\r\n".to_vec()];
+    expected.sort();
+    assert_eq!(wire_frames, expected);
 }
 
 #[test]
