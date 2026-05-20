@@ -1,19 +1,17 @@
-//! Numeric parsing helpers that mirror `_dn_atoi` and `_dn_atoui`.
+//! Numeric parsing helpers for fixed-length ASCII decimal slices.
 //!
-//! The C parsers consume a fixed-length byte slice (no NUL terminator)
-//! containing only ASCII decimal digits. They return `-1` (signed) or
-//! `0` (unsigned) on any non-digit byte or empty input. The Rust
-//! variants return [`None`] in those cases so callers can distinguish
-//! "the input was zero" from "the input was invalid".
+//! These parsers consume a fixed-length byte slice (no NUL terminator)
+//! containing only ASCII decimal digits and return [`None`] on any
+//! non-digit byte or empty input so callers can distinguish "the
+//! input was zero" from "the input was invalid".
 
 /// Parse a fixed-length ASCII decimal slice as an `i32`.
 ///
 /// Returns [`None`] if the slice is empty or contains a non-digit
-/// byte. The value is wrapped on overflow exactly the way
-/// `_dn_atoi` would (the C implementation uses `int * 10 + digit`
-/// without overflow checks; here we use `wrapping_mul`/`wrapping_add`
-/// and report values that wrap negative as [`None`] to mirror the
-/// C code's `value < 0` rejection step).
+/// byte. The accumulator uses `wrapping_mul`/`wrapping_add` and
+/// rejects any input whose accumulated value wraps negative, matching
+/// the engine's overflow semantics without relying on signed
+/// overflow being defined.
 ///
 /// # Examples
 ///

@@ -1,9 +1,9 @@
 //! Typed hash-map wrappers over [`ahash::AHashMap`].
 //!
-//! The C engine reaches for `dict` (a Redis-derived chaining hash
-//! table) plus a specialized `dict_msg_id` keyed on `msgid_t`. The
-//! Rust port replaces both with thin wrappers around [`ahash::AHashMap`]
-//! to preserve the `dict_*` API shape used downstream.
+//! The engine needs a small generic hash map plus a specialized
+//! variant keyed on [`MsgId`] for the in-flight message index. Both
+//! are thin wrappers around [`ahash::AHashMap`] that expose only the
+//! operations the rest of the engine actually uses.
 
 use std::collections::hash_map::IntoIter;
 use std::hash::Hash;

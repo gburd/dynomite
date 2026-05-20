@@ -23,13 +23,14 @@ use crate::core::types::Status;
 
 /// Action to run when a signal is delivered.
 ///
-/// The default mapping mirrors the table in `dyn_signal.c::signals[]`:
-/// SIGTTIN/SIGTTOU adjust verbosity, SIGHUP reopens the log file,
-/// SIGINT requests a graceful shutdown, SIGUSR1/SIGUSR2 are reserved
-/// noop slots, SIGSEGV records a stack trace, and SIGPIPE is ignored.
+/// The default mapping is: SIGTTIN/SIGTTOU adjust the global log
+/// verbosity, SIGHUP reopens the log file, SIGINT requests a
+/// graceful shutdown, SIGUSR1 and SIGUSR2 are reserved noop slots,
+/// SIGSEGV records a stack trace, and SIGPIPE is ignored.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SignalAction {
-    /// Reserved slot the C reference uses but currently does nothing.
+    /// Reserved slot used by the in-process action table that
+    /// currently does nothing.
     Noop,
     /// Bump the global log verbosity by one.
     LogLevelUp,
@@ -39,7 +40,8 @@ pub enum SignalAction {
     ReopenLog,
     /// Request a graceful shutdown.
     Shutdown,
-    /// Print a stack trace; the C reference re-raises SIGSEGV after.
+    /// Print a stack trace; the dispatcher also re-raises SIGSEGV
+    /// afterwards so the kernel can produce the standard core dump.
     StackTrace,
     /// Ignore the signal entirely (matches `SIG_IGN`).
     Ignore,

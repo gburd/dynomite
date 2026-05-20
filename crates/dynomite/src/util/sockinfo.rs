@@ -1,11 +1,11 @@
 //! Socket address resolution.
 //!
-//! The C engine carries a `struct sockinfo` that unions
-//! `sockaddr_in`, `sockaddr_in6`, and `sockaddr_un` with explicit
-//! family/length fields. Rust's [`SocketAddr`] already covers the
-//! Internet families directly; UNIX domain sockets are represented as
-//! a path-bearing variant. The wrapper is mostly a typed parser that
-//! mirrors `dn_resolve` and friends.
+//! [`SockInfo`] is the family-tagged endpoint type used across the
+//! engine. Rust's [`SocketAddr`] already covers the Internet families
+//! directly; UNIX domain sockets are represented as a path-bearing
+//! variant. The wrapper is a typed parser that resolves a hostname
+//! plus port, accepting v4 literals, v6 literals, hostnames, and
+//! filesystem paths.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
@@ -51,8 +51,7 @@ impl SockInfo {
     ///
     /// Names that begin with `/` are treated as UNIX domain socket
     /// paths and are returned unmodified. Everything else is fed to
-    /// [`std::net::ToSocketAddrs`]; the first matching entry wins,
-    /// mirroring the behavior of `dn_resolve_inet` in the C reference.
+    /// [`std::net::ToSocketAddrs`]; the first matching entry wins.
     ///
     /// # Examples
     ///

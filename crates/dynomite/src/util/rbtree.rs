@@ -66,8 +66,6 @@ impl<K: Ord, V> OrderedMap<K, V> {
     }
 
     /// Smallest entry, or [`None`] if the map is empty.
-    ///
-    /// Mirrors the C `rbtree_min` helper.
     pub fn min(&self) -> Option<(&K, &V)> {
         self.inner.iter().next()
     }

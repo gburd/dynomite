@@ -149,7 +149,7 @@ symbol is considered un-ported.
 | `log_level_down` | `dynomite::core::log::log_level_decrement` | done (Stage 1) |
 | `log_level_set` | `dynomite::core::log::log_level_set` | done (Stage 1) |
 | `log_loggable` | `dynomite::core::log::log_loggable` | done (Stage 1) |
-| `_log`, `_log_stderr`, `_log_hexdump`, `log_debug`, `log_notice`, `log_info`, `log_error`, `log_warn`, `log_panic`, `loga`, `loga_hexdump` | replaced by `tracing::{trace,debug,info,warn,error}` and `tracing::event!`; hexdumps land in Stage 5 (stats output) where they are actually used. |
+| `_log`, `_log_stderr`, `_log_hexdump`, `log_debug`, `log_notice`, `log_info`, `log_error`, `log_warn`, `log_panic`, `loga`, `loga_hexdump` | replaced by `tracing::{trace,debug,info,warn,error}` and `tracing::event!`; the hexdump helpers are deferred to Stage 2 (mbuf substrate) where the buffers being dumped are introduced. |
 
 ### dyn_signal.{c,h}
 
@@ -340,6 +340,40 @@ silently replaced with `1` during `apply_defaults`. The Rust
 explicit zero is preserved (and then rejected by
 `validate_numeric_ranges` because the lower bound is `1`). This
 follows the typed-Option model PLAN.md Stage 4 calls for.
+
+## Caveats
+
+Documented design choices that downstream stages must respect.
+
+* **Stage 1 - `core::task::TaskHandle` does not cancel on drop.**
+  Dropping a [`TaskHandle`](../crates/dynomite/src/core/task.rs)
+  without calling `cancel` leaves the task running detached. This
+  matches the original `cancel_task` shape (the engine cancels
+  tasks explicitly) but is a footgun for new callers. Any caller
+  storing a handle must own its lifetime; an ergonomic
+  `cancel-on-drop` wrapper may be added in a follow-up if this
+  pattern recurs.
+* **Stage 1 - `core::ring_queue` blocks the producer on a full
+  channel by default.** The reference SPSC ring drops the message
+  on full (`CBUF_Push` returns and the call site logs and skips).
+  Stage 10 callers porting `CBUF_Push` must use
+  [`crossbeam_channel::Sender::try_send`] explicitly to preserve
+  drop-on-full semantics; mechanical translation to `send` will
+  block instead.
+* **Stage 1 - `util::dict::DictMap::insert` is
+  [`dictReplace`](https://github.com/redis/redis)-shaped, not
+  `dictAdd`-shaped.** `DictMap::insert` overwrites a previous
+  value and returns it. The reference engine has both `dictAdd`
+  (rejects duplicates) and `dictReplace` (overwrites); only the
+  latter is currently exposed in Rust. Stage 10 gossip callers
+  porting `dictAdd` must guard with `contains_key` or use the
+  entry API to preserve duplicate-rejection behaviour.
+* **Stage 1 - `util::dict` uses `ahash`.** `ahash` is
+  non-cryptographic and seeded per-process. Internal-only maps
+  with non-adversarial keys (`MsgIndex`, gossip rack/DC
+  namespaces) are fine; any future consumer with attacker-
+  controlled keys must override the hasher to a DoS-resistant
+  one (`SipHash` from std).
 
 ## Project-wide follow-ups (not stage-specific)
 
