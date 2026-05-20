@@ -14,9 +14,9 @@
 //!    per-connection mpsc channel.
 //! 4. Writes the response bytes back to the transport.
 //!
-//! The driver mirrors the C reference engine's
-//! `dyn_client.c::msg_recv` /  `msg_send` loop and the surrounding
-//! `req_recv_done` / `rsp_send_next` / `rsp_send_done` glue.
+//! The driver runs a single tokio `select!` per iteration, draining
+//! pending response bytes first so the loop's read / write
+//! arms never block on a saturated peer.
 //!
 //! The Stage 9 implementation does not yet reach into the cluster
 //! layer (Stage 10) or the entropy reconciliation (Stage 11);
@@ -104,6 +104,46 @@ impl ClientHandler {
     #[must_use]
     pub fn data_store(&self) -> DataStore {
         self.data_store
+    }
+
+    /// Borrow the dispatcher this handler routes parsed requests
+    /// into. Exposed so role-specific drivers (CLIENT,
+    /// DNODE_PEER_CLIENT) can share the same dispatch contract.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::DataStore;
+    /// use dynomite::net::{ClientHandler, NoopDispatcher};
+    /// use std::sync::Arc;
+    /// use tokio::sync::mpsc;
+    /// let (tx, _rx) = mpsc::channel(1);
+    /// let h = ClientHandler::new(Arc::new(NoopDispatcher), tx, DataStore::Redis);
+    /// let _ = h.dispatcher();
+    /// ```
+    #[must_use]
+    pub fn dispatcher(&self) -> &Arc<dyn Dispatcher> {
+        &self.dispatcher
+    }
+
+    /// Borrow the per-connection response sender. The dispatcher
+    /// uses a clone of this channel to push asynchronously-produced
+    /// responses back to the FSM.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::DataStore;
+    /// use dynomite::net::{ClientHandler, NoopDispatcher};
+    /// use std::sync::Arc;
+    /// use tokio::sync::mpsc;
+    /// let (tx, _rx) = mpsc::channel(1);
+    /// let h = ClientHandler::new(Arc::new(NoopDispatcher), tx, DataStore::Redis);
+    /// let _clone = h.response_tx().clone();
+    /// ```
+    #[must_use]
+    pub fn response_tx(&self) -> &mpsc::Sender<OutboundEnvelope> {
+        &self.response_tx
     }
 
     fn alloc_msg_id(&mut self) -> MsgId {
@@ -211,6 +251,17 @@ async fn drive_parser(
                         "parser reported Ok with no bytes consumed".to_string(),
                     ));
                 }
+                // Carry the consumed wire bytes inside the msg so the
+                // dispatcher can forward them to a backend without
+                // having to re-encode. The C engine keeps the
+                // request bytes in the inbound mbuf chain across
+                // recv -> filter -> forward; the Rust port stores
+                // them on the msg's own mbuf chain instead.
+                let pool = conn.mbuf_pool().clone();
+                let mut buf = pool.get();
+                buf.recv(&accumulated[..consumed]);
+                msg.mbufs_mut().push_back(buf);
+                msg.recompute_mlen();
                 accumulated.drain(0..consumed);
                 let _ = consumed_before;
                 conn.outstanding_mut().insert(msg.id(), msg.id());
