@@ -112,10 +112,7 @@ pub fn accumulate_fragment_integer(parent: &mut Msg, rsp: &Msg) {
     if !matches!(rsp.ty(), MsgType::RspRedisInteger) {
         return;
     }
-    if !matches!(
-        parent.ty(),
-        MsgType::ReqRedisDel | MsgType::ReqRedisExists
-    ) {
+    if !matches!(parent.ty(), MsgType::ReqRedisDel | MsgType::ReqRedisExists) {
         return;
     }
     parent.set_integer(parent.integer().saturating_add(rsp.integer()));

@@ -153,11 +153,7 @@ fn clone_keypos(k: &KeyPos) -> KeyPos {
     KeyPos::new(k.key().to_vec(), k.tag())
 }
 
-fn encode_fragment(
-    frag: &mut Msg,
-    keys: &[KeyPos],
-    pool: &MbufPool,
-) -> Result<(), FragmentError> {
+fn encode_fragment(frag: &mut Msg, keys: &[KeyPos], pool: &MbufPool) -> Result<(), FragmentError> {
     let verb: &[u8] = match frag.ty() {
         MsgType::ReqMcGet => b"get",
         MsgType::ReqMcGets => b"gets",
