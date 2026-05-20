@@ -28,6 +28,7 @@ pub(super) fn hash(key: &[u8]) -> DynToken {
     murmur3_x86_128(key, MURMUR3_SEED)
 }
 
+#[allow(clippy::too_many_lines)]
 fn murmur3_x86_128(key: &[u8], seed: u32) -> DynToken {
     let len = key.len();
     let nblocks = len / 16;

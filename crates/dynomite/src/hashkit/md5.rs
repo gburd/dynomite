@@ -1,3 +1,8 @@
+// RFC 1321 names the round registers a, b, c, d; preserving the
+// short single-letter identifiers makes the round table directly
+// verifiable against the spec.
+#![allow(clippy::many_single_char_names, clippy::similar_names)]
+
 use crate::hashkit::token::DynToken;
 
 /// MD5 (RFC 1321). The implementation is a straight transliteration of
@@ -231,6 +236,7 @@ fn i1(x: u32, y: u32, z: u32) -> u32 {
     y ^ (x | !z)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn step(f: fn(u32, u32, u32) -> u32, a: &mut u32, b: u32, c: u32, d: u32, x: u32, t: u32, s: u32) {
     let aa = a.wrapping_add(f(b, c, d)).wrapping_add(x).wrapping_add(t);
     *a = aa.rotate_left(s).wrapping_add(b);
