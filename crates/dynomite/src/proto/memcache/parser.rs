@@ -993,7 +993,6 @@ pub fn memcache_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
             RspState::AlmostDone => match ch {
                 LF => {
                     r.set_type(ty);
-                    r.set_ntokens(r.ntokens());
                     r.set_vlen(vlen);
                     r.set_end_marker(end_marker);
                     r.set_parser_state(RspState::Start as u32);

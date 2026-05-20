@@ -827,6 +827,29 @@ fn redis_fragment_mget_partitions_keys() {
         .unwrap();
     assert_eq!(outcome.fragments.len(), 2);
     assert_eq!(outcome.shard_for_key.len(), 3);
+
+    // Wire-frame assertion: each fragment carries a complete
+    // RESP-formatted MGET request in its mbuf chain. With the
+    // OddEven dispatcher b'a' (97) and b'c' (99) land on shard 1
+    // and b'b' (98) on shard 0.
+    let mut wire_frames: Vec<Vec<u8>> = outcome
+        .fragments
+        .iter()
+        .map(|f| {
+            let mut bytes = Vec::new();
+            for mb in f.mbufs() {
+                bytes.extend_from_slice(mb.readable());
+            }
+            bytes
+        })
+        .collect();
+    wire_frames.sort();
+    let mut expected = vec![
+        b"*2\r\n$4\r\nmget\r\n$1\r\nb\r\n".to_vec(),
+        b"*3\r\n$4\r\nmget\r\n$1\r\na\r\n$1\r\nc\r\n".to_vec(),
+    ];
+    expected.sort();
+    assert_eq!(wire_frames, expected);
 }
 
 #[test]

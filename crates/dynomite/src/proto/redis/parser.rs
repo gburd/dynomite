@@ -1229,6 +1229,12 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     }
                 }
             }
+            // Resume-from-state entry: the parser API allows callers
+            // to resume from a saved RspState across input chunks.
+            // Status and Integer entries are no-op transitions to
+            // their respective body states (RuntoCrlf and
+            // IntegerStart) so a resumed parse picks up where the
+            // caller left off without re-consuming a byte.
             RspState::Status => {
                 state = RspState::RuntoCrlf;
             }
@@ -1263,6 +1269,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                 }
             }
             RspState::Integer => {
+                // Resume-from-state entry: see RspState::Status.
                 state = RspState::IntegerStart;
                 integer = 0;
                 int_negative = false;

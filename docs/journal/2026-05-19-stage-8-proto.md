@@ -205,3 +205,67 @@ differential rig) ships its static-lib build.
    place; only the script-emit step remains).
 3. Stage 14 spawns the differential rig and re-enables the
    `c-diff` feature gate.
+
+## Review response
+
+The independent Stage 8 review at
+`docs/journal/review-stage-8-pi-agent-e8211858.md` returned
+verdict REQUEST_CHANGES with five required changes plus four
+small nits. Disposition:
+
+* Change 1 (classify HSTRLEN): added `M::ReqRedisHstrlen ->
+  CommandClass::Arg1` to the dispatch table (option (a) in the
+  review's recommendation). HSTRLEN takes one key plus one
+  field arg; the C reference simply forgot to classify it,
+  and treating it as `Arg1` is the natural shape consistent
+  with the other hash-field-read commands. Commit `0dbc8eb`.
+
+* Change 2 (memcache fragment wire frames): mirrored the
+  redis encode_fragment shape. Each fragment now carries the
+  full `get k1 k2 ...\r\n` byte sequence in its mbuf chain.
+  The fragmenter now takes a `&MbufPool`. Wire-frame assertion
+  added to the integration test
+  `memcache_fragment_get_partitions_keys`. Commit `3d513f9`.
+
+* Change 3 (redis_pre_coalesce integer accumulation): exposed
+  as a separate helper `accumulate_fragment_integer` that the
+  dispatcher invokes once it has both messages in scope. The
+  data-shape claim in the parity row was overbroad; the
+  accumulation requires both response and parent and the in-
+  tree Msg type does not yet carry the parent reference
+  (Stage 9 will). Two regression tests pinned. Commit
+  `e8e3204`.
+
+* Change 4 (Lua scripts gap): regenerated all ten scripts
+  byte-for-byte from `_/dynomite/src/proto/dyn_proto_repair.h`
+  using a Python extractor. While porting the missing five
+  (HSET, HDEL, HGET, ZADD, SADD) the test rig caught a pre-
+  existing data-integrity bug: SET, DEL, CLEANUP_DEL,
+  CLEANUP_HDEL all had bodies SHORTER than their declared
+  `$<n>` prefixes. The original Stage 8 port lost bytes
+  during manual transcription. The replacement constants are
+  byte-identical to the C macros; ten unit tests pin each
+  declared length against its actual body length. Commit
+  `ba72c33`.
+
+* Change 5 (rewrite C-source comments): the original Stage 8
+  worker's `pi-agent-dd7df1dc-2915-413` partial commit
+  rewrote the `repair/{mod,scripts}.rs` module-level rustdoc
+  to drop the literal C file paths. Commit `0dbc8eb` carries
+  the wording.
+
+Nits addressed:
+* `_clone_keypos` removed from `repair/rewrite.rs`.
+* `r.set_ntokens(r.ntokens())` self-assignment removed from
+  `memcache/parser.rs:996`.
+* `RspState::Status` and `RspState::Integer` arms in
+  `redis/parser.rs` are reachable resume-from-state entries
+  (the parser API allows resuming from a saved state across
+  input chunks); the comment was updated to make this
+  explicit rather than removing the arms.
+* Wire-byte assertion added to
+  `redis_fragment_mget_partitions_keys`.
+
+Final gate counts on `stage/8-proto`: 440 nextest tests pass
+(was 428, +12 for the new length checks and accumulation
+tests), 441 doctests pass; `scripts/check.sh` ends OK.
