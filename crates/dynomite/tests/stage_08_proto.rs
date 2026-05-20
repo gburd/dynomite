@@ -922,3 +922,36 @@ fn redis_differential_against_c_parser() {
     // that the gated build stays compilable for tooling probes.
     assert_eq!(2 + 2, 4);
 }
+
+#[test]
+fn redis_pre_coalesce_accumulates_del_fragment_integers() {
+    let mut parent = Msg::new(1, MsgType::ReqRedisDel, true);
+    parent.set_frag_id(7);
+    parent.set_integer(0);
+
+    // Simulate three DEL fragment responses returning 1, 2, 3.
+    for n in [1, 2, 3] {
+        let mut rsp = Msg::new(0, MsgType::RspRedisInteger, false);
+        rsp.set_frag_id(7);
+        rsp.set_integer(n);
+        // pre_coalesce on its own does not accumulate (no parent
+        // ref); the dispatcher invokes accumulate_fragment_integer.
+        redis::redis_pre_coalesce(&mut rsp);
+        redis::accumulate_fragment_integer(&mut parent, &rsp);
+    }
+    assert_eq!(parent.integer(), 6);
+}
+
+#[test]
+fn redis_pre_coalesce_does_not_accumulate_unfragmented_response() {
+    let mut parent = Msg::new(1, MsgType::ReqRedisDel, true);
+    parent.set_integer(99);
+
+    let mut rsp = Msg::new(0, MsgType::RspRedisInteger, false);
+    rsp.set_frag_id(0);
+    rsp.set_integer(7);
+
+    redis::redis_pre_coalesce(&mut rsp);
+    redis::accumulate_fragment_integer(&mut parent, &rsp);
+    assert_eq!(parent.integer(), 99);
+}
