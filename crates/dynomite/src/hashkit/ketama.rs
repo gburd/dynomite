@@ -19,14 +19,43 @@ use crate::core::types::DynError;
 use crate::hashkit::md5_signature;
 use crate::hashkit::token::DynToken;
 
-/// 160 points per server. Mirrors `KETAMA_POINTS_PER_SERVER` in C.
+/// 160 points per server.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::ketama::POINTS_PER_SERVER;
+/// assert_eq!(POINTS_PER_SERVER, 160);
+/// ```
 pub const POINTS_PER_SERVER: u32 = 160;
 /// Each MD5 digest yields 4 continuum points.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::ketama::POINTS_PER_HASH;
+/// assert_eq!(POINTS_PER_HASH, 4);
+/// ```
 pub const POINTS_PER_HASH: u32 = 4;
 /// Maximum length of `"<name>-<idx>"` used to seed each digest.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::ketama::MAX_HOSTLEN;
+/// assert_eq!(MAX_HOSTLEN, 86);
+/// ```
 pub const MAX_HOSTLEN: usize = 86;
 
 /// Specification for one server in the continuum.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::ketama::ServerSpec;
+/// let s = ServerSpec { name: "redis-a".into(), weight: 2 };
+/// assert_eq!(s.weight, 2);
+/// ```
 #[derive(Clone, Debug)]
 pub struct ServerSpec {
     /// Stable, unique identifier (used to derive the continuum points).
@@ -37,6 +66,15 @@ pub struct ServerSpec {
 
 /// One entry on the continuum: a token and the index of the server that
 /// owns it.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::ketama::{Continuum, ServerSpec};
+/// let c = Continuum::build(&[ServerSpec { name: "a".into(), weight: 1 }]).unwrap();
+/// let p = c.points().first().unwrap();
+/// assert_eq!(p.server, 0);
+/// ```
 #[derive(Clone, Debug)]
 pub struct ContinuumPoint {
     /// Sorted-by-token coordinate.
@@ -46,6 +84,19 @@ pub struct ContinuumPoint {
 }
 
 /// Sorted continuum, ready for `dispatch`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::ketama::{Continuum, ServerSpec};
+/// use dynomite::hashkit::DynToken;
+/// let c = Continuum::build(&[
+///     ServerSpec { name: "a".into(), weight: 1 },
+///     ServerSpec { name: "b".into(), weight: 1 },
+/// ]).unwrap();
+/// assert!(!c.is_empty());
+/// let _ = c.dispatch(&DynToken::from_u32(123)).unwrap();
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct Continuum {
     points: Vec<ContinuumPoint>,
@@ -57,7 +108,15 @@ impl Continuum {
     /// # Errors
     ///
     /// Returns `DynError::Generic` when a server's `name + index` would
-    /// overflow the 86-byte buffer that the C reference allocates.
+    /// overflow the [`MAX_HOSTLEN`] buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::ketama::{Continuum, ServerSpec, POINTS_PER_SERVER};
+    /// let c = Continuum::build(&[ServerSpec { name: "s0".into(), weight: 1 }]).unwrap();
+    /// assert_eq!(c.len(), POINTS_PER_SERVER as usize);
+    /// ```
     pub fn build(servers: &[ServerSpec]) -> Result<Self, DynError> {
         if servers.is_empty() {
             return Ok(Self::default());
@@ -104,18 +163,41 @@ impl Continuum {
     }
 
     /// Number of continuum points.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::ketama::Continuum;
+    /// assert_eq!(Continuum::default().len(), 0);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.points.len()
     }
 
     /// Whether the continuum is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::ketama::Continuum;
+    /// assert!(Continuum::default().is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
 
     /// Read-only view of the continuum points, in sorted order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::ketama::{Continuum, ServerSpec};
+    /// let c = Continuum::build(&[ServerSpec { name: "a".into(), weight: 1 }]).unwrap();
+    /// let pts = c.points();
+    /// assert!(pts.windows(2).all(|w| w[0].token <= w[1].token));
+    /// ```
     #[must_use]
     pub fn points(&self) -> &[ContinuumPoint] {
         &self.points
@@ -129,6 +211,20 @@ impl Continuum {
     /// # Errors
     ///
     /// Returns an error if the continuum is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::ketama::{Continuum, ServerSpec};
+    /// use dynomite::hashkit::DynToken;
+    /// let c = Continuum::build(&[
+    ///     ServerSpec { name: "a".into(), weight: 1 },
+    ///     ServerSpec { name: "b".into(), weight: 1 },
+    /// ]).unwrap();
+    /// let s = c.dispatch(&DynToken::from_u32(0xabcd)).unwrap();
+    /// assert!(s < 2);
+    /// assert!(Continuum::default().dispatch(&DynToken::from_u32(0)).is_err());
+    /// ```
     pub fn dispatch(&self, hash: &DynToken) -> Result<usize, DynError> {
         if self.points.is_empty() {
             return Err(DynError::Generic("empty ketama continuum".into()));

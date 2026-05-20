@@ -38,6 +38,14 @@ pub struct DictMap<K: Eq + Hash, V> {
 
 impl<K: Eq + Hash, V> DictMap<K, V> {
     /// Construct an empty map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let m: DictMap<u32, u32> = DictMap::new();
+    /// assert!(m.is_empty());
+    /// ```
     pub fn new() -> Self {
         Self {
             inner: AHashMap::new(),
@@ -45,6 +53,14 @@ impl<K: Eq + Hash, V> DictMap<K, V> {
     }
 
     /// Construct an empty map with at least `capacity` slots.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let m: DictMap<u32, u32> = DictMap::with_capacity(8);
+    /// assert!(m.is_empty());
+    /// ```
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: AHashMap::with_capacity(capacity),
@@ -52,56 +68,164 @@ impl<K: Eq + Hash, V> DictMap<K, V> {
     }
 
     /// Insert `value` at `key`, returning the previous value (if any).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// assert_eq!(m.insert(1, 10), None);
+    /// assert_eq!(m.insert(1, 20), Some(10));
+    /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.inner.insert(key, value)
     }
 
     /// Remove and return the value at `key`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// m.insert(1, 10);
+    /// assert_eq!(m.remove(&1), Some(10));
+    /// assert_eq!(m.remove(&1), None);
+    /// ```
     pub fn remove(&mut self, key: &K) -> Option<V> {
         self.inner.remove(key)
     }
 
     /// Look up an immutable reference to the value at `key`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// m.insert(1, 10);
+    /// assert_eq!(m.get(&1), Some(&10));
+    /// ```
     pub fn get(&self, key: &K) -> Option<&V> {
         self.inner.get(key)
     }
 
     /// Look up a mutable reference to the value at `key`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// m.insert(1, 10);
+    /// *m.get_mut(&1).unwrap() = 20;
+    /// assert_eq!(m.get(&1), Some(&20));
+    /// ```
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         self.inner.get_mut(key)
     }
 
     /// Whether `key` is in the map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// m.insert(1, 10);
+    /// assert!(m.contains_key(&1));
+    /// assert!(!m.contains_key(&2));
+    /// ```
     pub fn contains_key(&self, key: &K) -> bool {
         self.inner.contains_key(key)
     }
 
     /// Number of entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// m.insert(1, 10);
+    /// assert_eq!(m.len(), 1);
+    /// ```
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
     /// Whether the map is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let m: DictMap<u32, u32> = DictMap::new();
+    /// assert!(m.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
     /// Drop every entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// m.insert(1, 10);
+    /// m.clear();
+    /// assert!(m.is_empty());
+    /// ```
     pub fn clear(&mut self) {
         self.inner.clear();
     }
 
     /// Borrowed iterator over `(key, value)` pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// m.insert(1, 10);
+    /// m.insert(2, 20);
+    /// let mut sum = 0u32;
+    /// for (_k, v) in m.iter() { sum += v; }
+    /// assert_eq!(sum, 30);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.inner.iter()
     }
 
     /// Mutable iterator over `(key, value)` pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// m.insert(1, 10);
+    /// for (_k, v) in m.iter_mut() { *v += 1; }
+    /// assert_eq!(m.get(&1), Some(&11));
+    /// ```
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&K, &mut V)> {
         self.inner.iter_mut()
     }
 
     /// Consume the map and yield `(key, value)` pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::util::dict::DictMap;
+    /// let mut m: DictMap<u32, u32> = DictMap::new();
+    /// m.insert(1, 10);
+    /// let drained: Vec<_> = m.drain().collect();
+    /// assert_eq!(drained, vec![(1, 10)]);
+    /// assert!(m.is_empty());
+    /// ```
     pub fn drain(&mut self) -> impl Iterator<Item = (K, V)> + '_ {
         self.inner.drain()
     }
@@ -115,8 +239,7 @@ impl<K: Eq + Hash, V> IntoIterator for DictMap<K, V> {
     }
 }
 
-/// Specialization keyed on [`MsgId`], the Rust home of the C
-/// `msg_table_dict_type` from `dyn_dict_msg_id.c`.
+/// Specialization keyed on [`MsgId`] for the in-flight message index.
 ///
 /// # Examples
 ///

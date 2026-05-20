@@ -23,9 +23,23 @@
 use crossbeam_channel::{bounded, Receiver, Sender};
 
 /// Maximum in-flight ring messages for the core -> gossip direction.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::ring_queue::C2G_IN_CAPACITY;
+/// assert_eq!(C2G_IN_CAPACITY, 256);
+/// ```
 pub const C2G_IN_CAPACITY: usize = 256;
 
 /// Maximum in-flight ring messages for the gossip -> core direction.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::ring_queue::C2G_OUT_CAPACITY;
+/// assert_eq!(C2G_OUT_CAPACITY, 256);
+/// ```
 pub const C2G_OUT_CAPACITY: usize = 256;
 
 /// A pair of bounded channels that carry the core <-> gossip ring
@@ -61,6 +75,16 @@ impl<I, O> RingChannels<I, O> {
 
     /// Create a new pair with explicit capacities. Useful for tests
     /// and downstream stages that wire smaller queues.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::core::ring_queue::RingChannels;
+    /// let chans: RingChannels<u32, ()> = RingChannels::with_capacities(2, 1);
+    /// chans.in_tx.send(1).unwrap();
+    /// chans.in_tx.send(2).unwrap();
+    /// assert!(chans.in_tx.try_send(3).is_err());
+    /// ```
     pub fn with_capacities(in_cap: usize, out_cap: usize) -> Self {
         let (in_tx, in_rx) = bounded(in_cap);
         let (out_tx, out_rx) = bounded(out_cap);

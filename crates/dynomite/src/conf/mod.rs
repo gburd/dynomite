@@ -43,7 +43,7 @@ mod pool;
 mod server;
 mod tokens;
 
-pub use endpoint::ConfListen;
+pub use endpoint::{ConfListen, EndpointKind};
 pub use enums::{ConsistencyLevel, DataStore, HashType, SecureServerOption};
 pub use error::ConfError;
 pub use pool::{ConfPool, Servers};
@@ -69,6 +69,16 @@ impl Config {
     /// Performs structural validation (exactly one pool, no unknown
     /// keys) but does not apply defaults. Call [`Config::finalize`]
     /// before [`Config::validate`] to fully prepare the config.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Config;
+    /// let yaml = "p:\n  listen: 127.0.0.1:1\n  dyn_listen: 127.0.0.1:2\n  tokens: '1'\n  servers:\n  - 127.0.0.1:3:1\n  data_store: 0\n";
+    /// let cfg = Config::parse_str(yaml).unwrap();
+    /// assert_eq!(cfg.pool_name(), "p");
+    /// assert!(Config::parse_str("").is_err());
+    /// ```
     pub fn parse_str(input: &str) -> Result<Self, ConfError> {
         let raw: BTreeMap<String, ConfPool> =
             serde_yaml::from_str(input).map_err(|e| ConfError::from_yaml(&e))?;
@@ -89,6 +99,17 @@ impl Config {
     }
 
     /// Parse a YAML configuration document from a filesystem path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io::Write;
+    /// use dynomite::conf::Config;
+    /// let mut f = tempfile::NamedTempFile::new().unwrap();
+    /// writeln!(f, "p:\n  listen: 127.0.0.1:1\n  dyn_listen: 127.0.0.1:2\n  tokens: '1'\n  servers:\n  - 127.0.0.1:3:1\n  data_store: 0\n").unwrap();
+    /// let cfg = Config::parse_file(f.path()).unwrap();
+    /// assert_eq!(cfg.pool_name(), "p");
+    /// ```
     pub fn parse_file(path: &Path) -> Result<Self, ConfError> {
         let bytes = std::fs::read_to_string(path).map_err(|e| ConfError::Io {
             path: path.to_path_buf(),
@@ -98,37 +119,84 @@ impl Config {
     }
 
     /// The configured pool name (the single top-level YAML key).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Config;
+    /// let cfg = Config::parse_str("my_pool:\n  listen: 127.0.0.1:1\n  dyn_listen: 127.0.0.1:2\n  tokens: '1'\n  servers:\n  - 127.0.0.1:3:1\n  data_store: 0\n").unwrap();
+    /// assert_eq!(cfg.pool_name(), "my_pool");
+    /// ```
     pub fn pool_name(&self) -> &str {
         &self.pool_name
     }
 
     /// Borrow the inner [`ConfPool`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Config;
+    /// let cfg = Config::parse_str("p:\n  listen: 127.0.0.1:8102\n  dyn_listen: 127.0.0.1:2\n  tokens: '1'\n  servers:\n  - 127.0.0.1:3:1\n  data_store: 0\n").unwrap();
+    /// assert_eq!(cfg.pool().listen.as_ref().unwrap().port(), 8102);
+    /// ```
     pub fn pool(&self) -> &ConfPool {
         &self.pool
     }
 
     /// Mutably borrow the inner [`ConfPool`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Config;
+    /// let mut cfg = Config::parse_str("p:\n  listen: 127.0.0.1:1\n  dyn_listen: 127.0.0.1:2\n  tokens: '1'\n  servers:\n  - 127.0.0.1:3:1\n  data_store: 0\n").unwrap();
+    /// cfg.pool_mut().preconnect = Some(true);
+    /// assert_eq!(cfg.pool().preconnect, Some(true));
+    /// ```
     pub fn pool_mut(&mut self) -> &mut ConfPool {
         &mut self.pool
     }
 
     /// Apply default values to any field left unset by the YAML.
     ///
-    /// Mirrors the second half of `conf_validate_pool` in the C code.
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Config;
+    /// let mut cfg = Config::parse_str("p:\n  listen: 127.0.0.1:1\n  dyn_listen: 127.0.0.1:2\n  tokens: '1'\n  servers:\n  - 127.0.0.1:3:1\n  data_store: 0\n").unwrap();
+    /// assert!(cfg.pool().rack.is_none());
+    /// cfg.finalize();
+    /// assert!(cfg.pool().rack.is_some());
+    /// ```
     pub fn finalize(&mut self) {
         self.pool.apply_defaults();
     }
 
     /// Run the full validation pass.
     ///
-    /// Mirrors `conf_validate_pool` and the per-directive checks in
-    /// the C reference.
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Config;
+    /// let mut cfg = Config::parse_str("p:\n  listen: 127.0.0.1:1\n  dyn_listen: 127.0.0.1:2\n  tokens: '1'\n  servers:\n  - 127.0.0.1:3:1\n  data_store: 0\n").unwrap();
+    /// cfg.finalize();
+    /// cfg.validate().unwrap();
+    /// ```
     pub fn validate(&self) -> Result<(), ConfError> {
         self.pool.validate(&self.pool_name)
     }
 
     /// Equivalent of `dynomite -t -c <file>`: finalize, validate, and
     /// produce a short status string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Config;
+    /// let cfg = Config::parse_str("p:\n  listen: 127.0.0.1:1\n  dyn_listen: 127.0.0.1:2\n  tokens: '1'\n  servers:\n  - 127.0.0.1:3:1\n  data_store: 0\n").unwrap();
+    /// assert!(cfg.test_conf().unwrap().contains("is valid"));
+    /// ```
     pub fn test_conf(&self) -> Result<String, ConfError> {
         let mut owned = self.clone();
         owned.finalize();

@@ -83,8 +83,18 @@ pub mod defaults {
     pub const ALLOC_MSGS_MAX: i64 = 1_000_000;
 }
 
-/// Wrapper for the `servers:` field that enforces the C invariant of
-/// "exactly one datastore" without losing the YAML list shape.
+/// Wrapper for the `servers:` field that enforces the invariant
+/// of "exactly one datastore" without losing the YAML list shape.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::{ConfServer, Servers};
+/// let s = Servers::from_vec(vec![ConfServer::parse("127.0.0.1:6379:1").unwrap()]);
+/// assert_eq!(s.len(), 1);
+/// assert!(!s.is_empty());
+/// assert!(s.datastore().is_some());
+/// ```
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Servers(pub(crate) Vec<ConfServer>);
@@ -92,6 +102,14 @@ pub struct Servers(pub(crate) Vec<ConfServer>);
 impl Servers {
     /// Construct from an explicit list. Validation enforces a length
     /// of one when called via `Config::validate`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::{ConfServer, Servers};
+    /// let s = Servers::from_vec(vec![ConfServer::parse("127.0.0.1:6379:1").unwrap()]);
+    /// assert_eq!(s.len(), 1);
+    /// ```
     pub fn from_vec(v: Vec<ConfServer>) -> Self {
         Self(v)
     }
@@ -99,24 +117,66 @@ impl Servers {
 
 impl Servers {
     /// Borrow the entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::{ConfServer, Servers};
+    /// let s = Servers::from_vec(vec![ConfServer::parse("127.0.0.1:6379:1").unwrap()]);
+    /// assert_eq!(s.entries().len(), 1);
+    /// ```
     pub fn entries(&self) -> &[ConfServer] {
         &self.0
     }
     /// Number of entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Servers;
+    /// assert_eq!(Servers::default().len(), 0);
+    /// ```
     pub fn len(&self) -> usize {
         self.0.len()
     }
     /// Whether the list is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Servers;
+    /// assert!(Servers::default().is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
     /// The single datastore (returns the first entry, if any).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::{ConfServer, Servers};
+    /// let s = Servers::from_vec(vec![ConfServer::parse("127.0.0.1:6379:1").unwrap()]);
+    /// assert!(s.datastore().is_some());
+    /// assert!(Servers::default().datastore().is_none());
+    /// ```
     pub fn datastore(&self) -> Option<&ConfServer> {
         self.0.first()
     }
 }
 
 /// Pool configuration body. One per top-level YAML pool name.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::{ConfPool, ConfListen};
+/// let mut p = ConfPool::default();
+/// assert!(p.listen.is_none());
+/// p.listen = Some(ConfListen::parse("listen", "127.0.0.1:8102").unwrap());
+/// p.apply_defaults();
+/// assert_eq!(p.timeout, Some(5_000));
+/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ConfPool {
@@ -215,6 +275,16 @@ pub struct ConfPool {
 
 impl ConfPool {
     /// Apply defaults to any field still left `None` after parsing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfPool;
+    /// let mut p = ConfPool::default();
+    /// p.apply_defaults();
+    /// assert_eq!(p.timeout, Some(5_000));
+    /// assert_eq!(p.rack.as_deref(), Some("localrack"));
+    /// ```
     pub fn apply_defaults(&mut self) {
         if self.dyn_seed_provider.is_none() {
             self.dyn_seed_provider = Some(defaults::SEED_PROVIDER.to_string());
@@ -317,6 +387,20 @@ impl ConfPool {
 
     /// Run the full validation pass against the (presumably finalized)
     /// pool body.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::{ConfListen, ConfPool, ConfServer, Servers, TokenList};
+    /// let mut p = ConfPool {
+    ///     listen: Some(ConfListen::parse("listen", "127.0.0.1:8102").unwrap()),
+    ///     servers: Some(Servers::from_vec(vec![ConfServer::parse("127.0.0.1:6379:1").unwrap()])),
+    ///     tokens: Some(TokenList::parse("0").unwrap()),
+    ///     ..ConfPool::default()
+    /// };
+    /// p.apply_defaults();
+    /// assert!(p.validate("dyn_o_mite").is_ok());
+    /// ```
     pub fn validate(&self, pool_name: &str) -> Result<(), ConfError> {
         if pool_name.is_empty() {
             return Err(ConfError::EmptyPoolName);

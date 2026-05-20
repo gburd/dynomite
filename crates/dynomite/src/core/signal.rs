@@ -27,6 +27,14 @@ use crate::core::types::Status;
 /// verbosity, SIGHUP reopens the log file, SIGINT requests a
 /// graceful shutdown, SIGUSR1 and SIGUSR2 are reserved noop slots,
 /// SIGSEGV records a stack trace, and SIGPIPE is ignored.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::signal::SignalAction;
+/// assert_ne!(SignalAction::Shutdown, SignalAction::Noop);
+/// assert_eq!(SignalAction::Ignore, SignalAction::Ignore);
+/// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SignalAction {
     /// Reserved slot used by the in-process action table that
@@ -48,6 +56,14 @@ pub enum SignalAction {
 }
 
 /// One entry in the signal-action table.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::signal::{default_actions, SignalAction};
+/// let entry = default_actions().iter().find(|e| e.name == "SIGINT").unwrap();
+/// assert_eq!(entry.action, SignalAction::Shutdown);
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct SignalEntry {
     /// The POSIX signal number this entry handles.
@@ -135,12 +151,17 @@ pub fn action_for(signal: Signal) -> Option<SignalAction> {
 
 /// Dispatch the action associated with `signal`.
 ///
-/// This is the work the C `signal_handler` performs after the kernel
-/// delivers a signal. Rust callers wire it to a tokio `Signal` stream
-/// and call [`dispatch`] from inside a regular task. Returning `Ok`
-/// after a [`SignalAction::Shutdown`] indicates the caller should exit
-/// the main loop. The boolean returned is `true` when shutdown was
-/// requested.
+/// Returns `true` when shutdown was requested. Unknown signals are
+/// reported as `false` and produce no side effect.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::signal::dispatch;
+/// use nix::sys::signal::Signal;
+/// assert!(!dispatch(Signal::SIGUSR1).unwrap());
+/// assert!(dispatch(Signal::SIGINT).unwrap());
+/// ```
 pub fn dispatch(signal: Signal) -> Result<bool, crate::core::types::DynError> {
     let Some(action) = action_for(signal) else {
         return Ok(false);
@@ -169,6 +190,14 @@ pub fn dispatch(signal: Signal) -> Result<bool, crate::core::types::DynError> {
 
 /// Convenience wrapper that returns [`Status`] for callers that prefer
 /// the void-returning shape used elsewhere in the engine.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::signal::handle;
+/// use nix::sys::signal::Signal;
+/// handle(Signal::SIGUSR1).unwrap();
+/// ```
 pub fn handle(signal: Signal) -> Status {
     dispatch(signal).map(|_| ())
 }

@@ -25,6 +25,13 @@ use std::fmt;
 use crate::core::types::DynError;
 
 /// Maximum number of 32-bit words a token can hold.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::token::TOKEN_WORD_CAPACITY;
+/// assert_eq!(TOKEN_WORD_CAPACITY, 4);
+/// ```
 pub const TOKEN_WORD_CAPACITY: usize = 4;
 
 /// 10 base-10 digits per group when parsing a textual token.
@@ -39,6 +46,13 @@ const DIGITS_PER_INT: usize = 10;
 const RADIX_VAL_C_REFERENCE: u32 = 0x1717_9149;
 
 /// Sign of a token.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::token::Sign;
+/// assert_ne!(Sign::Negative, Sign::Positive);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Sign {
     /// Negative token (sign field == -1 in C).
@@ -61,6 +75,15 @@ impl Sign {
 
 /// A signed magnitude integer used as both a hash output and a ring
 /// coordinate.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::DynToken;
+/// let mut t = DynToken::from_u32(7);
+/// assert_eq!(t.get_int(), 7);
+/// assert_eq!(t.len(), 1);
+/// ```
 #[derive(Clone, Debug)]
 pub struct DynToken {
     sign: Sign,
@@ -80,6 +103,14 @@ impl Default for DynToken {
 
 impl DynToken {
     /// Construct an empty token (sign zero, no magnitude words).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// let t = DynToken::new();
+    /// assert!(t.is_empty());
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -105,6 +136,15 @@ impl DynToken {
 
     /// Set the number of magnitude words. Returns an error if `len`
     /// exceeds [`TOKEN_WORD_CAPACITY`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// let mut t = DynToken::default();
+    /// assert!(t.size(2).is_ok());
+    /// assert!(t.size(99).is_err());
+    /// ```
     pub fn size(&mut self, len: usize) -> Result<(), DynError> {
         if len > TOKEN_WORD_CAPACITY {
             return Err(DynError::Generic(format!(
@@ -117,44 +157,106 @@ impl DynToken {
     }
 
     /// Number of magnitude words currently in use.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// assert_eq!(DynToken::from_u32(1).len(), 1);
+    /// assert_eq!(DynToken::default().len(), 0);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.len
     }
 
     /// Whether the token holds no magnitude words.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// assert!(DynToken::default().is_empty());
+    /// assert!(!DynToken::from_u32(1).is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
     /// Sign field.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// use dynomite::hashkit::token::Sign;
+    /// assert_eq!(DynToken::from_u32(1).sign(), Sign::Positive);
+    /// assert_eq!(DynToken::default().sign(), Sign::Zero);
+    /// ```
     #[must_use]
     pub fn sign(&self) -> Sign {
         self.sign
     }
 
     /// Read-only view of the magnitude words actually in use.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// let t = DynToken::from_u32(0xdead);
+    /// assert_eq!(t.mag(), &[0xdead]);
+    /// ```
     #[must_use]
     pub fn mag(&self) -> &[u32] {
         &self.mag[..self.len]
     }
 
     /// Mutable access to the full magnitude buffer (capacity-sized).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// use dynomite::hashkit::token::TOKEN_WORD_CAPACITY;
+    /// let mut t = DynToken::default();
+    /// t.size(2).unwrap();
+    /// t.mag_mut()[0] = 1;
+    /// assert_eq!(t.mag_mut().len(), TOKEN_WORD_CAPACITY);
+    /// ```
     pub fn mag_mut(&mut self) -> &mut [u32; TOKEN_WORD_CAPACITY] {
         &mut self.mag
     }
 
     /// Force the length without resetting the sign or zeroing words.
     ///
-    /// Used by the 128-bit `Murmur3` algorithm after writing into the
-    /// magnitude buffer directly.
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// let mut t = DynToken::default();
+    /// t.mag_mut()[0] = 0xaa;
+    /// t.set_len_keep(1);
+    /// assert_eq!(t.len(), 1);
+    /// assert_eq!(t.get_int(), 0xaa);
+    /// ```
     pub fn set_len_keep(&mut self, len: usize) {
         assert!(len <= TOKEN_WORD_CAPACITY, "token length out of range");
         self.len = len;
     }
 
     /// Sets sign explicitly. Mostly useful in tests.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// use dynomite::hashkit::token::Sign;
+    /// let mut t = DynToken::from_u32(1);
+    /// t.set_sign(Sign::Negative);
+    /// assert_eq!(t.sign(), Sign::Negative);
+    /// ```
     pub fn set_sign(&mut self, sign: Sign) {
         self.sign = sign;
     }
@@ -163,6 +265,16 @@ impl DynToken {
     ///
     /// Sign becomes `Positive` when `val > 0`, `Zero` otherwise. Length
     /// is forced to 1.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// let mut t = DynToken::default();
+    /// t.size(1).unwrap();
+    /// t.set_int(99);
+    /// assert_eq!(t.get_int(), 99);
+    /// ```
     pub fn set_int(&mut self, val: u32) {
         self.mag[0] = val;
         self.len = 1;
@@ -170,6 +282,14 @@ impl DynToken {
     }
 
     /// Read the token's first word as a 32-bit unsigned value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// assert_eq!(DynToken::from_u32(33).get_int(), 33);
+    /// assert_eq!(DynToken::default().get_int(), 0);
+    /// ```
     #[must_use]
     pub fn get_int(&self) -> u32 {
         if self.len == 0 {
@@ -181,6 +301,13 @@ impl DynToken {
 
     /// Hex dump of the magnitude words, big-endian per word, in
     /// declaration order. Used by tests and the `dyn-hash-tool` CLI.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::hashkit::DynToken;
+    /// assert_eq!(DynToken::from_u32(0xdead).to_hex(), "0000dead");
+    /// ```
     #[must_use]
     pub fn to_hex(&self) -> String {
         let mut out = String::with_capacity(8 * self.len);
@@ -262,13 +389,22 @@ impl std::hash::Hash for DynToken {
 }
 
 /// Parse a textual token from `bytes`. Accepts an optional leading `-`,
-/// then base-10 digits; reproduces `parse_dyn_token` byte-for-byte
-/// including the C-reference radix multiplier.
+/// then base-10 digits.
 ///
 /// # Errors
 ///
 /// Returns `DynError::Generic` when the input is empty, contains
 /// non-digit bytes, or specifies a length that overflows the token.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::token::{parse_token, Sign};
+/// let t = parse_token(b"42").unwrap();
+/// assert_eq!(t.sign(), Sign::Positive);
+/// assert_eq!(t.get_int(), 42);
+/// assert!(parse_token(b"").is_err());
+/// ```
 pub fn parse_token(bytes: &[u8]) -> Result<DynToken, DynError> {
     if bytes.is_empty() {
         return Err(DynError::Generic("empty token".into()));

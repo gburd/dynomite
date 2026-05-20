@@ -11,15 +11,47 @@ use std::io;
 use thiserror::Error;
 
 /// Monotonically increasing message identifier.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::types::MsgId;
+/// let id: MsgId = 1;
+/// assert_eq!(id + 1, 2);
+/// ```
 pub type MsgId = u64;
 
 /// Milliseconds since the UNIX epoch.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::types::Msec;
+/// let m: Msec = 1_700_000_000_000;
+/// assert!(m > 0);
+/// ```
 pub type Msec = u64;
 
 /// Microseconds since the UNIX epoch.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::types::Usec;
+/// let u: Usec = 1_700_000_000_000_000;
+/// assert!(u > 0);
+/// ```
 pub type Usec = u64;
 
 /// Seconds since the UNIX epoch.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::types::Sec;
+/// let s: Sec = 1_700_000_000;
+/// assert!(s > 0);
+/// ```
 pub type Sec = u64;
 
 /// Result alias used by most internal APIs that do not return data.
@@ -42,6 +74,17 @@ pub type Status = Result<(), DynError>;
 /// The variants enumerate the small fixed error set the engine
 /// reports plus an [`Io`](DynError::Io) variant for transport failures
 /// and an unstructured [`Generic`](DynError::Generic) catch-all.
+///
+/// # Examples
+///
+/// ```
+/// use std::io;
+/// use dynomite::core::types::DynError;
+/// let io_err = io::Error::new(io::ErrorKind::ConnectionReset, "x");
+/// let err: DynError = io_err.into();
+/// assert!(matches!(err, DynError::Io(_)));
+/// assert!(matches!(DynError::Again, DynError::Again));
+/// ```
 #[derive(Debug, Error)]
 pub enum DynError {
     /// Generic operational failure with a contextual message.

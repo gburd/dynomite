@@ -45,6 +45,22 @@ use tokio_util::sync::CancellationToken;
 /// Dropping the handle without calling [`TaskHandle::cancel`] leaves
 /// the task running (the tokio task holds a clone of the cancellation
 /// token). Call [`TaskHandle::cancel`] to stop the task explicitly.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::time::Duration;
+/// use dynomite::core::task::task_register;
+///
+/// let rt = tokio::runtime::Runtime::new().unwrap();
+/// rt.block_on(async {
+///     let h = task_register(Duration::from_millis(50), Arc::new(|| {}));
+///     assert!(!h.is_cancelled());
+///     h.cancel();
+///     assert!(h.is_cancelled());
+/// });
+/// ```
 #[derive(Debug, Clone)]
 pub struct TaskHandle {
     token: CancellationToken,
@@ -52,11 +68,42 @@ pub struct TaskHandle {
 
 impl TaskHandle {
     /// Cancel the task.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use dynomite::core::task::task_register;
+    ///
+    /// let rt = tokio::runtime::Runtime::new().unwrap();
+    /// rt.block_on(async {
+    ///     let h = task_register(Duration::from_millis(50), Arc::new(|| {}));
+    ///     h.cancel();
+    ///     assert!(h.is_cancelled());
+    /// });
+    /// ```
     pub fn cancel(&self) {
         self.token.cancel();
     }
 
     /// Whether the task has already been cancelled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use dynomite::core::task::task_register;
+    ///
+    /// let rt = tokio::runtime::Runtime::new().unwrap();
+    /// rt.block_on(async {
+    ///     let h = task_register(Duration::from_millis(50), Arc::new(|| {}));
+    ///     assert!(!h.is_cancelled());
+    ///     h.cancel();
+    ///     assert!(h.is_cancelled());
+    /// });
+    /// ```
     pub fn is_cancelled(&self) -> bool {
         self.token.is_cancelled()
     }
