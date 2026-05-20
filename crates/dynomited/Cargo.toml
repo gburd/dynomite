@@ -1,0 +1,32 @@
+[package]
+name = "dynomited"
+description = "Dynomite server binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "dynomited"
+path = "src/main.rs"
+
+[dependencies]
+dynomite = { path = "../dynomite" }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tempfile = { workspace = true }
+
+[build-dependencies]
+clap_mangen = { workspace = true }

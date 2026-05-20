@@ -1,0 +1,20 @@
+# Summary
+
+[Introduction](./intro.md)
+
+- [Architecture](./architecture.md)
+- [Configuration](./configuration.md)
+- [Protocols](./protocols/index.md)
+  - [Redis](./protocols/redis.md)
+  - [Memcache](./protocols/memcache.md)
+  - [DNODE](./protocols/dnode.md)
+- [Transports](./transports/index.md)
+  - [TCP](./transports/tcp.md)
+  - [QUIC](./transports/quic.md)
+- [Security](./security/crypto.md)
+- [Operations](./operations/recommendations.md)
+- [Embedding API](./embedding/index.md)
+  - [Server lifecycle](./embedding/server.md)
+  - [Hooks and traits](./embedding/hooks.md)
+  - [Examples](./embedding/examples.md)
+- [Internals](./internals/index.md)

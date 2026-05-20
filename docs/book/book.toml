@@ -1,0 +1,14 @@
+[book]
+title = "Dynomite (Rust) Reference Manual"
+authors = ["The Dynomite Rust Port Authors"]
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "../../target/book"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/gburd/dynomite"
