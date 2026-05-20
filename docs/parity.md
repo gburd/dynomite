@@ -438,7 +438,80 @@ next to its only consumer.
 
 ## src/entropy/
 
-(Stage 11.)
+### dyn_entropy.h
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `ENTROPY_ADDR` macro (`127.0.0.1`) | `dynomite::entropy::EntropyConfig::listen_addr` (operator-set) | done (Stage 11) |
+| `ENTROPY_PORT` macro (`8105`) | `dynomite::entropy::EntropyConfig::listen_addr` (operator-set, the default port appears in module rustdoc examples) | done (Stage 11) |
+| `ENCRYPT_FLAG` / `DECRYPT_FLAG` macros | `dynomite::entropy::EntropyConfig::encrypt` (single bool) and `SnapshotHeader::encrypt_flag` on the wire | done (Stage 11) |
+| `BUFFER_SIZE` macro | `dynomite::entropy::DEFAULT_BUFFER_SIZE` | done (Stage 11) |
+| `CIPHER_SIZE` macro | `dynomite::entropy::DEFAULT_CIPHER_SIZE` | done (Stage 11) |
+| `struct entropy` | `dynomite::entropy::EntropyConfig` (operator-visible knobs) plus `EntropySender` / `EntropyReceiver` runtime objects (no single struct holds the live state) | done (Stage 11) |
+| `entropy_init` | `EntropyReceiver::bind` (key/iv loaded inside `bind`) -- the C function is marked DEPRECATED in the reference source | done (Stage 11) |
+| `entropy_loop` | `EntropyReceiver::accept_loop` | done (Stage 11) |
+| `entropy_conn_start` | folded into `EntropyReceiver::run` (binds listener and spawns the accept task) | done (Stage 11) |
+| `entropy_conn_destroy` | implicit (`Drop` of `EntropyReceiver` and the spawned `JoinHandle`) | done (Stage 11) |
+| `entropy_listen` | folded into `EntropyReceiver::bind` (uses `tokio::net::TcpListener::bind`) | done (Stage 11) |
+| `entropy_encrypt` | `dynomite::entropy::send::encrypt_chunk` | done (Stage 11) -- uses PKCS#7 padding (deviation, see below) |
+| `entropy_decrypt` | `dynomite::entropy::receive::decrypt_chunk` | done (Stage 11) |
+| `entropy_key_iv_load` | `dynomite::entropy::util::load_material` (returns separate validated `EntropyKey` / `EntropyIv` rather than mutating a global) | done (Stage 11) |
+| `entropy_snd_start` | `EntropySender::push` (spawned wrapper: `EntropySender::run`) | done (Stage 11) |
+| `entropy_rcv_start` | merged into the receiver's per-connection worker plus the user-supplied `SnapshotSink`. See deviation note below. | done (Stage 11) |
+
+### dyn_entropy_util.c
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `MAGIC_NUMBER` macro (`64640001`) | `dynomite::entropy::ENTROPY_MAGIC` | done (Stage 11) |
+| `MAX_HEADER_SIZE` macro | `dynomite::entropy::MAX_HEADER_SIZE` | done (Stage 11) |
+| `MAX_BUFFER_SIZE` macro | `dynomite::entropy::MAX_BUFFER_SIZE` | done (Stage 11) |
+| `MAX_CIPHER_SIZE` macro | `dynomite::entropy::MAX_CIPHER_SIZE` | done (Stage 11) |
+| `static unsigned char *theKey` | omitted: the Rust loader always uses the on-disk file. The reference reassigns `theKey` only behind a commented-out line, so the C cipher always runs against the literal `0123456789012345`; recorded under `# Deviations`. | done (Stage 11) |
+| `static unsigned char *theIv` | omitted: same rationale as `theKey` | done (Stage 11) |
+| `entropy_crypto_init` | omitted: the RustCrypto stack has no global init step | done (Stage 11) |
+| `entropy_crypto_deinit` | omitted: same rationale as `entropy_crypto_init` | done (Stage 11) |
+| `entropy_decrypt` (util.c body) | `dynomite::entropy::receive::decrypt_chunk` | done (Stage 11) |
+| `entropy_encrypt` (util.c body) | `dynomite::entropy::send::encrypt_chunk` | done (Stage 11) |
+| `entropy_conn_stop` (static) | implicit (`tokio::net::TcpListener::drop` / connection drop) | done (Stage 11) |
+| `entropy_conn_destroy` (util.c body) | implicit (`Drop`) | done (Stage 11) |
+| `entropy_listen` (util.c body) | folded into `EntropyReceiver::bind` | done (Stage 11) |
+| `entropy_key_iv_load` (util.c body) | `dynomite::entropy::util::load_material` (`load_key_file` + `load_iv_file`) | done (Stage 11) |
+| `entropy_init` (util.c body, DEPRECATED) | replaced by `EntropyReceiver::bind` | done (Stage 11) |
+| `entropy_callback` (static) | inline body of `EntropyReceiver::handle_one` (per-connection negotiation: read magic, command, header_size, buffer_size, cipher_size, validate ranges, dispatch) | done (Stage 11) |
+| `entropy_loop` (util.c body) | `EntropyReceiver::accept_loop` | done (Stage 11) |
+| `entropy_conn_start` (util.c body) | folded into `EntropyReceiver::run` | done (Stage 11) |
+
+### dyn_entropy_snd.c
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `LOG_CHUNK_LEVEL` macro | omitted: per-chunk progress logging is left to embedders via tracing spans | done (Stage 11) |
+| `THROUGHPUT_THROTTLE` macro | omitted: tokio's cooperative scheduling already throttles long writes; explicit per-chunk usleep dropped (recorded under `# Deviations`) | done (Stage 11) |
+| `AOF_TO_SEND` macro (`/mnt/data/nfredis/appendonly.aof`) | default value of `RedisLocalSnapshot::aof_path` (configurable) | done (Stage 11) |
+| `entropy_redis_compact_aof` (static) | `RedisLocalSnapshot::bgrewriteaof` (issues RESP `BGREWRITEAOF` over TCP, retries with a configurable pause) | done (Stage 11) -- the reference shells out via `system("redis-cli ... bgrewriteaof")`; the Rust default speaks RESP directly. Recorded under `# Deviations`. |
+| `header_send` (static) | private helper `write_snapshot_header` inside `dynomite::entropy::send` -- writes the eight-byte `total_len` + `encrypt_flag` prefix and zero-fills the remainder of the negotiated `header_size`. The reference leaves trailing bytes uninitialized; the Rust port zero-fills (recorded under `# Deviations`). | done (Stage 11) |
+| `entropy_snd_stats` (static) | omitted: progress reporting moves to tracing | done (Stage 11) |
+| `entropy_snd_start` | `EntropySender::push` (spawned wrapper: `EntropySender::run`) | done (Stage 11) |
+
+### dyn_entropy_rcv.c
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `entropy_redis_connector` (static) | `dynomite::entropy::receive::RedisReplaySink` (default sink that opens a fresh TCP connection to the configured Redis address and streams the decrypted bytes at it) | done (Stage 11) |
+| `entropy_rcv_start` | merged into the receiver's per-connection worker (`EntropyReceiver::accept_loop` calls a private `handle_one` that reads the negotiation, snapshot header, and per-chunk frames, decrypts, and hands the plaintext to `SnapshotSink::apply`). The reference engine's per-key handshake (`numberOfKeys` + per-key `keyValueLength` + raw bytes streamed at `redis-server`) is collapsed into a single blob handed to `SnapshotSink::apply`; embedders that need the per-record stream can layer it inside their sink. Recorded under `# Deviations`. | done (Stage 11) |
+
+### Stage 11 new Rust-only items
+
+| Item | Rust home | Notes |
+|---|---|---|
+| (new) | `dynomite::entropy::SnapshotSource` trait + `dynomite::entropy::SnapshotSink` trait | the seam Stage 13 will re-export through the embedding API for custom snapshot/replay backends; the trait shape is locked here so Stage 13 only adds a forwarding wrapper. |
+| (new) | `dynomite::entropy::send::StaticSnapshot` | in-memory snapshot source for tests and embedders that already hold the snapshot in RAM. |
+| (new) | `dynomite::entropy::receive::MemorySink` | in-memory snapshot sink for tests. |
+| (new) | `dynomite::entropy::send::RedisLocalSnapshot` | default snapshot source: dials a local Redis on the conf-configured port, issues `BGREWRITEAOF`, then reads the AOF file from disk. |
+| (new) | `dynomite::entropy::receive::RedisReplaySink` | default snapshot sink: writes the decrypted blob to a fresh Redis TCP connection. |
+| (new) | `dynomite::entropy::NegotiationHeader` / `SnapshotHeader` | typed wire-frame helpers for the negotiation and per-snapshot headers. |
+| (new) | `dynomite::entropy::EntropyError` | typed error union for the entropy module (I/O, config, key material, protocol, crypto, source, sink). |
 
 ## src/dyn_server.{c,h} (Stage 10)
 
@@ -933,6 +1006,99 @@ entry point Stage 9 will use directly from the connection FSM
 when it spans buffers.
 
 ## Deviations
+
+### Stage 11: entropy crypto uses PKCS#7 padding instead of zero-padding-required-by-caller
+
+The reference engine sets `EVP_CIPHER_CTX_set_padding(ctx, 0)` in
+`entropy_encrypt` (`_/dynomite/src/entropy/dyn_entropy_util.c` lines
+179-180) and feeds the cipher chunks of the configured
+`buffer_size` plus a possibly-undersized final chunk
+(`last_chunk_size = file_size - (nchunk - 1) * buffer_size`). With
+no padding mode, `EVP_EncryptUpdate` requires the input length to
+be a multiple of the AES block size, so the C path silently
+produces a corrupt final chunk whenever `last_chunk_size` is not a
+multiple of 16 (a likely outcome for an arbitrary AOF file). The
+Rust port enables PKCS#7 padding (`Pkcs7` from the RustCrypto
+stack), which always emits one full extra block and lets the
+receiver recover an exact byte count. The negotiation header
+advertises a `cipher_size` of `buffer_size + 16` to accommodate
+the extra block.
+
+Pinned by `dynomite::entropy::send::tests::encrypt_chunk_round_trips_with_pkcs7`
+and the integration test
+`crates/dynomite/tests/stage_11_entropy.rs::encrypted_roundtrip_with_bundled_fixtures`.
+
+### Stage 11: entropy chunks are length-prefixed instead of fixed `cipher_size`
+
+The reference engine sends every chunk as exactly `cipher_size`
+bytes on the wire (`send(peer_socket, ciphertext, sizeof(ciphertext), 0)`,
+`_/dynomite/src/entropy/dyn_entropy_snd.c` line 257). With
+`cipher_size > buffer_size`, the wire bytes after the actual
+ciphertext are uninitialised stack contents on the C side and are
+ignored by the receiver. The Rust port prefixes each chunk with a
+4-byte big-endian `chunk_len` and emits exactly that many bytes,
+which both removes the uninitialised-stack leak and lets the
+receiver recover an exact ciphertext length when PKCS#7 padding
+produces sub-`cipher_size` outputs. The negotiation `cipher_size`
+field is retained as the maximum payload size for validation.
+
+### Stage 11: entropy snd/rcv wire formats unified into a single file-stream framing
+
+The reference engine ships two wholly different wire formats: the
+`snd` path streams the entire AOF file as opaque bytes
+(`_/dynomite/src/entropy/dyn_entropy_snd.c`), while the `rcv` path
+expects a header `numberOfKeys` followed by per-record
+`keyValueLength` plus that many bytes
+(`_/dynomite/src/entropy/dyn_entropy_rcv.c`). The two paths are
+not inverses of each other; the C engine relies on an external
+Lepton/Spark cluster to bridge between them. The Rust port
+unifies the framing on the file-stream shape and exposes the
+record-level interpretation through the user-supplied
+`SnapshotSink` so an embedder can layer either contract. The
+default `RedisReplaySink` writes the decrypted bytes at a Redis
+TCP socket (matching what `entropy_rcv_start` does for each key in
+the C engine, only as a single write).
+
+### Stage 11: `BGREWRITEAOF` invoked over RESP instead of via `system("redis-cli ...")`
+
+The reference snapshot pipeline shells out to `redis-cli`
+(`_/dynomite/src/entropy/dyn_entropy_snd.c::entropy_redis_compact_aof`,
+line 38). The Rust port speaks the RESP wire format directly to
+the configured Redis endpoint to remove the `redis-cli` runtime
+dependency. Behavioural shape is identical: one `BGREWRITEAOF`
+command, retry once after a configurable pause on transport
+failure.
+
+### Stage 11: throughput throttler removed
+
+The C `entropy_snd_start` interleaves `usleep` calls to cap
+throughput at `THROUGHPUT_THROTTLE` bytes per second
+(`_/dynomite/src/entropy/dyn_entropy_snd.c` lines 220-235). The
+Rust port omits the throttle: tokio's cooperative scheduling
+yields the task often enough that explicit sleeping serves no
+purpose, and the throttle constant is hardcoded in the C source
+rather than configured. Embedders that need rate limiting can
+plug their own `SnapshotSource` that yields chunks at a controlled
+cadence.
+
+### Stage 11: `recon_key.pem` / `recon_iv.pem` content is honoured
+
+The reference loader
+(`_/dynomite/src/entropy/dyn_entropy_util.c::entropy_key_iv_load`)
+reads each file with `fgets` and immediately discards the result:
+the `theKey = (unsigned char *)buff` and matching IV assignment
+are commented out, so the cipher always runs against the
+hardcoded literal `0123456789012345`. The Rust loader honours the
+file contents. To absorb the off-by-one in the bundled fixture
+(`_/dynomite/conf/recon_key.pem` is `01234567890123456` -- 17
+characters, not 16), the Rust loader trims trailing whitespace and
+takes the first 16 bytes provided the file contains at least that
+many; the truncation result equals the C hardcoded literal
+byte-for-byte, preserving cipher compatibility.
+
+Pinned by `dynomite::entropy::util::tests::loads_bundled_recon_fixtures`,
+`truncates_oversized_key_to_16_bytes`, and
+`truncates_oversized_iv_to_16_bytes`.
 
 ### Stage 7: `DynErrorCode::BadFormat.message()` returns a stable string instead of `strerror(8)`
 
