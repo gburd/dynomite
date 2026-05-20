@@ -224,11 +224,10 @@ impl Crypto {
     /// * AES-128 in CBC mode with PKCS#7 padding. The cipher
     ///   consumes only the first 16 bytes of the 32-byte `aes_key`
     ///   buffer.
-    /// * The IV is the same 16 bytes as the key, mirroring the C
-    ///   reference (`EVP_EncryptInit_ex(ctx, cipher, NULL, key, key)`
-    ///   in `dyn_crypto.c`). The static IV is a known weakness of
-    ///   the C protocol; the Rust port faithfully reproduces it for
-    ///   wire compatibility. Two encryptions of the same plaintext
+    /// * The IV is the same 16 bytes as the key. The static IV is
+    ///   a known weakness of the legacy wire protocol; the Rust
+    ///   port faithfully reproduces it for wire compatibility. Two
+    ///   encryptions of the same plaintext
     ///   under the same key produce identical ciphertext.
     /// * The output is not authenticated. Integrity is provided by
     ///   the surrounding DNODE message framing. Embedders that need

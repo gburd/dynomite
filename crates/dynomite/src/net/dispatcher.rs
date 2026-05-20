@@ -1,10 +1,10 @@
 //! Cluster-side dispatch hook.
 //!
-//! The reference engine threads parsed requests through
-//! `req_forward`, which decides whether to send the request to the
-//! local datastore, fan it out across racks, or relay it to a
-//! remote DC. Stage 9 only owns the per-connection FSMs; the
-//! routing logic lands with Stage 10's cluster module.
+//! Routing decisions (whether to send a request to the local
+//! datastore, fan it out across racks, or relay it to a remote DC)
+//! land in Stage 10's cluster module. Stage 9 only owns the
+//! per-connection FSMs and exposes a seam, [`Dispatcher`], that
+//! Stage 10 plugs into.
 //!
 //! [`Dispatcher`] is the seam between the two stages. The Stage 9
 //! client / dnode-client FSMs hand each fully parsed [`Msg`] to a
@@ -31,7 +31,7 @@ pub enum DispatchOutcome {
     Pending,
     /// The dispatcher wants the FSM to reply with the supplied
     /// message immediately. Used for control plane / synthetic
-    /// responses (the C reference's `simulate_ok_rsp` path).
+    /// responses (e.g. swallowed `QUIT` commands).
     Inline(Msg),
     /// The dispatcher rejected the request with an error response
     /// the FSM should return to the client immediately.

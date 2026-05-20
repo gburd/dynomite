@@ -1,9 +1,8 @@
 //! Response lifecycle helpers.
 //!
-//! `dyn_response.c` exposes a small number of pure-data helpers
-//! (constructing error responses, pairing a response with its
-//! request) that the request-side path consumes. The connection
-//! plumbing (`rsp_send_next`, `rsp_send_done`, queue threading)
+//! A small number of pure-data helpers - constructing error
+//! responses, pairing a response with its request - live here. The
+//! connection plumbing (response send / done, queue threading)
 //! ships in Stage 9.
 
 use super::message::Msg;

@@ -3,11 +3,10 @@
 //! When the engine forwards a request to multiple peer replicas, the
 //! arriving responses are routed through a [`ResponseMgr`] that
 //! tracks how many replies are good, how many errored, and whether
-//! the body checksums agree. The reference engine's
-//! `dyn_response_mgr.c` keeps a fixed-size array sized for
-//! [`MAX_REPLICAS_PER_DC`] replicas; the Rust port mirrors the same
-//! layout because the consistency model is fundamentally a small,
-//! finite-state decision table.
+//! the body checksums agree. The aggregator keeps a fixed-size
+//! array sized for [`MAX_REPLICAS_PER_DC`] replicas because the
+//! consistency model is fundamentally a small, finite-state
+//! decision table.
 //!
 //! The state machine is the union of two observations:
 //!

@@ -1,9 +1,9 @@
 //! Request lifecycle helpers.
 //!
-//! The reference engine's `dyn_request.c` is split into two layers:
-//! request-side data manipulation (which fragments are done, which
-//! are in error, what error to send) and connection-side plumbing
-//! (timeout queues, recv/send done callbacks, peer forwarding).
+//! Request handling splits into two layers: request-side data
+//! manipulation (which fragments are done, which are in error,
+//! what error to send) and connection-side plumbing (timeout
+//! queues, recv/send done callbacks, peer forwarding).
 //!
 //! This module owns the data-side helpers; the connection-side
 //! helpers land in Stage 9 once the connection FSM exists.

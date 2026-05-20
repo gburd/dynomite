@@ -77,9 +77,9 @@ pub struct ConnStats {
 
 /// Stable, process-unique connection identifier.
 ///
-/// The C reference engine identifies connections by their socket
-/// descriptor. The Rust port uses a monotonic 64-bit counter so the
-/// id stays unique across reconnects and across transports.
+/// Connections are identified by a monotonic 64-bit counter so the
+/// id stays unique across reconnects and across transports (TCP,
+/// QUIC).
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ConnHandle(u64);
 
@@ -393,14 +393,12 @@ impl Conn {
         self.write_consistency
     }
 
-    /// Update the read consistency level. Mirrors
-    /// `conn_set_read_consistency`.
+    /// Update the read consistency level.
     pub fn set_read_consistency(&mut self, c: ConsistencyLevel) {
         self.read_consistency = c;
     }
 
-    /// Update the write consistency level. Mirrors
-    /// `conn_set_write_consistency`.
+    /// Update the write consistency level.
     pub fn set_write_consistency(&mut self, c: ConsistencyLevel) {
         self.write_consistency = c;
     }

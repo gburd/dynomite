@@ -2,13 +2,10 @@
 //!
 //! Outbound peer connection: the local node initiates the link to
 //! a remote peer. The driver wraps every outgoing request in a
-//! DNODE header (and, when the pool's `secure_server_option`
+//! dnode header (and, when the pool's `secure_server_option`
 //! requires it, encrypts the payload), pumps the wire bytes, then
 //! parses the response that comes back and delivers it through
 //! the per-request responder channel.
-//!
-//! Mirrors `dyn_dnode_request.c::dnode_peer_req_forward` plus the
-//! response side in `dyn_dnode_proxy.c::dnode_rsp_send_next`.
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;

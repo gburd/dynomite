@@ -1,11 +1,10 @@
 //! Dual-stack listener helpers.
 //!
-//! The reference engine binds a single socket per `listen:` /
-//! `dyn_listen:` directive: for `0.0.0.0:port` it ends up with an
-//! IPv4-only socket, for `[::]:port` with an IPv6 socket whose
-//! `IPV6_V6ONLY` flag is what `getaddrinfo` defaulted to (which on
-//! Linux is the global `/proc/sys/net/ipv6/bindv6only` knob, usually
-//! `0`).
+//! Each `listen:` / `dyn_listen:` directive binds a single socket:
+//! `0.0.0.0:port` opens an IPv4-only socket, `[::]:port` opens an
+//! IPv6 socket whose `IPV6_V6ONLY` flag matches the platform
+//! default (on Linux, the `/proc/sys/net/ipv6/bindv6only` knob,
+//! usually `0`).
 //!
 //! The Stage 9 Rust wiring uses [`socket2::Socket`] to open the
 //! socket explicitly so the engine can:
@@ -42,9 +41,8 @@ use tokio::net::TcpListener;
 pub struct BindOptions {
     /// When the bind address is a v6 wildcard (`[::]`), set the
     /// `IPV6_V6ONLY` flag instead of accepting v4-mapped clients.
-    /// The default (`false`) accepts both families, which is the
-    /// engine's default behaviour on Linux and matches what the
-    /// reference engine ends up with through `getaddrinfo`.
+    /// The default (`false`) accepts both families, matching the
+    /// platform default on Linux.
     pub v6_only: bool,
     /// `SO_REUSEADDR`. Defaults to `true`.
     pub reuseaddr: bool,

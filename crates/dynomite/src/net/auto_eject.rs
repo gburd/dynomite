@@ -1,20 +1,18 @@
 //! Consecutive-failure auto-eject decision state.
 //!
 //! When a backend datastore (or peer) accumulates more than
-//! `server_failure_limit` consecutive connection or operation
-//! failures, the engine ejects it: subsequent calls into the pool
-//! return [`AutoEjectState::Ejected`] until the eject window
-//! configured by `server_retry_timeout_ms` has elapsed. After the
-//! window passes, [`AutoEject::record_attempt`] resumes returning
+//! `failure_limit` consecutive connection or operation failures,
+//! the engine ejects it: subsequent calls into the pool return
+//! [`AutoEjectState::Ejected`] until the eject window configured
+//! by `retry_after` has elapsed. After the window passes,
+//! [`AutoEject::record_attempt`] resumes returning
 //! [`AutoEjectState::Reachable`] (the next outbound connect attempt
 //! will then run, and a successful connect resets the failure
 //! counter through [`AutoEject::record_success`]).
 //!
-//! The C reference engine implements the exact same flow at the
-//! `datastore` and `peer` level (see `datastore_check_autoeject` and
-//! `dnode_peer_check_autoeject`). The Rust port lifts the policy
-//! into a standalone struct so the [`crate::net::pool::ConnPool`]
-//! and the Stage 10 cluster layer can both share the implementation.
+//! The same shared policy is reused by [`crate::net::pool::ConnPool`]
+//! and by the Stage 10 cluster layer; lifting the policy out of any
+//! one caller keeps the implementation single-sourced.
 //!
 //! # Examples
 //!
@@ -179,8 +177,9 @@ impl AutoEject {
     /// Record a successful operation.
     ///
     /// Resets the consecutive-failure counter and clears any active
-    /// eject window. Mirrors the `failure_count = 0; next_retry_ms
-    /// = 0` arm in the C reference's `server_ok`.
+    /// eject window. After a success, the next failure starts a
+    /// fresh streak from one (so the host has to fail
+    /// `failure_limit` more times before being re-ejected).
     ///
     /// `_now` is currently unused but accepted for parity with
     /// [`record_attempt`](Self::record_attempt) so callers can
