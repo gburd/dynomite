@@ -37,6 +37,12 @@ path = "src/main.rs"
 
 [features]
 default = []
+# Enable the end-to-end integration test that spawns a real
+# `redis-server` and drives the `dynomited` binary against it.
+# The test discovers `redis-server` via `PATH`; when the binary
+# is missing it marks itself ignored rather than failing. The
+# feature gates only the test, no production code.
+integration = []
 
 [dependencies]
 dynomite = { path = "../dynomite" }
