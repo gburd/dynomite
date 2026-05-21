@@ -14,6 +14,8 @@
 - [Security](./security/crypto.md)
 - [Operations](./operations/recommendations.md)
   - [Conformance suite](./operations/conformance.md)
+  - [Benchmarks](./operations/benchmarks.md)
+  - [Coverage gate](./operations/coverage.md)
 - [Embedding API](./embedding/index.md)
   - [Server lifecycle](./embedding/server.md)
   - [Hooks and traits](./embedding/hooks.md)
