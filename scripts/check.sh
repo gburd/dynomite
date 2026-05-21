@@ -68,4 +68,17 @@ echo "==> repo hygiene"
 "$ROOT/scripts/check_no_port_comments.sh"
 "$ROOT/scripts/check_ascii.sh"
 
+echo "==> quickfuzz (60s smoke per target)"
+"$ROOT/scripts/quickfuzz.sh" 60
+
+echo "==> coverage gate (Stage 15)"
+# The Stage 15 brief allows the actual coverage percentage to fall
+# below the 95% threshold while the Stage 16 chaos test is
+# pending; the gate is informational on `main` until the chaos
+# test lifts the network and FSM modules. Run
+# `scripts/coverage_gate.sh` directly (without `|| true`) to
+# enforce the threshold locally; CI flips this to enforcing
+# once Stage 16 lands.
+"$ROOT/scripts/coverage_gate.sh" || true
+
 echo "OK"
