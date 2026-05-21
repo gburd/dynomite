@@ -1,0 +1,28 @@
+# cargo-nextest configuration.
+#
+# The default profile preserves the upstream behaviour (no JUnit
+# output, parallel run). The `conformance` profile is the entry
+# point for the Stage 14 suite: it emits a JUnit XML report that
+# CI consumes after `scripts/check.sh` mirrors it to
+# `target/junit/conformance.xml`.
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[profile.conformance]
+# Conformance scenarios spawn real `dynomited` and `redis-server`
+# processes; serialise them so the OS does not run out of
+# ephemeral ports during a parallel run.
+test-threads = 1
+slow-timeout = { period = "30s", terminate-after = 2 }
+fail-fast = false
+
+[profile.conformance.junit]
+# Path is relative to the per-profile store directory; the
+# resolved location is `target/nextest/conformance/junit.xml`.
+# `scripts/check.sh` mirrors that file to
+# `target/junit/conformance.xml` for the CI workflow uploads.
+path = "junit.xml"
+report-name = "dynomite-conformance"
+store-success-output = false
+store-failure-output = true

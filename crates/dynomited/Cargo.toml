@@ -54,6 +54,10 @@ gen-man = ["dep:clap_mangen"]
 # is missing it marks itself ignored rather than failing. The
 # feature gates only the test, no production code.
 integration = []
+# Forward the engine's QUIC transport feature so the conformance
+# suite can exercise QUIC at the library level. Compiles in
+# `quiche` plus its build-time dependencies.
+quic = ["dynomite/quic"]
 
 [dependencies]
 dynomite = { path = "../dynomite" }
@@ -73,3 +77,6 @@ clap_mangen = { workspace = true, optional = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+thiserror = { workspace = true }
+rcgen = { workspace = true }

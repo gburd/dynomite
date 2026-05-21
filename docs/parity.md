@@ -1799,3 +1799,86 @@ Documented design choices that downstream stages must respect.
   that wiring is tracked as Stage 14b. The example was renamed
   from `embedded_with_custom_transport.rs` to make the sketch
   status visible at the file name.
+
+### Stage 14 - Conformance and regression suites
+
+The Stage 14 work delivers the harness that proves Rust
+behaviour matches the C reference. The harness lives in
+`crates/dynomited/tests/`:
+
+| C harness file | Rust home | Notes |
+|---|---|---|
+| `_/dynomite/test/dyno_cluster.py` | `crates/dynomited/tests/conformance/mod.rs::Cluster` | Rust-native cluster spawner with Drop-based process-group cleanup. |
+| `_/dynomite/test/dyno_node.py` | `crates/dynomited/tests/conformance/mod.rs::DynomitedNode` | Per-node config writer + spawn helper. |
+| `_/dynomite/test/redis_node.py` | `crates/dynomited/tests/conformance/mod.rs::RedisBackend` | Spawns ephemeral `redis-server` and tears it down on drop. |
+| `_/dynomite/test/func_test.py::run_key_value_tests` | `crates/dynomited/tests/conformance/python_harness.rs::run_key_value_workload` | Decision recorded in the journal: rewritten as a Rust integration test rather than kept as Python so the suite has one runner (cargo nextest), one cleanup contract, and one assertion model. |
+| `_/dynomite/test/func_test.py::run_multikey_test` | `crates/dynomited/tests/conformance/python_harness.rs::run_multikey_workload` | Same rationale. |
+| `_/dynomite/test/func_test.py::run_hash_tests` | `crates/dynomited/tests/conformance/python_harness.rs::run_hash_workload` | Same rationale. |
+| `_/dynomite/test/dual_run.py` | `crates/dynomited/tests/differential.rs` | Differential rig drives both the Rust dynomited and (when `CONFORMANCE_C_BINARY` is set) the C `dynomite` against a 100+ command corpus. |
+
+New Rust-side surfaces:
+
+* `crates/dynomited/tests/conformance.rs` - integration test
+  crate entry, gated on `feature = "integration"`, declares
+  the per-scenario submodules.
+* `crates/dynomited/tests/conformance/mod.rs` - the cluster
+  spawner, RESP client, and the supporting Drop-on-panic
+  cleanup helpers. Twelve unit tests pin the rig itself
+  (RESP partial reads, RESP timeouts, RESP EOF, RESP
+  malformed-frame rejection, `Cluster` drop kills the process
+  group, ...).
+* `crates/dynomited/tests/conformance/single_node.rs` - 10
+  Redis command-class round-trips against a 1-node cluster.
+* `crates/dynomited/tests/conformance/three_node_single_dc.rs`
+  - 3-node single-DC scenarios.
+* `crates/dynomited/tests/conformance/multi_dc.rs` - 8-node
+  topology (2 DCs * 2 racks * 2 nodes); one scenario per
+  consistency level.
+* `crates/dynomited/tests/conformance/quic_transport.rs` -
+  QUIC transport smoke, gated on `feature = "quic"`.
+* `crates/dynomited/tests/conformance/python_harness.rs` -
+  Rust port of `func_test.py` scenarios.
+* `crates/dynomited/tests/differential.rs` - C-vs-Rust
+  differential rig.
+* `crates/dynomited/tests/fixtures/conformance/commands.txt`
+  - 101-line command corpus (Redis RESP + Memcached ASCII).
+
+CI plumbing:
+
+* `.config/nextest.toml` - new `conformance` profile that emits
+  JUnit XML.
+* `scripts/check.sh` - runs the conformance suite after the
+  workspace nextest pass and mirrors the JUnit XML to
+  `target/junit/conformance.xml`.
+
+### Stage 14: deviations
+
+* **Multi-node routing assertions are conservative.** The
+  three-node and multi-DC scenarios assert that every node
+  accepts client connections and serves the per-node round-
+  trip. Cross-node routing parity assertions are deferred
+  until the gossip runtime lands (tracked under the Stage 12b
+  deferral `gossip task is data-shape only`).
+* **Differential rig records but does not enforce
+  byte-equivalence yet.** The rig drives the Rust cluster
+  through the corpus and writes any divergence to
+  `target/conformance/divergence/<id>.{rust,c}`; the C-side
+  cluster is wired only when `CONFORMANCE_C_BINARY` points at
+  a working binary. Stage 16 packaging adds a `target/cref/`
+  build of the C reference so the assertion can switch from
+  "record" to "enforce".
+* **Python harness ported to Rust, not invoked via pytest.**
+  The brief allowed either choice; the Rust port keeps the
+  scenarios under one runner and one cleanup contract.
+* **QUIC scenario exercises the library, not the binary.**
+  `dynomited` does not yet expose a QUIC option in its YAML
+  schema; the scenario therefore asserts the QUIC transport
+  primitives in `dynomite::net::quic` directly. When the
+  binary exposes QUIC the scenario will switch to the same
+  spawn-and-drive shape as the TCP scenarios.
+* **Coverage targets for Stage 15.** This stage's exit gate
+  pushes the listener / conn-FSM / dispatcher modules above
+  90% coverage but does not hit the >= 95% workspace gate.
+  Modules still below 90% after Stage 14 (entropy, gossip
+  runtime, signal-driven SIGHUP path) are listed in the
+  Stage 14 journal entry and are the entry point for Stage 15.
