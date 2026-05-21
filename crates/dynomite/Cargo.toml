@@ -12,12 +12,6 @@ readme = "../../README.md"
 [lints]
 workspace = true
 
-[features]
-default = ["tcp", "tls"]
-tcp = []
-quic = ["dep:quiche"]
-tls = []
-
 [dependencies]
 tokio = { workspace = true }
 tokio-util = { workspace = true }
@@ -52,3 +46,44 @@ hex = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 rcgen = { workspace = true }
+
+[features]
+default = ["tcp", "tls"]
+tcp = []
+quic = ["dep:quiche"]
+tls = []
+# Enables the macro (end-to-end with tc/netem) bench harness.
+# Requires CAP_NET_ADMIN; see docs/book/src/operations/benchmarks.md.
+bench-macro = []
+
+[[bench]]
+name = "parsers"
+harness = false
+
+[[bench]]
+name = "mbuf"
+harness = false
+
+[[bench]]
+name = "hashkit"
+harness = false
+
+[[bench]]
+name = "tokens"
+harness = false
+
+[[bench]]
+name = "dnode"
+harness = false
+
+[[bench]]
+name = "crypto"
+harness = false
+
+[[bench]]
+name = "quorum"
+harness = false
+
+[[bench]]
+name = "macro_throughput"
+harness = false

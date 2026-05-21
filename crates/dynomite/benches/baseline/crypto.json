@@ -1,0 +1,8 @@
+{
+  "name": "crypto",
+  "criterion_baseline": "stage-15",
+  "captured": null,
+  "git_sha": null,
+  "regression_budget_pct": 10,
+  "notes": "Run cargo bench --bench crypto -p dynomite -- --save-baseline stage-15 on a quiescent host to populate this baseline. The Stage 15 gate compares subsequent runs against the saved baseline and fails on >10% per-case regression. The empty captured slot indicates no baseline has been recorded yet; CI treats a missing baseline as a non-blocking warning."
+}
