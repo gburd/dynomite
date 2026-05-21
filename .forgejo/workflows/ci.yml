@@ -1,8 +1,17 @@
 name: ci
 
-# AGENTS.md Section 14b mandates that this workflow and
-# `.forgejo/workflows/ci.yml` stay in lockstep: both shell out
-# to `scripts/check.sh` as the single source of truth.
+# Codeberg / Forgejo Actions mirror of `.github/workflows/ci.yml`.
+# AGENTS.md Section 14b mandates the two workflows stay aligned:
+# both invoke `scripts/check.sh` so divergence is impossible.
+#
+# Forgejo Actions consume the GitHub Actions YAML format with
+# minor differences:
+#   * `runs-on` accepts the runner labels exposed by the
+#     `forgejo-runner` deployment; we use the conventional
+#     `docker` label and the `node:20-bookworm` image.
+#   * `actions/checkout`, `dtolnay/rust-toolchain`, and
+#     `taiki-e/install-action` work unchanged because they are
+#     pure-JavaScript actions.
 
 on:
   push:
@@ -16,13 +25,17 @@ env:
 jobs:
   check:
     name: build / lint / test
-    runs-on: ubuntu-latest
+    runs-on: docker
+    container:
+      image: node:20-bookworm
     steps:
-      - uses: actions/checkout@v4
       - name: install build prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y redis-server
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              build-essential pkg-config libssl-dev curl ca-certificates \
+              redis-server
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.90.0
         with:
           components: rustfmt, clippy
