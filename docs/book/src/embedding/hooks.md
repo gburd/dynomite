@@ -195,15 +195,27 @@ mounts the JSON snapshot at the address from `stats_listen:`.
 
 ## Discoverability
 
-Each trait lives in its own module under
-`crates/dynomite/src/embed/`:
+Each trait lives in `crates/dynomite/src/embed/hooks.rs` and is
+re-exported at [`dynomite::embed`]. A typical embedder writes
+`use dynomite::embed::SimpleSeedsProvider;` without reaching into
+the internals.
 
-* `embed::datastore`
-* `embed::seeds`
-* `embed::transport`
-* `embed::crypto`
-* `embed::metrics`
+Default implementations shipped in Stage 13:
 
-Default implementations are re-exposed at the module root so a
-typical embedder writes `use dynomite::embed::seeds::DnsSeedsProvider;`
-without reaching into the internals.
+* `dynomite::embed::MemoryDatastore` - in-process datastore for
+  examples and tests.
+* `dynomite::embed::RedisDatastore` / `MemcacheDatastore` -
+  protocol-tagged stubs that the Stage 14 conformance suite will
+  swap out for real protocol bridges.
+* `dynomite::embed::SimpleSeedsProvider` /
+  `DnsSeedsProvider` / `FloridaSeedsProvider` - wrappers around
+  the in-crate providers from `dynomite::seeds`.
+* `dynomite::embed::RustCryptoProvider` - wraps
+  [`dynomite::crypto::Crypto`].
+* `dynomite::embed::LoggingMetricsSink` - emits one
+  `tracing::info` event per flush.
+
+The `PrometheusMetricsSink` mentioned in the design above is not
+shipped by Stage 13 to avoid adding a new workspace dependency;
+the `LoggingMetricsSink` is the default sink.
+Recorded as a Deviation in `docs/parity.md`.
