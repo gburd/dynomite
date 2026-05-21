@@ -22,6 +22,27 @@ else
   cargo test --workspace --all-features
 fi
 
+echo "==> conformance suite (Stage 14)"
+# The conformance suite is gated behind the `integration`
+# feature plus a runtime check for `redis-server` on PATH. When
+# Redis is missing, every scenario returns a skip notice and
+# passes; otherwise the full multi-cluster matrix runs and the
+# JUnit XML report lands at `target/junit/conformance.xml`.
+if command -v cargo-nextest >/dev/null 2>&1; then
+  cargo nextest run \
+    --profile conformance \
+    -p dynomited \
+    --features integration \
+    --test conformance --test differential
+  src="target/nextest/conformance/junit.xml"
+  dst="target/junit/conformance.xml"
+  if [ -f "$src" ]; then
+    mkdir -p target/junit
+    cp "$src" "$dst"
+    echo "junit XML mirrored to $dst"
+  fi
+fi
+
 echo "==> doctests"
 cargo test --doc --workspace
 

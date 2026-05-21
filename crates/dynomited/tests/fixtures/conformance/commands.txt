@@ -1,0 +1,125 @@
+# Conformance corpus: representative RESP commands plus a few
+# memcached ASCII commands. Each line decodes to one wire frame
+# via `decode_command` (see crates/dynomited/tests/differential.rs).
+# Empty lines and `#`-prefixed lines are ignored. The corpus
+# pins both the parser surface and the differential rig's
+# command sequencing; new entries should be appended, not
+# inserted.
+#
+# --- Redis simple SET/GET round-trips ---
+*3\r\n$3\r\nSET\r\n$3\r\nk01\r\n$3\r\nv01\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk01\r\n
+*3\r\n$3\r\nSET\r\n$3\r\nk02\r\n$3\r\nv02\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk02\r\n
+*3\r\n$3\r\nSET\r\n$3\r\nk03\r\n$3\r\nv03\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk03\r\n
+*3\r\n$3\r\nSET\r\n$3\r\nk04\r\n$3\r\nv04\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk04\r\n
+*3\r\n$3\r\nSET\r\n$3\r\nk05\r\n$3\r\nv05\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk05\r\n
+*3\r\n$3\r\nSET\r\n$3\r\nk06\r\n$3\r\nv06\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk06\r\n
+*3\r\n$3\r\nSET\r\n$3\r\nk07\r\n$3\r\nv07\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk07\r\n
+*3\r\n$3\r\nSET\r\n$3\r\nk08\r\n$3\r\nv08\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk08\r\n
+*3\r\n$3\r\nSET\r\n$3\r\nk09\r\n$3\r\nv09\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk09\r\n
+*3\r\n$3\r\nSET\r\n$3\r\nk10\r\n$3\r\nv10\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nk10\r\n
+# --- DEL / EXISTS ---
+*2\r\n$3\r\nDEL\r\n$3\r\nk01\r\n
+*2\r\n$3\r\nDEL\r\n$3\r\nk02\r\n
+*2\r\n$3\r\nDEL\r\n$3\r\nk03\r\n
+*2\r\n$6\r\nEXISTS\r\n$3\r\nk01\r\n
+*2\r\n$6\r\nEXISTS\r\n$3\r\nk04\r\n
+*2\r\n$6\r\nEXISTS\r\n$3\r\nk05\r\n
+# --- INCR / DECR ---
+*3\r\n$3\r\nSET\r\n$1\r\nn\r\n$2\r\n10\r\n
+*2\r\n$4\r\nINCR\r\n$1\r\nn\r\n
+*2\r\n$4\r\nINCR\r\n$1\r\nn\r\n
+*2\r\n$4\r\nDECR\r\n$1\r\nn\r\n
+*3\r\n$6\r\nINCRBY\r\n$1\r\nn\r\n$1\r\n5\r\n
+*3\r\n$6\r\nDECRBY\r\n$1\r\nn\r\n$1\r\n3\r\n
+# --- MGET / MSET ---
+*5\r\n$4\r\nMSET\r\n$1\r\nx\r\n$1\r\n1\r\n$1\r\ny\r\n$1\r\n2\r\n
+*3\r\n$4\r\nMGET\r\n$1\r\nx\r\n$1\r\ny\r\n
+*4\r\n$4\r\nMGET\r\n$1\r\nx\r\n$1\r\ny\r\n$1\r\nz\r\n
+# --- HASH ---
+*4\r\n$4\r\nHSET\r\n$1\r\nh\r\n$2\r\nf1\r\n$2\r\nv1\r\n
+*4\r\n$4\r\nHSET\r\n$1\r\nh\r\n$2\r\nf2\r\n$2\r\nv2\r\n
+*3\r\n$4\r\nHGET\r\n$1\r\nh\r\n$2\r\nf1\r\n
+*3\r\n$4\r\nHGET\r\n$1\r\nh\r\n$2\r\nf2\r\n
+*3\r\n$4\r\nHDEL\r\n$1\r\nh\r\n$2\r\nf1\r\n
+*2\r\n$4\r\nHLEN\r\n$1\r\nh\r\n
+*2\r\n$7\r\nHGETALL\r\n$1\r\nh\r\n
+*2\r\n$5\r\nHKEYS\r\n$1\r\nh\r\n
+*2\r\n$5\r\nHVALS\r\n$1\r\nh\r\n
+*4\r\n$7\r\nHINCRBY\r\n$1\r\nh\r\n$2\r\nf3\r\n$2\r\n10\r\n
+*3\r\n$7\r\nHEXISTS\r\n$1\r\nh\r\n$2\r\nf3\r\n
+# --- SET datatype ---
+*4\r\n$4\r\nSADD\r\n$1\r\ns\r\n$1\r\na\r\n$1\r\nb\r\n
+*4\r\n$4\r\nSADD\r\n$1\r\ns\r\n$1\r\nc\r\n$1\r\nd\r\n
+*2\r\n$8\r\nSMEMBERS\r\n$1\r\ns\r\n
+*3\r\n$4\r\nSREM\r\n$1\r\ns\r\n$1\r\na\r\n
+*2\r\n$5\r\nSCARD\r\n$1\r\ns\r\n
+*3\r\n$9\r\nSISMEMBER\r\n$1\r\ns\r\n$1\r\nb\r\n
+# --- ZSET ---
+*6\r\n$4\r\nZADD\r\n$1\r\nz\r\n$1\r\n1\r\n$1\r\na\r\n$1\r\n2\r\n$1\r\nb\r\n
+*4\r\n$4\r\nZADD\r\n$1\r\nz\r\n$1\r\n3\r\n$1\r\nc\r\n
+*4\r\n$6\r\nZRANGE\r\n$1\r\nz\r\n$1\r\n0\r\n$2\r\n-1\r\n
+*4\r\n$9\r\nZRANGEBYSCORE\r\n$1\r\nz\r\n$1\r\n0\r\n$1\r\n5\r\n
+*3\r\n$4\r\nZREM\r\n$1\r\nz\r\n$1\r\nb\r\n
+*2\r\n$5\r\nZCARD\r\n$1\r\nz\r\n
+# --- Strings / generic ---
+*3\r\n$6\r\nAPPEND\r\n$3\r\nk04\r\n$5\r\n-tail\r\n
+*2\r\n$6\r\nSTRLEN\r\n$3\r\nk04\r\n
+*3\r\n$6\r\nSETNX\r\n$3\r\nk20\r\n$1\r\nv\r\n
+*4\r\n$5\r\nSETEX\r\n$3\r\nk21\r\n$2\r\n60\r\n$1\r\nv\r\n
+*3\r\n$6\r\nGETSET\r\n$3\r\nk21\r\n$2\r\nv2\r\n
+# --- TTL family ---
+*3\r\n$6\r\nEXPIRE\r\n$3\r\nk04\r\n$2\r\n60\r\n
+*2\r\n$3\r\nTTL\r\n$3\r\nk04\r\n
+*2\r\n$4\r\nPTTL\r\n$3\r\nk04\r\n
+*2\r\n$7\r\nPERSIST\r\n$3\r\nk04\r\n
+# --- Type / debugging ---
+*2\r\n$4\r\nTYPE\r\n$3\r\nk04\r\n
+*2\r\n$4\r\nTYPE\r\n$1\r\nh\r\n
+*2\r\n$4\r\nTYPE\r\n$1\r\nz\r\n
+# --- Lists ---
+*3\r\n$5\r\nRPUSH\r\n$1\r\nl\r\n$1\r\nA\r\n
+*3\r\n$5\r\nLPUSH\r\n$1\r\nl\r\n$1\r\nB\r\n
+*4\r\n$6\r\nLRANGE\r\n$1\r\nl\r\n$1\r\n0\r\n$2\r\n-1\r\n
+*2\r\n$4\r\nLLEN\r\n$1\r\nl\r\n
+*2\r\n$4\r\nLPOP\r\n$1\r\nl\r\n
+*2\r\n$4\r\nRPOP\r\n$1\r\nl\r\n
+# --- Bitops / counters ---
+*4\r\n$6\r\nSETBIT\r\n$3\r\nk30\r\n$1\r\n7\r\n$1\r\n1\r\n
+*3\r\n$6\r\nGETBIT\r\n$3\r\nk30\r\n$1\r\n7\r\n
+*2\r\n$8\r\nBITCOUNT\r\n$3\r\nk30\r\n
+# --- Server info ---
+*1\r\n$4\r\nPING\r\n
+*2\r\n$4\r\nECHO\r\n$5\r\nhello\r\n
+*1\r\n$6\r\nDBSIZE\r\n
+*2\r\n$4\r\nINFO\r\n$6\r\nclients\r\n
+*1\r\n$6\r\nCLIENT\r\n
+# --- Pipelines (two SETs in one frame) ---
+*3\r\n$3\r\nSET\r\n$3\r\np01\r\n$1\r\n1\r\n*3\r\n$3\r\nSET\r\n$3\r\np02\r\n$1\r\n2\r\n
+*2\r\n$3\r\nGET\r\n$3\r\np01\r\n*2\r\n$3\r\nGET\r\n$3\r\np02\r\n
+# --- Binary-safe payloads ---
+*3\r\n$3\r\nSET\r\n$3\r\nbin\r\n$4\r\n\x00\x01\x02\x03\r\n
+*2\r\n$3\r\nGET\r\n$3\r\nbin\r\n
+# --- Memcached ASCII (gated separately by the Rust harness) ---
+get k01\r\n
+get k02\r\n
+set k01 0 0 5\r\nhello\r\n
+set k02 0 0 5\r\nworld\r\n
+add k03 0 0 3\r\nabc\r\n
+replace k01 0 0 3\r\nXYZ\r\n
+delete k02\r\n
+incr counter 1\r\n
+decr counter 1\r\n
+gets k01\r\n
+stats\r\n
+version\r\n
+quit\r\n
