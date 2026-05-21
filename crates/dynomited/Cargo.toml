@@ -35,8 +35,18 @@ path = "src/lib.rs"
 name = "dynomited"
 path = "src/main.rs"
 
+[[bin]]
+name = "gen-man"
+path = "src/bin/gen-man.rs"
+required-features = ["gen-man"]
+
 [features]
 default = []
+# Build the optional `gen-man` binary that regenerates the
+# `dynomited(8)` manpage. Off by default so the production build
+# does not pull `clap_mangen` (and `roff`) into the dependency
+# graph.
+gen-man = ["dep:clap_mangen"]
 # Enable the end-to-end integration test that spawns a real
 # `redis-server` and drives the `dynomited` binary against it.
 # The test discovers `redis-server` via `PATH`; when the binary
@@ -54,9 +64,11 @@ anyhow = { workspace = true }
 nix = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
+# Optional: only used by the `gen-man` binary. Enabled via the
+# `gen-man` feature; production builds do not pay for it.
+clap_mangen = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
-clap_mangen = { workspace = true }
