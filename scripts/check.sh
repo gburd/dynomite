@@ -68,6 +68,24 @@ echo "==> repo hygiene"
 "$ROOT/scripts/check_no_port_comments.sh"
 "$ROOT/scripts/check_ascii.sh"
 
+echo "==> conformance suite (Stage 14, --features integration)"
+# AGENTS.md Section 14b lists the conformance suite as one of
+# the gates both runners exercise. The `dynomited` integration
+# feature spawns a real `redis-server` from PATH; when the
+# binary is missing the tests skip themselves rather than
+# fail. We invoke nextest only when both `cargo-nextest` and
+# `redis-server` are available; otherwise we surface a notice
+# and continue.
+if command -v cargo-nextest >/dev/null 2>&1 \
+   && command -v redis-server >/dev/null 2>&1; then
+    cargo nextest run --workspace --features integration
+else
+    echo "   (skipped: cargo-nextest and/or redis-server not on PATH)"
+fi
+
+echo "==> cleanup-sweep (Stage 16)"
+"$ROOT/scripts/check_clean.sh"
+
 echo "==> quickfuzz (60s smoke per target)"
 "$ROOT/scripts/quickfuzz.sh" 60
 

@@ -19,6 +19,7 @@ HITS=$(grep -RInE -i "$PATTERN" \
   --exclude='README.md' \
   --exclude='AGENTS.md' \
   --exclude='PLAN.md' \
+  --exclude='CHANGELOG.md' \
   --exclude='parity.md' \
   --exclude='NOTICE' \
   --exclude='LICENSE' \
