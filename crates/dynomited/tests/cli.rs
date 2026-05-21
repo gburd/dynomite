@@ -200,11 +200,12 @@ fn pidfile_is_written_and_removed() {
         .spawn()
         .unwrap();
 
-    // Wait for the pid file to materialise. Allow 30s to absorb
-    // heavily-loaded CI hosts and any first-run binary build.
+    // Wait for the pid file to materialise. Allow 60s to absorb
+    // heavily-loaded CI hosts, first-run binary build cost, and
+    // the 3-5x instrumentation overhead of `cargo llvm-cov`.
     // On failure, surface dynomited's captured stderr to make
     // the diagnostic obvious.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while !pid.exists() && std::time::Instant::now() < deadline {
         // Detect early child exit so we don't sleep until the
         // deadline when the child has already crashed.
@@ -218,7 +219,7 @@ fn pidfile_is_written_and_removed() {
         let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
         let _ = child.kill();
         let _ = child.wait();
-        panic!("pid file did not appear within 30s; dynomited stderr:\n{stderr}");
+        panic!("pid file did not appear within 60s; dynomited stderr:\n{stderr}");
     }
 
     // Graceful shutdown via SIGTERM, mirroring an init-script
