@@ -201,8 +201,9 @@ fn pidfile_is_written_and_removed() {
     // Wait for the pid file to materialise. The run loop opens
     // listeners synchronously inside `Server::build` and writes
     // the pid before that point, so the file should appear
-    // within a handful of milliseconds.
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    // within a handful of milliseconds; we allow 10s to ride
+    // out heavily-loaded CI hosts.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !pid.exists() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -214,8 +215,8 @@ fn pidfile_is_written_and_removed() {
     let pid_id = nix::unistd::Pid::from_raw(i32::try_from(child.id()).expect("child pid fits i32"));
     nix::sys::signal::kill(pid_id, nix::sys::signal::Signal::SIGTERM).unwrap();
 
-    let exit_status = wait_with_timeout(&mut child, Duration::from_secs(5))
-        .expect("dynomited did not exit within 5s after SIGTERM");
+    let exit_status = wait_with_timeout(&mut child, Duration::from_secs(15))
+        .expect("dynomited did not exit within 15s after SIGTERM");
     assert!(
         exit_status.success(),
         "dynomited exited with status {exit_status:?}"

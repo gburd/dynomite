@@ -220,7 +220,10 @@ async fn redis_set_get_quit_round_trip() {
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM).expect("kill SIGTERM");
     let dyn_status = wait_with_timeout(&mut dyn_child, Duration::from_secs(5));
     let dyn_status = dyn_status.expect("dynomited did not exit within 5s of SIGTERM");
-    assert!(dyn_status.success(), "dynomited exit status: {dyn_status:?}");
+    assert!(
+        dyn_status.success(),
+        "dynomited exit status: {dyn_status:?}"
+    );
 
     // Tear down redis-server.
     let redis_pid = nix::unistd::Pid::from_raw(i32::try_from(redis.id()).unwrap());
