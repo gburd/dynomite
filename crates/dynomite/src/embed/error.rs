@@ -37,6 +37,7 @@ use crate::conf::ConfError;
 /// assert!(matches!(e, EmbedError::Io(_)));
 /// ```
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum EmbedError {
     /// Configuration validation failed.
     #[error("build error: {0}")]

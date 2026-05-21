@@ -19,9 +19,8 @@ use std::sync::{Arc, OnceLock, Weak};
 
 use parking_lot::Mutex;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, Instant, MissedTickBehavior};
+use tokio::time::{Duration, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use crate::cluster::dispatch::{ClusterDispatcher, DispatchPlan};
@@ -42,15 +41,44 @@ use crate::stats::{
 };
 
 /// Bag of optional hook overrides supplied to a builder.
+///
+/// All fields are private so adding new hooks (for example, a
+/// `Box<dyn TransportListener>` slot) is not a SemVer-breaking
+/// change. Construct a `ServerHooks` only through
+/// [`crate::embed::ServerBuilder`] setters; read it back through
+/// the accessor methods below.
+#[non_exhaustive]
 pub struct ServerHooks {
-    /// Backing datastore.
-    pub datastore: Option<Box<dyn Datastore>>,
-    /// Seeds provider.
-    pub seeds: Option<Box<dyn SeedsProvider>>,
-    /// Crypto provider.
-    pub crypto: Option<Box<dyn CryptoProvider>>,
-    /// Metrics sink.
-    pub metrics: Option<Box<dyn MetricsSink>>,
+    pub(crate) datastore: Option<Box<dyn Datastore>>,
+    pub(crate) seeds: Option<Box<dyn SeedsProvider>>,
+    pub(crate) crypto: Option<Box<dyn CryptoProvider>>,
+    pub(crate) metrics: Option<Box<dyn MetricsSink>>,
+}
+
+impl ServerHooks {
+    /// Borrow the configured [`Datastore`], if any.
+    #[must_use]
+    pub fn datastore(&self) -> Option<&dyn Datastore> {
+        self.datastore.as_deref()
+    }
+
+    /// Borrow the configured [`SeedsProvider`], if any.
+    #[must_use]
+    pub fn seeds(&self) -> Option<&dyn SeedsProvider> {
+        self.seeds.as_deref()
+    }
+
+    /// Borrow the configured [`CryptoProvider`], if any.
+    #[must_use]
+    pub fn crypto(&self) -> Option<&dyn CryptoProvider> {
+        self.crypto.as_deref()
+    }
+
+    /// Borrow the configured [`MetricsSink`], if any.
+    #[must_use]
+    pub fn metrics(&self) -> Option<&dyn MetricsSink> {
+        self.metrics.as_deref()
+    }
 }
 
 impl std::fmt::Debug for ServerHooks {
@@ -200,17 +228,26 @@ impl Server {
         &self.pool_name
     }
 
-    /// Borrow the live cluster pool.
-    #[must_use]
-    pub fn cluster_pool(&self) -> &Arc<ServerPool> {
-        &self.cluster
-    }
-
     /// Spawn background tasks on the current tokio runtime and
     /// return a [`ServerHandle`].
     ///
     /// `start` is non-blocking. The returned handle is `Clone +
     /// Send + Sync`.
+    ///
+    /// # In-process only
+    ///
+    /// The embedded server in this stage is **in-process only**:
+    /// the `listen:` and `dyn_listen:` sockets bind so that
+    /// configured ports are reservable and post-bind reporting
+    /// works, but cross-process clients connecting to those
+    /// ports see open-then-immediate-close (with a runtime
+    /// warning logged on each accept). The sanctioned way to
+    /// drive an embedded `Server` from in-process code is
+    /// [`ServerHandle::inject_request`]. Cross-process traffic
+    /// is supported by the `dynomited` binary, which wires the
+    /// proxy module directly. Wiring the embedded accept loop
+    /// to the dispatcher is tracked as a follow-up; the contract
+    /// is documented in `docs/parity.md`.
     ///
     /// # Examples
     ///
@@ -683,19 +720,30 @@ async fn accept_loop(
             biased;
             () = inner.cancel.cancelled() => return,
             res = listener.accept() => {
-                let Ok((sock, _peer)) = res else { return };
+                let Ok((sock, peer)) = res else { return };
                 let conn_id = next_conn_id();
                 inner.bus.send(ServerEvent::ConnectionAccepted {
                     conn_id,
                     role,
                     local_addr: Some(addr),
                 });
-                // Stage 13 does not yet drive the per-connection
-                // protocol parser; we read-and-discard so the
-                // listener bind is observable in tests without
-                // imposing protocol semantics. Higher-level
-                // stages will replace this with the real per-role
-                // state machines.
+                // The embedded server is in-process only at this
+                // stage: the kernel-bound socket is reserved so
+                // post-bind reporting works, but the per-role
+                // protocol parser is not wired. Cross-process
+                // clients see open-then-immediate-close. Use
+                // `ServerHandle::inject_request` for in-process
+                // traffic; use the `dynomited` binary for the
+                // wire path.
+                tracing::warn!(
+                    listen = %addr,
+                    peer = %peer,
+                    role = ?role,
+                    conn_id,
+                    "embedded listen_addr accepted a connection; embedded mode does not yet \
+                     forward to the dispatcher; use ServerHandle::inject_request instead. \
+                     Closing connection."
+                );
                 let bus = inner.bus.clone();
                 let cancel = inner.cancel.clone();
                 tokio::spawn(async move {
@@ -844,15 +892,9 @@ fn rebuild_topology(pool: &Arc<ServerPool>) {
     pool.preselect_remote_racks();
 }
 
-// Provide a one-shot used by tests for synchronous shutdown.
-#[doc(hidden)]
-pub fn shutdown_signal() -> (oneshot::Sender<()>, oneshot::Receiver<()>) {
-    oneshot::channel()
-}
-
-// Reduce unused-import warnings: keep Instant in scope for future
-// use without exposing it publicly.
-#[doc(hidden)]
-pub fn _instant_now() -> Instant {
-    Instant::now()
-}
+// Internal helpers (`shutdown_signal`, `_instant_now`) removed:
+// they were public-but-doc(hidden) escape hatches that risked
+// SemVer commitments. The `oneshot` channel was not used
+// outside the (deleted) test helper, and `Instant` was kept in
+// scope only to silence an unused-import warning. Both have
+// been dropped.

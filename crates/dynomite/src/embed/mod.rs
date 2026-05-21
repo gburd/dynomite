@@ -74,9 +74,8 @@ pub use self::events::{
 };
 pub use self::hooks::{
     BoxFuture, CryptoProvider, CryptoProviderError, Datastore, DatastoreError, DnsSeedsProvider,
-    FloridaSeedsProvider, LegacySeedsAdapter, LoggingMetricsSink, MemcacheDatastore,
-    MemoryDatastore, MetricsError, MetricsSink, Protocol, RedisDatastore, RustCryptoProvider,
-    SeedsProvider, SimpleSeedsProvider,
+    FloridaSeedsProvider, LoggingMetricsSink, MemcacheDatastore, MemoryDatastore, MetricsError,
+    MetricsSink, Protocol, RedisDatastore, RustCryptoProvider, SeedsProvider, SimpleSeedsProvider,
 };
 pub use self::server::{Server, ServerHandle};
 pub use self::snapshots::{DatacenterSnapshot, PeerSnapshot, RackSnapshot, RingSnapshot};

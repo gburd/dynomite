@@ -50,6 +50,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Errors produced by a [`Datastore`] implementation.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DatastoreError {
     /// The datastore declined to handle this request type.
     #[error("unsupported request: {0:?}")]
@@ -69,6 +70,7 @@ pub enum DatastoreError {
 /// protocol; it carries no semantics inside the engine and is
 /// reported only through [`Datastore::protocol`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Protocol {
     /// Redis RESP.
     Redis,
@@ -309,60 +311,12 @@ pub trait SeedsProvider: Send + Sync {
     }
 }
 
-/// Adapter that lifts a [`crate::seeds::SeedsProvider`] into the
-/// embed-facing [`SeedsProvider`] trait.
-///
-/// # Examples
-///
-/// ```
-/// use std::sync::Arc;
-/// use dynomite::embed::hooks::{LegacySeedsAdapter, SeedsProvider};
-/// use dynomite::seeds::simple::SimpleSeedsProvider as Inner;
-/// use dynomite::conf::ConfDynSeed;
-/// let inner = Arc::new(Inner::new(vec![ConfDynSeed::parse("h:1:r:d:1").unwrap()]));
-/// let adapter = LegacySeedsAdapter::new(inner);
-/// assert_eq!(adapter.fetch().unwrap().len(), 1);
-/// ```
-#[derive(Clone)]
-pub struct LegacySeedsAdapter<T: RawSeeds> {
-    inner: Arc<T>,
-    refresh: Duration,
-}
-
-impl<T: RawSeeds> LegacySeedsAdapter<T> {
-    /// Wrap an existing provider.
-    pub fn new(inner: Arc<T>) -> Self {
-        Self {
-            inner,
-            refresh: Duration::from_secs(30),
-        }
-    }
-
-    /// Override the default refresh interval.
-    #[must_use]
-    pub fn with_refresh(mut self, interval: Duration) -> Self {
-        self.refresh = interval;
-        self
-    }
-}
-
-impl<T: RawSeeds> std::fmt::Debug for LegacySeedsAdapter<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LegacySeedsAdapter")
-            .field("refresh", &self.refresh)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<T: RawSeeds> SeedsProvider for LegacySeedsAdapter<T> {
-    fn fetch(&self) -> Result<Vec<ConfDynSeed>, SeedsError> {
-        self.inner.get_seeds()
-    }
-
-    fn refresh_interval(&self) -> Duration {
-        self.refresh
-    }
-}
+// LegacySeedsAdapter removed: the type would have leaked the
+// in-crate `crate::seeds::SeedsProvider` trait onto the public
+// API via its generic bound. Embedders that need to lift an
+// existing `SeedsProvider` impl wrap it in
+// `Box<dyn SeedsProvider>` directly and pass it to
+// [`crate::embed::ServerBuilder::seeds_provider`].
 
 /// Re-exported [`crate::seeds::simple::SimpleSeedsProvider`] with
 /// the embed [`SeedsProvider`] trait already implemented.
@@ -419,6 +373,7 @@ impl SeedsProvider for FloridaSeedsProvider {
 
 /// Errors produced by a [`CryptoProvider`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CryptoProviderError {
     /// Encryption failed.
     #[error("encryption failed: {0}")]
@@ -541,6 +496,7 @@ impl CryptoProvider for RustCryptoProvider {
 
 /// Errors produced by a [`MetricsSink`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum MetricsError {
     /// The sink could not flush the snapshot.
     #[error("metrics flush failed: {0}")]

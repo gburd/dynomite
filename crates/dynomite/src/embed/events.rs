@@ -7,18 +7,18 @@
 //! [`crate::embed::ServerHandle::subscribe_events`] wraps the
 //! broadcast receiver in [`EventStream`] for ergonomic polling.
 //!
+//! Only the engine publishes to the bus; embedding programs
+//! subscribe through [`EventBus::subscribe`] and consume via
+//! [`EventStream::recv`] / [`EventStream::try_recv`].
+//!
 //! # Examples
 //!
 //! ```
-//! use dynomite::embed::events::{ServerEvent, EventBus, ConnRoleTag, CloseReason, PeerDownReason};
-//! # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+//! use dynomite::embed::events::{ConnRoleTag, CloseReason, PeerDownReason, EventBus};
 //! let bus = EventBus::new(16);
-//! let mut rx = bus.subscribe();
-//! bus.send(ServerEvent::ConfigReloaded { generation: 1 });
-//! let evt = rx.recv().await.unwrap();
-//! assert!(matches!(evt, ServerEvent::ConfigReloaded { generation: 1 }));
+//! let _rx = bus.subscribe();
+//! assert_eq!(bus.subscriber_count(), 1);
 //! # let _ = (ConnRoleTag::Client, CloseReason::PeerEof, PeerDownReason::FailureDetector);
-//! # });
 //! ```
 
 use std::net::SocketAddr;
@@ -36,6 +36,7 @@ pub type PeerId = u32;
 /// Mirrors [`crate::io::reactor::ConnRole`] but renamed to keep
 /// the embed surface independent of the I/O substrate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ConnRoleTag {
     /// Listener that accepted a client connection.
     Proxy,
@@ -53,6 +54,7 @@ pub enum ConnRoleTag {
 
 /// Reason carried with [`ServerEvent::ConnectionClosed`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CloseReason {
     /// The peer closed cleanly (FIN / EOF).
     PeerEof,
@@ -66,6 +68,7 @@ pub enum CloseReason {
 
 /// Reason carried with [`ServerEvent::PeerDown`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PeerDownReason {
     /// Failure detector marked the peer down.
     FailureDetector,
@@ -204,15 +207,11 @@ impl EventBus {
     /// the event was delivered to (zero is normal during quiet
     /// periods and is never an error).
     ///
-    /// # Examples
-    ///
-    /// ```
-    /// use dynomite::embed::events::{EventBus, ServerEvent};
-    /// let bus = EventBus::new(2);
-    /// // No subscribers: send returns 0 and is silently dropped.
-    /// assert_eq!(bus.send(ServerEvent::ConfigReloaded { generation: 1 }), 0);
-    /// ```
-    pub fn send(&self, event: ServerEvent) -> usize {
+    /// `pub(crate)` because only the engine itself is allowed to
+    /// publish events; embedding programs subscribe through
+    /// [`EventBus::subscribe`] and consume via
+    /// [`EventStream::recv`].
+    pub(crate) fn send(&self, event: ServerEvent) -> usize {
         self.tx.send(event).unwrap_or(0)
     }
 
@@ -247,13 +246,14 @@ impl EventStream {
     /// # Examples
     ///
     /// ```
-    /// use dynomite::embed::events::{EventBus, ServerEvent};
+    /// use dynomite::embed::events::EventBus;
     /// # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+    /// // The bus is published-to only by the engine; subscribers
+    /// // poll for events. Dropping the bus closes the stream.
     /// let bus = EventBus::new(2);
     /// let mut s = bus.subscribe();
-    /// bus.send(ServerEvent::ConfigReloaded { generation: 7 });
-    /// let evt = s.recv().await.unwrap();
-    /// assert!(matches!(evt, ServerEvent::ConfigReloaded { generation: 7 }));
+    /// drop(bus);
+    /// assert!(s.recv().await.is_none());
     /// # });
     /// ```
     pub async fn recv(&mut self) -> Option<ServerEvent> {
