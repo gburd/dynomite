@@ -1,11 +1,11 @@
 //! `dynomited` - the Dynomite server binary.
 //!
-//! The binary mirrors the reference engine's `main()` flow:
-//! parse options, optionally print version/help/describe-stats,
-//! optionally validate the YAML config (`-t`), otherwise drop into
-//! the runtime loop. Logging, daemonization, and pid-file
-//! management are wired here; the runtime loop itself lands in a
-//! later commit in this stage.
+//! Mirrors the reference engine's `main()` flow: parse options,
+//! optionally print version/help/describe-stats, optionally
+//! validate the YAML config (`-t`), otherwise drop into the
+//! [`Server`] run loop. Logging, daemonization, and pid-file
+//! management are all wired here; the run loop itself lives in
+//! [`dynomited::server`].
 
 use std::process::ExitCode;
 
@@ -18,6 +18,7 @@ use dynomited::asciilogo::ASCII_LOGO;
 use dynomited::cli::{print_usage, print_version, Cli};
 use dynomited::daemonize::{daemonize, DaemonizeOutcome};
 use dynomited::pidfile::PidFile;
+use dynomited::server::Server;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -145,9 +146,39 @@ fn run_server(cli: &Cli) -> ExitCode {
     );
     tracing::info!("\n{ASCII_LOGO}");
 
-    // The runtime loop arrives in the next commit in this stage.
-    // For now, exiting with 0 keeps the daemonize + pid-file
-    // smoke tests green.
-    tracing::info!("dynomited: runtime loop not yet wired; exiting cleanly");
-    ExitCode::SUCCESS
+    // The CLI's `--gossip` flag mirrors the reference engine's
+    // `-g` knob: it force-enables gossip regardless of the
+    // configuration. Apply it before `Server::build` so the
+    // resulting `ConfPool` carries the override.
+    if cli.gossip {
+        cfg.pool_mut().enable_gossip = Some(true);
+    }
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "build tokio runtime");
+            return ExitCode::from(1);
+        }
+    };
+
+    runtime.block_on(async move {
+        let server = match Server::build(cfg).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, "server build failed");
+                return ExitCode::from(1);
+            }
+        };
+        match server.run().await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                tracing::error!(error = %e, "server run loop failed");
+                ExitCode::from(1)
+            }
+        }
+    })
 }

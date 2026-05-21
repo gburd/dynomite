@@ -164,20 +164,91 @@ fn daemonize_with_test_conf_is_rejected() {
 
 #[test]
 fn pidfile_is_written_and_removed() {
-    // The placeholder runtime exits cleanly after writing the pid
-    // file. We expect to see the file vanish on graceful exit.
+    // Spawn dynomited with a config bound to fresh ephemeral
+    // ports, wait long enough for the run loop to write the pid
+    // file, send SIGTERM, and confirm the pid file is removed.
+    use std::io::Write;
+    use std::time::Duration;
+
     let dir = tempfile::tempdir().unwrap();
     let pid = dir.path().join("d.pid");
-    let p = conf_dir().join("dynomite.yml");
-    bin()
-        .args(["-c"])
-        .arg(&p)
-        .args(["-p"])
-        .arg(&pid)
-        .assert()
-        .success();
-    // PidFile::Drop unlinks the file on graceful shutdown.
+
+    let listen_port = pick_port();
+    let dyn_port = pick_port();
+    let stats_port = pick_port();
+    let conf_path = dir.path().join("d.yml");
+    let mut f = std::fs::File::create(&conf_path).unwrap();
+    write!(
+        f,
+        "p:\n  listen: 127.0.0.1:{listen_port}\n  dyn_listen: 127.0.0.1:{dyn_port}\n  stats_listen: 127.0.0.1:{stats_port}\n  tokens: '101134286'\n  servers:\n  - 127.0.0.1:22122:1\n  data_store: 0\n",
+    )
+    .unwrap();
+    f.sync_all().unwrap();
+
+    let exe = assert_cmd::cargo::cargo_bin("dynomited");
+    let mut child = std::process::Command::new(exe)
+        .args([
+            "-c".as_ref(),
+            conf_path.as_os_str(),
+            "-p".as_ref(),
+            pid.as_os_str(),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Wait for the pid file to materialise. The run loop opens
+    // listeners synchronously inside `Server::build` and writes
+    // the pid before that point, so the file should appear
+    // within a handful of milliseconds.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while !pid.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(pid.exists(), "pid file did not appear within 3s");
+
+    // Graceful shutdown via SIGTERM, mirroring an init-script
+    // stop. The run loop's signal handler flips the watch flag,
+    // listeners drain, and Drop unlinks the pid file.
+    let pid_id = nix::unistd::Pid::from_raw(i32::try_from(child.id()).expect("child pid fits i32"));
+    nix::sys::signal::kill(pid_id, nix::sys::signal::Signal::SIGTERM).unwrap();
+
+    let exit_status = wait_with_timeout(&mut child, Duration::from_secs(5))
+        .expect("dynomited did not exit within 5s after SIGTERM");
+    assert!(
+        exit_status.success(),
+        "dynomited exited with status {exit_status:?}"
+    );
     assert!(!pid.exists(), "pid file should be removed on exit");
+}
+
+fn pick_port() -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let p = l.local_addr().unwrap().port();
+    drop(l);
+    p
+}
+
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: std::time::Duration,
+) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 #[test]
