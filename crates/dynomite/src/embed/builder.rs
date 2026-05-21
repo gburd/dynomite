@@ -433,7 +433,6 @@ impl ServerBuilder {
     // Targeted setters land as the missing fields are
     // identified.
 
-
     /// Build the [`Server`].
     ///
     /// Applies defaults to any unset field, runs the validation

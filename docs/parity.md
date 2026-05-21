@@ -1659,6 +1659,12 @@ Documented design choices that downstream stages must respect.
 | (new) | `dynomite::embed::Transport` (re-export) | Transport trait already exposed by `io::reactor` since Stage 2; re-exported here for embedder discoverability. |
 | `dynomite_reload_conf` (`_/dynomite/src/dynomite.c`) | `ServerHandle::reload(Config)` | the in-process equivalent of SIGHUP. Validates the new `Config` with `Config::validate` before any state is touched and emits `ServerEvent::ConfigReloaded`. The C path re-reads the YAML from disk on signal; the embedding API takes the parsed `Config` directly. |
 | `core_dump`-equivalent shutdown path | `ServerHandle::shutdown` | cancels every spawned background task via a single `tokio_util::sync::CancellationToken`, deregisters from the in-process peer registry, and joins outstanding handles. Idempotent. |
+| (new) | `dynomite::embed::EmbedError` (`#[non_exhaustive]`) | top-level error returned by every fallible embed-API call. Marked non-exhaustive so adding a variant in a future stage stays a SemVer-minor change. |
+| (new) | `dynomite::embed::hooks::DatastoreError` / `MetricsError` / `CryptoProviderError` (`#[non_exhaustive]`) | per-hook error types; same non-exhaustive treatment. |
+| (new) | `dynomite::embed::hooks::Protocol` (`#[non_exhaustive]`) | wire-protocol tag reported by `Datastore::protocol`. |
+| (new) | `dynomite::embed::events::ConnRoleTag` / `CloseReason` / `PeerDownReason` (`#[non_exhaustive]`) | event-payload enums; same non-exhaustive treatment. (`ServerEvent` was already non-exhaustive.) |
+| (new) | `dynomite::embed::server::ServerHooks` (sealed, `#[non_exhaustive]`, `pub(crate)` fields, `pub` accessor methods) | hook bag; construction routed through `ServerBuilder`, read-back through `datastore()`/`seeds()`/`crypto()`/`metrics()`. New hook slots can be added without breaking SemVer. |
+| (new) | `dynomite::embed::ServerBuilder::with_pool_name` | setter for the pool name; complements the constructor argument. The C reference accepts only one pool per `Config`, so the constructor still takes the pool name; this setter exists so callers that start from `ServerBuilder::default()` (which pre-fills `"dyn_o_mite"`) can rename the pool. Recorded under Deviations. |
 
 ### Stage 13: deviations and follow-ups
 
@@ -1705,3 +1711,91 @@ Documented design choices that downstream stages must respect.
   round-trip and avoids `ConfDynSeed`'s asymmetric serde shape
   (it serialises as `pname` only and would fail the
   full-form deserialiser).
+
+* **`Server::builder()` takes a `pool_name` argument.** The
+  design page sketches a no-arg constructor; the impl ships
+  `Server::builder(pool_name: impl Into<String>)` plus a
+  `ServerBuilder::with_pool_name(name)` setter and a
+  `ServerBuilder::default()` impl that pre-fills `"dyn_o_mite"`.
+  Reason: the C reference accepts only one pool per `Config`, so
+  embedding programs always know the pool name at constructor
+  time. The setter exists so callers that start from
+  `ServerBuilder::default()` can rename the pool without
+  rebuilding the chain.
+
+* **`Server::start()` is `async fn -> Result<ServerHandle,
+  EmbedError>`.** The design page sketches `fn -> ServerHandle`
+  (sync, infallible). Reason: the bind for `listen:` /
+  `dyn_listen:` happens during `start`, so an `EADDRINUSE` (or
+  any other `io::Error`) must be surfaced. The `async` keyword
+  is required because `tokio::net::TcpListener::bind` is async.
+  The contract leaks into every embedding program; recording the
+  shape here makes the divergence explicit.
+
+* **`Datastore` is single-method (`dispatch`).** The design page
+  on `embedding/hooks.md` sketches a two-tier
+  `Datastore::connect() -> Box<dyn DatastoreConn>` +
+  `DatastoreConn::dispatch/close` shape. v0.1 collapses this to
+  a single `Datastore::dispatch(&self, req: Msg) -> BoxFuture<...>`
+  on the trait surface. Reason: in-pool connection lifecycle
+  is owned by the implementor (Redis pool, Memcache pool, etc.)
+  rather than the engine; surfacing the connection handle on
+  the public trait would require the engine to manage that
+  state, which v0.1 does not do. The design page should be
+  updated to reflect the v0.1 contract; v0.2 may restore the
+  two-tier API if downstream needs emerge. No `connect`/`close`
+  hook is exposed today.
+
+* **`ServerBuilder::tokens_str` swallows parse failures.** The
+  setter logs a `tracing::warn!` event on parse failure and
+  returns the builder unchanged so the chain stays ergonomic.
+  Use [`ServerBuilder::tokens`] with a pre-parsed `TokenList`
+  for a hard error on bad input. A future SemVer-major release
+  may switch `tokens_str` to a `Result`-returning shape; the
+  swallow-with-log behaviour is the v0.1 contract.
+
+* **Public enums marked `#[non_exhaustive]`.** `EmbedError`,
+  `DatastoreError`, `MetricsError`, `CryptoProviderError`,
+  `Protocol`, `ConnRoleTag`, `CloseReason`, and
+  `PeerDownReason` carry `#[non_exhaustive]` so adding a
+  variant in a future stage stays a SemVer-minor change.
+  `ServerEvent` was already non-exhaustive.
+
+* **`ServerHooks` is sealed.** The struct in
+  `dynomite::embed::server::ServerHooks` keeps `pub(crate)`
+  fields and exposes accessor methods (`datastore()`,
+  `seeds()`, `crypto()`, `metrics()`) for read-back. New hook
+  slots (for example, a `Box<dyn TransportListener>` Stage 14b
+  field) can be added without breaking SemVer. Construction is
+  routed through `ServerBuilder` only.
+
+* **Internal types no longer leak through public getters.**
+  `Server::cluster_pool()`, `ServerBuilder::conf_pool_mut()`,
+  the `pub fn shutdown_signal()` and `pub fn _instant_now()`
+  escape hatches, the `LegacySeedsAdapter<T: RawSeeds>` generic
+  wrapper, and the `pub type SharedDatastore` alias have all
+  been removed or downgraded to `pub(crate)` so the public
+  surface no longer commits to the in-crate types they exposed.
+  `EventBus::send` is `pub(crate)` (only the engine publishes;
+  embedding programs subscribe via `EventBus::subscribe`).
+
+* **Embedded `listen_addr` / `dyn_listen_addr` are in-process
+  only.** `ServerHandle::start` binds the configured listeners
+  so post-bind reporting works, but the per-role protocol
+  parser is not wired into the embedded accept loop. Real
+  clients connecting to those ports see open-then-immediate-
+  close with a `tracing::warn!` event on each accept directing
+  the operator to `ServerHandle::inject_request` (in-process)
+  or the `dynomited` binary (cross-process). Wiring the
+  embedded accept loop to `ClusterDispatcher` is a follow-up;
+  the contract is documented on `Server::start`.
+
+* **`embedded_custom_transport_sketch` is a sketch, not a
+  runnable transport plug-in.** The example demonstrates the
+  `Transport` trait shape (a duplex stream wrapped in a type
+  that carries a `ConnRole` plus a synthetic `peer_addr`) but
+  does not plug a custom listener into the engine. The
+  builder does not yet accept a `Box<dyn TransportListener>`;
+  that wiring is tracked as Stage 14b. The example was renamed
+  from `embedded_with_custom_transport.rs` to make the sketch
+  status visible at the file name.
