@@ -1,0 +1,44 @@
+[Unit]
+Description=Dynomite Rust server (dynomited)
+Documentation=man:dynomited(8)
+After=network.target nss-lookup.target time-sync.target
+
+[Service]
+Type=forking
+User=dynomite
+Group=dynomite
+
+# Default environment variable values.
+Environment=DYNOMITED_CONF=/etc/dynomite/dynomite.yml
+Environment=DYNOMITED_PIDFILE=/var/run/dynomite/dynomited.pid
+
+# Optional drop-in overrides via the package-default location.
+# rpm-based distros use /etc/sysconfig; deb-based distros use
+# /etc/default. Both are referenced as optional (the leading `-`)
+# so the unit installs cleanly on either family.
+EnvironmentFile=-/etc/sysconfig/dynomited
+EnvironmentFile=-/etc/default/dynomited
+
+ExecStart=/usr/local/sbin/dynomited -d -c ${DYNOMITED_CONF} -p ${DYNOMITED_PIDFILE}
+ExecReload=/bin/kill -HUP $MAINPID
+PIDFile=${DYNOMITED_PIDFILE}
+
+# The reference C unit requested an immediate restart on every
+# exit; the Rust port keeps that behaviour, with a small back-off
+# so a misconfigured node does not loop tighter than systemd's
+# default StartLimit window.
+Restart=always
+RestartSec=200ms
+
+# Sandboxing: the Rust port honours `forbid(unsafe_code)` so we
+# can lock the unit down further than the C reference. None of
+# these directives change the runtime behaviour relative to a
+# stock systemd install on the supported distros.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/run/dynomite /var/lib/dynomite /var/log/dynomite
+
+[Install]
+WantedBy=multi-user.target
