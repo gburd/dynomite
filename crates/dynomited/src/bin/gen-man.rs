@@ -52,9 +52,8 @@ const FOOTER: &str = ".SH SEE ALSO
 .BR redis-server (1)
 .br
 .SH AUTHOR
-This is the Rust port of Netflix Dynomite. The original C
-project is at https://github.com/Netflix/dynomite. The Rust
-port lives at https://github.com/gburd/dynomite.
+Greg Burd <greg@burd.me> and contributors.
+Project home: https://github.com/gburd/dynomite
 ";
 
 fn main() -> std::io::Result<()> {

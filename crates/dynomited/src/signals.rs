@@ -1,11 +1,11 @@
 //! Async signal handling for `dynomited`.
 //!
-//! The reference engine installs a `sigaction` table in
-//! `_/dynomite/src/dyn_signal.c` that maps `SIGINT`, `SIGTERM`,
-//! `SIGHUP`, `SIGTTIN`, `SIGTTOU`, `SIGUSR1`, `SIGUSR2`, and
-//! `SIGSEGV` to a single `signal_handler`. The Rust port replaces
-//! the synchronous handler with a tokio-driven [`SignalSet`] that
-//! exposes the same logical actions through async streams.
+//! Installs a tokio-driven [`SignalSet`] that maps `SIGINT`,
+//! `SIGTERM`, `SIGHUP`, `SIGTTIN`, `SIGTTOU`, `SIGUSR1`,
+//! `SIGUSR2`, and `SIGSEGV` to a single async stream of
+//! [`SignalEvent`] values. The run loop selects on this
+//! stream and dispatches each event to the appropriate
+//! handler (graceful shutdown, log reopen, log-level toggle).
 //!
 //! Stage 12b only consumes the four signals the run loop must
 //! react to:

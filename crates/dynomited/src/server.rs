@@ -625,9 +625,10 @@ fn build_local_peer(
             reason: "expected at least one token".into(),
         });
     }
-    // Local peer endpoint mirrors the dyn_listen address; with
-    // no dyn_listen we still need an endpoint for the topology
-    // tables, so fall back to the configured listen address.
+    // Reuse the configured peer-listen address as this node's
+    // own peer endpoint; with no dyn_listen we still need an
+    // endpoint for the topology tables, so fall back to the
+    // configured listen address.
     let endpoint = dyn_listen.map_or_else(
         || PeerEndpoint::tcp("127.0.0.1".into(), 0),
         |a| PeerEndpoint::tcp(a.ip().to_string(), a.port()),

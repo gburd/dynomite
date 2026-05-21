@@ -199,7 +199,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn periodic_task_fires_multiple_times() {
         let n = Arc::new(AtomicUsize::new(0));
         let nn = n.clone();
@@ -209,11 +209,22 @@ mod tests {
                 nn.fetch_add(1, Ordering::Relaxed);
             }),
         );
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        // Yield once so the spawned task gets polled and its
+        // interval is registered with the paused clock before
+        // the first advance.
+        tokio::task::yield_now().await;
+        // tokio::time is paused; advance() drives the timer
+        // deterministically without depending on wall-clock
+        // scheduling, eliminating CI flake.
+        for _ in 0..8 {
+            tokio::time::advance(Duration::from_millis(5)).await;
+            tokio::task::yield_now().await;
+        }
         handle.cancel();
         let after_cancel = n.load(Ordering::Relaxed);
         assert!(after_cancel >= 2, "expected >=2 fires, got {after_cancel}");
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::advance(Duration::from_millis(20)).await;
+        tokio::task::yield_now().await;
         // No fires after cancel.
         let final_count = n.load(Ordering::Relaxed);
         assert!(
