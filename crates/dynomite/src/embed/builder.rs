@@ -423,7 +423,11 @@ impl ServerBuilder {
             .datastore
             .unwrap_or_else(|| Box::new(MemoryDatastore::new()));
         let seeds = self.hooks.seeds.unwrap_or_else(|| {
-            let raw = finalized.dyn_seeds.as_deref().map(<[_]>::to_vec).unwrap_or_default();
+            let raw = finalized
+                .dyn_seeds
+                .as_deref()
+                .map(<[_]>::to_vec)
+                .unwrap_or_default();
             Box::new(SimpleSeedsProvider::new(raw))
         });
         let crypto = self.hooks.crypto;
