@@ -1,0 +1,15 @@
+# Default configuration shipped in the dynomite Docker image.
+#
+# Single-DC, single-rack, single-token; the bundled redis-server
+# on 127.0.0.1:22122 is the datastore. Override by mounting a
+# replacement YAML at /etc/dynomite/dynomite.yml.
+p:
+  listen: 0.0.0.0:8102
+  dyn_listen: 0.0.0.0:8101
+  stats_listen: 0.0.0.0:22222
+  rack: rack0
+  dc: dc0
+  data_store: 0
+  tokens: '101134286'
+  servers:
+    - 127.0.0.1:22122:1
