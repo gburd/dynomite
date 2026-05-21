@@ -10,7 +10,6 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::conf::{
@@ -56,6 +55,17 @@ impl std::fmt::Debug for ServerBuilder {
             .field("pool_name", &self.pool_name)
             .field("pool", &self.pool)
             .finish_non_exhaustive()
+    }
+}
+
+impl Default for ServerBuilder {
+    /// Build a `ServerBuilder` for the canonical pool name
+    /// `"dyn_o_mite"`. Mirrors the design page's sketch of a
+    /// no-arg `Server::builder()` while keeping the typed
+    /// constructor (`new(pool_name)`) for ergonomics; the C
+    /// reference accepts only one pool per `Config`.
+    fn default() -> Self {
+        Self::new("dyn_o_mite")
     }
 }
 
@@ -119,6 +129,21 @@ impl ServerBuilder {
     #[must_use]
     pub fn pool_name(&self) -> &str {
         &self.pool_name
+    }
+
+    /// Override the pool name supplied to [`Self::new`].
+    ///
+    /// The C reference accepts only one pool per `Config`, so the
+    /// pool name is part of the constructor for ergonomics. This
+    /// setter exists so callers that build a [`ServerBuilder`]
+    /// from a default-named template (`"dyn_o_mite"`) can rename
+    /// the pool without rebuilding the chain. Recorded as
+    /// Deviation in `docs/parity.md` (the design page sketches
+    /// a no-arg `Server::builder()`).
+    #[must_use]
+    pub fn with_pool_name(mut self, name: impl Into<String>) -> Self {
+        self.pool_name = name.into();
+        self
     }
 
     // ---- YAML-mirroring setters ------------------------------------------
@@ -270,12 +295,30 @@ impl ServerBuilder {
     /// representation.
     ///
     /// Returns the builder unchanged when the tokens string fails
-    /// to parse so callers can chain. Use [`ServerBuilder::tokens`]
-    /// to set a pre-parsed [`TokenList`].
+    /// to parse so callers can chain. Parse failures emit a
+    /// `tracing::warn!` event so a typo in the token string is
+    /// observable in logs even though it does not break the
+    /// chain. Use [`ServerBuilder::tokens`] to set a pre-parsed
+    /// [`TokenList`] when you want a hard error on bad input.
+    ///
+    /// The silent-ignore-with-log behaviour is recorded as a
+    /// SemVer-major candidate in `docs/parity.md`; v0.2 may
+    /// switch to a `Result`-returning variant.
     #[must_use]
     pub fn tokens_str(mut self, raw: impl AsRef<str>) -> Self {
-        if let Ok(t) = TokenList::parse(raw.as_ref()) {
-            self.pool.tokens = Some(t);
+        let raw = raw.as_ref();
+        match TokenList::parse(raw) {
+            Ok(t) => {
+                self.pool.tokens = Some(t);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    raw = %raw,
+                    error = %e,
+                    "ServerBuilder::tokens_str: parse failed; leaving tokens unchanged. \
+                     Use ServerBuilder::tokens(TokenList) for a hard error on bad input."
+                );
+            }
         }
         self
     }
@@ -385,11 +428,11 @@ impl ServerBuilder {
         self
     }
 
-    /// Borrow the (mutable) underlying [`ConfPool`] for fields
-    /// that have no dedicated setter yet. Escape hatch.
-    pub fn conf_pool_mut(&mut self) -> &mut ConfPool {
-        &mut self.pool
-    }
+    // `conf_pool_mut` removed: the escape hatch leaked the
+    // entire internal `ConfPool` shape onto the public API.
+    // Targeted setters land as the missing fields are
+    // identified.
+
 
     /// Build the [`Server`].
     ///
@@ -470,6 +513,7 @@ impl Default for ServerHooks {
     }
 }
 
-// Re-export Arc for consumers that want shared hook handles.
-#[doc(hidden)]
-pub type SharedDatastore = Arc<dyn Datastore>;
+// `SharedDatastore` removed: it was a `#[doc(hidden)]` `pub`
+// alias with no in-tree consumer. Embedders that need a shared
+// handle build their own `Arc<dyn Datastore>` from a
+// `Box<dyn Datastore>` they construct.
