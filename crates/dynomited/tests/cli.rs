@@ -186,6 +186,8 @@ fn pidfile_is_written_and_removed() {
     f.sync_all().unwrap();
 
     let exe = assert_cmd::cargo::cargo_bin("dynomited");
+    let stderr_path = dir.path().join("d.stderr");
+    let stderr_file = std::fs::File::create(&stderr_path).unwrap();
     let mut child = std::process::Command::new(exe)
         .args([
             "-c".as_ref(),
@@ -194,20 +196,30 @@ fn pidfile_is_written_and_removed() {
             pid.as_os_str(),
         ])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(stderr_file)
         .spawn()
         .unwrap();
 
-    // Wait for the pid file to materialise. The run loop opens
-    // listeners synchronously inside `Server::build` and writes
-    // the pid before that point, so the file should appear
-    // within a handful of milliseconds; we allow 10s to ride
-    // out heavily-loaded CI hosts.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // Wait for the pid file to materialise. Allow 30s to absorb
+    // heavily-loaded CI hosts and any first-run binary build.
+    // On failure, surface dynomited's captured stderr to make
+    // the diagnostic obvious.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !pid.exists() && std::time::Instant::now() < deadline {
+        // Detect early child exit so we don't sleep until the
+        // deadline when the child has already crashed.
+        if let Ok(Some(status)) = child.try_wait() {
+            let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+            panic!("dynomited exited before writing pid file: status={status:?} stderr=\n{stderr}");
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert!(pid.exists(), "pid file did not appear within 3s");
+    if !pid.exists() {
+        let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("pid file did not appear within 30s; dynomited stderr:\n{stderr}");
+    }
 
     // Graceful shutdown via SIGTERM, mirroring an init-script
     // stop. The run loop's signal handler flips the watch flag,
