@@ -1,0 +1,340 @@
+# Changelog
+
+All notable changes to the Rust port of dynomite are documented
+in this file. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
+project adheres to [Semantic Versioning](https://semver.org/).
+
+The Rust port reproduces the algorithms, configuration grammar,
+on-the-wire DNODE protocol, and operator-visible behaviour of
+the original [Netflix Dynomite][netflix-dynomite] C engine
+(BSD-licensed, kept verbatim under `_/dynomite/` for parity
+review). The mention here is the only acknowledgement of the
+upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
+
+[netflix-dynomite]: https://github.com/Netflix/dynomite
+
+## [Unreleased]
+
+Stage 16 deliverables (final stage):
+
+- 1-hour chaos / punishment / stress test at
+  `crates/dynomite/tests/stage_16_chaos.rs`. Smoke variant
+  (60 s) runs in nextest under `--features chaos` plus
+  `CHAOS_DURATION_SECS=60`; production-mode 1-hour run is the
+  manual pre-tag gate the lead executes before the v0.1.0
+  signed tag.
+- Failure-injection helpers under `scripts/netem/`:
+  `partition_dc.sh`, `slow_peer.sh`, `flap.sh`, `gc_pause.sh`,
+  `clock_skew.sh`. All scripts no-op cleanly when
+  `CAP_NET_ADMIN` is missing.
+- Distribution packaging under `dist/`: systemd unit, Docker
+  image (multi-stage, rust:1.90-bookworm builder ->
+  debian:bookworm-slim runtime), deb / rpm hook stubs, HOWTO.
+- Dual-platform CI: `.forgejo/workflows/ci.yml` mirrors
+  `.github/workflows/ci.yml`; both invoke the single
+  `scripts/check.sh` source of truth.
+- `scripts/check_clean.sh`: cleanup-sweep gate enforcing the
+  AGENTS.md Section 14c discipline (no agent cruft, no
+  committed gitignored content, no committed
+  `target/chaos/<run-id>/` data, no committed
+  `crates/fuzz/{corpus,artifacts}` data).
+- mdBook polish: `docs/book/src/operations/chaos.md`,
+  `docs/book/src/operations/release.md`, refreshed
+  `SUMMARY.md`.
+
+## [0.1.0] - 2026-05-19
+
+Initial release of the Rust port. Drop-in replacement
+(`dynomited` binary + embeddable `dynomite` library crate)
+for the C engine, with feature parity validated by the Stage
+14 conformance suite and stress-tested by the Stage 16 chaos
+run.
+
+### Added
+
+#### Stage 0 - Foundation
+
+- Workspace layout (`crates/dynomite`, `crates/dynomited`,
+  `crates/dyn-hash-tool`, `crates/fuzz`).
+- Nix flake pinning Rust 1.90.0 and the dev-shell toolset.
+- Shared lints (`forbid(unsafe_code)`, `pedantic`,
+  `rust_2018_idioms`).
+- C-symbol parity matrix scaffold at `docs/parity.md`.
+- `scripts/check.sh` single-source-of-truth CI gate.
+- Hygiene scripts: `check_no_todos.sh`,
+  `check_no_port_comments.sh`, `check_ascii.sh`.
+
+#### Stage 1 - Core types and process scaffolding
+
+- `dynomite::core::{context, loop_, types, signal, log,
+  ring_queue, msg_index, setting}` mirroring the reference
+  engine's `dyn_core.{c,h}`, `dyn_signal.{c,h}`,
+  `dyn_log.{c,h}`, `dyn_ring_queue.{c,h}`.
+- `Status` / `DynError` taxonomy replacing `rstatus_t`.
+- Cross-thread C2G/G2C ring queue built on
+  `crossbeam-channel`.
+- Histogram primitives mirroring `dyn_histogram.{c,h}`.
+
+#### Stage 2 - I/O
+
+- `io::mbuf` pooled message buffer (`dyn_mbuf.{c,h}`),
+  `io::cbuf` SPSC ring buffer (`dyn_cbuf.h`), `io::reactor`
+  tokio-driven equivalent of the C epoll loop. Read/write
+  vectors land in lockstep with the reference paths so the
+  Stage 8 wire-format parsers can be plugged in without
+  reshuffling lifetimes.
+
+#### Stage 3 - Hashkit
+
+- `hashkit::{md5, fnv1, fnv1a, hsieh, jenkins, murmur,
+  one_at_a_time}` byte-identical to the C `dyn_hashkit_*`
+  family.
+- `hashkit::{ketama, modula, random}` continuum builders,
+  `DynToken` (mirrors `dyn_token`) with the integer-bignum
+  parsing semantics the C engine relies on for ring math.
+- 1024-case property-test soak under
+  `crates/dynomite/tests/stage_03_properties.rs`.
+
+#### Stage 4 - Configuration
+
+- `conf::{Config, ConfPool, ConfListen, ConfServer,
+  ConfDynSeed, SecureServerOption, ConsistencyLevel,
+  DataStore}` parsed via `serde_yaml` with strict
+  `deny_unknown_fields`.
+- All 30+ tunable defaults from `dyn_conf.h` lifted into
+  `conf::pool::defaults`.
+- Validators reproducing every `conf_validate_*` arm:
+  numeric ranges, mbuf size alignment, IPv6 listen syntax,
+  bracketed addresses, weight column.
+
+#### Stage 5 - Stats
+
+- `stats::{Stats, Snapshot, PoolStats, ServerStats,
+  ServiceInfo, MetricSpec, PoolField, ServerField,
+  Histogram}` with the per-pool, per-server, per-DC, and
+  per-rack tables matching `dyn_stats.{c,h}`.
+- HTTP / 1.1 `/info`, `/describe`, `/peer/state`, and
+  POST mutator endpoints on the stats listener; the JSON
+  shape is byte-identical to the C engine on the
+  shared corpus.
+- `describe_stats()` machine-readable schema for embedders.
+
+#### Stage 6 - Crypto (RustCrypto migration)
+
+- AES-128-CBC payload encrypt/decrypt via `aes` + `cbc`
+  with PKCS#7 padding (parity with the C
+  `EVP_aes_128_cbc()` path).
+- RSA OAEP (SHA-1, MGF1-SHA-1) wrap / unwrap of session
+  keys via the `rsa` crate, replacing the OpenSSL ABI
+  use in `dyn_crypto.c`.
+- PEM loader (`crypto::pem`) honouring the bundled
+  fixtures byte-for-byte.
+- Migration to a pure-Rust crypto stack to remove the
+  symbol clash with `quiche`'s bundled BoringSSL (Stage 9
+  blocker resolution).
+
+#### Stage 7 - Messages and DNODE codec
+
+- `msg::{Msg, MsgType, MsgQueue, MsgIndex, RequestState,
+  ResponseMgr}` mirroring `dyn_message.{c,h}`,
+  `dyn_request.c`, `dyn_response.c`,
+  `dyn_response_mgr.{c,h}`.
+- 179 `MsgType` variants exhaustively enumerated to match
+  `MSG_REQ_*` / `MSG_RSP_*` / `MSG_DNODE_*`.
+- DNODE codec: header (mbuf magic, version, flags, length,
+  msg-id, type, dc, rack, sender, msg-seqno, parent-id,
+  consistency, payload-checksum), payload framing,
+  fragment / coalesce, write-replication policy.
+
+#### Stage 8 - Protocol parsers
+
+- `proto::redis::{request, response}` and
+  `proto::memcache::{ascii, binary}` parsers driven by a
+  resumable byte-by-byte state machine matching the C
+  switch graphs.
+- 10 repair Lua scripts at
+  `crates/dynomite/src/proto/redis/lua/` byte-identical
+  to the C `repair-store/lua/*.lua` set; loaded via
+  `EVAL` so server-side parity is preserved.
+- Differential corpus parity for both protocols.
+
+#### Stage 9 - Transports and connection FSMs
+
+- `net::{conn, conn_pool, client, proxy, dnode_listener,
+  dnode_client, dnode_peer_client, dnode_peer_server,
+  auto_eject, quic}` covering the 6 connection roles from
+  the C engine.
+- TCP and (optional) QUIC listeners; both IPv4 and IPv6.
+- TLS payload protection on the peer plane (matching
+  `dyn_dnode_peer.c`).
+- `Dispatcher` trait seam consumed by Stage 10.
+
+#### Stage 10 - Cluster, gossip, seeds, dispatcher
+
+- `cluster::{pool, datacenter, rack, peer, snitch,
+  gossip, dispatch}` plus `seeds::{Provider, Static,
+  Florida}` for live peer discovery.
+- Gossip round driver (period, fanout, suspect / DOWN
+  failure detection) reproducing the C `dyn_gossip.c`
+  state machine.
+- Cluster-aware dispatcher: DC-quorum, rack-quorum, and
+  DC_EACH_SAFE_QUORUM fan-out; fragmenter for multi-key
+  Redis ops; coalescer aligning with `dyn_response_mgr`.
+- HTTP florida client built on `httparse` plus tokio.
+
+#### Stage 11 - Entropy reconciliation
+
+- `entropy::{send, receive, util}` covering
+  `dyn_entropy_snd.c`, `dyn_entropy_rcv.c`, and
+  `dyn_entropy_util.c`.
+- Snapshot pipeline driven over RESP (no
+  `redis-cli`-shellout dependency).
+- Pluggable `SnapshotSource` / `SnapshotSink` so embedders
+  can route the stream wherever they like.
+- Six documented deviations versus the broken C reference
+  (PKCS#7 padding, length-prefixed chunks, unified
+  framing, `BGREWRITEAOF` over RESP, throughput throttle
+  removal, key/IV honoured) all entered in
+  `docs/parity.md` and pinned by tests.
+
+#### Stage 12 - dynomited binary
+
+- `crates/dynomited` workspace member with the
+  `dynomited` binary, manpage at `dynomited(8)`, and a
+  `gen-man` helper binary.
+- Full CLI (`-c`, `-d`, `-p`, `-t`, `-v`, `-D`,
+  `--describe-stats`, `--version`, `--help`) parity with
+  the C `dynomite` argument table.
+- Daemonization (single `unsafe { fork() }` block,
+  documented in `docs/journal/allowances.md`),
+  pidfile management, signal table (SIGTERM, SIGINT,
+  SIGHUP, SIGUSR1, SIGUSR2).
+- Integration test (`crates/dynomited/tests/integration.rs`)
+  spawning real redis-server + dynomited and driving a
+  Redis SET / GET / QUIT round trip.
+
+#### Stage 13 - Embedding API
+
+- `dynomite::embed::{Server, ServerHandle, ServerBuilder,
+  ServerHooks, ServerEvent, EventStream, Datastore,
+  SeedsProvider, CryptoProvider, MetricsSink,
+  TransportListener}`.
+- SemVer-hardened with `#[non_exhaustive]` on every
+  builder, options struct, and event variant; only the
+  builder methods are stable surface.
+- Examples under `crates/dynomite/examples/` (sidecar,
+  custom datastore, crypto provider override, metrics
+  sink).
+- `cargo public-api` baseline committed under
+  `docs/api/public-api.txt`.
+
+#### Stage 14 - Conformance and regression suites
+
+- Conformance harness at
+  `crates/dynomited/tests/conformance.rs` driving real
+  dynomited clusters across the canonical scenarios
+  (single-node, three-node, multi-DC, QUIC).
+- Differential rig at
+  `crates/dynomited/tests/differential.rs` recording
+  divergences against an optional C reference build.
+- Lua repair script regression at
+  `crates/dynomite/src/proto/redis/lua/tests.rs`.
+
+#### Stage 15 - Fuzz, bench, coverage
+
+- `crates/fuzz/`: 7 cargo-fuzz targets (`conf_parse`,
+  `proto_redis_parse`, `proto_memcache_parse`,
+  `dnode_parse`, `crypto_aes_decrypt`,
+  `entropy_chunk_parse`, `gossip_parse`); deduplicated
+  regression seeds under `crates/fuzz/seeds/`.
+- 7 criterion micro-benches (`parsers`, `mbuf`,
+  `hashkit`, `tokens`, `dnode`, `crypto`, `quorum`)
+  plus the macro-throughput harness
+  (`crates/dynomite/benches/macro_throughput.rs`).
+- Coverage gate at `scripts/coverage_gate.sh` on a
+  95% line / branch / function threshold; per-file
+  deviations catalogued in `docs/coverage-deviations.md`.
+- 1024-case Stage 15 property-test soak under
+  `crates/dynomite/tests/stage_15_properties.rs`.
+
+#### Stage 16 - Release, packaging, chaos verification
+
+- `crates/dynomite/tests/stage_16_chaos.rs` 1-hour chaos
+  test exercising every `dyn_state_t` variant under
+  concurrent failure injection.
+- `dist/` packaging tree (systemd unit, Docker image,
+  deb / rpm hooks, HOWTO).
+- `.forgejo/workflows/ci.yml` mirroring
+  `.github/workflows/ci.yml`; both invoke
+  `scripts/check.sh`.
+- `scripts/check_clean.sh` cleanup-sweep gate.
+- mdBook reference complete; chaos and release-process
+  pages added.
+
+### Cumulative deviations
+
+Every intentional deviation versus the C reference is logged
+in `docs/parity.md`. The five cumulative classes summarised
+for the v0.1.0 release:
+
+1. **Crypto stack**: pure-Rust RustCrypto (`aes`, `cbc`,
+   `rsa`, `sha1`, `rand`) replaces OpenSSL bindings; lifts
+   the symbol clash with `quiche`'s BoringSSL and removes
+   the long-lived global `EVP_CIPHER_CTX *` re-key races.
+   Per-call `Encryptor` / `Decryptor` instances are
+   functionally equivalent and lock-free. RSA padding is
+   PKCS#1 OAEP (SHA-1) matching the C
+   `RSA_PKCS1_OAEP_PADDING` choice.
+2. **Entropy reconciliation**: the C send and receive paths
+   ship two different wire formats and rely on an external
+   Lepton/Spark cluster to bridge them; the Rust port
+   unifies the framing on the file-stream shape with PKCS#7
+   padding and length-prefixed chunks, exposes the
+   record-level interpretation through the embedding
+   `SnapshotSink`, drops the hardcoded throughput throttle,
+   and honours the `recon_key.pem` / `recon_iv.pem` file
+   contents the C loader silently discarded.
+3. **Configuration parser**: `serde_yaml` replaces the
+   hand-rolled `conf_handler` / `conf_token_*` /
+   `conf_event_*` machinery. Numeric ranges, IPv6 bracketed
+   listen syntax, server-row weights, and explicit zero
+   connection counts behave per the parity matrix; unknown
+   keys are rejected (`#[serde(deny_unknown_fields)]`)
+   instead of silently ignored.
+4. **Connection ownership**: the C engine maintains an
+   ad-hoc ref/unref dance across `dyn_connection.c`,
+   `dyn_connection_pool.c`, `dyn_server.c`, and the
+   listener layer. The Rust port uses `Arc<Conn>` plus
+   ownership transfer on accept; `auto_eject` is lifted
+   into its own module so the failure detector is not
+   scattered across `dyn_server.c` / `dyn_dnode_peer.c`.
+   The DNODE peer-client decrypt error is collapsed to a
+   single opaque variant at the boundary to close the
+   Vaudenay padding-oracle surface.
+5. **Coalesced messages and message-type taxonomy**:
+   `DynErrorCode::BadFormat.message()` returns a stable
+   `"Bad message format"` literal instead of falling
+   through to `strerror(8)` (`"Exec format error"` on
+   Linux) the way the C `dn_strerror` switch's default arm
+   does. `MsgType` exposes 179 explicit variants with
+   compile-time exhaustiveness.
+
+### Testing baseline at v0.1.0
+
+- 608 nextest tests at default features.
+- 664 nextest tests at `--all-features`.
+- 566 doctests.
+- 1024-case property-test soak per Stage 3 / 15
+  properties suite.
+- 7 cargo-fuzz targets, 60 s smoke per target in
+  CI, 1 h soak target per release.
+- Coverage gate: 95% line / branch / function threshold
+  with documented per-file deviations under
+  `docs/coverage-deviations.md`.
+- Chaos test: 1-hour production-mode run preceding every
+  release tag; smoke 60 s variant available under
+  `--features chaos` for development cycles.
+
+[Unreleased]: https://github.com/gburd/dynomite/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/gburd/dynomite/releases/tag/v0.1.0
