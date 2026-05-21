@@ -250,7 +250,7 @@ symbol is considered un-ported.
 | (new) | `dynomite::crypto::Crypto::dyn_aes_decrypt_to_vec` | Convenience that flattens an encrypted mbuf chain into a `Vec<u8>` for the DNODE handshake parser. |
 | (new) | `dynomite::crypto::pem::load_rsa_private_key_from_bytes` | In-memory PEM parser used by tests and embedders that already hold the PEM bytes. |
 
-### `dynomite.c` (the server binary) - Stage 12 partial
+### `dynomite.c` (the server binary) - Stage 12 + 12b
 
 | C symbol | Rust home | Notes |
 |---|---|---|
@@ -260,11 +260,54 @@ symbol is considered un-ported.
 | `dn_get_options` | `dynomited::cli::Cli::parse` (clap derive) | done (Stage 12); every `getopt_long` short + long option matched 1:1 (`-h/-V/-t/-d/-D/-v/-o/-c/-p/-x/-m/-M/-g`). |
 | `dn_test_conf` | `dynomited::commands::test_conf` | done (Stage 12); produces the C-equivalent `dynomite: configuration file '<path>' syntax is valid` text on success and a parse-error report on failure. |
 | `dn_describe_stats` | `dynomited::commands::describe_stats` (delegates to `dynomite::stats::describe_stats`) | done (Stage 12). |
-| `dynomite_daemonize` | `dynomited::daemonize::daemonize` | done (Stage 12); fork + setsid + stdin/stdout/stderr redirection via `nix::unistd`; no `unsafe` blocks needed (nix wraps the primitives). |
+| `dynomite_daemonize` | `dynomited::daemonize::daemonize` | done (Stage 12); fork + setsid + stdin/stdout/stderr redirection via `nix::unistd`; the two `unsafe { fork() }` calls are isolated in `daemonize.rs` per the allowance in `docs/journal/allowances.md`. |
 | `dynomite_pidfile_create` / `dynomite_pidfile_remove` | `dynomited::pidfile::PidFile::{create, drop}` | done (Stage 12); exclusive flock via `nix::fcntl::Flock`, RAII removal on drop. |
-| `dn_pre_run` / `dn_run` / `dn_post_run` | `dynomited::server::run_server` | deferred to Stage 12b (the async run loop + signal handling + Redis-backed integration test). |
-| `dn_signal_handlers` | `dynomited::signals` | deferred to Stage 12b. |
+| `dn_pre_run` | folded into `dynomited::main::run_server` + `dynomited::server::Server::build` | done (Stage 12b); log_init -> daemonize -> pidfile -> Server::build mirrors the C order. |
+| `dn_run` | `dynomited::server::Server::run` | done (Stage 12b); tokio multi-thread runtime, `Proxy` + `DnodeProxy` + `StatsServer` driven via `tokio::select!`, shutdown via `tokio::sync::watch`. |
+| `dn_post_run` | `dynomited::server::Server::run` graceful-drop path + `Drop for PidFile` | done (Stage 12b); listeners drain on the cancel future, the pid file unlinks on Drop. |
+| `dn_signal_handlers` (the `signals[]` table in `_/dynomite/src/dyn_signal.c`) | `dynomited::signals::SignalSet` + `dynomited::server::Server::run` SIGHUP arm | done (Stage 12b); SIGINT / SIGTERM / SIGHUP wired via `tokio::signal::unix`. SIGUSR1, SIGUSR2, SIGTTIN, SIGTTOU, SIGSEGV, SIGPIPE remain deferred (see Ambiguities below for the rationale). |
+| `signal_handler` | inlined into the SignalEvent match in `Server::run` | done (Stage 12b); the C function's per-signal switch (log reopen, level up/down, exit) is split across the SignalSet match arms. |
 | `dn_get_loglevel` / `dn_set_loglevel` | folded into `dynomite::core::log` (Stage 1) | done (Stage 1). |
+| `dn_coredump_init` (`setrlimit(RLIMIT_CORE, RLIM_INFINITY)`) | omitted: deferred to operator init scripts (systemd `LimitCORE=infinity`, sysvinit `ulimit -c unlimited`). | Recorded as a deviation; the C call hard-codes a global rlimit which is hostile to embedded users. The embed API exposes no equivalent; the binary trusts the deployment environment. |
+
+#### Stage 12b additions
+
+| New Rust symbol | Notes |
+|---|---|
+| `dynomited::server::Server` | Top-level orchestrator. Mirrors `dn_run` plus the `core_start` / `core_stop` book-ending. |
+| `dynomited::server::ShutdownHandle` | Cheap-clonable `tokio::sync::watch::Sender` wrapper. The signal arms and the embed API converge on this handle for graceful teardown. |
+| `dynomited::server::ServerError` | `thiserror`-derived error type covering bind failures, configuration gaps, signal-install failures, and child-task panics. |
+| `dynomited::signals::SignalSet` | `tokio::signal::unix` bundle (SIGINT, SIGTERM, SIGHUP). Replaces the C `sigaction` registration loop in `dyn_signal.c::signal_init`. |
+| `dynomited::signals::SignalEvent` | Tagged enum of the three signals the run loop reacts to. |
+| `dynomited::cli::Cli` (`gen-man` integration) | The same struct now feeds `clap_mangen` to render the manpage. The reference `dynomite.8` lives at `_/dynomite/man/dynomite.8`; the Rust port writes to `crates/dynomited/man/dynomited.8` and matches the OPTIONS wording closely. |
+
+#### Ambiguities (Stage 12b)
+
+* The C `signal_handler` invokes `log_level_up` / `log_level_down`
+  on `SIGTTIN` / `SIGTTOU` and `raise(SIGSEGV)` on `SIGSEGV`. Both
+  are deferred until the embed API exposes the corresponding
+  control hooks (Stage 13). The Rust binary leaves the signals
+  unmasked so the kernel default action applies (terminal stop on
+  SIGTTIN/SIGTTOU; core dump on SIGSEGV). This is the same
+  behaviour an operator would see if they removed those rows from
+  the C `signals[]` table.
+* The C `dn_pre_run` opens the pid file *after* `signal_init`,
+  while the Rust port opens it *before* installing signal
+  handlers (signals are installed inside `Server::run`, not
+  `Server::build`). The observable behaviour is identical for
+  graceful shutdowns; only an SIGSEGV between `PidFile::create`
+  and the first `signal()` call would diverge. We treat this as a
+  benign reordering because pid-file writes are atomic via
+  `flock` + `O_TRUNC`.
+* Token components above `u32::MAX` are saturated to `u32::MAX`
+  inside `dynomited::server::token_component_to_dyn`. The C
+  reference accepts arbitrary-precision tokens, but the existing
+  `dynomite::hashkit::DynToken` only carries four bytes. Tokens
+  beyond `u32::MAX` are vanishingly rare in practice (default
+  `tokens: '101134286'` is an order of magnitude below the limit)
+  and the saturation keeps the run-time wiring infallible. A full
+  big-int port of `DynToken` is tracked as a separate parity row
+  under `hashkit/token.c`.
 
 
 ## src/event/

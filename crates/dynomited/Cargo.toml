@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
+default-run = "dynomited"
 
 [lints.rust]
 # Inherit and override: the workspace declares `unsafe_code = "forbid"`,

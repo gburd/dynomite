@@ -703,7 +703,9 @@ mod tests {
         // Static lock so concurrent unit tests do not race the
         // kernel into handing the same ephemeral port out twice.
         static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _g = GUARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         drop(l);
