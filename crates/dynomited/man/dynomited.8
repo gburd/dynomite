@@ -1,0 +1,82 @@
+.TH DYNOMITED 8 "2026-05-19" "v0.0.1"
+.SH NAME
+dynomited - a generic dynamo implementation for different key/value storage engines (Rust port).
+.SH DESCRIPTION
+.B Dynomited
+is a thin, distributed Dynamo layer for different storage engines and protocols. Dynomite provides sharding and multi-data center replication. It has a shared nothing architecture with no single point of failure (SPOF) that delivers high availability (HA) even when a server, rack or entire data center goes offline.
+.PP
+Redis is currently the primary backend and protocol supported by Dynomite, while support for Memcached is partially implemented.
+.PP
+Dynomite provides the following functionality:
+.IP \[bu]
+Linear scalability
+.IP \[bu]
+High availability (HA)
+.IP \[bu]
+Shared nothing architecture with symmetric nodes
+.IP \[bu]
+Multi-data center (DC) replication
+.IP \[bu]
+Data replication and sharding
+.IP \[bu]
+Support for any Redis client plus a specialized Dyno client for Java
+.IP \[bu]
+Reduced connections to and lower connection overhead on backend storage engines via persistent connections
+.IP \[bu]
+Observability via easily accessible statistics
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.SH SYNOPSIS
+\fBdynomited\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fB\-t\fR|\fB\-\-test\-conf\fR] [\fB\-d\fR|\fB\-\-daemonize\fR] [\fB\-D\fR|\fB\-\-describe\-stats\fR] [\fB\-v\fR|\fB\-\-verbosity\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-c\fR|\fB\-\-conf\-file\fR] [\fB\-p\fR|\fB\-\-pid\-file\fR] [\fB\-x\fR|\fB\-\-admin\-operation\fR] [\fB\-m\fR|\fB\-\-mbuf\-size\fR] [\fB\-M\fR|\fB\-\-max\-msgs\fR] [\fB\-g\fR|\fB\-\-gossip\fR] 
+
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Show the help banner and exit (sets [`Self::show_version`])
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Show the version banner and exit
+.TP
+\fB\-t\fR, \fB\-\-test\-conf\fR
+Validate the configuration file and exit
+.TP
+\fB\-d\fR, \fB\-\-daemonize\fR
+Daemonize: fork twice, become a session leader, redirect stdio to /dev/null
+.TP
+\fB\-D\fR, \fB\-\-describe\-stats\fR
+Print the stats description and exit
+.TP
+\fB\-v\fR, \fB\-\-verbosity\fR \fI<N>\fR [default: 5]
+Numeric verbosity. Values outside `0..=11` are rejected
+.TP
+\fB\-o\fR, \fB\-\-output\fR \fI<FILE>\fR
+Path to the log output file. `None` keeps logs on standard error
+.TP
+\fB\-c\fR, \fB\-\-conf\-file\fR \fI<FILE>\fR [default: conf/dynomite.yml]
+Path to the YAML configuration file
+.TP
+\fB\-p\fR, \fB\-\-pid\-file\fR \fI<FILE>\fR
+Path to the pid file. `None` disables the pid file
+.TP
+\fB\-x\fR, \fB\-\-admin\-operation\fR \fI<N>\fR [default: 0]
+Admin operation flag. `0` means "no admin override"
+.TP
+\fB\-m\fR, \fB\-\-mbuf\-size\fR \fI<N>\fR
+Deprecated mbuf chunk size override
+.TP
+\fB\-M\fR, \fB\-\-max\-msgs\fR \fI<N>\fR
+Deprecated maximum allocated messages override
+.TP
+\fB\-g\fR, \fB\-\-gossip\fR
+Force\-enable gossip regardless of the YAML setting
+
+.SH SEE ALSO
+.BR memcached (8),
+.BR redis-server (1)
+.br
+.SH AUTHOR
+This is the Rust port of Netflix Dynomite. The original C
+project is at https://github.com/Netflix/dynomite. The Rust
+port lives at https://github.com/gburd/dynomite.
