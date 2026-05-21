@@ -55,6 +55,13 @@ tls = []
 # Enables the macro (end-to-end with tc/netem) bench harness.
 # Requires CAP_NET_ADMIN; see docs/book/src/operations/benchmarks.md.
 bench-macro = []
+# Enables the Stage 16 chaos / punishment / stress test
+# (`tests/stage_16_chaos.rs`). The test compiles only when this
+# feature is on so a default `cargo test` run does not pull in
+# the heavy harness. The smoke 60-second variant runs in CI
+# when CHAOS_DURATION_SECS=60 is set; the full 1-hour run is a
+# manual pre-tag gate. See docs/book/src/operations/chaos.md.
+chaos = []
 
 [[bench]]
 name = "parsers"
