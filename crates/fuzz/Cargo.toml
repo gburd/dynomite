@@ -1,0 +1,68 @@
+[package]
+name = "dynomite-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+rust-version = "1.83"
+authors = ["The Dynomite Rust Port Authors"]
+description = "Fuzz harnesses for the dynomite Rust port (libfuzzer / cargo-fuzz)."
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+dynomite = { path = "../dynomite", default-features = false, features = ["tcp"] }
+
+[[bin]]
+name = "proto_redis_parse"
+path = "fuzz_targets/proto_redis_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_redis_parse_rsp"
+path = "fuzz_targets/proto_redis_parse_rsp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_memcache_parse"
+path = "fuzz_targets/proto_memcache_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_memcache_parse_rsp"
+path = "fuzz_targets/proto_memcache_parse_rsp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dnode_parse"
+path = "fuzz_targets/dnode_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "conf_parse"
+path = "fuzz_targets/conf_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_aes_decrypt"
+path = "fuzz_targets/crypto_aes_decrypt.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

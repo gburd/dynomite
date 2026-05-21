@@ -1,0 +1,7 @@
+mc_pool:
+  listen: 0.0.0.0:11211
+  dyn_listen: 0.0.0.0:8101
+  tokens: '1'
+  servers:
+  - 127.0.0.1:11212:1
+  data_store: 1
