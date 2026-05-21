@@ -1,0 +1,9 @@
+dyn_o_mite:
+  listen: 0.0.0.0:8102
+  dyn_listen: 0.0.0.0:8101
+  tokens: '1'
+  servers:
+  - 127.0.0.1:22122:1
+  data_store: 0
+  secure_server_option: all
+  pem_key_file: /tmp/dynomite.pem

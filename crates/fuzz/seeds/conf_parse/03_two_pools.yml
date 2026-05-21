@@ -1,0 +1,14 @@
+pool_a:
+  listen: 127.0.0.1:8102
+  dyn_listen: 127.0.0.1:8101
+  tokens: '1'
+  servers:
+  - 127.0.0.1:22122:1
+  data_store: 0
+pool_b:
+  listen: 127.0.0.1:9102
+  dyn_listen: 127.0.0.1:9101
+  tokens: '2'
+  servers:
+  - 127.0.0.1:22123:1
+  data_store: 1

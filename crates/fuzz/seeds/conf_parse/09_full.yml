@@ -1,0 +1,15 @@
+dyn_o_mite:
+  listen: 0.0.0.0:8102
+  dyn_listen: 0.0.0.0:8101
+  tokens: '437425602'
+  servers:
+  - 127.0.0.1:22122:1
+  data_store: 0
+  hash: murmur
+  distribution: vnode
+  preconnect: true
+  auto_eject_hosts: false
+  rack: rack1
+  datacenter: dc1
+  stats_listen: 0.0.0.0:22222
+  stats_interval: 30000
