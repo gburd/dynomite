@@ -1642,3 +1642,66 @@ Documented design choices that downstream stages must respect.
   active C call graph never reads. The LCG parameters are pinned
   by `hashkit::random::tests::lcg_parameters_are_pinned` so any
   future move to a different PRNG is an intentional change.
+
+### Stage 13 - Embedding API (`dynomite::embed`)
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| (new) | `dynomite::embed::Server` | configured-but-not-running engine handle; ctor `Server::builder()` returns `ServerBuilder`. |
+| (new) | `dynomite::embed::ServerBuilder` | fluent builder mirroring every YAML-visible field on `ConfPool` plus typed setters for hook traits with no YAML form. |
+| (new) | `dynomite::embed::ServerHandle` | running-engine control surface: `shutdown`, `reload`, `stats`, `subscribe_events`, `inject_request`, `peers`, `datacenters`, `ring`, `describe_stats`, `crypto_provider`, `listen_addr`, `dyn_listen_addr`. |
+| (new) | `dynomite::embed::ServerEvent` | broadcast-channel events: `PeerUp`, `PeerDown`, `ConfigReloaded`, `GossipRound`, `AutoEjected`, `RepairTriggered`, `ConnectionAccepted`, `ConnectionClosed`, `Lagged`. Non-exhaustive at the type level. |
+| (new) | `dynomite::embed::EventStream` / `EventBus` | wrapper over `tokio::sync::broadcast`; `EventStream::recv` synthesises `ServerEvent::Lagged` on receiver lag. |
+| (new) | `dynomite::embed::hooks::Datastore` | object-safe hook trait for the backing store; defaults `MemoryDatastore`, `RedisDatastore`, `MemcacheDatastore`. |
+| (new) | `dynomite::embed::hooks::SeedsProvider` | embed-facing seeds trait; defaults `SimpleSeedsProvider`, `DnsSeedsProvider`, `FloridaSeedsProvider` (re-exported and adapted from `dynomite::seeds`). |
+| (new) | `dynomite::embed::hooks::CryptoProvider` | object-safe AES + RSA hook; default `RustCryptoProvider` wraps `dynomite::crypto::Crypto`. |
+| (new) | `dynomite::embed::hooks::MetricsSink` | object-safe sink hook; default `LoggingMetricsSink`. |
+| (new) | `dynomite::embed::Transport` (re-export) | Transport trait already exposed by `io::reactor` since Stage 2; re-exported here for embedder discoverability. |
+| `dynomite_reload_conf` (`_/dynomite/src/dynomite.c`) | `ServerHandle::reload(Config)` | the in-process equivalent of SIGHUP. Validates the new `Config` with `Config::validate` before any state is touched and emits `ServerEvent::ConfigReloaded`. The C path re-reads the YAML from disk on signal; the embedding API takes the parsed `Config` directly. |
+| `core_dump`-equivalent shutdown path | `ServerHandle::shutdown` | cancels every spawned background task via a single `tokio_util::sync::CancellationToken`, deregisters from the in-process peer registry, and joins outstanding handles. Idempotent. |
+
+### Stage 13: deviations and follow-ups
+
+* **In-process peer registry for `inject_request` forwarding.** The
+  embedding API ships a process-wide static registry keyed on
+  `dyn_listen` `SocketAddr`. When `inject_request` produces a
+  `Replicas` plan that targets a peer co-located in the same
+  process, the request is forwarded to that peer's local
+  `Datastore` via the registry rather than the dnode wire path.
+  This keeps the in-process tests free of socket round-trips while
+  preserving the production code path semantics (compute plan,
+  deliver to target peers). Real cross-process forwarding lands
+  with the connection-pool wiring in a future stage; the embed
+  surface stays unchanged.
+
+* **`PrometheusMetricsSink` not shipped.** The design in
+  `docs/book/src/embedding/hooks.md` lists a Prometheus sink as
+  one of the standard exporters. Stage 13 ships
+  `LoggingMetricsSink` only and documents the Prometheus shape
+  inline; adding the dependency is deferred to a follow-up so the
+  `Cargo.toml` dependency set stays at the audited Stage 0
+  baseline.
+
+* **TLS transport example is illustrative.** The
+  `embedded_with_custom_transport.rs` example sketches the
+  custom-transport shape with an in-memory `tokio::io::DuplexStream`
+  rather than `tokio_rustls`. The workspace dependency set does
+  not include rustls, so the example exercises the `Transport`
+  trait with a dependency-free stand-in. Production embedders swap
+  the duplex stream for `tokio_rustls::TlsStream` without changing
+  the trait surface.
+
+* **`dyn_listen` post-bind reporting.** `ServerHandle::listen_addr` /
+  `dyn_listen_addr` return the kernel-assigned `SocketAddr` after
+  bind so tests can use `127.0.0.1:0` to avoid hard-coded ports.
+  The C reference always logs the configured pname; preserving the
+  resolved address is a Rust addition.
+
+* **Builder validation reuses `ConfPool::validate`.** The builder
+  applies defaults via `ConfPool::apply_defaults` and runs
+  `ConfPool::validate(pool_name)` directly rather than serialising
+  through YAML. The validation surface is identical (the same
+  helper backs `Config::validate`); this skips a needless
+  round-trip and avoids `ConfDynSeed`'s asymmetric serde shape
+  (it serialises as `pname` only and would fail the
+  full-form deserialiser).

@@ -201,3 +201,19 @@ entry titled `api-change: <summary>` with a migration note and the
 `cargo public-api` diff. 1.0 is cut when the Stage 14 conformance
 suite is green, the Stage 15 fuzz soak is clean, and `cargo
 public-api` reports zero diffs over two consecutive PRs.
+
+## Implementation
+
+Stage 13 lands the surface above in:
+
+* `crates/dynomite/src/embed/mod.rs` - re-exports.
+* `crates/dynomite/src/embed/builder.rs` - [`ServerBuilder`].
+* `crates/dynomite/src/embed/server.rs` - [`Server`], [`ServerHandle`].
+* `crates/dynomite/src/embed/events.rs` - [`ServerEvent`], [`EventStream`].
+* `crates/dynomite/src/embed/snapshots.rs` - [`PeerSnapshot`],
+  [`DatacenterSnapshot`], [`RingSnapshot`].
+* `crates/dynomite/src/embed/error.rs` - [`EmbedError`].
+
+The runtime tasks (gossip, stats, metrics, accept loops) live in
+`server.rs` next to [`ServerHandle`]; they are spawned by
+[`Server::start`] and observe a single `tokio_util::sync::CancellationToken`.
