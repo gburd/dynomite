@@ -163,6 +163,7 @@ fn daemonize_with_test_conf_is_rejected() {
 }
 
 #[test]
+#[ignore = "spawns a real dynomited binary; load-correlated flaky under default-features parallel test runs. Run via `cargo nextest run --features integration --run-ignored only` or in the conformance suite."]
 fn pidfile_is_written_and_removed() {
     // Spawn dynomited with a config bound to fresh ephemeral
     // ports, wait long enough for the run loop to write the pid
