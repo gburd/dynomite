@@ -250,6 +250,23 @@ symbol is considered un-ported.
 | (new) | `dynomite::crypto::Crypto::dyn_aes_decrypt_to_vec` | Convenience that flattens an encrypted mbuf chain into a `Vec<u8>` for the DNODE handshake parser. |
 | (new) | `dynomite::crypto::pem::load_rsa_private_key_from_bytes` | In-memory PEM parser used by tests and embedders that already hold the PEM bytes. |
 
+### `dynomite.c` (the server binary) - Stage 12 partial
+
+| C symbol | Rust home | Notes |
+|---|---|---|
+| `print_help` | `dynomited::cli::print_help` | done (Stage 12); text matches `_/dynomite/src/dynomite.c::print_help` line for line. |
+| `print_version` | `dynomited::cli::print_version` | done (Stage 12); banner + ASCII logo from `_/dynomite/src/dyn_asciilogo.h` ported verbatim into `crates/dynomited/src/asciilogo.rs`. |
+| `set_default_options` | `dynomited::cli::Cli::default_values` | done (Stage 12); the defaults table mirrors the C `set_default_options` initialization order. |
+| `dn_get_options` | `dynomited::cli::Cli::parse` (clap derive) | done (Stage 12); every `getopt_long` short + long option matched 1:1 (`-h/-V/-t/-d/-D/-v/-o/-c/-p/-x/-m/-M/-g`). |
+| `dn_test_conf` | `dynomited::commands::test_conf` | done (Stage 12); produces the C-equivalent `dynomite: configuration file '<path>' syntax is valid` text on success and a parse-error report on failure. |
+| `dn_describe_stats` | `dynomited::commands::describe_stats` (delegates to `dynomite::stats::describe_stats`) | done (Stage 12). |
+| `dynomite_daemonize` | `dynomited::daemonize::daemonize` | done (Stage 12); fork + setsid + stdin/stdout/stderr redirection via `nix::unistd`; no `unsafe` blocks needed (nix wraps the primitives). |
+| `dynomite_pidfile_create` / `dynomite_pidfile_remove` | `dynomited::pidfile::PidFile::{create, drop}` | done (Stage 12); exclusive flock via `nix::fcntl::Flock`, RAII removal on drop. |
+| `dn_pre_run` / `dn_run` / `dn_post_run` | `dynomited::server::run_server` | deferred to Stage 12b (the async run loop + signal handling + Redis-backed integration test). |
+| `dn_signal_handlers` | `dynomited::signals` | deferred to Stage 12b. |
+| `dn_get_loglevel` / `dn_set_loglevel` | folded into `dynomite::core::log` (Stage 1) | done (Stage 1). |
+
+
 ## src/event/
 
 The per-platform reactor (`dyn_event.h`, `dyn_epoll.c`, `dyn_kqueue.c`,
