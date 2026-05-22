@@ -123,6 +123,14 @@ pub struct ClusterDispatcher {
     /// encoded onto the wire and shipped to the [`crate::net::ServerConn`]
     /// task that drives the redis / memcache backend.
     backend: Option<mpsc::Sender<OutboundRequest>>,
+    /// Per-peer outbound channel for cross-DC fan-out. Keyed by
+    /// `Peer::idx`. When a `DispatchPlan::Replicas` plan names a
+    /// non-local peer, the dispatcher forwards via the matching
+    /// channel to a `DnodeServerConn` task. Peers without a
+    /// wired channel are skipped (`Pending`); when no replica
+    /// is reachable for the consistency level the dispatcher
+    /// falls back to a `DynomiteNoQuorumAchieved` error response.
+    peer_backends: std::collections::HashMap<u32, mpsc::Sender<OutboundRequest>>,
 }
 
 impl ClusterDispatcher {
@@ -160,6 +168,7 @@ impl ClusterDispatcher {
         Self {
             pool,
             backend: None,
+            peer_backends: std::collections::HashMap::new(),
         }
     }
 
@@ -177,10 +186,37 @@ impl ClusterDispatcher {
         self
     }
 
+    /// Attach an outbound channel for a single peer (by
+    /// `Peer::idx`). The supplied sender feeds a
+    /// [`crate::net::DnodeServerConn`] task that writes
+    /// dnode-framed requests to the peer's `dyn_listen` and
+    /// routes the response back through the per-request
+    /// responder channel.
+    ///
+    /// Wiring is additive: call this once per non-local peer.
+    /// Calling it again with the same `peer_idx` replaces the
+    /// previous sender (used by reconnect supervisors that
+    /// rebuild channels on restart).
+    #[must_use]
+    pub fn with_peer_backend(
+        mut self,
+        peer_idx: u32,
+        sender: mpsc::Sender<OutboundRequest>,
+    ) -> Self {
+        self.peer_backends.insert(peer_idx, sender);
+        self
+    }
+
     /// Whether a backend channel is wired.
     #[must_use]
     pub fn has_backend(&self) -> bool {
         self.backend.is_some()
+    }
+
+    /// Number of peer-backend channels wired.
+    #[must_use]
+    pub fn peer_backend_count(&self) -> usize {
+        self.peer_backends.len()
     }
 
     /// Borrow the underlying pool.
@@ -419,7 +455,62 @@ impl Dispatcher for ClusterDispatcher {
                 }
                 DispatchOutcome::Pending
             }
-            DispatchPlan::Replicas(_) => DispatchOutcome::Pending,
+            DispatchPlan::Replicas(targets) => {
+                if targets.is_empty() {
+                    return DispatchOutcome::Drop;
+                }
+                // Snapshot the wire bytes once. Each target gets
+                // its own clone (the ServerConn / DnodeServerConn
+                // takes ownership of `bytes`).
+                let bytes: Vec<u8> = req
+                    .mbufs()
+                    .iter()
+                    .flat_map(|b| b.readable().to_vec())
+                    .collect();
+                if bytes.is_empty() {
+                    return DispatchOutcome::Drop;
+                }
+                let mut sent = 0usize;
+                for target in &targets {
+                    if target.is_local {
+                        if let Some(tx) = self.backend.as_ref() {
+                            let env = OutboundRequest {
+                                bytes: bytes.clone(),
+                                req_id: req.id(),
+                                responder: responder.clone(),
+                            };
+                            if tx.try_send(env).is_ok() {
+                                sent += 1;
+                            }
+                        }
+                    } else if let Some(tx) = self.peer_backends.get(&target.peer_idx) {
+                        let env = OutboundRequest {
+                            bytes: bytes.clone(),
+                            req_id: req.id(),
+                            responder: responder.clone(),
+                        };
+                        if tx.try_send(env).is_ok() {
+                            sent += 1;
+                        }
+                    }
+                }
+                if sent == 0 {
+                    let err_type =
+                        if matches!(req.ty(), MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
+                            MsgType::RspRedisError
+                        } else {
+                            MsgType::RspMcServerError
+                        };
+                    let rsp = crate::msg::response::make_error(
+                        &req,
+                        err_type,
+                        0,
+                        crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
+                    );
+                    return DispatchOutcome::Error(rsp);
+                }
+                DispatchOutcome::Pending
+            }
         }
     }
 }

@@ -63,7 +63,7 @@ use dynomite::core::log::reopen_on_sighup;
 use dynomite::hashkit::DynToken;
 use dynomite::io::reactor::{ConnRole, TcpTransport};
 use dynomite::net::server::OutboundRequest;
-use dynomite::net::{Conn, DnodeProxy, NetError, Proxy};
+use dynomite::net::{Conn, DnodeProxy, DnodeServerConn, NetError, Proxy};
 use dynomite::stats::{Snapshot, StatsServer};
 
 use crate::signals::{SignalEvent, SignalSet};
@@ -130,6 +130,7 @@ pub struct Server {
     dnode_proxy: Option<DnodeProxy>,
     stats: Option<StatsServer>,
     backend_handle: Option<JoinHandle<Result<(), NetError>>>,
+    peer_handles: Vec<JoinHandle<Result<(), NetError>>>,
     listen_addr: SocketAddr,
     dyn_listen_addr: Option<SocketAddr>,
     stats_listen_addr: Option<SocketAddr>,
@@ -295,9 +296,61 @@ impl Server {
             backend_supervisor(backend_addr, backend_rx, backend_data_store).await
         });
 
-        let dispatcher = Arc::new(
-            ClusterDispatcher::new(server_pool.clone()).with_backend(backend_tx),
-        );
+        // Spawn one peer supervisor per non-local peer so the
+        // dispatcher can fan `Replicas` plans across the
+        // cluster. Each supervisor owns one `mpsc::Receiver`,
+        // dials the peer's `dyn_listen` (the `endpoint()`
+        // address), and drives a `DnodeServerConn` with bounded
+        // reconnect backoff. Failures are non-fatal at startup;
+        // the supervisor reports them via `tracing::warn!` and
+        // keeps trying.
+        let mut dispatcher = ClusterDispatcher::new(server_pool.clone()).with_backend(backend_tx);
+        let mut peer_handles: Vec<JoinHandle<Result<(), NetError>>> = Vec::new();
+        let peer_channel_capacity = 256usize;
+        for peer in server_pool.peers().read().iter() {
+            if peer.is_local() {
+                continue;
+            }
+            let peer_idx = peer.idx();
+            let host = peer.endpoint().host().to_string();
+            let port = peer.endpoint().port();
+            // Resolve once. We log and continue on failure - the
+            // supervisor will then sit on the channel and silently
+            // discard any forwarded requests until the operator
+            // fixes the seed entry.
+            use std::net::ToSocketAddrs;
+            let resolved = match (host.as_str(), port).to_socket_addrs() {
+                Ok(mut iter) => iter.next(),
+                Err(e) => {
+                    tracing::warn!(
+                        peer = %format!("{host}:{port}"),
+                        error = %e,
+                        "could not resolve peer endpoint; skipping"
+                    );
+                    continue;
+                }
+            };
+            let Some(peer_addr) = resolved else {
+                tracing::warn!(
+                    peer = %format!("{host}:{port}"),
+                    "peer endpoint resolved to empty address list; skipping"
+                );
+                continue;
+            };
+            let (peer_tx, peer_rx) =
+                tokio::sync::mpsc::channel::<OutboundRequest>(peer_channel_capacity);
+            dispatcher = dispatcher.with_peer_backend(peer_idx, peer_tx);
+            let handle: JoinHandle<Result<(), NetError>> =
+                tokio::spawn(async move { peer_supervisor(peer_addr, peer_rx).await });
+            peer_handles.push(handle);
+            tracing::info!(
+                peer_idx,
+                peer_addr = %peer_addr,
+                "spawned peer supervisor"
+            );
+        }
+
+        let dispatcher = Arc::new(dispatcher);
 
         let proxy = Proxy::bind(listen_addr, dispatcher.clone())
             .map_err(ServerError::Net)?
@@ -328,6 +381,7 @@ impl Server {
             dnode_proxy,
             stats,
             backend_handle: Some(backend_handle),
+            peer_handles,
             listen_addr,
             dyn_listen_addr,
             stats_listen_addr,
@@ -409,6 +463,7 @@ impl Server {
             dnode_proxy,
             stats,
             backend_handle,
+            peer_handles,
             listen_addr,
             dyn_listen_addr,
             stats_listen_addr,
@@ -496,6 +551,10 @@ impl Server {
         // channel and the driver will return Ok. We still abort
         // here as a belt-and-braces against a stuck backend.
         if let Some(h) = backend_handle {
+            h.abort();
+            let _ = h.await;
+        }
+        for h in peer_handles {
             h.abort();
             let _ = h.await;
         }
@@ -788,6 +847,72 @@ async fn run_one_backend_conn(
                 }
             }
         }
+    }
+}
+
+/// Long-running supervisor for one outbound peer connection.
+/// Maintains a `DnodeServerConn` against the peer's `dyn_listen`
+/// address, reconnecting with capped exponential backoff when
+/// the underlying TCP / dnode driver returns an error. Owns the
+/// receiver half of the dispatcher's per-peer outbound channel
+/// and exits when that channel is closed (the dispatcher dropped).
+async fn peer_supervisor(
+    addr: SocketAddr,
+    mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
+) -> Result<(), NetError> {
+    let mut backoff_ms: u64 = 100;
+    let backoff_max_ms: u64 = 5_000;
+    loop {
+        if rx.is_closed() && rx.is_empty() {
+            return Ok(());
+        }
+        let connect = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await;
+        let stream = match connect {
+            Ok(Ok(s)) => {
+                backoff_ms = 100;
+                s
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(peer = %addr, error = %e, "peer connect failed; retrying");
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                continue;
+            }
+            Err(_) => {
+                tracing::warn!(peer = %addr, "peer connect timed out; retrying");
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                continue;
+            }
+        };
+        let _ = stream.set_nodelay(true);
+        let conn = Conn::new(
+            Box::new(TcpTransport::new(stream, ConnRole::DnodePeerServer)),
+            ConnRole::DnodePeerServer,
+        );
+        // Build a fresh DnodeServerConn each iteration. The
+        // borrowed-receiver `run_with` keeps `rx` owned by us so
+        // we can reconnect without losing pending requests.
+        let mut driver = DnodeServerConn::new(
+            conn,
+            // Placeholder receiver; `run_with` ignores
+            // `self.requests` and reads from the borrowed one.
+            tokio::sync::mpsc::channel::<OutboundRequest>(1).1,
+        );
+        if let Err(e) = driver.run_with(&mut rx).await {
+            tracing::warn!(
+                peer = %addr,
+                error = %e,
+                "peer connection ended; reconnecting"
+            );
+        } else {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
