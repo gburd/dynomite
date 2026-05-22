@@ -38,7 +38,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 clap = { version = "4.5", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 thiserror = "1.0"
 anyhow = "1.0"
 crossbeam-channel = "0.5"
@@ -73,6 +73,18 @@ predicates = "3.1"
 tempfile = "3.13"
 clap_mangen = "0.2"
 rcgen = "0.13"
+
+# --- log-format / OTLP work (deliverables: per-format log output + OTLP
+# log export). `time` powers the syslog timestamps, `nix` already in the
+# tree provides `gethostname`, and the four `opentelemetry*` crates are
+# the opt-in OTLP appender stack pulled in only when the configuration
+# enables it. `regex` is dev-only (used by the format-shape tests).
+time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
+opentelemetry = { version = "0.32", features = ["logs"] }
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "logs"] }
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "logs", "tls"] }
+opentelemetry-appender-tracing = "0.32"
+regex = "1"
 
 [profile.release]
 lto = "thin"
