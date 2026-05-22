@@ -53,10 +53,20 @@ dyn_pid() {
 
 redis_pid() {
     if [ -f "$RUN/redis.pid" ]; then
-        local pid; pid=$(cat "$RUN/redis.pid" 2>/dev/null)
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            printf '%s' "$pid"; return 0
-        fi
+        local raw; raw=$(cat "$RUN/redis.pid" 2>/dev/null)
+        case "$raw" in
+            container:*)
+                # Container variant: report the container name as a
+                # synthetic identifier the injector can bounce via
+                # the container runtime.
+                printf '%s' "$raw"; return 0
+                ;;
+            *)
+                if [ -n "$raw" ] && kill -0 "$raw" 2>/dev/null; then
+                    printf '%s' "$raw"; return 0
+                fi
+                ;;
+        esac
     fi
     return 1
 }
@@ -109,24 +119,42 @@ while true; do
     fi
 
     if [ "$NOW" -ge "$NEXT_REDIS_BOUNCE" ]; then
-        if pid=$(redis_pid); then
-            event redis_bounce "{\"pid\":$pid}"
-            kill -KILL "$pid" 2>/dev/null || true
-            sleep 1
-            # restart redis with the same args
-            REDIS=$(command -v redis-server || true)
-            if [ -n "$REDIS" ]; then
-                nohup "$REDIS" \
-                    --port "$DATASTORE_PORT" \
-                    --bind 127.0.0.1 \
-                    --daemonize no \
-                    --appendonly no \
-                    --save "" \
-                    --dir "$RUN" \
-                    --logfile "$LOGS/redis-$DC_NAME.log" \
-                    > /dev/null 2>&1 &
-                echo $! > "$RUN/redis.pid"
-            fi
+        if id=$(redis_pid); then
+            event redis_bounce "{\"id\":\"$id\"}"
+            case "$id" in
+                container:*)
+                    name="${id#container:}"
+                    if command -v podman >/dev/null 2>&1; then
+                        podman rm -f "$name" >/dev/null 2>&1 || true
+                    elif command -v docker >/dev/null 2>&1; then
+                        docker rm -f "$name" >/dev/null 2>&1 || true
+                    fi
+                    sleep 1
+                    # Restart via start-host.sh's container path.
+                    bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
+                        "$DC_NAME" "$TOKENS" "$SEEDS" \
+                        "$DATASTORE_PORT" "$DYN_LISTEN_PORT" \
+                        "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" \
+                        >> "$LOGS/restart-redis-$DC_NAME.log" 2>&1 || true
+                    ;;
+                *)
+                    kill -KILL "$id" 2>/dev/null || true
+                    sleep 1
+                    REDIS=$(command -v redis-server || true)
+                    if [ -n "$REDIS" ]; then
+                        nohup "$REDIS" \
+                            --port "$DATASTORE_PORT" \
+                            --bind 127.0.0.1 \
+                            --daemonize no \
+                            --appendonly no \
+                            --save "" \
+                            --dir "$RUN" \
+                            --logfile "$LOGS/redis-$DC_NAME.log" \
+                            > /dev/null 2>&1 &
+                        echo $! > "$RUN/redis.pid"
+                    fi
+                    ;;
+            esac
         fi
         NEXT_REDIS_BOUNCE=$(( $(date +%s) + (RANDOM % 600 + 1200) ))
     fi

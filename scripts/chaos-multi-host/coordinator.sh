@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Multi-host chaos coordinator.
+# Multi-host chaos coordinator (pass 1).
 #
 # Drives a 3-DC dynomite cluster across:
 #
@@ -9,18 +9,26 @@
 #   nuc    (LAN, via arnold ProxyJump) - DC3, FreeBSD 15 amd64
 #
 # Each host runs:
-#   * 1 redis-server on 127.0.0.1:17100 (datastore)
+#   * 1 redis (native on floki/nuc, podman container on arnold)
 #   * 1 dynomited bound on 0.0.0.0 with peer/client/stats ports
-#   * 1 workload-driver.py that issues every Redis feature class
-#   * 1 chaos-injector.sh that SIGSTOP/SIGKILLs dynomited periodically
+#   * 1 workload-driver.py issuing every Redis feature class to
+#     127.0.0.1:CLIENT_LISTEN_PORT (the local dynomited)
+#   * 1 chaos-injector.sh that SIGSTOP/SIGKILLs dynomited and
+#     periodically bounces redis
 #
-# Inter-host networking:
-#   floki <-> arnold  : direct via Tailscale 100.x.x.x
-#   arnold <-> nuc    : direct via LAN 192.168.1.x
-#   floki <-> nuc     : via SSH local-forward through arnold
+# Pass 1 NOTE: the dynomited binary does not yet wire outbound
+# peer connections, so traffic does NOT cross between DCs. Each
+# DC operates independently. With identical tokens on every node
+# and DC_ONE consistency this is consistent: every key has a
+# local replica. The chaos test exercises:
+#   - process stability under SIGSTOP / SIGKILL
+#   - backend reconnect after redis bounce
+#   - cross-platform behavior (Linux + FreeBSD)
+#   - pidfile / signal handling
+#   - 2-hour soak
 #
-# After CHAOS_DURATION_SECS the coordinator tears everything down,
-# rsyncs all logs back to floki, and runs the report script.
+# When outbound peer connections land, switch to per-DC tokens
+# and DC_EACH_SAFE_QUORUM writes to exercise cross-DC routing.
 
 set -euo pipefail
 
@@ -33,26 +41,18 @@ REPO="/home/gburd/ws/dynomite"
 LOCAL_LOGS="$REPO/target/chaos-multi-host/$RUN_ID"
 mkdir -p "$LOCAL_LOGS"
 
-# Peer/client/stats ports (the same on every host).
 DATASTORE_PORT=17100
 DYN_LISTEN_PORT=18101
 CLIENT_LISTEN_PORT=18102
 STATS_LISTEN_PORT=22222
 
-# SSH-tunnel-only ports. Used to reach nuc:18101 from floki, and
-# floki:18101 from nuc, both via arnold.
-NUC_TUNNEL_PORT_FLOKI=19501       # floki uses this to reach nuc
-FLOKI_TUNNEL_PORT_NUC=19501       # nuc uses this to reach floki
+# Same token on every node makes each DC a full replica. With
+# DC_ONE consistency every read / write routes locally.
+TOKENS="101134286"
 
-# Per-DC tokens picked to land on different ring positions.
-# Token ring is 32-bit big-int; these are evenly spaced.
-TOKENS_FLOKI="0"
-TOKENS_ARNOLD="1431655765"
-TOKENS_NUC="2863311530"
-
-# Tailscale + LAN IPs.
 FLOKI_TS_IP="100.104.16.13"
 ARNOLD_TS_IP="100.117.233.104"
+ARNOLD_LAN_IP="192.168.1.37"
 NUC_LAN_IP="192.168.1.61"
 
 SSH_KEY="$HOME/.ssh/id_ed25519"
@@ -69,160 +69,103 @@ NUC_RSYNC_E="ssh ${SSH_BASE_OPTS[*]} -o ProxyJump=arnold"
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOCAL_LOGS/coordinator.log" ; }
 
-# ---- start the SSH tunnels ----
+# Each host's view of the cluster: floki sees arnold via
+# Tailscale and nuc as effectively unreachable (no cross-host
+# routing yet); arnold can reach both floki (Tailscale) and nuc
+# (LAN); nuc reaches arnold via LAN, floki effectively
+# unreachable. The seed lists below reflect the topology so
+# `dyn_seeds` is parsed correctly even though the binary does
+# not yet open outbound peer connections.
 
-start_tunnels() {
-    log "starting SSH tunnels via arnold"
-    # floki -> nuc:DYN_LISTEN_PORT
-    env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" \
-        -fN -L "${NUC_TUNNEL_PORT_FLOKI}:${NUC_LAN_IP}:${DYN_LISTEN_PORT}" \
-        arnold &
-    TUN_PID_FLOKI_TO_NUC=$!
-    log "  floki -> nuc tunnel pid=$TUN_PID_FLOKI_TO_NUC (local:$NUC_TUNNEL_PORT_FLOKI -> $NUC_LAN_IP:$DYN_LISTEN_PORT)"
-
-    # The nuc -> floki tunnel runs ON nuc.
-    "${NUC_SSH[@]}" "nohup ssh -o IdentitiesOnly=yes -i \$HOME/.ssh/id_ed25519 \
-        -o ControlMaster=no -o ControlPath=none \
-        -o StrictHostKeyChecking=accept-new \
-        -fN -L ${FLOKI_TUNNEL_PORT_NUC}:${FLOKI_TS_IP}:${DYN_LISTEN_PORT} \
-        gburd@arnold > /scratch/dynomite-chaos/logs/nuc-tunnel.log 2>&1 < /dev/null"
-
-    sleep 2
-    # Verify the floki -> nuc tunnel is up.
-    if (echo; sleep 0.1) | nc -q 1 127.0.0.1 "$NUC_TUNNEL_PORT_FLOKI" 2>/dev/null; then
-        log "  floki -> nuc tunnel: connection acceptable"
-    else
-        log "  floki -> nuc tunnel: NOT yet usable (will retry once dynomited is up on nuc)"
-    fi
-}
-
-# ---- per-host setup ----
-
-# Each host's seed list is host-specific because the address each
-# host uses to reach a given peer depends on the host's network
-# position.
-
-write_floki_config() {
+floki_seeds() {
     cat <<SEEDS
-    - $ARNOLD_TS_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS_ARNOLD
-    - 127.0.0.1:$NUC_TUNNEL_PORT_FLOKI:rack-1:dc-nuc:$TOKENS_NUC
+    - $ARNOLD_TS_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS
 SEEDS
 }
 
-write_arnold_config() {
+arnold_seeds() {
     cat <<SEEDS
-    - $FLOKI_TS_IP:$DYN_LISTEN_PORT:rack-1:dc-floki:$TOKENS_FLOKI
-    - $NUC_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-nuc:$TOKENS_NUC
+    - $FLOKI_TS_IP:$DYN_LISTEN_PORT:rack-1:dc-floki:$TOKENS
+    - $NUC_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-nuc:$TOKENS
 SEEDS
 }
 
-write_nuc_config() {
+nuc_seeds() {
     cat <<SEEDS
-    - 127.0.0.1:$FLOKI_TUNNEL_PORT_NUC:rack-1:dc-floki:$TOKENS_FLOKI
-    - $NUC_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS_ARNOLD
-SEEDS
-}
-# Actually arnold's IP from nuc is the LAN address.
-write_nuc_config() {
-    cat <<SEEDS
-    - 127.0.0.1:$FLOKI_TUNNEL_PORT_NUC:rack-1:dc-floki:$TOKENS_FLOKI
-    - 192.168.1.37:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS_ARNOLD
+    - $ARNOLD_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS
 SEEDS
 }
 
-# ---- bring up each host ----
+# ---- per-host start ----
 
-write_start_args_local() {
-    cat > "$REPO/.start-args.floki" <<EOF
-TOKENS=$TOKENS_FLOKI
-SEEDS=$(write_floki_config | base64 -w0)
+start_host() {
+    local label="$1"; shift
+    local seeds_str="$1"; shift
+    local runner=("$@")
+    log "starting $label"
+    "${runner[@]}" "mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs"
+    # Persist start-args so the chaos injector can restart
+    # dynomited with the same arguments after a SIGKILL.
+    "${runner[@]}" "cat > /scratch/dynomite-chaos/run/seeds.yml <<'EOF'
+$seeds_str
+EOF
+cat > /scratch/dynomite-chaos/run/start-args <<EOF
+TOKENS='$TOKENS'
+SEEDS=\$(cat /scratch/dynomite-chaos/run/seeds.yml)
 DATASTORE_PORT=$DATASTORE_PORT
 DYN_LISTEN_PORT=$DYN_LISTEN_PORT
 CLIENT_LISTEN_PORT=$CLIENT_LISTEN_PORT
 STATS_LISTEN_PORT=$STATS_LISTEN_PORT
-EOF
+EOF"
+    # FreeBSD's /bin/sh is a different shell than bash; pick
+    # bash explicitly for the start-host script.
+    local bash_path=/bin/bash
+    case "$label" in
+        dc-nuc) bash_path=/usr/local/bin/bash ;;
+    esac
+    "${runner[@]}" "$bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/start-host.sh \
+        $label '$TOKENS' '$seeds_str' \
+        $DATASTORE_PORT $DYN_LISTEN_PORT $CLIENT_LISTEN_PORT $STATS_LISTEN_PORT" \
+        >> "$LOCAL_LOGS/$label-start.log" 2>&1
+    log "  $label dynomited up"
 }
 
 start_floki() {
-    log "starting floki (DC=dc-floki)"
-    mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs
-    # On floki we use the in-tree binary at target/release.
-    if [ ! -x "$REPO/target/release/dynomited" ]; then
-        log "  building dynomited on floki..."
-        (cd "$REPO" && cargo build --release --locked --bin dynomited >> "$LOCAL_LOGS/floki-build.log" 2>&1)
-    fi
-    ln -sf "$REPO/target/release/dynomited" /scratch/dynomite-chaos/build/release/dynomited 2>/dev/null || true
-    mkdir -p /scratch/dynomite-chaos/build/release
+    log "preparing floki"
+    mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs /scratch/dynomite-chaos/build/release
     cp -f "$REPO/target/release/dynomited" /scratch/dynomite-chaos/build/release/dynomited
-    # Save start-args so the injector can restart with the same shape.
-    SEEDS_TMP="$LOCAL_LOGS/floki-seeds.yml"
-    write_floki_config > "$SEEDS_TMP"
+    # rsync source so the injector can find scripts via the same
+    # /scratch/dynomite-chaos/src layout used on the remotes.
+    mkdir -p /scratch/dynomite-chaos/src
+    rsync -a --delete --exclude target/ --exclude .git/ --exclude _/dynomite/.git/ \
+        "$REPO"/ /scratch/dynomite-chaos/src/
+    SEEDS_STR=$(floki_seeds)
+    cat > /scratch/dynomite-chaos/run/seeds.yml <<EOF
+$SEEDS_STR
+EOF
     cat > /scratch/dynomite-chaos/run/start-args <<EOF
-TOKENS='$TOKENS_FLOKI'
-SEEDS=\$(cat $SEEDS_TMP)
+TOKENS='$TOKENS'
+SEEDS=\$(cat /scratch/dynomite-chaos/run/seeds.yml)
 DATASTORE_PORT=$DATASTORE_PORT
 DYN_LISTEN_PORT=$DYN_LISTEN_PORT
 CLIENT_LISTEN_PORT=$CLIENT_LISTEN_PORT
 STATS_LISTEN_PORT=$STATS_LISTEN_PORT
 EOF
     bash "$REPO/scripts/chaos-multi-host/start-host.sh" \
-        dc-floki "$TOKENS_FLOKI" "$(write_floki_config)" \
+        dc-floki "$TOKENS" "$SEEDS_STR" \
         "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" \
-        >> "$LOCAL_LOGS/floki-start.log" 2>&1
-    log "  floki dynomited up"
-}
-
-start_arnold() {
-    log "starting arnold (DC=dc-arnold)"
-    "${ARNOLD_SSH[@]}" "mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs"
-    SEEDS_STR=$(write_arnold_config)
-    "${ARNOLD_SSH[@]}" "cat > /scratch/dynomite-chaos/run/seeds <<'EOF'
-$SEEDS_STR
-EOF"
-    "${ARNOLD_SSH[@]}" "cat > /scratch/dynomite-chaos/run/start-args <<EOF
-TOKENS='$TOKENS_ARNOLD'
-SEEDS=\\\$(cat /scratch/dynomite-chaos/run/seeds)
-DATASTORE_PORT=$DATASTORE_PORT
-DYN_LISTEN_PORT=$DYN_LISTEN_PORT
-CLIENT_LISTEN_PORT=$CLIENT_LISTEN_PORT
-STATS_LISTEN_PORT=$STATS_LISTEN_PORT
-EOF"
-    "${ARNOLD_SSH[@]}" "bash /scratch/dynomite-chaos/src/scripts/chaos-multi-host/start-host.sh \
-        dc-arnold '$TOKENS_ARNOLD' '$SEEDS_STR' \
-        $DATASTORE_PORT $DYN_LISTEN_PORT $CLIENT_LISTEN_PORT $STATS_LISTEN_PORT" \
-        >> "$LOCAL_LOGS/arnold-start.log" 2>&1
-    log "  arnold dynomited up"
-}
-
-start_nuc() {
-    log "starting nuc (DC=dc-nuc)"
-    "${NUC_SSH[@]}" "mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs"
-    SEEDS_STR=$(write_nuc_config)
-    "${NUC_SSH[@]}" "cat > /scratch/dynomite-chaos/run/seeds <<'EOF'
-$SEEDS_STR
-EOF"
-    "${NUC_SSH[@]}" "cat > /scratch/dynomite-chaos/run/start-args <<EOF
-TOKENS='$TOKENS_NUC'
-SEEDS=\\\$(cat /scratch/dynomite-chaos/run/seeds)
-DATASTORE_PORT=$DATASTORE_PORT
-DYN_LISTEN_PORT=$DYN_LISTEN_PORT
-CLIENT_LISTEN_PORT=$CLIENT_LISTEN_PORT
-STATS_LISTEN_PORT=$STATS_LISTEN_PORT
-EOF"
-    # nuc is FreeBSD; bash exists but may live at /usr/local/bin/bash.
-    "${NUC_SSH[@]}" "/usr/local/bin/bash /scratch/dynomite-chaos/src/scripts/chaos-multi-host/start-host.sh \
-        dc-nuc '$TOKENS_NUC' '$SEEDS_STR' \
-        $DATASTORE_PORT $DYN_LISTEN_PORT $CLIENT_LISTEN_PORT $STATS_LISTEN_PORT" \
-        >> "$LOCAL_LOGS/nuc-start.log" 2>&1
-    log "  nuc dynomited up"
+        >> "$LOCAL_LOGS/dc-floki-start.log" 2>&1
+    log "  dc-floki dynomited up"
 }
 
 # ---- workload + injector ----
 
 start_workload() {
-    local label="$1" host_runner=("${@:2}")
+    local label="$1"; shift
+    local bash_path="$1"; shift
+    local runner=("$@")
     log "starting workload-driver on $label"
-    "${host_runner[@]}" "nohup python3 /scratch/dynomite-chaos/src/scripts/chaos-multi-host/workload-driver.py \
+    "${runner[@]}" "nohup python3 /scratch/dynomite-chaos/src/scripts/chaos-multi-host/workload-driver.py \
         --host 127.0.0.1 --port $CLIENT_LISTEN_PORT \
         --label $label \
         --out /scratch/dynomite-chaos/logs/workload-$label.ndjson \
@@ -233,9 +176,11 @@ start_workload() {
 }
 
 start_injector() {
-    local label="$1" host_runner=("${@:2}")
+    local label="$1"; shift
+    local bash_path="$1"; shift
+    local runner=("$@")
     log "starting chaos-injector on $label"
-    "${host_runner[@]}" "nohup bash /scratch/dynomite-chaos/src/scripts/chaos-multi-host/chaos-injector.sh $label \
+    "${runner[@]}" "nohup $bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/chaos-injector.sh $label \
         > /scratch/dynomite-chaos/logs/injector-$label.stderr 2>&1 < /dev/null &
     echo \$! > /scratch/dynomite-chaos/run/injector.pid"
 }
@@ -244,23 +189,28 @@ start_injector() {
 
 teardown() {
     log "==> TEARDOWN"
-    # Kill local processes on every host.
-    for spec in "floki:bash -lc" \
-                "arnold:${ARNOLD_SSH[*]}" \
-                "nuc:${NUC_SSH[*]}"; do
-        label="${spec%%:*}"
-        runner="${spec#*:}"
+    for spec in \
+        "dc-floki:bash:bash -lc" \
+        "dc-arnold:bash:${ARNOLD_SSH[*]}" \
+        "dc-nuc:bash:${NUC_SSH[*]}"; do
+        IFS=: read -r label _ runner <<<"$spec"
         log "  teardown $label"
-        $runner "for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid /scratch/dynomite-chaos/run/dynomited.pid /scratch/dynomite-chaos/run/redis.pid; do \
+        $runner "for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid; do \
             [ -f \$f ] && pid=\$(cat \$f) && kill -TERM \$pid 2>/dev/null; \
         done; sleep 2; \
-        for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid /scratch/dynomite-chaos/run/dynomited.pid /scratch/dynomite-chaos/run/redis.pid; do \
+        for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid /scratch/dynomite-chaos/run/dynomited.pid; do \
             [ -f \$f ] && pid=\$(cat \$f) && kill -KILL \$pid 2>/dev/null; \
         done; \
-        true" >> "$LOCAL_LOGS/teardown-$label.log" 2>&1 || true
+        if [ -f /scratch/dynomite-chaos/run/redis.pid ]; then \
+            id=\$(cat /scratch/dynomite-chaos/run/redis.pid); \
+            case \$id in \
+                container:*) (command -v podman >/dev/null && podman rm -f \${id#container:}) || (command -v docker >/dev/null && docker rm -f \${id#container:}); ;; \
+                *) kill -KILL \$id 2>/dev/null; ;; \
+            esac; \
+        fi; \
+        true" >> "$LOCAL_LOGS/$label-teardown.log" 2>&1 || true
     done
 
-    # Pull logs back.
     log "  rsync arnold logs"
     rsync -az -e "$ARNOLD_RSYNC_E" arnold:/scratch/dynomite-chaos/logs/ "$LOCAL_LOGS/arnold-logs/" || true
     log "  rsync nuc logs"
@@ -268,13 +218,7 @@ teardown() {
     log "  copy floki logs"
     cp -r /scratch/dynomite-chaos/logs "$LOCAL_LOGS/floki-logs" 2>/dev/null || true
 
-    # Tear down tunnels.
-    if [ -n "${TUN_PID_FLOKI_TO_NUC:-}" ]; then
-        kill -TERM "$TUN_PID_FLOKI_TO_NUC" 2>/dev/null || true
-    fi
-    "${NUC_SSH[@]}" 'pkill -f "ssh.*-fN.*-L 19501" || true' || true
-
-    log "  done"
+    log "  done; logs at $LOCAL_LOGS"
 }
 
 # ---- main ----
@@ -282,30 +226,29 @@ teardown() {
 trap teardown EXIT INT TERM
 
 log "================================================================"
-log "multi-host chaos coordinator starting; run id=$RUN_ID, duration=$DURATION s"
+log "multi-host chaos coordinator (pass 1) starting"
+log "  run id: $RUN_ID"
+log "  duration: $DURATION s"
+log "  logs: $LOCAL_LOGS"
 log "================================================================"
 
-# Sanity: source must already be on arnold and nuc.
 "${ARNOLD_SSH[@]}" "[ -d /scratch/dynomite-chaos/src ]" || { log "arnold:src missing"; exit 1; }
 "${NUC_SSH[@]}" "[ -d /scratch/dynomite-chaos/src ]" || { log "nuc:src missing"; exit 1; }
 
-start_tunnels
-
-# Bring up the cluster.
 start_floki
-start_arnold
-start_nuc
+start_host dc-arnold "$(arnold_seeds)" "${ARNOLD_SSH[@]}"
+start_host dc-nuc    "$(nuc_seeds)"    "${NUC_SSH[@]}"
 
-# Wait for gossip convergence (peers should see each other within 30s).
-sleep 30
+# Brief settle so any deferred state is in place.
+sleep 5
 
-start_workload dc-floki bash -lc
-start_workload dc-arnold "${ARNOLD_SSH[@]}"
-start_workload dc-nuc "${NUC_SSH[@]}"
+start_workload dc-floki  /bin/bash             bash -lc
+start_workload dc-arnold /bin/bash             "${ARNOLD_SSH[@]}"
+start_workload dc-nuc    /usr/local/bin/bash   "${NUC_SSH[@]}"
 
-start_injector dc-floki bash -lc
-start_injector dc-arnold "${ARNOLD_SSH[@]}"
-start_injector dc-nuc "${NUC_SSH[@]}"
+start_injector dc-floki  /bin/bash             bash -lc
+start_injector dc-arnold /bin/bash             "${ARNOLD_SSH[@]}"
+start_injector dc-nuc    /usr/local/bin/bash   "${NUC_SSH[@]}"
 
 log "==> all components up; sleeping for $DURATION seconds"
 sleep "$DURATION"

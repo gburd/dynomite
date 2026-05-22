@@ -31,21 +31,56 @@ else
 fi
 
 REDIS=$(command -v redis-server || true)
-[ -n "$REDIS" ] || { echo "redis-server not on PATH"; exit 1; }
+if [ -z "$REDIS" ]; then
+    # No native redis-server. Try a container runtime as a
+    # fallback (this lets arnold run without us installing
+    # anything on the host).
+    if command -v podman >/dev/null 2>&1; then
+        REDIS_CONTAINER_TOOL=podman
+    elif command -v docker >/dev/null 2>&1; then
+        REDIS_CONTAINER_TOOL=docker
+    else
+        echo "redis-server not on PATH and no podman/docker available" >&2
+        exit 1
+    fi
+fi
 
 # Start redis-server in the background.
-echo "==> starting redis-server on $DATASTORE_PORT"
-nohup "$REDIS" \
-    --port "$DATASTORE_PORT" \
-    --bind 127.0.0.1 \
-    --daemonize no \
-    --appendonly no \
-    --save "" \
-    --dir "$RUN" \
-    --logfile "$LOGS/redis-$DC_NAME.log" \
-    > /dev/null 2>&1 &
-REDIS_PID=$!
-echo "$REDIS_PID" > "$RUN/redis.pid"
+echo "==> starting redis on $DATASTORE_PORT"
+if [ -n "$REDIS" ]; then
+    nohup "$REDIS" \
+        --port "$DATASTORE_PORT" \
+        --bind 127.0.0.1 \
+        --daemonize no \
+        --appendonly no \
+        --save "" \
+        --dir "$RUN" \
+        --logfile "$LOGS/redis-$DC_NAME.log" \
+        > /dev/null 2>&1 &
+    REDIS_PID=$!
+    echo "$REDIS_PID" > "$RUN/redis.pid"
+else
+    # Container path: run redis as a host-network container so
+    # it binds 127.0.0.1:$DATASTORE_PORT directly. Use --rm and a
+    # name so we can clean it up by name on shutdown.
+    CONTAINER_NAME="dyn-chaos-redis-$DC_NAME"
+    "$REDIS_CONTAINER_TOOL" rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    "$REDIS_CONTAINER_TOOL" run -d \
+        --name "$CONTAINER_NAME" \
+        --network=host \
+        --rm \
+        docker.io/library/redis:7-alpine \
+        redis-server \
+            --port "$DATASTORE_PORT" \
+            --bind 127.0.0.1 \
+            --appendonly no \
+            --save "" \
+        > "$LOGS/redis-$DC_NAME-container.id" 2>&1
+    # The container's PID isn't directly tracked; record the
+    # container name in redis.pid so the injector knows what to
+    # bounce.
+    echo "container:$CONTAINER_NAME" > "$RUN/redis.pid"
+fi
 
 # Wait for redis to accept connections.
 for i in $(seq 1 30); do
@@ -68,8 +103,8 @@ dyn_o_mite:
   datacenter: $DC_NAME
   rack: rack-1
   data_store: 0
-  read_consistency: DC_QUORUM
-  write_consistency: DC_EACH_SAFE_QUORUM
+  read_consistency: DC_ONE
+  write_consistency: DC_ONE
   enable_gossip: true
   gos_interval: 1000
   timeout: 5000
