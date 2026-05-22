@@ -156,16 +156,12 @@ impl Proxy {
             // listener has stopped accepting). After that, abort
             // so a wedged client_loop cannot keep the proxy from
             // exiting on shutdown.
-            match tokio::time::timeout(std::time::Duration::from_millis(250), h).await {
-                Ok(Ok(_)) | Ok(Err(_)) => {}
-                Err(_) => {
-                    // The JoinHandle was consumed by `timeout`,
-                    // so we cannot abort it here; tokio will GC
-                    // it once the task yields. The runtime
-                    // shutdown that follows the proxy::run
-                    // return will reap it.
-                }
-            }
+            //
+            // Both arms of this match are intentionally no-ops:
+            // the timeout case can't abort the consumed handle
+            // (tokio will GC it on shutdown), and the
+            // task-completed case has nothing to do.
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(250), h).await;
         }
         Ok(())
     }

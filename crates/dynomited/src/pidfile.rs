@@ -139,10 +139,7 @@ impl PidFile {
             }
         }
         Err(last_err.unwrap_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("flock {}: unknown error", path.display()),
-            )
+            io::Error::other(format!("flock {}: unknown error", path.display()))
         }))
     }
 

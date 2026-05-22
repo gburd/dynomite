@@ -90,6 +90,10 @@ fn run_test_conf(cli: &Cli) -> ExitCode {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "main's run_server threads CLI parsing, log/format selection, OTLP install, daemonize, runtime build, server build, server run, and tracer-guard shutdown into a single linear flow whose order matters; splitting hides the construction-vs-shutdown ordering invariants"
+)]
 fn run_server(cli: &Cli) -> ExitCode {
     // Parse and validate the configuration before any side effect
     // so a malformed YAML never leaves a daemonized child or a

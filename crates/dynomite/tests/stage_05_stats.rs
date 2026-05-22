@@ -209,8 +209,8 @@ async fn metrics_endpoint_returns_prometheus_text() {
         .find(|l| l.to_ascii_lowercase().starts_with("content-type:"))
         .expect("Content-Type header present");
     let ct_value = ct_line
-        .splitn(2, ':')
-        .nth(1)
+        .split_once(':')
+        .map(|(_, v)| v)
         .expect("Content-Type has value")
         .trim();
     assert!(
