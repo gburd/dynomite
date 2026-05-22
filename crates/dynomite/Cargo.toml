@@ -53,6 +53,10 @@ noxu-db = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true }
 opentelemetry = { workspace = true }
 
+# Syslog-style timestamp formatting for the rfc3164/rfc5424 log
+# formats.
+time = { workspace = true }
+
 [dev-dependencies]
 hegeltest = { workspace = true }
 criterion = { workspace = true }
@@ -61,6 +65,7 @@ hex = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 rcgen = { workspace = true }
+regex = { workspace = true }
 
 [features]
 default = ["tcp", "tls"]

@@ -29,6 +29,7 @@ fn install_global_with_no_endpoint_is_a_no_op() {
 fn install_global_with_empty_endpoint_string_is_a_no_op() {
     let cfg = ObservabilityConfig {
         otlp_traces_endpoint: Some(String::new()),
+        otlp_logs_endpoint: None,
         service_name: None,
         traces_sampling: None,
     };
@@ -40,6 +41,7 @@ fn install_global_with_empty_endpoint_string_is_a_no_op() {
 async fn init_otlp_tracer_builds_provider_for_well_formed_endpoint() {
     let cfg = ObservabilityConfig {
         otlp_traces_endpoint: Some("http://127.0.0.1:4317".into()),
+        otlp_logs_endpoint: None,
         service_name: Some("dynomited-test".into()),
         traces_sampling: Some(0.5),
     };
@@ -80,6 +82,7 @@ async fn otlp_grpc_bytes_reach_mock_listener() {
 
     let cfg = ObservabilityConfig {
         otlp_traces_endpoint: Some(format!("http://{addr}")),
+        otlp_logs_endpoint: None,
         service_name: Some("dynomited-test".into()),
         traces_sampling: Some(1.0),
     };

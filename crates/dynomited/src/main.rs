@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use dynomite::conf::Config;
-use dynomite::core::log::log_init;
+use dynomite::core::log::{log_init_with_format, LogFormat};
 use dynomite::stats::describe_stats;
 use dynomited::asciilogo::ASCII_LOGO;
 use dynomited::cli::{print_usage, print_version, Cli};
@@ -124,6 +124,14 @@ fn run_server(cli: &Cli) -> ExitCode {
         }
     }
 
+    let log_format = match resolve_log_format(cli, &cfg) {
+        Ok(f) => f,
+        Err(reason) => {
+            eprintln!("dynomite: {reason}");
+            return ExitCode::from(1);
+        }
+    };
+
     // Distributed-tracing OTLP exporter must be wired BEFORE
     // `log_init` because both helpers install a global
     // `tracing` subscriber and only one global default may be
@@ -135,6 +143,12 @@ fn run_server(cli: &Cli) -> ExitCode {
     // log_init's subscriber install (the fmt layer takes its
     // place). The guard must outlive `runtime.block_on(...)` so
     // the batch span processor flushes on shutdown.
+    //
+    // Known follow-up: `install_global` does not yet honor
+    // `log_format`; when OTLP traces are on the fmt layer uses
+    // the default text format regardless of the configured
+    // format. The unified log/OTel layer-builder refactor
+    // sequenced as a follow-up will plumb log_format through.
     let tracer_guard: Option<TracerGuard> = match cfg.pool().observability.as_ref() {
         Some(obs) => match install_global(obs, cli.verbosity) {
             Ok(g) => g,
@@ -149,7 +163,7 @@ fn run_server(cli: &Cli) -> ExitCode {
     };
 
     if tracer_guard.is_none() {
-        if let Err(e) = log_init(cli.verbosity, cli.output.as_deref()) {
+        if let Err(e) = log_init_with_format(cli.verbosity, cli.output.as_deref(), log_format) {
             eprintln!("dynomite: log_init failed: {e}");
             return ExitCode::from(1);
         }
@@ -157,8 +171,8 @@ fn run_server(cli: &Cli) -> ExitCode {
         // OTLP path installed a fmt+otel layered subscriber
         // already; the standalone log_init STATE (used by SIGHUP
         // log-reopen) is intentionally unset. SIGHUP log-reopen
-        // is unavailable in OTLP mode; operators that need both
-        // can run with otlp_traces_endpoint unset.
+        // is unavailable in OTLP-traces mode; operators that need
+        // both can run with otlp_traces_endpoint unset.
         tracing::debug!("OTLP exporter installed; skipping log_init STATE setup");
     }
 
@@ -221,4 +235,18 @@ fn run_server(cli: &Cli) -> ExitCode {
         runtime.block_on(async move { g.shutdown() });
     }
     exit
+}
+
+/// Resolve the effective log format for this invocation.
+///
+/// Precedence: explicit `--log-format` CLI flag > YAML `log_format:`
+/// pool field > built-in default ([`LogFormat::Default`]).
+fn resolve_log_format(cli: &Cli, cfg: &Config) -> Result<LogFormat, String> {
+    if let Some(s) = cli.log_format.as_deref() {
+        return LogFormat::parse(s).map_err(|e| format!("--log-format: {e}"));
+    }
+    if let Some(s) = cfg.pool().log_format.as_deref() {
+        return LogFormat::parse(s).map_err(|e| format!("log_format: {e}"));
+    }
+    Ok(LogFormat::Default)
 }

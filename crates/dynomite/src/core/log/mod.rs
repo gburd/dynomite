@@ -11,6 +11,14 @@
 //! Sending `SIGHUP` reopens the log file at the stored path; the helper
 //! [`reopen_on_sighup`] is what the signal handler invokes.
 //!
+//! Four output shapes are supported, dispatched by [`LogFormat`]:
+//! [`LogFormat::Default`] (the historical text format), [`LogFormat::Rfc5424`]
+//! (modern syslog), [`LogFormat::Rfc3164`] (BSD syslog), and
+//! [`LogFormat::Json`] (NDJSON). Operators select a shape via the
+//! `log_format:` configuration key or the `--log-format` CLI flag;
+//! when neither is set the default value reproduces the pre-existing
+//! behavior byte-for-byte.
+//!
 //! # Examples
 //!
 //! ```
@@ -35,6 +43,13 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::EnvFilter;
 
 use crate::core::types::{DynError, Status};
+
+mod format;
+mod host;
+mod syslog;
+
+pub use format::{LogFormat, LogFormatParseError};
+pub use host::local_hostname;
 
 /// System is unusable.
 pub const LOG_EMERG: u8 = 0;
@@ -184,6 +199,10 @@ impl OpenOptionsExt for OpenOptions {
 /// records are appended to that file (created if missing); when `None`,
 /// records are written to standard error.
 ///
+/// This entry point preserves the historical default output shape
+/// ([`LogFormat::Default`]). To pick a different shape, call
+/// [`log_init_with_format`] directly.
+///
 /// `log_init` may be called only once per process; subsequent calls
 /// return [`DynError::Generic`].
 ///
@@ -194,6 +213,23 @@ impl OpenOptionsExt for OpenOptions {
 /// log_init(LOG_NOTICE, None).expect("install logger");
 /// ```
 pub fn log_init(level: u8, path: Option<&Path>) -> Status {
+    log_init_with_format(level, path, LogFormat::Default)
+}
+
+/// Install the global tracing subscriber with a chosen output shape.
+///
+/// See [`LogFormat`] for the supported values. The default value
+/// (`LogFormat::Default`) is byte-identical to what [`log_init`]
+/// installs, so passing it here is equivalent to the original
+/// two-argument call.
+///
+/// # Examples
+///
+/// ```no_run
+/// use dynomite::core::log::{log_init_with_format, LogFormat, LOG_NOTICE};
+/// log_init_with_format(LOG_NOTICE, None, LogFormat::Json).expect("install logger");
+/// ```
+pub fn log_init_with_format(level: u8, path: Option<&Path>, format: LogFormat) -> Status {
     let sink: Box<dyn Write + Send> = match path {
         Some(p) => Box::new(open_log_file(p).map_err(DynError::Io)?),
         None => Box::new(io::stderr()),
@@ -209,19 +245,73 @@ pub fn log_init(level: u8, path: Option<&Path>) -> Status {
         .set(state)
         .map_err(|_| DynError::generic("log_init: subscriber already installed"))?;
 
+    install_subscriber(level, format).map_err(|e| {
+        // The OnceLock is already populated; surface the dispatch
+        // error verbatim. The caller is expected to abort.
+        DynError::generic(format!("log_init: {e}"))
+    })
+}
+
+fn install_subscriber(
+    level: u8,
+    format: LogFormat,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
     let level_filter = LevelFilter::from_level(tracing_level_for(clamp_level(level)));
     CURRENT_LEVEL.store(clamp_level(level), Ordering::Relaxed);
     let env = EnvFilter::builder()
         .with_default_directive(level_filter.into())
         .from_env_lossy();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(env)
-        .with_writer(LoggerWriter)
-        .with_target(true)
-        .try_init()
-        .map_err(|e| DynError::generic(format!("log_init: {e}")))?;
-
+    match format {
+        LogFormat::Default => {
+            // Preserve the original SubscriberBuilder path verbatim:
+            // a future regression in the layered Registry path must
+            // not silently change the historical default output.
+            tracing_subscriber::fmt()
+                .with_env_filter(env)
+                .with_writer(LoggerWriter)
+                .with_target(true)
+                .try_init()?;
+        }
+        LogFormat::Json => {
+            tracing_subscriber::fmt()
+                .with_env_filter(env)
+                .with_writer(LoggerWriter)
+                .with_target(true)
+                .json()
+                .flatten_event(false)
+                .with_current_span(true)
+                .with_span_list(false)
+                .try_init()?;
+        }
+        LogFormat::Rfc5424 => {
+            // Syslog wire format must never contain ANSI escapes; the
+            // SubscriberBuilder path strips ANSI only for the default
+            // `Format<L, T>` formatter, so we layer the registry by
+            // hand to set `with_ansi(false)` on the fmt layer.
+            let layer = tracing_subscriber::fmt::Layer::new()
+                .with_writer(LoggerWriter)
+                .event_format(syslog::Rfc5424Formatter::new())
+                .with_ansi(false);
+            tracing_subscriber::registry()
+                .with(env)
+                .with(layer)
+                .try_init()?;
+        }
+        LogFormat::Rfc3164 => {
+            let layer = tracing_subscriber::fmt::Layer::new()
+                .with_writer(LoggerWriter)
+                .event_format(syslog::Rfc3164Formatter::new())
+                .with_ansi(false);
+            tracing_subscriber::registry()
+                .with(env)
+                .with(layer)
+                .try_init()?;
+        }
+    }
     Ok(())
 }
 
@@ -407,5 +497,208 @@ mod tests {
         assert!(log_loggable(0));
         assert!(log_loggable(5));
         assert!(!log_loggable(6));
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    //! Per-format unit tests.
+    //!
+    //! These tests cannot install the global subscriber - that
+    //! is process-wide and other tests already use it - so each
+    //! test scopes a `tracing_subscriber` to a closure via
+    //! `tracing::subscriber::with_default` and captures the bytes
+    //! the subscriber writes to a shared `Vec<u8>`. The captured
+    //! buffer is then asserted against the format's documented
+    //! shape (regex for syslog, line-per-event JSON for NDJSON,
+    //! field-name presence for the default text format).
+
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
+    use regex::Regex;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    use super::syslog::{Rfc3164Formatter, Rfc5424Formatter};
+
+    /// Cloneable byte sink used as the writer behind a scoped
+    /// subscriber. Each `make_writer()` call hands back a
+    /// `Buffer` that pushes into the shared `Vec<u8>`.
+    #[derive(Clone, Default)]
+    struct CaptureBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl CaptureBuffer {
+        fn snapshot(&self) -> Vec<u8> {
+            self.0.lock().expect("lock CaptureBuffer").clone()
+        }
+        fn snapshot_string(&self) -> String {
+            String::from_utf8(self.snapshot()).expect("captured bytes are utf-8")
+        }
+    }
+
+    impl Write for CaptureBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut guard = self.0.lock().expect("lock CaptureBuffer");
+            guard.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CaptureBuffer {
+        type Writer = CaptureBuffer;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Build the four subscriber shapes against the given capture
+    /// buffer. The functions are factored out so the assertions are
+    /// next to the regex and not next to the subscriber wiring.
+    fn run_default(buf: &CaptureBuffer) {
+        let sub = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_target(true)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!(answer = 42, name = "ada", "hello");
+        });
+    }
+
+    fn run_rfc5424(buf: &CaptureBuffer) {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        let layer = tracing_subscriber::fmt::Layer::new()
+            .with_writer(buf.clone())
+            .event_format(Rfc5424Formatter::new())
+            .with_ansi(false);
+        let sub = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!(answer = 42, "hello");
+        });
+    }
+
+    fn run_rfc3164(buf: &CaptureBuffer) {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        let layer = tracing_subscriber::fmt::Layer::new()
+            .with_writer(buf.clone())
+            .event_format(Rfc3164Formatter::new())
+            .with_ansi(false);
+        let sub = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!(answer = 42, "hello");
+        });
+    }
+
+    fn run_json(buf: &CaptureBuffer) {
+        let sub = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .json()
+            .with_target(true)
+            .flatten_event(false)
+            .with_current_span(true)
+            .with_span_list(false)
+            .finish();
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!(answer = 42, name = "ada", "first");
+            tracing::warn!(retry = true, "second");
+        });
+    }
+
+    #[test]
+    fn default_format_unchanged_from_baseline() {
+        let buf = CaptureBuffer::default();
+        run_default(&buf);
+        let text = buf.snapshot_string();
+        // The historical text format stamps the level, the target,
+        // the message and the field key/value pairs as
+        // `key=value`. Anything weaker would fail to detect a
+        // regression where a future refactor accidentally swaps
+        // formatters.
+        assert!(text.contains(" INFO "), "missing INFO level: {text:?}");
+        assert!(text.contains("hello"), "missing message text: {text:?}");
+        assert!(
+            text.contains("answer=42"),
+            "missing kv 'answer=42': {text:?}"
+        );
+        assert!(text.contains("name=\"ada\""), "missing kv 'name': {text:?}");
+        // Sanity: line ends with a trailing newline.
+        assert!(text.ends_with('\n'), "missing trailing newline");
+    }
+
+    #[test]
+    fn rfc5424_format_starts_with_pri_version() {
+        let buf = CaptureBuffer::default();
+        run_rfc5424(&buf);
+        let text = buf.snapshot_string();
+        // The brief specifies the regex
+        // `^<\d+>1 [\d-]+T[\d:.+-]+ \S+ dynomited \d+ - `
+        let re =
+            Regex::new(r"^<\d+>1 [\d-]+T[\d:.+\-]+ \S+ dynomited \d+ - ").expect("compile regex");
+        let first_line = text.lines().next().expect("at least one line");
+        assert!(
+            re.is_match(first_line),
+            "RFC 5424 line did not match regex: {first_line:?}"
+        );
+        assert!(
+            first_line.contains("origin@32473"),
+            "missing structured-data ID: {first_line:?}"
+        );
+        assert!(
+            first_line.contains("hello"),
+            "missing message: {first_line:?}"
+        );
+    }
+
+    #[test]
+    fn rfc3164_format_starts_with_pri_then_timestamp() {
+        let buf = CaptureBuffer::default();
+        run_rfc3164(&buf);
+        let text = buf.snapshot_string();
+        // The brief specifies the regex
+        // `^<\d+>[A-Z][a-z]{2} [\d ]\d \d{2}:\d{2}:\d{2} \S+ \S+: `
+        let re = Regex::new(r"^<\d+>[A-Z][a-z]{2} [\d ]\d \d{2}:\d{2}:\d{2} \S+ \S+: ")
+            .expect("compile regex");
+        let first_line = text.lines().next().expect("at least one line");
+        assert!(
+            re.is_match(first_line),
+            "RFC 3164 line did not match regex: {first_line:?}"
+        );
+        assert!(
+            first_line.contains("hello"),
+            "missing message: {first_line:?}"
+        );
+    }
+
+    #[test]
+    fn ndjson_format_is_one_json_per_line() {
+        let buf = CaptureBuffer::default();
+        run_json(&buf);
+        let text = buf.snapshot_string();
+        let lines: Vec<_> = text.lines().filter(|l| !l.is_empty()).collect();
+        assert!(
+            lines.len() >= 2,
+            "expected at least two JSON lines: {text:?}"
+        );
+        for line in &lines {
+            // Each line must be a self-contained JSON object.
+            let v: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("line is not valid JSON ({e}): {line:?}"));
+            // Required keys, per the brief: timestamp, level,
+            // target, fields. The `tracing-subscriber` JSON
+            // formatter always emits `timestamp`, `level`,
+            // `target`, and a `fields` object.
+            for key in ["timestamp", "level", "target", "fields"] {
+                assert!(
+                    v.get(key).is_some(),
+                    "JSON line missing key {key:?}: {line}"
+                );
+            }
+            // Inner-newline check: a valid NDJSON line must not
+            // contain a literal '\n' character.
+            assert!(!line.contains('\n'));
+        }
     }
 }

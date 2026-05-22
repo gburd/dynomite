@@ -129,6 +129,11 @@ pub struct Cli {
     /// Force-enable gossip regardless of the YAML setting.
     #[arg(short = 'g', long = "gossip")]
     pub gossip: bool,
+
+    /// Override the YAML `log_format:` knob. Accepts `default`,
+    /// `rfc5424`, `rfc3164`, `json`, or `ndjson`.
+    #[arg(long = "log-format", value_name = "FMT")]
+    pub log_format: Option<String>,
 }
 
 /// The version banner the reference engine writes via
@@ -247,6 +252,14 @@ mod tests {
         assert!(s.contains("\r\n"));
         assert!(s.ends_with('\n'));
         assert!(s.is_ascii());
+    }
+
+    #[test]
+    fn log_format_flag_parses() {
+        let cli = Cli::try_parse_from(["dynomited", "--log-format", "json"]).unwrap();
+        assert_eq!(cli.log_format.as_deref(), Some("json"));
+        let cli = Cli::try_parse_from(["dynomited"]).unwrap();
+        assert!(cli.log_format.is_none());
     }
 
     #[test]
