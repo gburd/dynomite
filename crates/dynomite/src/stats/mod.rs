@@ -14,6 +14,7 @@
 mod codec;
 mod histogram;
 mod numeric;
+mod prometheus;
 mod rest;
 mod snapshot;
 
@@ -28,6 +29,7 @@ pub use crate::stats::codec::{
     MetricSpec, PoolField, ServerField, StatsMetricType, POOL_CODEC, SERVER_CODEC,
 };
 pub use crate::stats::histogram::{Histogram, BUCKET_COUNT};
+pub use crate::stats::prometheus::render_prometheus;
 pub use crate::stats::rest::{StatsServer, MAX_HEADERS, MAX_REQUEST_BYTES};
 pub use crate::stats::snapshot::{
     describe_stats, HistogramSummary, PeerStats, PoolStats, ServerStats, ServiceInfo, Snapshot,

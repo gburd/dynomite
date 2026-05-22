@@ -57,6 +57,7 @@ base64 = "0.22"
 nix = { version = "0.29", features = ["signal", "process", "fs", "user", "net"] }
 socket2 = "0.5"
 httparse = "1.9"
+prometheus = "0.13"
 
 # Storage backend (Noxu DB) for the planned Riak-compatible API
 # and multi-engine storage substrate. Path deps for now; flip to

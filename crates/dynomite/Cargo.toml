@@ -37,6 +37,7 @@ base64 = { workspace = true }
 nix = { workspace = true }
 socket2 = { workspace = true }
 httparse = { workspace = true }
+prometheus = { workspace = true }
 
 # Storage-substrate path dep declared so the resolver exercises
 # the Noxu DB version graph today, before any Riak-protocol code
