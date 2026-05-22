@@ -42,6 +42,7 @@
 
 pub mod datacenter;
 pub mod dispatch;
+pub mod failure_detector;
 pub mod gossip;
 pub mod peer;
 pub mod pool;

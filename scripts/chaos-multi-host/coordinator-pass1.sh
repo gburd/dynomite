@@ -46,19 +46,9 @@ DYN_LISTEN_PORT=18101
 CLIENT_LISTEN_PORT=18102
 STATS_LISTEN_PORT=22222
 
-# Per-DC distinct tokens (pass-2). Distinct token slices on the
-# ring force keys to hash into a specific DC, exercising outbound
-# peer connections from the dispatcher's `Replicas` plan.
-# Choose roughly equally spaced 32-bit tokens. With
-# `DC_QUORUM` consistency, the dispatcher will fan out to every
-# replica in the local DC; with each DC owning a distinct token
-# range and only one node per DC, that's still LocalDatastore
-# for keys hashing into the local range and Replicas (cross-DC)
-# for keys that don't. Pass-1 used identical tokens on every
-# node so cross-DC routing was never triggered.
-TOKENS_FLOKI="0"
-TOKENS_ARNOLD="1431655765"
-TOKENS_NUC="2863311530"
+# Same token on every node makes each DC a full replica. With
+# DC_ONE consistency every read / write routes locally.
+TOKENS="101134286"
 
 FLOKI_TS_IP="100.104.16.13"
 ARNOLD_TS_IP="100.117.233.104"
@@ -89,20 +79,20 @@ log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOCAL_LOGS/coo
 
 floki_seeds() {
     cat <<SEEDS
-    - $ARNOLD_TS_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS_ARNOLD
+    - $ARNOLD_TS_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS
 SEEDS
 }
 
 arnold_seeds() {
     cat <<SEEDS
-    - $FLOKI_TS_IP:$DYN_LISTEN_PORT:rack-1:dc-floki:$TOKENS_FLOKI
-    - $NUC_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-nuc:$TOKENS_NUC
+    - $FLOKI_TS_IP:$DYN_LISTEN_PORT:rack-1:dc-floki:$TOKENS
+    - $NUC_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-nuc:$TOKENS
 SEEDS
 }
 
 nuc_seeds() {
     cat <<SEEDS
-    - $ARNOLD_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS_ARNOLD
+    - $ARNOLD_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS
 SEEDS
 }
 
@@ -110,10 +100,9 @@ SEEDS
 
 start_host() {
     local label="$1"; shift
-    local tokens="$1"; shift
     local seeds_str="$1"; shift
     local runner=("$@")
-    log "starting $label tokens=$tokens"
+    log "starting $label"
     "${runner[@]}" "mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs"
     # Persist start-args so the chaos injector can restart
     # dynomited with the same arguments after a SIGKILL.
@@ -129,7 +118,7 @@ start_host() {
 $seeds_str
 EOF
     "${runner[@]}" "cat > /scratch/dynomite-chaos/run/start-args" <<EOF
-TOKENS='$tokens'
+TOKENS='$TOKENS'
 SEEDS=\$(cat /scratch/dynomite-chaos/run/seeds.yml)
 DATASTORE_PORT=$DATASTORE_PORT
 DYN_LISTEN_PORT=$DYN_LISTEN_PORT
@@ -143,14 +132,14 @@ EOF
         dc-nuc) bash_path=/usr/local/bin/bash ;;
     esac
     "${runner[@]}" "$bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/start-host.sh \
-        $label '$tokens' '$seeds_str' \
+        $label '$TOKENS' '$seeds_str' \
         $DATASTORE_PORT $DYN_LISTEN_PORT $CLIENT_LISTEN_PORT $STATS_LISTEN_PORT" \
         >> "$LOCAL_LOGS/$label-start.log" 2>&1
     log "  $label dynomited up"
 }
 
 start_floki() {
-    log "preparing floki tokens=$TOKENS_FLOKI"
+    log "preparing floki"
     mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs /scratch/dynomite-chaos/build/release
     cp -f "$REPO/target/release/dynomited" /scratch/dynomite-chaos/build/release/dynomited
     # rsync source so the injector can find scripts via the same
@@ -163,7 +152,7 @@ start_floki() {
 $SEEDS_STR
 EOF
     cat > /scratch/dynomite-chaos/run/start-args <<EOF
-TOKENS='$TOKENS_FLOKI'
+TOKENS='$TOKENS'
 SEEDS=\$(cat /scratch/dynomite-chaos/run/seeds.yml)
 DATASTORE_PORT=$DATASTORE_PORT
 DYN_LISTEN_PORT=$DYN_LISTEN_PORT
@@ -171,7 +160,7 @@ CLIENT_LISTEN_PORT=$CLIENT_LISTEN_PORT
 STATS_LISTEN_PORT=$STATS_LISTEN_PORT
 EOF
     bash "$REPO/scripts/chaos-multi-host/start-host.sh" \
-        dc-floki "$TOKENS_FLOKI" "$SEEDS_STR" \
+        dc-floki "$TOKENS" "$SEEDS_STR" \
         "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" \
         >> "$LOCAL_LOGS/dc-floki-start.log" 2>&1
     log "  dc-floki dynomited up"
@@ -255,8 +244,8 @@ log "================================================================"
 "${NUC_SSH[@]}" "[ -d /scratch/dynomite-chaos/src ]" || { log "nuc:src missing"; exit 1; }
 
 start_floki
-start_host dc-arnold "$TOKENS_ARNOLD" "$(arnold_seeds)" "${ARNOLD_SSH[@]}"
-start_host dc-nuc    "$TOKENS_NUC"    "$(nuc_seeds)"    "${NUC_SSH[@]}"
+start_host dc-arnold "$(arnold_seeds)" "${ARNOLD_SSH[@]}"
+start_host dc-nuc    "$(nuc_seeds)"    "${NUC_SSH[@]}"
 
 # Brief settle so any deferred state is in place.
 sleep 5

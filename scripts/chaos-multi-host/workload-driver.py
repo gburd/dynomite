@@ -53,10 +53,43 @@ class RespConn:
         self.rbuf: bytes = b""
 
     def connect(self) -> None:
-        sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
-        sock.settimeout(self.timeout)
-        self.sock = sock
-        self.rbuf = b""
+        # On FreeBSD (and occasionally on Linux too) the kernel can
+        # pick an ephemeral source port for a 127.0.0.1 connect()
+        # that happens to equal the destination port, producing a
+        # "self-connection" 127.0.0.1:N -> 127.0.0.1:N that blocks
+        # any future bind on N. Avoid that by binding the source
+        # to port 0 in a high range BEFORE connecting; if the
+        # kernel still hands us a colliding port we close and
+        # retry up to a few times.
+        for _ in range(5):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                # Hint the kernel toward a source port well above
+                # the dynomite/redis ports we're targeting (which
+                # live in the 17000-22000 range). 50000-65535 is
+                # the standard ephemeral range and never overlaps
+                # with our service ports.
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+                sock.bind(("127.0.0.1", 0))
+                sock.settimeout(self.timeout)
+                sock.connect((self.host, self.port))
+                local_port = sock.getsockname()[1]
+                if local_port == self.port:
+                    # Loopback self-connection. Close and try
+                    # again; the kernel will pick a different
+                    # ephemeral the next time.
+                    sock.close()
+                    continue
+                self.sock = sock
+                self.rbuf = b""
+                return
+            except OSError:
+                with suppress(Exception):
+                    sock.close()
+                raise
+        raise ConnectionError(
+            "could not establish a non-self-loop connection after 5 attempts"
+        )
 
     def close(self) -> None:
         if self.sock is not None:
