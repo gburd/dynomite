@@ -136,7 +136,21 @@ impl Proxy {
             clients.retain(|h| !h.is_finished());
         }
         for h in clients {
-            let _ = h.await;
+            // Give each client a brief window to drain (e.g.
+            // finish writing the last response after the
+            // listener has stopped accepting). After that, abort
+            // so a wedged client_loop cannot keep the proxy from
+            // exiting on shutdown.
+            match tokio::time::timeout(std::time::Duration::from_millis(250), h).await {
+                Ok(Ok(_)) | Ok(Err(_)) => {}
+                Err(_) => {
+                    // The JoinHandle was consumed by `timeout`,
+                    // so we cannot abort it here; tokio will GC
+                    // it once the task yields. The runtime
+                    // shutdown that follows the proxy::run
+                    // return will reap it.
+                }
+            }
         }
         Ok(())
     }

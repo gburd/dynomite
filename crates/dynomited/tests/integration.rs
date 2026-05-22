@@ -193,17 +193,13 @@ async fn redis_set_get_quit_round_trip() {
     sock.write_all(b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n")
         .await
         .expect("write GET");
-    let get_rsp = read_until(&mut sock, b"\r\n\r\n").await;
-    // RESP for $1\r\nv\r\n is "$1\r\nv\r\n" - two CRLFs wrap
-    // the value so we read until the trailing pair.
-    assert!(
-        get_rsp.windows(2).any(|w| w == b"\r\n"),
-        "GET response had no CRLF: {get_rsp:?}"
-    );
-    let s = std::str::from_utf8(&get_rsp).expect("utf8");
-    assert!(
-        s.contains("$1\r\nv\r\n"),
-        "GET response did not include value: {s:?}"
+    // Bulk reply for value `v`: `$1\r\nv\r\n` = 7 bytes.
+    let get_rsp = read_exact_n(&mut sock, 7).await;
+    assert_eq!(
+        &get_rsp,
+        b"$1\r\nv\r\n",
+        "GET response: {}",
+        String::from_utf8_lossy(&get_rsp)
     );
 
     sock.write_all(b"*1\r\n$4\r\nQUIT\r\n")

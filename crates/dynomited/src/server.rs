@@ -51,6 +51,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -60,7 +61,9 @@ use dynomite::cluster::pool::{PoolConfig, ServerPool};
 use dynomite::conf::{ConfDynSeed, ConfListen, ConfPool, Config, EndpointKind};
 use dynomite::core::log::reopen_on_sighup;
 use dynomite::hashkit::DynToken;
-use dynomite::net::{DnodeProxy, NetError, Proxy};
+use dynomite::io::reactor::{ConnRole, TcpTransport};
+use dynomite::net::server::OutboundRequest;
+use dynomite::net::{Conn, DnodeProxy, NetError, Proxy};
 use dynomite::stats::{Snapshot, StatsServer};
 
 use crate::signals::{SignalEvent, SignalSet};
@@ -126,6 +129,7 @@ pub struct Server {
     proxy: Proxy,
     dnode_proxy: Option<DnodeProxy>,
     stats: Option<StatsServer>,
+    backend_handle: Option<JoinHandle<Result<(), NetError>>>,
     listen_addr: SocketAddr,
     dyn_listen_addr: Option<SocketAddr>,
     stats_listen_addr: Option<SocketAddr>,
@@ -208,7 +212,92 @@ impl Server {
         }
         let server_pool = Arc::new(ServerPool::new(pool_config.clone(), peers));
         server_pool.preselect_remote_racks();
-        let dispatcher = Arc::new(ClusterDispatcher::new(server_pool.clone()));
+
+        // Open the local-datastore connection. The dispatcher
+        // routes `LocalDatastore` plans to this `ServerConn`
+        // task, which writes request bytes to the backend (redis
+        // or memcache) and feeds parsed responses back to the
+        // originating client via the per-request responder
+        // channel. Without this wiring the proxy parses requests
+        // and then drops them on the floor.
+        let datastore = conf_pool
+            .servers
+            .as_ref()
+            .and_then(|s| s.entries().first())
+            .ok_or(ServerError::MissingConfig("servers"))?;
+        if datastore.is_unix() {
+            return Err(ServerError::BadConfig {
+                field: "servers",
+                reason: "unix-socket datastores are not yet wired in the binary".into(),
+            });
+        }
+        let backend_addr: SocketAddr = format!("{}:{}", datastore.host(), datastore.port())
+            .parse()
+            .or_else(|_| -> Result<SocketAddr, ServerError> {
+                use std::net::ToSocketAddrs;
+                let mut iter = (datastore.host(), datastore.port())
+                    .to_socket_addrs()
+                    .map_err(ServerError::Io)?;
+                iter.next().ok_or(ServerError::BadConfig {
+                    field: "servers",
+                    reason: format!(
+                        "could not resolve datastore endpoint '{}:{}'",
+                        datastore.host(),
+                        datastore.port()
+                    ),
+                })
+            })?;
+        let backend_capacity =
+            usize::from(conf_pool.datastore_connections.unwrap_or(8)).max(1) * 64;
+        let (backend_tx, backend_rx) =
+            tokio::sync::mpsc::channel::<OutboundRequest>(backend_capacity);
+        // Backend supervisor: keeps a single `ServerConn` alive
+        // against the configured datastore. It runs in its own
+        // task so `build()` does not block on a slow / refused
+        // backend; the `preconnect: true` config option still
+        // gets respected by attempting one synchronous connect
+        // before returning. The supervisor reconnects with
+        // exponential-ish backoff on failure so transient redis
+        // restarts do not break the proxy permanently.
+        let preconnect = conf_pool.preconnect.unwrap_or(false);
+        let backend_data_store = pool_config.data_store;
+        if preconnect {
+            // Best-effort eager connect: surface a failure only if
+            // the user asked for it explicitly via preconnect=true.
+            match tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::net::TcpStream::connect(backend_addr),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    return Err(ServerError::BadConfig {
+                        field: "servers",
+                        reason: format!(
+                            "preconnect=true: could not connect to datastore '{}': {}",
+                            backend_addr, e
+                        ),
+                    });
+                }
+                Err(_) => {
+                    return Err(ServerError::BadConfig {
+                        field: "servers",
+                        reason: format!(
+                            "preconnect=true: connect to datastore '{}' timed out after 5s",
+                            backend_addr
+                        ),
+                    });
+                }
+            }
+        }
+        let backend_handle: JoinHandle<Result<(), NetError>> = tokio::spawn(async move {
+            backend_supervisor(backend_addr, backend_rx, backend_data_store).await
+        });
+
+        let dispatcher = Arc::new(
+            ClusterDispatcher::new(server_pool.clone()).with_backend(backend_tx),
+        );
 
         let proxy = Proxy::bind(listen_addr, dispatcher.clone())
             .map_err(ServerError::Net)?
@@ -238,6 +327,7 @@ impl Server {
             proxy,
             dnode_proxy,
             stats,
+            backend_handle: Some(backend_handle),
             listen_addr,
             dyn_listen_addr,
             stats_listen_addr,
@@ -318,6 +408,7 @@ impl Server {
             proxy,
             dnode_proxy,
             stats,
+            backend_handle,
             listen_addr,
             dyn_listen_addr,
             stats_listen_addr,
@@ -398,6 +489,16 @@ impl Server {
         // Whatever the supervisor returns, make sure the listeners
         // see the cancel and the join handles drain.
         let _ = shutdown_tx.send(true);
+
+        // The backend driver listens to its request-channel sender;
+        // dropping the dispatcher (which holds the only sender)
+        // when the proxy and dnode listeners exit will close the
+        // channel and the driver will return Ok. We still abort
+        // here as a belt-and-braces against a stuck backend.
+        if let Some(h) = backend_handle {
+            h.abort();
+            let _ = h.await;
+        }
 
         let proxy_outcome = await_listener("proxy", proxy_handle).await;
         let dnode_outcome = if let Some(h) = dnode_handle {
@@ -515,6 +616,178 @@ async fn wait_finished(handle: &JoinHandle<Result<(), NetError>>) {
     // to await the handle later for its outcome.
     while !handle.is_finished() {
         tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// Long-running supervisor that owns the request channel for the
+/// local datastore. Reconnects to the backend with bounded
+/// backoff whenever a `ServerConn` driver returns. Exits when
+/// the receiver half is closed (the dispatcher is dropped).
+async fn backend_supervisor(
+    addr: SocketAddr,
+    mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
+    data_store: dynomite::conf::DataStore,
+) -> Result<(), NetError> {
+    let mut backoff_ms: u64 = 100;
+    let backoff_max_ms: u64 = 5_000;
+    loop {
+        // Bail out if the channel is empty AND the sender side has
+        // been dropped (proxy/dispatcher gone). `is_closed` is the
+        // cleanest signal; an empty open channel just means we are
+        // idle and should connect anyway.
+        if rx.is_closed() && rx.is_empty() {
+            return Ok(());
+        }
+        let connect = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await;
+        let stream = match connect {
+            Ok(Ok(s)) => {
+                backoff_ms = 100;
+                s
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    backend = %addr,
+                    error = %e,
+                    "backend connect failed; retrying"
+                );
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                continue;
+            }
+            Err(_) => {
+                tracing::warn!(
+                    backend = %addr,
+                    "backend connect timed out; retrying"
+                );
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                continue;
+            }
+        };
+        let _ = stream.set_nodelay(true);
+        let conn = Conn::new(
+            Box::new(TcpTransport::new(stream, ConnRole::Server)),
+            ConnRole::Server,
+        );
+        // The ServerConn takes the receiver by ownership; on its
+        // exit we get the receiver back via the channel-half
+        // pattern below. tokio's mpsc cannot move a Receiver in
+        // and out of an owned struct cleanly, so we drive the
+        // ServerConn loop manually here, owning the receiver
+        // ourselves and forwarding requests / responses.
+        if let Err(e) = run_one_backend_conn(conn, &mut rx, data_store).await {
+            tracing::warn!(
+                backend = %addr,
+                error = %e,
+                "backend connection ended; reconnecting"
+            );
+        } else {
+            // Clean exit only when the channel closed.
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Drive one TCP connection to the backend. Reads requests from
+/// `rx`, writes them, parses responses, and pushes responses
+/// onto each request's per-connection responder channel. Returns
+/// `Ok(())` when `rx` closes naturally; returns an error on
+/// transport failure so the supervisor reconnects.
+async fn run_one_backend_conn(
+    mut conn: Conn,
+    rx: &mut tokio::sync::mpsc::Receiver<OutboundRequest>,
+    data_store: dynomite::conf::DataStore,
+) -> Result<(), NetError> {
+    use dynomite::msg::{Msg, MsgParseResult, MsgType};
+    use dynomite::net::OutboundEnvelope;
+    let mut accumulated: Vec<u8> = Vec::new();
+    let mut read_buf = vec![0u8; 4096];
+    let mut pending: std::collections::VecDeque<(
+        u64,
+        tokio::sync::mpsc::Sender<OutboundEnvelope>,
+    )> = std::collections::VecDeque::new();
+    loop {
+        tokio::select! {
+            req = rx.recv() => {
+                let Some(req) = req else { return Ok(()); };
+                let transport = conn.transport_mut().ok_or(NetError::Closed)?;
+                if let Err(e) = transport.write_all(&req.bytes).await {
+                    return Err(NetError::Io(e));
+                }
+                conn.record_send(req.bytes.len());
+                pending.push_back((req.req_id, req.responder));
+            }
+            res = async {
+                if let Some(t) = conn.transport_mut() {
+                    t.read(&mut read_buf).await
+                } else {
+                    Ok(0)
+                }
+            } => {
+                let n = match res {
+                    Ok(n) => n,
+                    Err(e) => return Err(NetError::Io(e)),
+                };
+                if n == 0 {
+                    return Err(NetError::Closed);
+                }
+                conn.record_recv(n);
+                accumulated.extend_from_slice(&read_buf[..n]);
+                while !accumulated.is_empty() {
+                    let head_id = pending.front().map(|p| p.0).unwrap_or(0);
+                    let mut msg = Msg::new(head_id, MsgType::Unknown, false);
+                    let result = match data_store {
+                        dynomite::conf::DataStore::Redis => {
+                            dynomite::proto::redis::redis_parse_rsp(&mut msg, &accumulated)
+                        }
+                        dynomite::conf::DataStore::Memcache => {
+                            dynomite::proto::memcache::memcache_parse_rsp(&mut msg, &accumulated)
+                        }
+                    };
+                    match result {
+                        MsgParseResult::Ok => {
+                            let consumed = msg.parser_pos();
+                            if consumed == 0 {
+                                return Err(NetError::Parse("backend parser stalled".into()));
+                            }
+                            let bytes = accumulated[..consumed].to_vec();
+                            accumulated.drain(0..consumed);
+                            if let Some((req_id, responder)) = pending.pop_front() {
+                                let pool = conn.mbuf_pool().clone();
+                                let mut buf = pool.get();
+                                buf.recv(&bytes);
+                                msg.mbufs_mut().push_back(buf);
+                                msg.recompute_mlen();
+                                let _ = responder
+                                    .send(OutboundEnvelope { req_id, rsp: msg })
+                                    .await;
+                            }
+                        }
+                        MsgParseResult::Again => break,
+                        MsgParseResult::Repair
+                        | MsgParseResult::Noop
+                        | MsgParseResult::Fragment => {
+                            let consumed = msg.parser_pos();
+                            if consumed > 0 {
+                                accumulated.drain(0..consumed);
+                            } else {
+                                break;
+                            }
+                        }
+                        MsgParseResult::Error
+                        | MsgParseResult::OomError
+                        | MsgParseResult::DynoConfig => {
+                            return Err(NetError::Parse(format!("{result:?}")));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
