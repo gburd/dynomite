@@ -23,7 +23,7 @@ use crate::proto::dnode::{dmsg_write, DmsgType, DnodeParser, ParseStep};
 pub struct DnodeServerConn {
     conn: Conn,
     requests: mpsc::Receiver<OutboundRequest>,
-    pending: std::collections::VecDeque<MsgId>,
+    pending: std::collections::VecDeque<(MsgId, tracing::Span)>,
 }
 
 impl DnodeServerConn {
@@ -88,21 +88,38 @@ impl DnodeServerConn {
             tokio::select! {
                 req = requests.recv() => {
                     let Some(req) = req else { continue; };
+                    use tracing::Instrument as _;
+                    let send_span = tracing::info_span!(
+                        parent: &req.span,
+                        "peer.send",
+                        req_id = req.req_id,
+                        bytes = req.bytes.len(),
+                    );
+                    let req_span = req.span.clone();
+                    let req_bytes = req.bytes;
+                    let req_id = req.req_id;
                     let mut header_buf = self.conn.mbuf_pool().get();
                     dmsg_write(
                         &mut header_buf,
-                        req.req_id,
+                        req_id,
                         DmsgType::Req,
                         0,
                         true,
                         None,
-                        u32::try_from(req.bytes.len()).unwrap_or(u32::MAX),
+                        u32::try_from(req_bytes.len()).unwrap_or(u32::MAX),
                     )?;
+                    let header_len = header_buf.readable().len();
                     let transport = self.conn.transport_mut().ok_or(NetError::Closed)?;
-                    transport.write_all(header_buf.readable()).await?;
-                    transport.write_all(&req.bytes).await?;
-                    self.conn.record_send(header_buf.readable().len() + req.bytes.len());
-                    self.pending.push_back(req.req_id);
+                    let write_res = async {
+                        transport.write_all(header_buf.readable()).await?;
+                        transport.write_all(&req_bytes).await?;
+                        Ok::<(), std::io::Error>(())
+                    }
+                    .instrument(send_span)
+                    .await;
+                    write_res?;
+                    self.conn.record_send(header_len + req_bytes.len());
+                    self.pending.push_back((req_id, req_span));
                     pending_responder = Some(req.responder);
                 }
                 read_res = async {
@@ -156,19 +173,35 @@ impl DnodeServerConn {
                     parser.reset();
 
                     // Build the response Msg from the payload bytes.
-                    let req_id = self.pending.pop_front().unwrap_or(dmsg.id);
-                    let mut rsp = Msg::new(req_id, MsgType::Unknown, false);
-                    let pool = self.conn.mbuf_pool().clone();
-                    let mut buf = pool.get();
-                    buf.recv(&payload);
-                    rsp.mbufs_mut().push_back(buf);
-                    rsp.recompute_mlen();
-                    rsp.set_dmsg(dmsg);
-                    // Mark parse outcome so consumers can branch
-                    // on a successful peer round-trip.
-                    rsp.set_parse_result(MsgParseResult::Ok);
+                    let (req_id, req_span) = self
+                        .pending
+                        .pop_front()
+                        .unwrap_or_else(|| (dmsg.id, tracing::Span::current()));
+                    let parse_span = tracing::info_span!(
+                        parent: &req_span,
+                        "peer.parse",
+                        req_id,
+                        bytes = plen,
+                    );
+                    let env = parse_span.in_scope(|| {
+                        let mut rsp = Msg::new(req_id, MsgType::Unknown, false);
+                        let pool = self.conn.mbuf_pool().clone();
+                        let mut buf = pool.get();
+                        buf.recv(&payload);
+                        rsp.mbufs_mut().push_back(buf);
+                        rsp.recompute_mlen();
+                        rsp.set_dmsg(dmsg);
+                        // Mark parse outcome so consumers can branch
+                        // on a successful peer round-trip.
+                        rsp.set_parse_result(MsgParseResult::Ok);
+                        OutboundEnvelope {
+                            req_id,
+                            rsp,
+                            span: req_span,
+                        }
+                    });
                     if let Some(sender) = responder.as_ref() {
-                        let _ = sender.send(OutboundEnvelope { req_id, rsp }).await;
+                        let _ = sender.send(env).await;
                     }
                 }
             }

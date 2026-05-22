@@ -342,8 +342,18 @@ impl Server {
             let (peer_tx, peer_rx) =
                 tokio::sync::mpsc::channel::<OutboundRequest>(peer_channel_capacity);
             dispatcher = dispatcher.with_peer_backend(peer_idx, peer_tx);
-            let handle: JoinHandle<Result<(), NetError>> =
-                tokio::spawn(async move { peer_supervisor(peer_addr, peer_rx).await });
+            let handle: JoinHandle<Result<(), NetError>> = {
+                use tracing::Instrument as _;
+                let span = tracing::info_span!(
+                    "peer_supervisor.spawn",
+                    peer_idx,
+                    peer = %peer_addr,
+                );
+                tokio::spawn(
+                    async move { peer_supervisor(peer_addr, peer_rx).await }
+                        .instrument(span),
+                )
+            };
             peer_handles.push(handle);
             tracing::info!(
                 peer_idx,
@@ -456,6 +466,15 @@ impl Server {
     /// # Errors
     /// [`ServerError`] for signal-installation, listener, or
     /// task-join failures.
+    #[tracing::instrument(
+        name = "server.run",
+        skip_all,
+        fields(
+            pool = %self.pool_name,
+            listen = %self.listen_addr,
+            peers = self.pool.peers().read().len(),
+        ),
+    )]
     pub async fn run(self) -> Result<(), ServerError> {
         let Self {
             pool_name,
@@ -753,6 +772,14 @@ async fn redis_auth_handshake(
 /// performs a Redis `AUTH <password>` handshake before being
 /// handed to `run_one_backend_conn`. A rejected AUTH is treated
 /// as a connection failure: the supervisor logs and reconnects.
+#[tracing::instrument(
+    name = "backend_supervisor",
+    skip_all,
+    fields(
+        backend = %addr,
+        ds = ?data_store,
+    ),
+)]
 async fn backend_supervisor(
     addr: SocketAddr,
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
@@ -851,6 +878,11 @@ async fn backend_supervisor(
 /// onto each request's per-connection responder channel. Returns
 /// `Ok(())` when `rx` closes naturally; returns an error on
 /// transport failure so the supervisor reconnects.
+#[tracing::instrument(
+    name = "run_one_backend_conn",
+    skip_all,
+    fields(ds = ?data_store),
+)]
 async fn run_one_backend_conn(
     mut conn: Conn,
     rx: &mut tokio::sync::mpsc::Receiver<OutboundRequest>,
@@ -858,22 +890,40 @@ async fn run_one_backend_conn(
 ) -> Result<(), NetError> {
     use dynomite::msg::{Msg, MsgParseResult, MsgType};
     use dynomite::net::OutboundEnvelope;
+    use tracing::Instrument as _;
     let mut accumulated: Vec<u8> = Vec::new();
     let mut read_buf = vec![0u8; 4096];
     let mut pending: std::collections::VecDeque<(
         u64,
         tokio::sync::mpsc::Sender<OutboundEnvelope>,
+        tracing::Span,
     )> = std::collections::VecDeque::new();
     loop {
         tokio::select! {
             req = rx.recv() => {
                 let Some(req) = req else { return Ok(()); };
+                // Build the `backend.send` span as a child of
+                // the originating client request span and use
+                // `.instrument()` to attach it to the write
+                // future. This avoids crossing an `.await` with
+                // a non-`Send` `EnteredSpan` guard.
+                let send_span = tracing::info_span!(
+                    parent: &req.span,
+                    "backend.send",
+                    req_id = req.req_id,
+                    bytes = req.bytes.len(),
+                );
+                let req_span = req.span.clone();
+                let req_bytes = req.bytes;
                 let transport = conn.transport_mut().ok_or(NetError::Closed)?;
-                if let Err(e) = transport.write_all(&req.bytes).await {
+                let write_res = async { transport.write_all(&req_bytes).await }
+                    .instrument(send_span)
+                    .await;
+                if let Err(e) = write_res {
                     return Err(NetError::Io(e));
                 }
-                conn.record_send(req.bytes.len());
-                pending.push_back((req.req_id, req.responder));
+                conn.record_send(req_bytes.len());
+                pending.push_back((req.req_id, req.responder, req_span));
             }
             res = async {
                 if let Some(t) = conn.transport_mut() {
@@ -910,18 +960,31 @@ async fn run_one_backend_conn(
                             }
                             let bytes = accumulated[..consumed].to_vec();
                             accumulated.drain(0..consumed);
-                            if let Some((req_id, responder)) = pending.pop_front() {
-                                let pool = conn.mbuf_pool().clone();
-                                let mut buf = pool.get();
-                                buf.recv(&bytes);
-                                msg.mbufs_mut().push_back(buf);
-                                msg.recompute_mlen();
-                                let _ = responder
-                                    .send(OutboundEnvelope { req_id, rsp: msg })
-                                    .await;
+                            if let Some((req_id, responder, req_span)) = pending.pop_front() {
+                                let parse_span = tracing::info_span!(
+                                    parent: &req_span,
+                                    "backend.parse",
+                                    req_id,
+                                    bytes = consumed,
+                                );
+                                let env = parse_span.in_scope(|| {
+                                    let pool = conn.mbuf_pool().clone();
+                                    let mut buf = pool.get();
+                                    buf.recv(&bytes);
+                                    msg.mbufs_mut().push_back(buf);
+                                    msg.recompute_mlen();
+                                    OutboundEnvelope {
+                                        req_id,
+                                        rsp: msg,
+                                        span: req_span,
+                                    }
+                                });
+                                let _ = responder.send(env).await;
                             }
                         }
-                        MsgParseResult::Again => break,
+                        MsgParseResult::Again => {
+                            break;
+                        }
                         MsgParseResult::Repair
                         | MsgParseResult::Noop
                         | MsgParseResult::Fragment => {
@@ -950,6 +1013,11 @@ async fn run_one_backend_conn(
 /// the underlying TCP / dnode driver returns an error. Owns the
 /// receiver half of the dispatcher's per-peer outbound channel
 /// and exits when that channel is closed (the dispatcher dropped).
+#[tracing::instrument(
+    name = "peer_supervisor",
+    skip_all,
+    fields(peer = %addr),
+)]
 async fn peer_supervisor(
     addr: SocketAddr,
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,

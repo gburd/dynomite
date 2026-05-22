@@ -397,6 +397,28 @@ impl Dispatcher for ClusterDispatcher {
             .map(|kp| kp.tag_bytes().to_vec())
             .unwrap_or_default();
         let plan = self.plan(&req, &key);
+        // Capture the originating request span here. Every
+        // `OutboundRequest` we hand off across an mpsc channel
+        // carries a clone so the receiver task can `enter()` it
+        // and attach its own work as children.
+        let req_span = tracing::Span::current();
+        let plan_kind: &'static str = match &plan {
+            DispatchPlan::Drop => "drop",
+            DispatchPlan::NoTargets => "no_targets",
+            DispatchPlan::LocalDatastore => "local_datastore",
+            DispatchPlan::Replicas(_) => "replicas",
+        };
+        let target_count = match &plan {
+            DispatchPlan::Replicas(t) => t.len(),
+            _ => 0,
+        };
+        let _plan_span = tracing::info_span!(
+            "dispatch.plan",
+            req_id = req.id(),
+            plan = plan_kind,
+            targets = target_count,
+        )
+        .entered();
         match plan {
             DispatchPlan::Drop => DispatchOutcome::Drop,
             DispatchPlan::NoTargets => {
@@ -434,6 +456,7 @@ impl Dispatcher for ClusterDispatcher {
                         bytes,
                         req_id: req.id(),
                         responder,
+                        span: req_span.clone(),
                     };
                     if tx.try_send(env).is_err() {
                         // Backend channel full or closed: surface
@@ -478,6 +501,7 @@ impl Dispatcher for ClusterDispatcher {
                                 bytes: bytes.clone(),
                                 req_id: req.id(),
                                 responder: responder.clone(),
+                                span: req_span.clone(),
                             };
                             if tx.try_send(env).is_ok() {
                                 sent += 1;
@@ -488,6 +512,7 @@ impl Dispatcher for ClusterDispatcher {
                             bytes: bytes.clone(),
                             req_id: req.id(),
                             responder: responder.clone(),
+                            span: req_span.clone(),
                         };
                         if tx.try_send(env).is_ok() {
                             sent += 1;
