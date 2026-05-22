@@ -701,7 +701,15 @@ pub fn redis_parse_req_with_args(
                         state = ReqState::ArgnLen;
                     }
                     CommandClass::ArgEval => {
-                        if rntokens < 2 {
+                        // After parsing the script body we need at
+                        // least the `numkeys` argument to follow.
+                        // Valid Redis EVAL forms include `EVAL
+                        // "script" 0` (no keys, no args) which has
+                        // rntokens == 1 after the script. The
+                        // earlier `< 2` bound rejected that and
+                        // closed the client connection on every
+                        // EVAL-with-no-extra-args invocation.
+                        if rntokens < 1 {
                             return finish_req_error(
                                 r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
                                 quit, routing,
@@ -764,15 +772,19 @@ pub fn redis_parse_req_with_args(
                         p = new_p;
                         if class == CommandClass::ArgEval {
                             // Token holds the start of the integer.
+                            // `read_bulk_arg` returns `needed + 1`,
+                            // so position `p - 1` is the trailing
+                            // `\r`. The digit string is
+                            // `input[start..p - 1]`.
                             let start = token.unwrap_or(0);
-                            if start >= p {
+                            if start >= p.saturating_sub(1) {
                                 return finish_req_error(
                                     r, state, p, token, rlen, rntokens, ntokens, nkeys, ty,
                                     is_read, quit, routing,
                                 );
                             }
                             let mut nkey: u32 = 0;
-                            for &b in &input[start..p] {
+                            for &b in &input[start..p - 1] {
                                 if b.is_ascii_digit() {
                                     nkey =
                                         nkey.saturating_mul(10).saturating_add(u32::from(b - b'0'));
@@ -783,7 +795,11 @@ pub fn redis_parse_req_with_args(
                                     );
                                 }
                             }
-                            if nkey == 0 || rntokens < nkey {
+                            // numkeys may legitimately be 0 (script
+                            // takes no keys). Validate only that
+                            // there are at least `nkey` more bulk
+                            // tokens to follow.
+                            if rntokens < nkey {
                                 return finish_req_error(
                                     r, state, p, token, rlen, rntokens, ntokens, nkeys, ty,
                                     is_read, quit, routing,
@@ -838,13 +854,31 @@ pub fn redis_parse_req_with_args(
                         state = ReqState::ArgnLen;
                     }
                     CommandClass::ArgEval => {
-                        if rntokens < 1 {
-                            return finish_req_error(
-                                r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read,
-                                quit, routing,
-                            );
+                        // After parsing the numkeys arg, the
+                        // remaining tokens are `numkeys` keys
+                        // followed by zero or more args. If
+                        // numkeys=0 AND no more args remain we
+                        // are done with a valid `EVAL "script"
+                        // 0` request.
+                        if rntokens == 0 {
+                            return finish_req_ok(r, p, ty, is_read, quit, routing, ntokens, nkeys);
                         }
-                        state = ReqState::KeyLen;
+                        // Move to the keys section if numkeys > 0
+                        // OR to the args section if numkeys == 0
+                        // and we still have arg tokens to read.
+                        // The state-transition itself does not
+                        // need to know which case we are in:
+                        // KeyLen reads the next bulk len whether
+                        // it represents a key (recorded with
+                        // routing tag) or an arg (recorded with
+                        // record_args). For EVAL with numkeys=0
+                        // we want the arg path, so route to
+                        // ArgnLen instead.
+                        if nkeys == 0 {
+                            state = ReqState::ArgnLen;
+                        } else {
+                            state = ReqState::KeyLen;
+                        }
                     }
                     _ => {
                         return finish_req_error(
