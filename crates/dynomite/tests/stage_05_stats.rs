@@ -170,6 +170,121 @@ async fn rest_endpoint_serves_snapshot_json() {
         .expect("server completed without error");
 }
 
+#[tokio::test]
+async fn metrics_endpoint_returns_prometheus_text() {
+    let snap = deterministic_snapshot();
+    let sink = Arc::new(Mutex::new(snap));
+    let addr: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid loopback addr");
+    let server = StatsServer::bind(addr, Arc::clone(&sink))
+        .await
+        .expect("bind ephemeral port");
+    let local = server.local_addr().expect("local address");
+    let handle = tokio::spawn(async move { server.accept_one().await });
+
+    let mut conn = TcpStream::connect(local)
+        .await
+        .expect("connect to stats server");
+    conn.write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .expect("write request");
+    let mut buf = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(2), conn.read_to_end(&mut buf))
+        .await
+        .expect("response within timeout")
+        .expect("read response");
+    assert!(read > 0, "expected non-empty response");
+
+    let response = String::from_utf8(buf).expect("response is utf-8");
+    let header_end = response
+        .find("\r\n\r\n")
+        .expect("header terminator present");
+    let status_line = response.lines().next().expect("status line");
+    assert!(
+        status_line.starts_with("HTTP/1.1 200"),
+        "unexpected status: {status_line}"
+    );
+    let headers = &response[..header_end];
+    let ct_line = headers
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("content-type:"))
+        .expect("Content-Type header present");
+    let ct_value = ct_line
+        .splitn(2, ':')
+        .nth(1)
+        .expect("Content-Type has value")
+        .trim();
+    assert!(
+        ct_value.starts_with("text/plain"),
+        "unexpected Content-Type: {ct_value}"
+    );
+    assert!(
+        ct_value.contains("version=0.0.4"),
+        "Content-Type missing prometheus version: {ct_value}"
+    );
+
+    let body = &response[header_end + 4..];
+    assert!(
+        body.contains("dynomite_build_info"),
+        "prometheus body missing build_info:\n{body}"
+    );
+    assert!(
+        body.contains("# HELP "),
+        "prometheus body missing # HELP lines:\n{body}"
+    );
+    assert!(
+        body.contains("# TYPE "),
+        "prometheus body missing # TYPE lines:\n{body}"
+    );
+
+    handle
+        .await
+        .expect("server task joined")
+        .expect("server completed without error");
+}
+
+#[tokio::test]
+async fn stats_endpoint_unchanged() {
+    // Regression guard: hitting /stats must return the exact same JSON
+    // body as the existing fixture used by `snapshot_matches_fixture`.
+    // The /stats route is an alias for the legacy / and /info paths
+    // and exists so monitoring tooling can use a stable URL.
+    let snap = deterministic_snapshot();
+    let sink = Arc::new(Mutex::new(snap));
+    let addr: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid loopback addr");
+    let server = StatsServer::bind(addr, Arc::clone(&sink))
+        .await
+        .expect("bind ephemeral port");
+    let local = server.local_addr().expect("local address");
+    let handle = tokio::spawn(async move { server.accept_one().await });
+
+    let mut conn = TcpStream::connect(local)
+        .await
+        .expect("connect to stats server");
+    conn.write_all(b"GET /stats HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .expect("write request");
+    let mut buf = Vec::new();
+    let read = tokio::time::timeout(Duration::from_secs(2), conn.read_to_end(&mut buf))
+        .await
+        .expect("response within timeout")
+        .expect("read response");
+    assert!(read > 0, "expected non-empty response");
+
+    let response = String::from_utf8(buf).expect("response is utf-8");
+    let header_end = response
+        .find("\r\n\r\n")
+        .expect("header terminator present");
+    assert!(response[..header_end].contains("Content-Type: application/json"));
+    let body = &response[header_end + 4..];
+    let expected = include_str!("fixtures/stats/snapshot.json").trim_end_matches('\n');
+    assert_eq!(body, expected, "/stats body diverged from fixture");
+
+    handle
+        .await
+        .expect("server task joined")
+        .expect("server completed without error");
+}
+
 #[hegel::test(test_cases = 256)]
 fn histogram_percentile_is_monotone_non_decreasing(tc: TestCase) {
     let values = tc.draw(
