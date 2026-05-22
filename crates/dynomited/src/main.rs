@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use dynomite::conf::Config;
-use dynomite::core::log::log_init;
+use dynomite::core::log::{log_init_with_format, LogFormat};
 use dynomite::stats::describe_stats;
 use dynomited::asciilogo::ASCII_LOGO;
 use dynomited::cli::{print_usage, print_version, Cli};
@@ -123,7 +123,15 @@ fn run_server(cli: &Cli) -> ExitCode {
         }
     }
 
-    if let Err(e) = log_init(cli.verbosity, cli.output.as_deref()) {
+    let log_format = match resolve_log_format(cli, &cfg) {
+        Ok(f) => f,
+        Err(reason) => {
+            eprintln!("dynomite: {reason}");
+            return ExitCode::from(1);
+        }
+    };
+
+    if let Err(e) = log_init_with_format(cli.verbosity, cli.output.as_deref(), log_format) {
         eprintln!("dynomite: log_init failed: {e}");
         return ExitCode::from(1);
     }
@@ -181,4 +189,18 @@ fn run_server(cli: &Cli) -> ExitCode {
             }
         }
     })
+}
+
+/// Resolve the effective log format for this invocation.
+///
+/// Precedence: explicit `--log-format` CLI flag > YAML `log_format:`
+/// pool field > built-in default ([`LogFormat::Default`]).
+fn resolve_log_format(cli: &Cli, cfg: &Config) -> Result<LogFormat, String> {
+    if let Some(s) = cli.log_format.as_deref() {
+        return LogFormat::parse(s).map_err(|e| format!("--log-format: {e}"));
+    }
+    if let Some(s) = cfg.pool().log_format.as_deref() {
+        return LogFormat::parse(s).map_err(|e| format!("log_format: {e}"));
+    }
+    Ok(LogFormat::Default)
 }
