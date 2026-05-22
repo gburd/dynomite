@@ -214,6 +214,14 @@ pub struct ConfPool {
     pub data_store: Option<i64>,
     /// `preconnect:` - eagerly establish connections at startup.
     pub preconnect: Option<bool>,
+    /// `redis_requirepass:` - optional password sent as `AUTH <pw>`
+    /// on every backend connection right after the TCP handshake.
+    /// Mirrors the Redis server option of the same name. Leave
+    /// unset to disable. Memcache backends are not authenticated
+    /// (`AUTH` is Redis-specific; memcache binary SASL is not
+    /// implemented).
+    #[serde(default)]
+    pub redis_requirepass: Option<String>,
     /// `auto_eject_hosts:` - automatically eject failing peers.
     pub auto_eject_hosts: Option<bool>,
     /// `server_retry_timeout:` - retry interval for ejected servers (ms).
