@@ -176,3 +176,100 @@ including:
 - any observed throughput dips correlated with chaos events
 - per-host CPU / memory if the metrics make it easy
 - what pass-2 should additionally measure
+
+## 6. Phi-accrual failure detector for peer plane (post-gossip)
+
+**Source**: discussion of Cassandra/Akka/Riak-style failure
+detection vs Dynomite's current consecutive-failure model.
+
+**Why**: today our peer health story is the C reference's:
+periodic gossip ticks + a counter that ejects after N missed
+updates. That model is brittle for cross-DC links with high
+latency variance (e.g. our floki<->arnold Tailscale path at
+95ms +/- 200ms). The Cassandra-style accrual detector adapts
+the threshold to historical inter-arrival times and gives a
+continuous suspicion value rather than a binary up/down.
+
+**Scope**: peer plane only. Backends (redis) get pinged by
+actual requests, not heartbeats; `auto_eject::AutoEject` is the
+right model there and stays.
+
+**Ordering**: depends on gossip being wired in the binary,
+which is currently logged as 'deferred'. Sequence:
+  1. Wire gossip task in `dynomited::server` (~2 days).
+  2. Add `cluster::failure_detector::PhiAccrual` next to
+     `net::auto_eject::AutoEject` (~1 day with tests).
+  3. Feed gossip heartbeats into the detector; emit
+     `PeerState::Down` transitions when phi crosses the
+     configured threshold (default 8, configurable via
+     `phi_threshold:` pool config).
+
+**Implementation sketch**:
+```rust
+pub struct PhiAccrual {
+    window_size: usize,
+    intervals: VecDeque<f64>,    // ms between recent heartbeats
+    last_heartbeat: Option<Instant>,
+    threshold: f64,              // default 8.0
+}
+
+impl PhiAccrual {
+    pub fn record_heartbeat(&mut self, now: Instant) {
+        if let Some(prev) = self.last_heartbeat {
+            let dt_ms = now.duration_since(prev).as_secs_f64() * 1000.0;
+            if self.intervals.len() == self.window_size {
+                self.intervals.pop_front();
+            }
+            self.intervals.push_back(dt_ms);
+        }
+        self.last_heartbeat = Some(now);
+    }
+
+    pub fn phi(&self, now: Instant) -> f64 {
+        let Some(last) = self.last_heartbeat else { return 0.0; };
+        let elapsed_ms = now.duration_since(last).as_secs_f64() * 1000.0;
+        // Exponential model: -log10(P(elapsed > x)) given mean.
+        let mean = self.intervals.iter().sum::<f64>()
+            / self.intervals.len().max(1) as f64;
+        if mean <= 0.0 { return 0.0; }
+        // P(X > elapsed) = exp(-elapsed / mean) for exponential.
+        // phi = -log10(P) = elapsed / (mean * ln(10))
+        elapsed_ms / (mean * std::f64::consts::LN_10)
+    }
+
+    pub fn is_suspect(&self, now: Instant) -> bool {
+        self.phi(now) > self.threshold
+    }
+}
+```
+
+A per-peer instance lives next to the peer's `PeerState`. The
+gossip task calls `record_heartbeat` on incoming gossip; a
+periodic ticker checks `phi` against threshold and updates
+`PeerState::Down` when crossed. AutoEject for backends stays
+untouched.
+
+**Estimated effort**: ~1 day for the detector itself; gossip
+wiring is a separate ~2 day item.
+
+## 7. Quoracle-based operator tool (deferred, optional)
+
+**Source**: review of the quoracle crate at
+`ssh://git@codeberg.org/gregburd/rs-quoracle.git`.
+
+**Idea**: a `dyn-quoracle-tool` binary (analogous to our existing
+`dyn-hash-tool`) that takes a YAML pool config + chosen
+consistency level and emits read/write resilience numbers, load
+distribution under various read fractions, capacity ceilings,
+and recommended token placements. Pure offline analysis; not on
+the runtime path.
+
+**Adopt as runtime dep**: no. Dynomite's dispatcher does not
+benefit from runtime LP-based quorum optimization; consistency
+levels are static.
+
+**Adopt as tool**: optional, deferred until a user asks. The
+value is real (helps operators design clusters and reason about
+failure tolerance) but it's a separate side project.
+
+**Estimated effort**: 1-2 days for a useful first cut.
