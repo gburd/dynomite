@@ -106,17 +106,25 @@ start_host() {
     "${runner[@]}" "mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs"
     # Persist start-args so the chaos injector can restart
     # dynomited with the same arguments after a SIGKILL.
-    "${runner[@]}" "cat > /scratch/dynomite-chaos/run/seeds.yml <<'EOF'
+    #
+    # Build seeds.yml + start-args via stdin to avoid double
+    # heredoc expansion: the previous version used
+    # ssh "...cat > start-args <<EOF..." which command-substituted
+    # `$(cat seeds.yml)` on the REMOTE side at write time, baking
+    # the seeds into start-args without quoting and breaking the
+    # later `. start-args` in chaos-injector.sh. Pipe through
+    # stdin so the remote `cat` writes the bytes verbatim.
+    "${runner[@]}" "cat > /scratch/dynomite-chaos/run/seeds.yml" <<EOF
 $seeds_str
 EOF
-cat > /scratch/dynomite-chaos/run/start-args <<EOF
+    "${runner[@]}" "cat > /scratch/dynomite-chaos/run/start-args" <<EOF
 TOKENS='$TOKENS'
 SEEDS=\$(cat /scratch/dynomite-chaos/run/seeds.yml)
 DATASTORE_PORT=$DATASTORE_PORT
 DYN_LISTEN_PORT=$DYN_LISTEN_PORT
 CLIENT_LISTEN_PORT=$CLIENT_LISTEN_PORT
 STATS_LISTEN_PORT=$STATS_LISTEN_PORT
-EOF"
+EOF
     # FreeBSD's /bin/sh is a different shell than bash; pick
     # bash explicitly for the start-host script.
     local bash_path=/bin/bash
