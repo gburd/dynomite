@@ -30,16 +30,6 @@ fn bundled_iv_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recon/recon_iv.pem")
 }
 
-fn workspace_root() -> PathBuf {
-    // crates/dynomite/tests/stage_11_entropy.rs -> repo root
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
-
 fn cfg(listen: std::net::SocketAddr, peer: std::net::SocketAddr, encrypt: bool) -> EntropyConfig {
     EntropyConfig {
         key_file: bundled_key_path(),

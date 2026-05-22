@@ -404,6 +404,10 @@ fn plan_with_consistency(
 }
 
 impl Dispatcher for ClusterDispatcher {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "single dispatch fn must enumerate every plan; splitting hides the planner-to-effect mapping"
+    )]
     fn dispatch(&self, req: Msg, responder: ServerSink) -> DispatchOutcome {
         if req.flags().quit {
             return DispatchOutcome::Drop;

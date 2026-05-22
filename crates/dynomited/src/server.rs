@@ -45,7 +45,7 @@
 //!   API in Stage 13.
 
 use std::io;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -172,6 +172,10 @@ impl Server {
     ///
     /// # Errors
     /// [`ServerError`] for configuration or I/O failures.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Builder threads config validation, listener bind, backend wiring, peer-supervisor spawn, dispatcher construction, and shutdown channel setup. Splitting hides the assembly order which matters for crash-on-construct semantics."
+    )]
     pub async fn build(mut config: Config) -> Result<Self, ServerError> {
         config.finalize();
         config.validate().map_err(|e| ServerError::BadConfig {
@@ -235,7 +239,6 @@ impl Server {
         let backend_addr: SocketAddr = format!("{}:{}", datastore.host(), datastore.port())
             .parse()
             .or_else(|_| -> Result<SocketAddr, ServerError> {
-                use std::net::ToSocketAddrs;
                 let mut iter = (datastore.host(), datastore.port())
                     .to_socket_addrs()
                     .map_err(ServerError::Io)?;
@@ -276,8 +279,7 @@ impl Server {
                     return Err(ServerError::BadConfig {
                         field: "servers",
                         reason: format!(
-                            "preconnect=true: could not connect to datastore '{}': {}",
-                            backend_addr, e
+                            "preconnect=true: could not connect to datastore '{backend_addr}': {e}"
                         ),
                     });
                 }
@@ -285,8 +287,7 @@ impl Server {
                     return Err(ServerError::BadConfig {
                         field: "servers",
                         reason: format!(
-                            "preconnect=true: connect to datastore '{}' timed out after 5s",
-                            backend_addr
+                            "preconnect=true: connect to datastore '{backend_addr}' timed out after 5s"
                         ),
                     });
                 }
@@ -325,7 +326,6 @@ impl Server {
             // supervisor will then sit on the channel and silently
             // discard any forwarded requests until the operator
             // fixes the seed entry.
-            use std::net::ToSocketAddrs;
             let resolved = match (host.as_str(), port).to_socket_addrs() {
                 Ok(mut iter) => iter.next(),
                 Err(e) => {
@@ -478,6 +478,10 @@ impl Server {
             listen = %self.listen_addr,
             peers = self.pool.peers().read().len(),
         ),
+    )]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "single supervise loop must enumerate every shutdown source (signal, ctrl-c, dispatcher) plus join every spawned task; splitting hides the shutdown ordering invariants"
     )]
     pub async fn run(self) -> Result<(), ServerError> {
         let Self {
@@ -879,6 +883,10 @@ async fn backend_supervisor(
     skip_all,
     fields(ds = ?data_store),
 )]
+#[allow(
+    clippy::too_many_lines,
+    reason = "single backend conn driver enumerates every state of a request/response interleave; splitting hides the borrow-checker boundaries on `accumulated` and `pending`"
+)]
 async fn run_one_backend_conn(
     mut conn: Conn,
     rx: &mut tokio::sync::mpsc::Receiver<OutboundRequest>,
@@ -938,7 +946,7 @@ async fn run_one_backend_conn(
                 conn.record_recv(n);
                 accumulated.extend_from_slice(&read_buf[..n]);
                 while !accumulated.is_empty() {
-                    let head_id = pending.front().map(|p| p.0).unwrap_or(0);
+                    let head_id = pending.front().map_or(0, |p| p.0);
                     let mut msg = Msg::new(head_id, MsgType::Unknown, false);
                     let result = match data_store {
                         dynomite::conf::DataStore::Redis => {
@@ -1142,7 +1150,6 @@ fn listen_to_socket_addr(l: &ConfListen, field: &'static str) -> Result<SocketAd
         EndpointKind::Hostname => {
             // Resolve via the std resolver. The reference engine
             // also resolves at bind time and aborts on failure.
-            use std::net::ToSocketAddrs;
             let pname = l.pname();
             pname
                 .to_socket_addrs()
@@ -1371,8 +1378,7 @@ mod tests {
             // hang on a misbehaving client.
             for _ in 0..32 {
                 match tokio::time::timeout(Duration::from_secs(1), sock.read(&mut buf)).await {
-                    Ok(Ok(0)) | Err(_) => break,
-                    Ok(Ok(n)) => {
+                    Ok(Ok(n)) if n > 0 => {
                         let mut g = recorded_inner.lock().await;
                         g.extend_from_slice(&buf[..n]);
                         // RESP `*2\r\n$4\r\nAUTH\r\n$N\r\n<pw>\r\n`
@@ -1381,7 +1387,8 @@ mod tests {
                             break;
                         }
                     }
-                    Ok(Err(_)) => break,
+                    // Eof, timeout, or read error - all terminal.
+                    _ => break,
                 }
             }
             let _ = sock.write_all(reply).await;

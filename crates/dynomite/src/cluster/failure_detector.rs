@@ -258,6 +258,10 @@ impl PhiAccrual {
     /// heartbeats arrive faster than the configured gossip
     /// cadence (e.g. burst-then-pause).
     #[must_use]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "window length is bounded by window_size (default 100), well below f64 mantissa"
+    )]
     pub fn mean_interval_ms(&self) -> f64 {
         if self.intervals.is_empty() {
             return self.min_mean_ms;
@@ -300,7 +304,7 @@ mod tests {
     #[test]
     fn no_heartbeat_means_phi_zero() {
         let fd = PhiAccrual::default();
-        assert_eq!(fd.phi(Instant::now()), 0.0);
+        assert!(fd.phi(Instant::now()).abs() < f64::EPSILON);
         assert!(!fd.is_suspect(Instant::now()));
     }
 
@@ -309,7 +313,7 @@ mod tests {
         let mut fd = PhiAccrual::default();
         fd.record_heartbeat(t(0, 0));
         // No inter-arrival data yet.
-        assert_eq!(fd.phi(t(60, 0)), 0.0);
+        assert!(fd.phi(t(60, 0)).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -395,7 +399,7 @@ mod tests {
         fd.reset();
         assert_eq!(fd.sample_count(), 0);
         assert!(fd.last_heartbeat().is_none());
-        assert_eq!(fd.phi(Instant::now()), 0.0);
+        assert!(fd.phi(Instant::now()).abs() < f64::EPSILON);
     }
 
     #[test]
