@@ -57,6 +57,23 @@ impl DnodeServerConn {
     /// # Errors
     /// Forwarded transport / DNODE parse errors.
     pub async fn run(mut self) -> Result<(), NetError> {
+        let mut requests = std::mem::replace(&mut self.requests, {
+            let (_tx, rx) = mpsc::channel::<OutboundRequest>(1);
+            rx
+        });
+        self.run_with(&mut requests).await
+    }
+
+    /// Drive the FSM using a borrowed request receiver. Useful
+    /// for reconnect supervisors that own the receiver across
+    /// multiple connection attempts and pass it in by reference.
+    ///
+    /// # Errors
+    /// Forwarded transport / DNODE parse errors.
+    pub async fn run_with(
+        &mut self,
+        requests: &mut mpsc::Receiver<OutboundRequest>,
+    ) -> Result<(), NetError> {
         let mut read_buf = vec![0u8; 4096];
         let mut accumulated = Vec::<u8>::new();
         let mut parser = DnodeParser::new();
@@ -69,7 +86,7 @@ impl DnodeServerConn {
             }
 
             tokio::select! {
-                req = self.requests.recv() => {
+                req = requests.recv() => {
                     let Some(req) = req else { continue; };
                     let mut header_buf = self.conn.mbuf_pool().get();
                     dmsg_write(
