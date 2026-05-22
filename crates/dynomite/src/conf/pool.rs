@@ -284,20 +284,29 @@ pub struct ConfPool {
     pub remote_peer_connections: Option<u8>,
     /// `read_repairs_enabled:` - enable read-repair on quorum mismatch.
     pub read_repairs_enabled: Option<bool>,
+    /// `log_format:` - selectable shape for tracing output.
+    ///
+    /// Accepted values are `default`, `rfc5424`, `rfc3164`, `json`,
+    /// and `ndjson` (alias of `json`). When unset, the historical
+    /// default text format is used. Parsing is performed at
+    /// log-installation time by [`crate::core::log::LogFormat::parse`];
+    /// invalid values fail the `dynomited --test-conf` gate.
+    pub log_format: Option<String>,
 
-    /// `observability:` - opt-in observability knobs (currently:
-    /// distributed-tracing OTLP exporter). Absent / null disables
-    /// every observability surface, preserving today's silent
-    /// default. See [`ObservabilityConfig`].
+    /// `observability:` - opt-in observability knobs (distributed
+    /// tracing OTLP exporter today; the OTLP log appender is
+    /// scoped but not yet wired). Absent / null disables every
+    /// observability surface, preserving today's silent default.
+    /// See [`ObservabilityConfig`].
     #[serde(default)]
     pub observability: Option<ObservabilityConfig>,
 }
 
 /// Opt-in observability configuration.
 ///
-/// Absent or null disables every observability surface. Currently
-/// covers distributed-tracing only; metrics and log-format knobs
-/// land in adjacent milestones and reuse the same field.
+/// Absent or null disables every observability surface. Covers
+/// distributed-tracing today; an OTLP log-appender bridge using
+/// the same fields is scoped as a follow-up.
 ///
 /// # Examples
 ///
@@ -305,6 +314,7 @@ pub struct ConfPool {
 /// use dynomite::conf::ObservabilityConfig;
 /// let cfg = ObservabilityConfig {
 ///     otlp_traces_endpoint: Some("http://collector:4317".into()),
+///     otlp_logs_endpoint: None,
 ///     service_name: Some("dynomited".into()),
 ///     traces_sampling: Some(0.1),
 /// };
@@ -318,8 +328,14 @@ pub struct ObservabilityConfig {
     /// the OTel SDK install entirely; tracing keeps using the
     /// configured `tracing-subscriber` log layer only.
     pub otlp_traces_endpoint: Option<String>,
-    /// Service name attached to every emitted span. Defaults to
-    /// `"dynomited"` when unset.
+    /// OTLP gRPC endpoint for log records. When set the binary
+    /// installs an `opentelemetry-appender-tracing` bridge
+    /// alongside the local log writer. The wiring is scoped as
+    /// a follow-up; the field is parsed today so YAML files
+    /// authored against the eventual implementation validate.
+    pub otlp_logs_endpoint: Option<String>,
+    /// Service name attached to every emitted span / log record.
+    /// Defaults to `"dynomited"` when unset.
     pub service_name: Option<String>,
     /// Trace sampling ratio in `[0.0, 1.0]`. `1.0` records every
     /// trace, `0.0` records none. Defaults to `1.0` when unset.
@@ -492,6 +508,14 @@ impl ConfPool {
                 Some(s) if !s.is_empty() => {}
                 _ => return Err(ConfError::MissingRequired("pem_key_file")),
             }
+        }
+
+        if let Some(s) = &self.log_format {
+            crate::core::log::LogFormat::parse(s).map_err(|e| ConfError::BadServer {
+                field: "log_format",
+                value: s.clone(),
+                reason: e.to_string(),
+            })?;
         }
 
         match &self.servers {
@@ -710,5 +734,53 @@ mod tests {
             p.validate("p"),
             Err(ConfError::MissingRequired("servers"))
         ));
+    }
+
+    #[test]
+    fn log_format_known_values_accepted() {
+        for value in ["default", "rfc5424", "rfc3164", "json", "ndjson", "DEFAULT"] {
+            let mut p = pool();
+            p.log_format = Some(value.to_string());
+            p.apply_defaults();
+            assert!(p.validate("p").is_ok(), "value {value:?} should validate");
+        }
+    }
+
+    #[test]
+    fn log_format_unknown_rejected() {
+        let mut p = pool();
+        p.log_format = Some("yaml".to_string());
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfError::BadServer {
+                    field: "log_format",
+                    ..
+                }
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn observability_block_round_trips() {
+        let yaml = r"
+observability:
+  otlp_logs_endpoint: http://collector:4317
+  service_name: dynomited
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+";
+        let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
+        let obs = p.observability.as_ref().expect("observability set");
+        assert_eq!(
+            obs.otlp_logs_endpoint.as_deref(),
+            Some("http://collector:4317")
+        );
+        assert_eq!(obs.service_name.as_deref(), Some("dynomited"));
     }
 }

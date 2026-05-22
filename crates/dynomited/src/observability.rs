@@ -160,6 +160,7 @@ pub fn install_global(
 /// # async fn main() {
 /// let cfg = ObservabilityConfig {
 ///     otlp_traces_endpoint: Some("http://localhost:4317".into()),
+///     otlp_logs_endpoint: None,
 ///     service_name: Some("my-service".into()),
 ///     traces_sampling: Some(1.0),
 /// };
@@ -219,6 +220,7 @@ mod tests {
     fn empty_endpoint_string_is_treated_as_unset() {
         let cfg = ObservabilityConfig {
             otlp_traces_endpoint: Some(String::new()),
+            otlp_logs_endpoint: None,
             service_name: None,
             traces_sampling: None,
         };
@@ -244,6 +246,7 @@ mod tests {
         // collector the test would hang on flush.
         let cfg = ObservabilityConfig {
             otlp_traces_endpoint: Some("http://127.0.0.1:4317".into()),
+            otlp_logs_endpoint: None,
             service_name: Some("dynomited-test".into()),
             traces_sampling: Some(0.5),
         };
