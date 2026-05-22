@@ -97,6 +97,13 @@ impl Proxy {
     ///
     /// # Errors
     /// Forwarded from the listener accept call.
+    #[tracing::instrument(
+        name = "proxy.run",
+        skip_all,
+        fields(
+            local = self.listener.local_addr().map_or_else(|_| String::from("?"), |a| a.to_string()),
+        ),
+    )]
     pub async fn run(
         self,
         cancel: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
@@ -124,11 +131,21 @@ impl Proxy {
                     let cap = self.response_capacity;
                     let ds = self.data_store;
                     tracing::debug!(?peer, "proxy accepted client");
-                    let handle = tokio::spawn(async move {
-                        let (tx, rx) = mpsc::channel(cap);
-                        let handler = ClientHandler::new(dispatcher, tx, ds);
-                        client_loop(conn, handler, rx).await
-                    });
+                    let accept_span = tracing::info_span!(
+                        "client.accept",
+                        peer = %peer,
+                    );
+                    let handle = tokio::spawn(
+                        {
+                            use tracing::Instrument as _;
+                            async move {
+                                let (tx, rx) = mpsc::channel(cap);
+                                let handler = ClientHandler::new(dispatcher, tx, ds);
+                                client_loop(conn, handler, rx).await
+                            }
+                            .instrument(accept_span)
+                        },
+                    );
                     clients.push(handle);
                 }
             }

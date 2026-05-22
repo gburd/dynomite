@@ -192,6 +192,7 @@ async fn drive_dnode_parser(
                                 let env = OutboundEnvelope {
                                     req_id: rsp.id(),
                                     rsp,
+                                    span: tracing::Span::current(),
                                 };
                                 let _ = handler.response_tx().send(env).await;
                             }
