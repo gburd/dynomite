@@ -16,6 +16,7 @@ use parking_lot::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::stats::prometheus::render_prometheus;
 use crate::stats::snapshot::Snapshot;
 
 /// Maximum number of bytes the server will read for an HTTP request
@@ -206,9 +207,13 @@ async fn handle_parsed(
         return write_response(sock, 405, "Method Not Allowed", b"").await;
     }
     match path {
-        "/" | "/info" => {
+        "/" | "/info" | "/stats" => {
             let body = snapshot.to_json();
             write_json_response(sock, body.as_bytes()).await
+        }
+        "/metrics" => {
+            let body = render_prometheus(&snapshot);
+            write_metrics_response(sock, body.as_bytes()).await
         }
         _ => write_response(sock, 200, "OK", b"OK\r\n").await,
     }
@@ -235,6 +240,18 @@ async fn write_response(
 async fn write_json_response(sock: &mut TcpStream, body: &[u8]) -> io::Result<()> {
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    sock.write_all(header.as_bytes()).await?;
+    sock.write_all(body).await?;
+    sock.shutdown().await?;
+    Ok(())
+}
+
+async fn write_metrics_response(sock: &mut TcpStream, body: &[u8]) -> io::Result<()> {
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
