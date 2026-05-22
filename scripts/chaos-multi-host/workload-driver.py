@@ -334,7 +334,9 @@ def main() -> int:
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    f = out.open("a", buffering=1)
+    # Truncate on each run; the coordinator manages run-id
+    # subdirs so we never want to mix sessions in one file.
+    f = out.open("w", buffering=1)
 
     counts: dict[tuple[str, str], int] = {}
     failures: dict[tuple[str, str], int] = {}
@@ -365,6 +367,15 @@ def main() -> int:
         except (RespError, ConnectionError, socket.timeout, OSError) as exc:
             key = (cls_name, type(exc).__name__)
             failures[key] = failures.get(key, 0) + 1
+            # Log a small sample of failures to stderr so the
+            # operator can correlate with dynomited / redis logs.
+            if failures[key] <= 5:
+                print(
+                    f"[{args.label}] {cls_name} call failed: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             with suppress(Exception):
                 conn.close()
         if sleep_per_op > 0:
