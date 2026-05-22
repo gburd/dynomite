@@ -262,8 +262,7 @@ impl PhiAccrual {
         if self.intervals.is_empty() {
             return self.min_mean_ms;
         }
-        let raw =
-            self.intervals.iter().sum::<f64>() / self.intervals.len() as f64;
+        let raw = self.intervals.iter().sum::<f64>() / self.intervals.len() as f64;
         if raw < self.min_mean_ms {
             self.min_mean_ms
         } else {
@@ -343,10 +342,8 @@ mod tests {
         // 100ms intervals, one fed wildly varying intervals
         // averaging 100ms. The jittery one should NOT flag a 1s
         // gap as suspect; the steady one should.
-        let mut steady =
-            PhiAccrual::new(50, 8.0).with_min_mean(Duration::from_millis(50));
-        let mut jittery =
-            PhiAccrual::new(50, 8.0).with_min_mean(Duration::from_millis(50));
+        let mut steady = PhiAccrual::new(50, 8.0).with_min_mean(Duration::from_millis(50));
+        let mut jittery = PhiAccrual::new(50, 8.0).with_min_mean(Duration::from_millis(50));
 
         // Steady: 100ms apart, exactly.
         for i in 0..50 {

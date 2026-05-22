@@ -164,6 +164,14 @@ impl ClientHandler {
 /// Any transport-level error is returned. Parse errors are surfaced
 /// as [`NetError::Parse`] and end the loop after sending a synthetic
 /// error response when possible.
+#[tracing::instrument(
+    name = "client_loop",
+    skip_all,
+    fields(
+        role = ?conn.role(),
+        peer = tracing::field::Empty,
+    ),
+)]
 pub async fn client_loop(
     mut conn: Conn,
     mut handler: ClientHandler,
@@ -227,6 +235,11 @@ pub async fn client_loop(
     }
 }
 
+#[tracing::instrument(
+    name = "client.parse_loop",
+    skip_all,
+    fields(accumulated = accumulated.len()),
+)]
 async fn drive_parser(
     conn: &mut Conn,
     handler: &mut ClientHandler,
@@ -251,40 +264,57 @@ async fn drive_parser(
                         "parser reported Ok with no bytes consumed".to_string(),
                     ));
                 }
-                // Carry the consumed wire bytes inside the msg so the
-                // dispatcher can forward them to a backend without
-                // having to re-encode. The C engine keeps the
-                // request bytes in the inbound mbuf chain across
-                // recv -> filter -> forward; the Rust port stores
-                // them on the msg's own mbuf chain instead.
-                let pool = conn.mbuf_pool().clone();
-                let mut buf = pool.get();
-                buf.recv(&accumulated[..consumed]);
-                msg.mbufs_mut().push_back(buf);
-                msg.recompute_mlen();
-                accumulated.drain(0..consumed);
-                let _ = consumed_before;
-                conn.outstanding_mut().insert(msg.id(), msg.id());
-                conn.enqueue_out(Msg::new(msg.id(), msg.ty(), true))?;
+                // Per-request span - one is created for every
+                // fully-parsed inbound message. Cross-task work
+                // (dispatch.plan, backend.send / parse, peer.send /
+                // parse, client.send) attaches as children via the
+                // captured `tracing::Span` on the OutboundRequest /
+                // OutboundEnvelope envelopes.
+                let req_span = tracing::info_span!(
+                    "client.parse",
+                    msg_id = msg.id(),
+                    msg_type = ?msg.ty(),
+                    bytes = consumed,
+                );
                 let was_quit = msg.flags().quit;
-                let outcome = handler
-                    .dispatcher
-                    .dispatch(msg, handler.response_tx.clone());
-                match outcome {
-                    DispatchOutcome::Pending | DispatchOutcome::Drop => {
-                        // Pending: dispatcher will deliver the
-                        // response asynchronously through the
-                        // response channel. Drop: dispatcher swallowed
-                        // the request (quit / filter); the C engine
-                        // mirrors this in `req_filter`.
-                    }
-                    DispatchOutcome::Inline(rsp) | DispatchOutcome::Error(rsp) => {
-                        let env = OutboundEnvelope {
-                            req_id: rsp.id(),
-                            rsp,
-                        };
-                        let _ = handler.response_tx.send(env).await;
-                    }
+                let inline_send: Option<OutboundEnvelope> = req_span.in_scope(|| {
+                    // Carry the consumed wire bytes inside the
+                    // msg so the dispatcher can forward them to a
+                    // backend without having to re-encode. The C
+                    // engine keeps the request bytes in the
+                    // inbound mbuf chain across recv -> filter
+                    // -> forward; the Rust port stores them on
+                    // the msg's own mbuf chain instead.
+                    let pool = conn.mbuf_pool().clone();
+                    let mut buf = pool.get();
+                    buf.recv(&accumulated[..consumed]);
+                    msg.mbufs_mut().push_back(buf);
+                    msg.recompute_mlen();
+                    accumulated.drain(0..consumed);
+                    let _ = consumed_before;
+                    conn.outstanding_mut().insert(msg.id(), msg.id());
+                    // The placeholder enqueue cannot fail under
+                    // normal operation; if it does we surface it
+                    // via the outer `?`.
+                    conn.enqueue_out(Msg::new(msg.id(), msg.ty(), true))
+                        .map_err(|e: NetError| e)?;
+                    let outcome = handler
+                        .dispatcher
+                        .dispatch(msg, handler.response_tx.clone());
+                    let inline = match outcome {
+                        DispatchOutcome::Pending | DispatchOutcome::Drop => None,
+                        DispatchOutcome::Inline(rsp) | DispatchOutcome::Error(rsp) => {
+                            Some(OutboundEnvelope {
+                                req_id: rsp.id(),
+                                rsp,
+                                span: tracing::Span::current(),
+                            })
+                        }
+                    };
+                    Ok::<Option<OutboundEnvelope>, NetError>(inline)
+                })?;
+                if let Some(env) = inline_send {
+                    let _ = handler.response_tx.send(env).await;
                 }
                 if was_quit {
                     // The C engine closes the client connection on
@@ -315,6 +345,10 @@ async fn drive_parser(
 }
 
 fn handle_response(conn: &mut Conn, env: &OutboundEnvelope, pending: &mut Vec<u8>) {
+    let _enter = env.span.enter();
+    let bytes_len: usize = env.rsp.mbufs().iter().map(|b| b.readable().len()).sum();
+    let _send_span =
+        tracing::info_span!("client.send", req_id = env.req_id, bytes = bytes_len,).entered();
     for buf in env.rsp.mbufs() {
         pending.extend_from_slice(buf.readable());
     }

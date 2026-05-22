@@ -61,6 +61,30 @@ use crate::msg::{ConsistencyLevel, Msg, MsgRouting, MsgType};
 use crate::net::dispatcher::{DispatchOutcome, Dispatcher, ServerSink};
 use crate::net::server::OutboundRequest;
 
+/// Build the `dispatch.plan` info span and enter it. Returns the
+/// originating client request span (captured before the plan
+/// span was entered) plus the entered plan-span guard. Factored
+/// out so [`ClusterDispatcher::dispatch`] stays inside the
+/// project's per-function line budget.
+fn enter_plan_span(
+    req_id: u64,
+    plan: &DispatchPlan,
+) -> (tracing::Span, tracing::span::EnteredSpan) {
+    let req_span = tracing::Span::current();
+    let kind: &'static str = match plan {
+        DispatchPlan::Drop => "drop",
+        DispatchPlan::NoTargets => "no_targets",
+        DispatchPlan::LocalDatastore => "local_datastore",
+        DispatchPlan::Replicas(_) => "replicas",
+    };
+    let targets = match plan {
+        DispatchPlan::Replicas(t) => t.len(),
+        _ => 0,
+    };
+    let span = tracing::info_span!("dispatch.plan", req_id, plan = kind, targets,).entered();
+    (req_span, span)
+}
+
 fn map_hash(h: ConfHashType) -> HashType {
     match h {
         ConfHashType::OneAtATime => HashType::OneAtATime,
@@ -397,6 +421,7 @@ impl Dispatcher for ClusterDispatcher {
             .map(|kp| kp.tag_bytes().to_vec())
             .unwrap_or_default();
         let plan = self.plan(&req, &key);
+        let (req_span, _plan_span) = enter_plan_span(req.id(), &plan);
         match plan {
             DispatchPlan::Drop => DispatchOutcome::Drop,
             DispatchPlan::NoTargets => {
@@ -434,6 +459,7 @@ impl Dispatcher for ClusterDispatcher {
                         bytes,
                         req_id: req.id(),
                         responder,
+                        span: req_span.clone(),
                     };
                     if tx.try_send(env).is_err() {
                         // Backend channel full or closed: surface
@@ -478,6 +504,7 @@ impl Dispatcher for ClusterDispatcher {
                                 bytes: bytes.clone(),
                                 req_id: req.id(),
                                 responder: responder.clone(),
+                                span: req_span.clone(),
                             };
                             if tx.try_send(env).is_ok() {
                                 sent += 1;
@@ -488,6 +515,7 @@ impl Dispatcher for ClusterDispatcher {
                             bytes: bytes.clone(),
                             req_id: req.id(),
                             responder: responder.clone(),
+                            span: req_span.clone(),
                         };
                         if tx.try_send(env).is_ok() {
                             sent += 1;

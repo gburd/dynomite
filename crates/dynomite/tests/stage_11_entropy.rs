@@ -23,13 +23,11 @@ use dynomite::entropy::send::StaticSnapshot;
 use dynomite::entropy::{boxed_sink, boxed_source, EntropyConfig, EntropyReceiver, EntropySender};
 
 fn bundled_key_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/recon/recon_key.pem")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recon/recon_key.pem")
 }
 
 fn bundled_iv_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/recon/recon_iv.pem")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recon/recon_iv.pem")
 }
 
 fn workspace_root() -> PathBuf {

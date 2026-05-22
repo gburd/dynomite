@@ -46,7 +46,7 @@ mod tokens;
 pub use endpoint::{ConfListen, EndpointKind};
 pub use enums::{ConsistencyLevel, DataStore, HashType, SecureServerOption};
 pub use error::ConfError;
-pub use pool::{ConfPool, Servers};
+pub use pool::{ConfPool, ObservabilityConfig, Servers};
 pub use server::{ConfDynSeed, ConfServer};
 pub use tokens::{TokenComponent, TokenList};
 

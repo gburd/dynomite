@@ -16,6 +16,7 @@
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tracing::Instrument as _;
 
 use crate::conf::DataStore;
 use crate::core::types::MsgId;
@@ -33,7 +34,7 @@ pub struct ServerConn {
     conn: Conn,
     requests: mpsc::Receiver<OutboundRequest>,
     data_store: DataStore,
-    pending_responses: std::collections::VecDeque<MsgId>,
+    pending_responses: std::collections::VecDeque<(MsgId, tracing::Span)>,
 }
 
 /// Envelope sent into the server driver.
@@ -41,6 +42,13 @@ pub struct ServerConn {
 /// The driver writes `bytes` to the transport then awaits a
 /// response, which it forwards as an [`OutboundEnvelope`] on
 /// `responder` along with `req_id`.
+///
+/// `span` carries the originating client request's
+/// [`tracing::Span`] across the mpsc channel boundary so the
+/// receiving task's work nests under the originating client
+/// span when distributed tracing is enabled. The default value
+/// is [`tracing::Span::none`], which has no overhead when no
+/// subscriber is installed.
 #[derive(Debug)]
 pub struct OutboundRequest {
     /// Wire bytes already encoded by the dispatcher.
@@ -49,6 +57,9 @@ pub struct OutboundRequest {
     pub req_id: MsgId,
     /// Channel the driver pushes the parsed response onto.
     pub responder: mpsc::Sender<OutboundEnvelope>,
+    /// Originating client request span; entered by the receiver
+    /// to nest backend / peer work under the request tree.
+    pub span: tracing::Span,
 }
 
 impl ServerConn {
@@ -124,10 +135,21 @@ impl ServerConn {
                         }
                         continue;
                     };
+                    let send_span = tracing::info_span!(
+                        parent: &out_req.span,
+                        "backend.send",
+                        req_id = out_req.req_id,
+                        bytes = out_req.bytes.len(),
+                    );
+                    let req_span = out_req.span.clone();
+                    let req_bytes = out_req.bytes;
                     let transport = self.conn.transport_mut().ok_or(NetError::Closed)?;
-                    transport.write_all(&out_req.bytes).await?;
-                    self.conn.record_send(out_req.bytes.len());
-                    self.pending_responses.push_back(out_req.req_id);
+                    let write_res = async { transport.write_all(&req_bytes).await }
+                        .instrument(send_span)
+                        .await;
+                    write_res?;
+                    self.conn.record_send(req_bytes.len());
+                    self.pending_responses.push_back((out_req.req_id, req_span));
                     pending_responder = Some(out_req.responder);
                 }
                 read_res = async {
@@ -159,7 +181,11 @@ impl ServerConn {
         use crate::proto::redis::redis_parse_rsp;
 
         while !accumulated.is_empty() {
-            let id = self.pending_responses.front().copied().unwrap_or(0);
+            let head_span = self
+                .pending_responses
+                .front()
+                .map_or_else(tracing::Span::current, |(_, s)| s.clone());
+            let id = self.pending_responses.front().map_or(0, |(i, _)| *i);
             let mut msg = Msg::new(id, MsgType::Unknown, false);
             let result = match self.data_store {
                 DataStore::Redis => redis_parse_rsp(&mut msg, accumulated),
@@ -173,16 +199,29 @@ impl ServerConn {
                     }
                     let bytes = accumulated[..consumed].to_vec();
                     accumulated.drain(0..consumed);
-                    let req_id = self.pending_responses.pop_front().unwrap_or(0);
-                    let mut rsp = msg;
-                    // Append raw response bytes onto the rsp's mbuf chain
-                    let pool = self.conn.mbuf_pool().clone();
-                    let mut buf = pool.get();
-                    buf.recv(&bytes);
-                    rsp.mbufs_mut().push_back(buf);
-                    rsp.recompute_mlen();
+                    let (req_id, req_span) =
+                        self.pending_responses.pop_front().unwrap_or((0, head_span));
+                    let parse_span = tracing::info_span!(
+                        parent: &req_span,
+                        "backend.parse",
+                        req_id,
+                        bytes = consumed,
+                    );
+                    let env = parse_span.in_scope(|| {
+                        let mut rsp = msg;
+                        let pool = self.conn.mbuf_pool().clone();
+                        let mut buf = pool.get();
+                        buf.recv(&bytes);
+                        rsp.mbufs_mut().push_back(buf);
+                        rsp.recompute_mlen();
+                        OutboundEnvelope {
+                            req_id,
+                            rsp,
+                            span: req_span,
+                        }
+                    });
                     if let Some(sender) = responder.as_ref() {
-                        let _ = sender.send(OutboundEnvelope { req_id, rsp }).await;
+                        let _ = sender.send(env).await;
                     }
                 }
                 MsgParseResult::Again => return Ok(()),

@@ -15,6 +15,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tracing::Instrument as _;
 
 use crate::stats::prometheus::render_prometheus;
 use crate::stats::snapshot::Snapshot;
@@ -153,13 +154,23 @@ impl StatsServer {
     /// # }
     /// ```
     pub async fn run(self) -> io::Result<()> {
-        loop {
-            let (sock, _peer) = self.listener.accept().await?;
-            let snapshot = self.source.lock().clone();
-            tokio::spawn(async move {
-                let _ = serve_connection(sock, snapshot).await;
-            });
+        let span = tracing::info_span!(
+            "stats_server.run",
+            local = %self.listener.local_addr().map_or_else(|_| String::from("?"), |a| a.to_string()),
+        );
+        let listener = self.listener;
+        let source = self.source;
+        async move {
+            loop {
+                let (sock, _peer) = listener.accept().await?;
+                let snapshot = source.lock().clone();
+                tokio::spawn(async move {
+                    let _ = serve_connection(sock, snapshot).await;
+                });
+            }
         }
+        .instrument(span)
+        .await
     }
 }
 
