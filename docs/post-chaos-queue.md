@@ -76,7 +76,51 @@ lands, optionally re-run a 30-min chaos pass with all three DCs
 configured to use a passworded redis. The existing rebuild cycle
 (podman on arnold, native on nuc, native on floki) is unchanged.
 
-## 2. (optional) Workload-driver source-port hardening
+## 2. Pidfile flock race on fast restart
+
+**Source**: bug surfaced by the live chaos run on arnold:
+
+```
+ERROR dynomited: create pid file
+      error=flock /scratch/dynomite-chaos/run/dynomited.pid:
+            EAGAIN: Try again
+      path=/scratch/dynomite-chaos/run/dynomited.pid
+```
+
+Observed 5 times across ~3 SIGKILL+restart cycles on arnold during
+the 2h pass-1 chaos run.
+
+**Cause**: chaos-injector.sh does `kill -KILL <pid>` then
+`sleep 2` then calls start-host.sh, which spawns a new dynomited
+via `nohup ... &`. The new dynomited tries to `flock(LOCK_EX |
+LOCK_NB)` the pidfile. The kernel may not have fully reaped the
+killed process yet, so its flock entry is still in the inode's
+lock list, causing EAGAIN.
+
+**Impact during pass-1**: zero client-visible failures. The
+backend_supervisor's reconnect retry loop eventually won (~2-3
+restart attempts per kill before one succeeded). The system is
+tolerant; the noise just shows up as `restart_failed` events in
+the chaos-events ndjson.
+
+**Two-pronged fix**:
+
+1. In `dynomited::pidfile`, retry the `flock` call up to N
+   times (e.g. 5 times at 100ms intervals) before bailing. The
+   kernel reaps in microseconds normally; a tiny retry budget
+   absorbs the race entirely.
+
+2. In `chaos-injector.sh`, after `kill -KILL`, busy-wait until
+   `kill -0 <pid>` returns non-zero (process is fully gone)
+   before calling start-host.sh. Bound the wait to ~5s.
+
+Fix (1) is the load-bearing one (helps any operator-driven
+restart, not just chaos). Fix (2) is a chaos-test hygiene fix.
+
+**Estimated effort**: 1 hour for both, including a unit test
+that opens an flock and verifies the new pidfile loop retries.
+
+## 3. (optional) Workload-driver source-port hardening
 
 **Source**: bug surfaced by the live chaos run (FreeBSD-only loopback
 ephemeral-port collision when nuc's dynomited died).
@@ -106,7 +150,7 @@ priority.
 
 **Estimated effort**: 30-60 min including a FreeBSD repro.
 
-## 3. Pass-2 multi-host chaos run
+## 4. Pass-2 multi-host chaos run
 
 **Prereqs**:
 - Item 1 (AUTH) lands so a more realistic deployment is testable.
@@ -121,7 +165,7 @@ Then re-run the 2-hour chaos with `read_consistency: DC_ONE`
 fan-out to remote DCs works under chaos (kills, pauses, redis
 bounces).
 
-## 4. Curate the pass-1 chaos report
+## 5. Curate the pass-1 chaos report
 
 After the post-run reporter generates `report.md`, hand-curate
 it into `dist/chaos-reports/v0.1.0/multi-host-pass-1.md`
