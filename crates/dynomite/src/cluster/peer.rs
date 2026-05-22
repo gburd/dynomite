@@ -155,6 +155,11 @@ pub struct Peer {
     state: PeerState,
     failure_count: u32,
     last_state_ts_secs: u64,
+    /// Phi-accrual failure detector for this peer. Fed by
+    /// gossip heartbeats; queried by the gossip task to decide
+    /// when to transition `state` to [`PeerState::Down`].
+    /// Initialised lazily on the first `record_heartbeat` call.
+    fd: crate::cluster::failure_detector::PhiAccrual,
 }
 
 impl Peer {
@@ -215,6 +220,7 @@ impl Peer {
             state,
             failure_count: 0,
             last_state_ts_secs: 0,
+            fd: crate::cluster::failure_detector::PhiAccrual::default(),
         }
     }
 
@@ -314,6 +320,22 @@ impl Peer {
     #[must_use]
     pub fn failure_count(&self) -> u32 {
         self.failure_count
+    }
+
+    /// Borrow the phi-accrual failure detector for this peer.
+    /// Used by the gossip task to record heartbeat arrivals and
+    /// to query the suspicion level on every tick.
+    #[must_use]
+    pub fn failure_detector(&self) -> &crate::cluster::failure_detector::PhiAccrual {
+        &self.fd
+    }
+
+    /// Mutably borrow the phi-accrual failure detector. Use
+    /// from the gossip / heartbeat task.
+    pub fn failure_detector_mut(
+        &mut self,
+    ) -> &mut crate::cluster::failure_detector::PhiAccrual {
+        &mut self.fd
     }
 
     /// First (primary) token of this peer, if any.
