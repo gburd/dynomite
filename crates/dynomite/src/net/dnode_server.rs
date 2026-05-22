@@ -9,6 +9,7 @@
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tracing::Instrument as _;
 
 use crate::core::types::MsgId;
 use crate::io::reactor::ConnRole;
@@ -88,7 +89,6 @@ impl DnodeServerConn {
             tokio::select! {
                 req = requests.recv() => {
                     let Some(req) = req else { continue; };
-                    use tracing::Instrument as _;
                     let send_span = tracing::info_span!(
                         parent: &req.span,
                         "peer.send",

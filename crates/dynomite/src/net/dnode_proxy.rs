@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tracing::Instrument as _;
 
 use crate::io::reactor::{ConnRole, TcpTransport};
 use crate::net::client::ClientHandler;
@@ -90,7 +91,6 @@ impl DnodeProxy {
                         "dnode_client.accept",
                         peer = %peer,
                     );
-                    use tracing::Instrument as _;
                     let h = tokio::spawn(
                         async move {
                             dnode_client_loop(conn, handler, rx).await

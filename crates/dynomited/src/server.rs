@@ -294,8 +294,13 @@ impl Server {
         }
         let backend_requirepass = conf_pool.redis_requirepass.clone();
         let backend_handle: JoinHandle<Result<(), NetError>> = tokio::spawn(async move {
-            backend_supervisor(backend_addr, backend_rx, backend_data_store, backend_requirepass)
-                .await
+            backend_supervisor(
+                backend_addr,
+                backend_rx,
+                backend_data_store,
+                backend_requirepass,
+            )
+            .await
         });
 
         // Spawn one peer supervisor per non-local peer so the
@@ -350,8 +355,7 @@ impl Server {
                     peer = %peer_addr,
                 );
                 tokio::spawn(
-                    async move { peer_supervisor(peer_addr, peer_rx).await }
-                        .instrument(span),
+                    async move { peer_supervisor(peer_addr, peer_rx).await }.instrument(span),
                 )
             };
             peer_handles.push(handle);
@@ -718,12 +722,7 @@ async fn redis_auth_handshake(
         password.len(),
         password
     );
-    let write = async {
-        stream
-            .write_all(cmd.as_bytes())
-            .await
-            .map_err(NetError::Io)
-    };
+    let write = async { stream.write_all(cmd.as_bytes()).await.map_err(NetError::Io) };
     tokio::time::timeout(timeout, write)
         .await
         .map_err(|_| NetError::Parse("AUTH write timeout".into()))??;
@@ -796,11 +795,9 @@ async fn backend_supervisor(
         if rx.is_closed() && rx.is_empty() {
             return Ok(());
         }
-        let connect = tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::net::TcpStream::connect(addr),
-        )
-        .await;
+        let connect =
+            tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(addr))
+                .await;
         let mut stream = match connect {
             Ok(Ok(s)) => {
                 backoff_ms = 100;
@@ -833,8 +830,7 @@ async fn backend_supervisor(
         // skip this entirely (binary SASL is not implemented).
         if data_store == dynomite::conf::DataStore::Redis {
             if let Some(pw) = requirepass.as_deref() {
-                if let Err(e) =
-                    redis_auth_handshake(&mut stream, pw, Duration::from_secs(5)).await
+                if let Err(e) = redis_auth_handshake(&mut stream, pw, Duration::from_secs(5)).await
                 {
                     tracing::error!(
                         backend = %addr,
@@ -1028,11 +1024,9 @@ async fn peer_supervisor(
         if rx.is_closed() && rx.is_empty() {
             return Ok(());
         }
-        let connect = tokio::time::timeout(
-            Duration::from_secs(5),
-            tokio::net::TcpStream::connect(addr),
-        )
-        .await;
+        let connect =
+            tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(addr))
+                .await;
         let stream = match connect {
             Ok(Ok(s)) => {
                 backoff_ms = 100;
@@ -1376,12 +1370,7 @@ mod tests {
             // RESP framing). Bound the read so the test cannot
             // hang on a misbehaving client.
             for _ in 0..32 {
-                match tokio::time::timeout(
-                    Duration::from_secs(1),
-                    sock.read(&mut buf),
-                )
-                .await
-                {
+                match tokio::time::timeout(Duration::from_secs(1), sock.read(&mut buf)).await {
                     Ok(Ok(0)) | Err(_) => break,
                     Ok(Ok(n)) => {
                         let mut g = recorded_inner.lock().await;

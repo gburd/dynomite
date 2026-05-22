@@ -16,6 +16,7 @@
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tracing::Instrument as _;
 
 use crate::conf::DataStore;
 use crate::core::types::MsgId;
@@ -134,7 +135,6 @@ impl ServerConn {
                         }
                         continue;
                     };
-                    use tracing::Instrument as _;
                     let send_span = tracing::info_span!(
                         parent: &out_req.span,
                         "backend.send",
@@ -181,11 +181,11 @@ impl ServerConn {
         use crate::proto::redis::redis_parse_rsp;
 
         while !accumulated.is_empty() {
-            let (id, head_span) = self
+            let head_span = self
                 .pending_responses
                 .front()
-                .map(|(i, s)| (*i, s.clone()))
-                .unwrap_or((0, tracing::Span::current()));
+                .map_or_else(tracing::Span::current, |(_, s)| s.clone());
+            let id = self.pending_responses.front().map_or(0, |(i, _)| *i);
             let mut msg = Msg::new(id, MsgType::Unknown, false);
             let result = match self.data_store {
                 DataStore::Redis => redis_parse_rsp(&mut msg, accumulated),
@@ -199,10 +199,8 @@ impl ServerConn {
                     }
                     let bytes = accumulated[..consumed].to_vec();
                     accumulated.drain(0..consumed);
-                    let (req_id, req_span) = self
-                        .pending_responses
-                        .pop_front()
-                        .unwrap_or((0, head_span));
+                    let (req_id, req_span) =
+                        self.pending_responses.pop_front().unwrap_or((0, head_span));
                     let parse_span = tracing::info_span!(
                         parent: &req_span,
                         "backend.parse",

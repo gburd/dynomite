@@ -17,6 +17,7 @@ use dynomite::stats::describe_stats;
 use dynomited::asciilogo::ASCII_LOGO;
 use dynomited::cli::{print_usage, print_version, Cli};
 use dynomited::daemonize::{daemonize, DaemonizeOutcome};
+use dynomited::observability::{install_global, TracerGuard};
 use dynomited::pidfile::PidFile;
 use dynomited::server::Server;
 
@@ -123,9 +124,42 @@ fn run_server(cli: &Cli) -> ExitCode {
         }
     }
 
-    if let Err(e) = log_init(cli.verbosity, cli.output.as_deref()) {
-        eprintln!("dynomite: log_init failed: {e}");
-        return ExitCode::from(1);
+    // Distributed-tracing OTLP exporter must be wired BEFORE
+    // `log_init` because both helpers install a global
+    // `tracing` subscriber and only one global default may be
+    // set per process. When `observability.otlp_traces_endpoint`
+    // is unset (the default-behavior path), install_global
+    // returns Ok(None) and we fall through to `log_init` as
+    // before. When the operator opts in, install_global wires a
+    // layered Registry+EnvFilter+fmt+OTel subscriber and we skip
+    // log_init's subscriber install (the fmt layer takes its
+    // place). The guard must outlive `runtime.block_on(...)` so
+    // the batch span processor flushes on shutdown.
+    let tracer_guard: Option<TracerGuard> = match cfg.pool().observability.as_ref() {
+        Some(obs) => match install_global(obs, cli.verbosity) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!(
+                    "dynomite: OTLP exporter install failed: {e}; continuing without distributed tracing"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
+    if tracer_guard.is_none() {
+        if let Err(e) = log_init(cli.verbosity, cli.output.as_deref()) {
+            eprintln!("dynomite: log_init failed: {e}");
+            return ExitCode::from(1);
+        }
+    } else {
+        // OTLP path installed a fmt+otel layered subscriber
+        // already; the standalone log_init STATE (used by SIGHUP
+        // log-reopen) is intentionally unset. SIGHUP log-reopen
+        // is unavailable in OTLP mode; operators that need both
+        // can run with otlp_traces_endpoint unset.
+        tracing::debug!("OTLP exporter installed; skipping log_init STATE setup");
     }
 
     let _pid = match cli.pid_file.as_deref() {
@@ -165,7 +199,7 @@ fn run_server(cli: &Cli) -> ExitCode {
         }
     };
 
-    runtime.block_on(async move {
+    let exit = runtime.block_on(async move {
         let server = match Server::build(cfg).await {
             Ok(s) => s,
             Err(e) => {
@@ -180,5 +214,11 @@ fn run_server(cli: &Cli) -> ExitCode {
                 ExitCode::from(1)
             }
         }
-    })
+    });
+    // Drop the tracer guard inside the runtime so the batch span
+    // processor's flush task has a runtime to run on.
+    if let Some(mut g) = tracer_guard {
+        runtime.block_on(async move { g.shutdown() });
+    }
+    exit
 }
