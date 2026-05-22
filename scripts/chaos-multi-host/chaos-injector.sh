@@ -110,9 +110,16 @@ while true; do
         if pid=$(dyn_pid); then
             event kill "{\"pid\":$pid}"
             kill -KILL "$pid" 2>/dev/null || true
-            sleep 2
+            # Wait for the kernel to reap the killed process before
+            # restarting. The new dynomited's flock(2) on the
+            # pidfile would otherwise race the still-being-reaped
+            # holder and EAGAIN. Bound the wait so a stuck
+            # process does not stall the injector forever.
+            for _ in $(seq 1 50); do
+                kill -0 "$pid" 2>/dev/null || break
+                sleep 0.1
+            done
         fi
-        # Wait for the spawn pid to settle, then restart.
         sleep 1
         restart_dynomited
         NEXT_KILL=$(( $(date +%s) + (RANDOM % 240 + 480) ))
