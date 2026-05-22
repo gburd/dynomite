@@ -38,6 +38,13 @@ nix = { workspace = true }
 socket2 = { workspace = true }
 httparse = { workspace = true }
 
+# Distributed-tracing OTel handles. The library only consumes
+# the `tracing` instrumentation macros and the `OpenTelemetrySpanExt`
+# adapter exposed by `tracing-opentelemetry`; the OTLP exporter
+# wiring lives in the `dynomited` binary.
+tracing-opentelemetry = { workspace = true }
+opentelemetry = { workspace = true }
+
 [dev-dependencies]
 hegeltest = { workspace = true }
 criterion = { workspace = true }
