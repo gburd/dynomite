@@ -166,5 +166,20 @@ while true; do
         NEXT_REDIS_BOUNCE=$(( $(date +%s) + (RANDOM % 600 + 1200) ))
     fi
 
+    # Independent recovery: if dynomited is missing for any
+    # reason (failed restart, crash we did not cause, OS-level
+    # OOM kill), bring it back without waiting for the next
+    # scheduled kill. This catches the case where
+    # restart_dynomited above returned nonzero and we would
+    # otherwise have to wait 8-12 minutes for the next kill
+    # cycle to retry. With the pidfile flock retry in place this
+    # branch should rarely fire, but it makes the injector
+    # robust to any future failure mode that leaves dynomited
+    # missing.
+    if ! dyn_pid >/dev/null; then
+        event recovery_restart "{}"
+        restart_dynomited
+    fi
+
     sleep 5
 done
