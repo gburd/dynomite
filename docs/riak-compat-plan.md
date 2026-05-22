@@ -837,23 +837,24 @@ Filing these is part of M1's exit gate.
 Honest list of things this plan does **not** answer. Each carries a
 confidence label and the smallest decision unit needed to resolve it.
 
-### 8.1 Hash function for the Riak-compat ring
+### 8.1 Hash function for the Riak-compat ring  **[DECIDED 2026-05-22: murmur3]**
 
 * Riak hashes with SHA-1 over a 160-bit ring partitioned into
   `ring_size` (default 64) vnodes.
 * Dynomite hashes with murmur3 over a 32-bit ring; `ring_size` is
   determined by the `tokens:` list, default also 64.
-* **Question**: does Riak compatibility mean *bug-for-bug* hash
-  compatibility (so a key hashes to the same vnode in a Riak cluster
-  and a Dynomite-with-Noxu cluster), or only *behavioural*
-  compatibility (so the substrate's invariants hold but tokens
-  differ)?
-* **Confidence**: low. The user has not stated whether wire-level
-  cluster migration from a real Riak deployment is in scope.
-* **Recommendation if undecided**: ship behavioural compatibility
-  with murmur3 (matches every other Dynomite hash), expose
-  `chash_keyfun: sha1` as a per-bucket-type option for users who
-  want to interoperate with a real Riak.
+* **Decision (operator, 2026-05-22)**: keep murmur3 for the
+  Riak-compat ring. Behavioural compatibility only; bug-for-bug
+  wire migration from a real Riak deployment is **not** a goal.
+  Operators who later need SHA-1-based migration can request the
+  `chash_keyfun: sha1` per-bucket-type option as a follow-up; it
+  is not on the M1-M9 critical path.
+* **Implication for M1**: the substrate continues to use the
+  existing `crate::hashkit::DynToken` (32-bit murmur3) untouched.
+  The Riak HTTP/PB protocol layer maps Riak buckets+keys to
+  Dynomite hash inputs via the obvious concatenation
+  (`<bucket>/<key>`) - documented in M2 alongside the rest of
+  the protocol surface.
 
 ### 8.2 Vector clock implementation
 
