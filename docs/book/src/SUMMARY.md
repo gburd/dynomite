@@ -18,6 +18,7 @@
   - [Coverage gate](./operations/coverage.md)
   - [Chaos test](./operations/chaos.md)
   - [Metrics](./operations/metrics.md)
+  - [Distributed tracing](./operations/tracing.md)
   - [Release process](./operations/release.md)
 - [Embedding API](./embedding/index.md)
   - [Server lifecycle](./embedding/server.md)

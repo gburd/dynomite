@@ -97,6 +97,19 @@ tempfile = "3.13"
 clap_mangen = "0.2"
 rcgen = "0.13"
 
+# Distributed tracing (opt-in OTLP exporter; off by default).
+# Versions are pinned as a compatible 0.27/0.28 family: the
+# `opentelemetry*` crates do not follow semver across minor
+# bumps yet, so all four pieces have to track the same release
+# train. `rt-tokio` lets the SDK schedule its batch span
+# processor on the existing tokio runtime; `grpc-tonic` is the
+# default OTLP wire format the brief requires (Jaeger, Tempo,
+# Honeycomb, OTel-Collector all accept it).
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.28"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

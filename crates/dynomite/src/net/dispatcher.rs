@@ -61,12 +61,19 @@ pub type ServerSink = mpsc::Sender<OutboundEnvelope>;
 
 /// Envelope wrapping a dispatcher response and the request id it
 /// corresponds to.
+///
+/// `span` carries the originating request span back to the
+/// client-side FSM so the response writeback nests under the
+/// originating client span. The default is
+/// [`tracing::Span::none`].
 #[derive(Debug)]
 pub struct OutboundEnvelope {
     /// Request id the response is for.
     pub req_id: crate::core::types::MsgId,
     /// The response message.
     pub rsp: Msg,
+    /// Originating request span for cross-task propagation.
+    pub span: tracing::Span,
 }
 
 /// Dispatcher that drops every request and emits no response.

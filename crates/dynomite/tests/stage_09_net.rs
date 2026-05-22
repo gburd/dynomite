@@ -270,6 +270,7 @@ impl Dispatcher for ForwardingDispatcher {
             bytes,
             req_id: req.id(),
             responder,
+            span: tracing::Span::current(),
         };
         // try_send is fine here: the server channel is bounded
         // generously and the mock backend drains synchronously.
@@ -430,6 +431,7 @@ async fn dnode_peer_round_trip() {
             bytes: redis_bytes.clone(),
             req_id: 99,
             responder: env_tx,
+            span: tracing::Span::current(),
         })
         .await
         .unwrap();

@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tracing::Instrument as _;
 
 use crate::io::reactor::{ConnRole, TcpTransport};
 use crate::net::client::ClientHandler;
@@ -55,6 +56,13 @@ impl DnodeProxy {
     ///
     /// # Errors
     /// Forwarded from the listener accept call.
+    #[tracing::instrument(
+        name = "dnode_proxy.run",
+        skip_all,
+        fields(
+            local = self.listener.local_addr().map_or_else(|_| String::from("?"), |a| a.to_string()),
+        ),
+    )]
     pub async fn run<F>(
         self,
         cancel: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
@@ -79,9 +87,16 @@ impl DnodeProxy {
                     let (tx, rx) = tokio::sync::mpsc::channel(64);
                     let handler = handler_factory(tx);
                     tracing::debug!(?peer, "dnode_proxy accepted peer");
-                    let h = tokio::spawn(async move {
-                        dnode_client_loop(conn, handler, rx).await
-                    });
+                    let accept_span = tracing::info_span!(
+                        "dnode_client.accept",
+                        peer = %peer,
+                    );
+                    let h = tokio::spawn(
+                        async move {
+                            dnode_client_loop(conn, handler, rx).await
+                        }
+                        .instrument(accept_span),
+                    );
                     peers.push(h);
                 }
             }

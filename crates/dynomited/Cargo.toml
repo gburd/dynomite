@@ -73,6 +73,15 @@ thiserror = { workspace = true }
 # `gen-man` feature; production builds do not pay for it.
 clap_mangen = { workspace = true, optional = true }
 
+# Distributed tracing: the OTel SDK and OTLP exporter live in
+# the binary because that is where the global subscriber is
+# installed. Library code only uses `tracing` plus the
+# `tracing-opentelemetry` adapter for context propagation.
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+
 [dev-dependencies]
 assert_cmd = { workspace = true }
 predicates = { workspace = true }

@@ -16,6 +16,7 @@
 pub mod asciilogo;
 pub mod cli;
 pub mod daemonize;
+pub mod observability;
 pub mod pidfile;
 pub mod server;
 pub mod signals;
