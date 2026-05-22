@@ -292,8 +292,10 @@ impl Server {
                 }
             }
         }
+        let backend_requirepass = conf_pool.redis_requirepass.clone();
         let backend_handle: JoinHandle<Result<(), NetError>> = tokio::spawn(async move {
-            backend_supervisor(backend_addr, backend_rx, backend_data_store).await
+            backend_supervisor(backend_addr, backend_rx, backend_data_store, backend_requirepass)
+                .await
         });
 
         // Spawn one peer supervisor per non-local peer so the
@@ -678,14 +680,84 @@ async fn wait_finished(handle: &JoinHandle<Result<(), NetError>>) {
     }
 }
 
+/// Send `AUTH <password>` to a freshly-connected Redis backend
+/// and read the first reply line. Returns `Ok(())` on `+OK`,
+/// `Err(NetError)` on any of: I/O failure, connection close,
+/// timeout, or a non-`+OK` reply (e.g. `-ERR invalid password`).
+///
+/// The handshake is intentionally tiny: we read byte-by-byte
+/// until the first CRLF so we never over-consume into the
+/// run-loop's own read buffer. Bounded by `timeout`.
+async fn redis_auth_handshake(
+    stream: &mut tokio::net::TcpStream,
+    password: &str,
+    timeout: Duration,
+) -> Result<(), NetError> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let cmd = format!(
+        "*2\r\n$4\r\nAUTH\r\n${}\r\n{}\r\n",
+        password.len(),
+        password
+    );
+    let write = async {
+        stream
+            .write_all(cmd.as_bytes())
+            .await
+            .map_err(NetError::Io)
+    };
+    tokio::time::timeout(timeout, write)
+        .await
+        .map_err(|_| NetError::Parse("AUTH write timeout".into()))??;
+
+    // Read the reply: first byte indicates the type.
+    // `+OK\r\n` is the only success; anything else (including
+    // `-...\r\n` errors) is a failure.
+    let mut buf = Vec::with_capacity(64);
+    let mut byte = [0u8; 1];
+    let read = async {
+        loop {
+            match stream.read(&mut byte).await {
+                Ok(0) => return Err(NetError::Closed),
+                Ok(_) => {
+                    buf.push(byte[0]);
+                    if buf.len() >= 2 && buf.ends_with(b"\r\n") {
+                        return Ok(());
+                    }
+                    if buf.len() > 1024 {
+                        return Err(NetError::Parse(
+                            "AUTH reply exceeded 1KiB without CRLF".into(),
+                        ));
+                    }
+                }
+                Err(e) => return Err(NetError::Io(e)),
+            }
+        }
+    };
+    tokio::time::timeout(timeout, read)
+        .await
+        .map_err(|_| NetError::Parse("AUTH read timeout".into()))??;
+    if buf.starts_with(b"+OK\r\n") {
+        Ok(())
+    } else {
+        let msg = String::from_utf8_lossy(buf.trim_ascii_end()).to_string();
+        Err(NetError::Parse(format!("AUTH rejected: {msg}")))
+    }
+}
+
 /// Long-running supervisor that owns the request channel for the
 /// local datastore. Reconnects to the backend with bounded
 /// backoff whenever a `ServerConn` driver returns. Exits when
 /// the receiver half is closed (the dispatcher is dropped).
+///
+/// When `requirepass` is set, every freshly-opened TCP connection
+/// performs a Redis `AUTH <password>` handshake before being
+/// handed to `run_one_backend_conn`. A rejected AUTH is treated
+/// as a connection failure: the supervisor logs and reconnects.
 async fn backend_supervisor(
     addr: SocketAddr,
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
     data_store: dynomite::conf::DataStore,
+    requirepass: Option<String>,
 ) -> Result<(), NetError> {
     let mut backoff_ms: u64 = 100;
     let backoff_max_ms: u64 = 5_000;
@@ -702,7 +774,7 @@ async fn backend_supervisor(
             tokio::net::TcpStream::connect(addr),
         )
         .await;
-        let stream = match connect {
+        let mut stream = match connect {
             Ok(Ok(s)) => {
                 backoff_ms = 100;
                 s
@@ -728,6 +800,28 @@ async fn backend_supervisor(
             }
         };
         let _ = stream.set_nodelay(true);
+
+        // Optional Redis AUTH handshake before the supervisor
+        // hands the stream to the run loop. Memcache backends
+        // skip this entirely (binary SASL is not implemented).
+        if data_store == dynomite::conf::DataStore::Redis {
+            if let Some(pw) = requirepass.as_deref() {
+                if let Err(e) =
+                    redis_auth_handshake(&mut stream, pw, Duration::from_secs(5)).await
+                {
+                    tracing::error!(
+                        backend = %addr,
+                        error = %e,
+                        "backend AUTH failed; reconnecting after backoff"
+                    );
+                    drop(stream);
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                    continue;
+                }
+            }
+        }
+
         let conn = Conn::new(
             Box::new(TcpTransport::new(stream, ConnRole::Server)),
             ConnRole::Server,
@@ -1187,5 +1281,107 @@ mod tests {
         };
         let tok = token_component_to_dyn(&cmp).unwrap();
         assert_eq!(tok.get_int(), u32::MAX);
+    }
+
+    /// Build a tiny RESP server that:
+    ///   1. accepts a single TCP connection,
+    ///   2. reads the first command (the AUTH),
+    ///   3. replies with the operator-supplied bytes,
+    ///   4. records what was read into a shared buffer.
+    async fn auth_stub_backend(
+        reply: &'static [u8],
+    ) -> (
+        std::net::SocketAddr,
+        std::sync::Arc<tokio::sync::Mutex<Vec<u8>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let recorded = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<u8>::new()));
+        let recorded_inner = recorded.clone();
+        let h = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            // Read until we have at least one CRLF-terminated
+            // command (AUTH always ends with two CRLFs in the
+            // RESP framing). Bound the read so the test cannot
+            // hang on a misbehaving client.
+            for _ in 0..32 {
+                match tokio::time::timeout(
+                    Duration::from_secs(1),
+                    sock.read(&mut buf),
+                )
+                .await
+                {
+                    Ok(Ok(0)) | Err(_) => break,
+                    Ok(Ok(n)) => {
+                        let mut g = recorded_inner.lock().await;
+                        g.extend_from_slice(&buf[..n]);
+                        // RESP `*2\r\n$4\r\nAUTH\r\n$N\r\n<pw>\r\n`
+                        // ends with at least 4 CRLFs.
+                        if g.windows(2).filter(|w| *w == b"\r\n").count() >= 4 {
+                            break;
+                        }
+                    }
+                    Ok(Err(_)) => break,
+                }
+            }
+            let _ = sock.write_all(reply).await;
+            // Hold the socket briefly so the client can read.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = sock.shutdown().await;
+        });
+        (addr, recorded, h)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn redis_auth_handshake_sends_auth_and_succeeds_on_ok() {
+        let (addr, recorded, h) = auth_stub_backend(b"+OK\r\n").await;
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        redis_auth_handshake(&mut stream, "hunter2", Duration::from_secs(2))
+            .await
+            .expect("AUTH should succeed");
+        h.await.unwrap();
+        let bytes = recorded.lock().await.clone();
+        let s = String::from_utf8_lossy(&bytes).to_string();
+        assert!(s.contains("AUTH"), "client did not send AUTH: {s:?}");
+        assert!(s.contains("hunter2"), "client did not send password: {s:?}");
+        assert!(
+            s.starts_with("*2\r\n$4\r\nAUTH\r\n"),
+            "AUTH not framed as a RESP array: {s:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn redis_auth_handshake_rejects_on_err_reply() {
+        let (addr, _recorded, h) = auth_stub_backend(b"-ERR invalid password\r\n").await;
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let err = redis_auth_handshake(&mut stream, "wrong", Duration::from_secs(2))
+            .await
+            .expect_err("AUTH should fail on -ERR");
+        let msg = format!("{err}");
+        assert!(msg.contains("AUTH rejected"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("invalid password"),
+            "error did not propagate server message: {msg}"
+        );
+        h.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn redis_auth_handshake_handles_peer_close() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let h = tokio::spawn(async move {
+            // Accept and immediately drop.
+            let _ = listener.accept().await;
+        });
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let err = redis_auth_handshake(&mut stream, "x", Duration::from_secs(2))
+            .await
+            .expect_err("AUTH should fail when peer closes");
+        let _ = err; // any error variant is fine; we just want non-Ok
+        h.await.unwrap();
     }
 }

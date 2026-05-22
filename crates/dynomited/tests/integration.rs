@@ -228,3 +228,121 @@ async fn redis_set_get_quit_round_trip() {
         kill_silently(&mut redis);
     }
 }
+
+#[tokio::test]
+async fn redis_set_get_with_requirepass() {
+    let Some(redis_bin) = redis_server_in_path() else {
+        eprintln!("redis-server not in PATH; skipping integration test");
+        return;
+    };
+
+    let backend_port = pick_port();
+    let listen_port = pick_port();
+    let dyn_port = pick_port();
+    let stats_port = pick_port();
+
+    let dir = tempfile::tempdir().unwrap();
+    let password = "hunter2-secret";
+
+    // Start redis-server with a password.
+    let mut redis = Command::new(&redis_bin)
+        .args([
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            &backend_port.to_string(),
+            "--save",
+            "",
+            "--appendonly",
+            "no",
+            "--protected-mode",
+            "no",
+            "--requirepass",
+            password,
+            "--dir",
+            dir.path().to_str().unwrap(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn redis-server");
+
+    if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(5)) {
+        kill_silently(&mut redis);
+        panic!("redis-server did not bind {backend_port} within 5s");
+    }
+
+    // Write the dynomite YAML pointing at the passworded redis.
+    let conf = dir.path().join("d.yml");
+    let mut f = std::fs::File::create(&conf).unwrap();
+    write!(
+        f,
+        "p:\n  listen: 127.0.0.1:{listen_port}\n  dyn_listen: 127.0.0.1:{dyn_port}\n  stats_listen: 127.0.0.1:{stats_port}\n  tokens: '101134286'\n  servers:\n  - 127.0.0.1:{backend_port}:1\n  data_store: 0\n  redis_requirepass: {password}\n",
+    )
+    .unwrap();
+    f.sync_all().unwrap();
+
+    let exe = assert_cmd::cargo::cargo_bin("dynomited");
+    let pid_file = dir.path().join("dyn.pid");
+    let mut dyn_child = Command::new(exe)
+        .arg("-c")
+        .arg(&conf)
+        .arg("-p")
+        .arg(&pid_file)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn dynomited");
+
+    if !wait_for_listen(listen_port, Instant::now() + Duration::from_secs(5)) {
+        kill_silently(&mut dyn_child);
+        kill_silently(&mut redis);
+        panic!("dynomited did not bind {listen_port} within 5s");
+    }
+
+    // Drive a SET / GET through dynomited. The proxy never sees
+    // the password; AUTH happens inside backend_supervisor before
+    // the run loop accepts requests.
+    let mut sock = TcpStream::connect(("127.0.0.1", listen_port))
+        .await
+        .expect("connect dynomited");
+    sock.set_nodelay(true).ok();
+
+    sock.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n")
+        .await
+        .expect("write SET");
+    let set_rsp = read_exact_n(&mut sock, 5).await;
+    assert_eq!(&set_rsp, b"+OK\r\n", "SET response (passworded backend)");
+
+    sock.write_all(b"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n")
+        .await
+        .expect("write GET");
+    let get_rsp = read_exact_n(&mut sock, 7).await;
+    assert_eq!(
+        &get_rsp,
+        b"$1\r\nv\r\n",
+        "GET response: {}",
+        String::from_utf8_lossy(&get_rsp)
+    );
+
+    sock.write_all(b"*1\r\n$4\r\nQUIT\r\n")
+        .await
+        .expect("write QUIT");
+    let mut tail = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(2), sock.read_to_end(&mut tail)).await;
+
+    let pid = nix::unistd::Pid::from_raw(i32::try_from(dyn_child.id()).unwrap());
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM).expect("kill SIGTERM");
+    let dyn_status = wait_with_timeout(&mut dyn_child, Duration::from_secs(5));
+    let dyn_status = dyn_status.expect("dynomited did not exit within 5s of SIGTERM");
+    assert!(
+        dyn_status.success(),
+        "dynomited exit status: {dyn_status:?}"
+    );
+
+    let redis_pid = nix::unistd::Pid::from_raw(i32::try_from(redis.id()).unwrap());
+    let _ = nix::sys::signal::kill(redis_pid, nix::sys::signal::Signal::SIGTERM);
+    if wait_with_timeout(&mut redis, Duration::from_secs(5)).is_none() {
+        kill_silently(&mut redis);
+    }
+}
