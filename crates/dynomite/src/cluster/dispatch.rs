@@ -50,6 +50,8 @@
 
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
+
 use crate::cluster::pool::ServerPool;
 use crate::cluster::snitch::{rack_distance, RackDistance};
 use crate::cluster::vnode;
@@ -57,6 +59,7 @@ use crate::conf::HashType as ConfHashType;
 use crate::hashkit::{self, HashType};
 use crate::msg::{ConsistencyLevel, Msg, MsgRouting, MsgType};
 use crate::net::dispatcher::{DispatchOutcome, Dispatcher, ServerSink};
+use crate::net::server::OutboundRequest;
 
 fn map_hash(h: ConfHashType) -> HashType {
     match h {
@@ -113,6 +116,13 @@ pub enum DispatchPlan {
 #[derive(Debug, Clone)]
 pub struct ClusterDispatcher {
     pool: Arc<ServerPool>,
+    /// Outbound channel feeding the local datastore driver. When
+    /// `None`, `LocalDatastore` plans short-circuit to `Pending`
+    /// without forwarding (used by tests that do not need a real
+    /// backend). When set, requests for the local node are
+    /// encoded onto the wire and shipped to the [`crate::net::ServerConn`]
+    /// task that drives the redis / memcache backend.
+    backend: Option<mpsc::Sender<OutboundRequest>>,
 }
 
 impl ClusterDispatcher {
@@ -147,7 +157,30 @@ impl ClusterDispatcher {
     /// ```
     #[must_use]
     pub fn new(pool: Arc<ServerPool>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            backend: None,
+        }
+    }
+
+    /// Attach a backend request channel. Calls to [`Self::dispatch`]
+    /// that produce a [`DispatchPlan::LocalDatastore`] plan will
+    /// forward the request bytes onto this channel for the local
+    /// datastore driver to write to the backend.
+    ///
+    /// The channel sender must be the request side of a
+    /// [`crate::net::ServerConn`] task; multiple senders cloned from
+    /// the same channel are fine.
+    #[must_use]
+    pub fn with_backend(mut self, backend: mpsc::Sender<OutboundRequest>) -> Self {
+        self.backend = Some(backend);
+        self
+    }
+
+    /// Whether a backend channel is wired.
+    #[must_use]
+    pub fn has_backend(&self) -> bool {
+        self.backend.is_some()
     }
 
     /// Borrow the underlying pool.
@@ -311,7 +344,7 @@ fn plan_with_consistency(
 }
 
 impl Dispatcher for ClusterDispatcher {
-    fn dispatch(&self, req: Msg, _responder: ServerSink) -> DispatchOutcome {
+    fn dispatch(&self, req: Msg, responder: ServerSink) -> DispatchOutcome {
         if req.flags().quit {
             return DispatchOutcome::Drop;
         }
@@ -344,7 +377,49 @@ impl Dispatcher for ClusterDispatcher {
                 );
                 DispatchOutcome::Error(rsp)
             }
-            DispatchPlan::LocalDatastore | DispatchPlan::Replicas(_) => DispatchOutcome::Pending,
+            DispatchPlan::LocalDatastore => {
+                if let Some(tx) = self.backend.as_ref() {
+                    // Snapshot the wire bytes from the parsed mbuf
+                    // chain. The chain is the original on-the-wire
+                    // sequence the parser walked, so this is a
+                    // faithful relay rather than a re-encode.
+                    let bytes: Vec<u8> = req
+                        .mbufs()
+                        .iter()
+                        .flat_map(|b| b.readable().to_vec())
+                        .collect();
+                    if bytes.is_empty() {
+                        // Parsed request with no replayable bytes
+                        // (e.g. a synthetic `Msg`) - drop rather
+                        // than enqueue a no-op on the backend.
+                        return DispatchOutcome::Drop;
+                    }
+                    let env = OutboundRequest {
+                        bytes,
+                        req_id: req.id(),
+                        responder,
+                    };
+                    if tx.try_send(env).is_err() {
+                        // Backend channel full or closed: surface
+                        // an error to the client immediately.
+                        let err_type =
+                            if matches!(req.ty(), MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
+                                MsgType::RspRedisError
+                            } else {
+                                MsgType::RspMcServerError
+                            };
+                        let rsp = crate::msg::response::make_error(
+                            &req,
+                            err_type,
+                            0,
+                            crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
+                        );
+                        return DispatchOutcome::Error(rsp);
+                    }
+                }
+                DispatchOutcome::Pending
+            }
+            DispatchPlan::Replicas(_) => DispatchOutcome::Pending,
         }
     }
 }

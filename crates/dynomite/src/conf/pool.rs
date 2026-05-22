@@ -28,7 +28,12 @@ pub mod defaults {
     /// Default `data_store:` value (0 = redis).
     pub const DATA_STORE: i64 = 0;
     /// Default `preconnect:` value.
-    pub const PRECONNECT: bool = true;
+    ///
+    /// The C reference defaults `preconnect` to false: clients
+    /// can connect to dynomited before the local datastore is
+    /// reachable. The lazy connect avoids a hard dependency on
+    /// boot ordering. We match that default here.
+    pub const PRECONNECT: bool = false;
     /// Default `auto_eject_hosts:` value.
     pub const AUTO_EJECT_HOSTS: bool = true;
     /// Default `server_retry_timeout:` (ms).

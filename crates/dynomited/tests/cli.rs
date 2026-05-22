@@ -121,10 +121,15 @@ fn verbosity_out_of_range_rejected() {
     bin().args(["-v", "12"]).assert().failure();
     bin().args(["-v", "999"]).assert().failure();
     bin().args(["-v", "-1"]).assert().failure();
-    // No assertion: bare `-v 5` enters the runtime path which exits 1
-    // until Stage 12 commit 3 wires the run loop in; we only care that
-    // option parsing accepts the value.
-    drop(bin().args(["-v", "5"]).assert());
+    // `-v 5` is a legal verbosity. Pair it with `-t` so the
+    // binary validates config and exits, rather than entering
+    // the long-running supervisor.
+    let p = conf_dir().join("dynomite.yml");
+    bin()
+        .args(["-t", "-v", "5", "-c"])
+        .arg(&p)
+        .assert()
+        .success();
 }
 
 #[test]

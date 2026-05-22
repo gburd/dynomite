@@ -363,14 +363,10 @@ mod tests {
 
     #[test]
     fn loads_bundled_recon_fixtures() {
-        // Locate the C reference fixtures relative to the workspace.
-        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap();
-        let key_path = repo_root.join("_/dynomite/conf/recon_key.pem");
-        let iv_path = repo_root.join("_/dynomite/conf/recon_iv.pem");
+        // Bundled recon fixtures live with the crate's test data.
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let key_path = crate_root.join("tests/fixtures/recon/recon_key.pem");
+        let iv_path = crate_root.join("tests/fixtures/recon/recon_iv.pem");
         let key = load_key_file(&key_path).unwrap();
         let iv = load_iv_file(&iv_path).unwrap();
         // The bundled fixtures contain a 17-byte ASCII string

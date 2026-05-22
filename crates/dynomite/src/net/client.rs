@@ -266,6 +266,7 @@ async fn drive_parser(
                 let _ = consumed_before;
                 conn.outstanding_mut().insert(msg.id(), msg.id());
                 conn.enqueue_out(Msg::new(msg.id(), msg.ty(), true))?;
+                let was_quit = msg.flags().quit;
                 let outcome = handler
                     .dispatcher
                     .dispatch(msg, handler.response_tx.clone());
@@ -284,6 +285,14 @@ async fn drive_parser(
                         };
                         let _ = handler.response_tx.send(env).await;
                     }
+                }
+                if was_quit {
+                    // The C engine closes the client connection on
+                    // a parsed QUIT. Mirror that here by marking
+                    // the conn EOF; the outer client loop will
+                    // drain any pending responses and return.
+                    conn.set_eof();
+                    return Ok(());
                 }
             }
             MsgParseResult::Again
