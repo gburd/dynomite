@@ -176,9 +176,22 @@ while true; do
     # branch should rarely fire, but it makes the injector
     # robust to any future failure mode that leaves dynomited
     # missing.
+    #
+    # Hysteresis: only fire a recovery restart once dynomited
+    # has been missing for two consecutive 5s checks. start-host.sh
+    # commonly takes 5-15s to bring dynomited fully up; without
+    # this debounce we'd fire overlapping restarts that compete
+    # for the pidfile flock and produce a thrashing loop.
     if ! dyn_pid >/dev/null; then
-        event recovery_restart "{}"
-        restart_dynomited
+        if [ "${MISSING_STREAK:-0}" -ge 1 ]; then
+            event recovery_restart "{\"streak\":$MISSING_STREAK}"
+            restart_dynomited
+            MISSING_STREAK=0
+        else
+            MISSING_STREAK=$(( ${MISSING_STREAK:-0} + 1 ))
+        fi
+    else
+        MISSING_STREAK=0
     fi
 
     sleep 5
