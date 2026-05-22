@@ -38,6 +38,13 @@ nix = { workspace = true }
 socket2 = { workspace = true }
 httparse = { workspace = true }
 
+# Storage-substrate path dep declared so the resolver exercises
+# the Noxu DB version graph today, before any Riak-protocol code
+# lands. Gated behind the disabled-by-default `riak-storage`
+# feature; nothing in the engine imports `noxu_db` yet. See
+# docs/riak-compat-plan.md.
+noxu-db = { workspace = true, optional = true }
+
 [dev-dependencies]
 hegeltest = { workspace = true }
 criterion = { workspace = true }
@@ -52,6 +59,11 @@ default = ["tcp", "tls"]
 tcp = []
 quic = ["dep:quiche"]
 tls = []
+# Riak-compatible API + Noxu storage backend. Off by default;
+# enabling it only forces the resolver to walk the noxu-db dep
+# graph, validating that our crate-version pins are compatible.
+# No source-level imports yet. See docs/riak-compat-plan.md.
+riak-storage = ["dep:noxu-db"]
 # Enables the macro (end-to-end with tc/netem) bench harness.
 # Requires CAP_NET_ADMIN; see docs/book/src/operations/benchmarks.md.
 bench-macro = []
