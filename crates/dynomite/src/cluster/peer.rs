@@ -332,9 +332,7 @@ impl Peer {
 
     /// Mutably borrow the phi-accrual failure detector. Use
     /// from the gossip / heartbeat task.
-    pub fn failure_detector_mut(
-        &mut self,
-    ) -> &mut crate::cluster::failure_detector::PhiAccrual {
+    pub fn failure_detector_mut(&mut self) -> &mut crate::cluster::failure_detector::PhiAccrual {
         &mut self.fd
     }
 

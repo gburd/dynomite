@@ -24,6 +24,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tracing::Instrument as _;
 
 use crate::conf::DataStore;
 use crate::io::reactor::{ConnRole, TcpTransport};
@@ -136,15 +137,12 @@ impl Proxy {
                         peer = %peer,
                     );
                     let handle = tokio::spawn(
-                        {
-                            use tracing::Instrument as _;
-                            async move {
-                                let (tx, rx) = mpsc::channel(cap);
-                                let handler = ClientHandler::new(dispatcher, tx, ds);
-                                client_loop(conn, handler, rx).await
-                            }
-                            .instrument(accept_span)
-                        },
+                        async move {
+                            let (tx, rx) = mpsc::channel(cap);
+                            let handler = ClientHandler::new(dispatcher, tx, ds);
+                            client_loop(conn, handler, rx).await
+                        }
+                        .instrument(accept_span),
                     );
                     clients.push(handle);
                 }

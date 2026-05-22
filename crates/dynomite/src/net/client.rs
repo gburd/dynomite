@@ -347,12 +347,8 @@ async fn drive_parser(
 fn handle_response(conn: &mut Conn, env: &OutboundEnvelope, pending: &mut Vec<u8>) {
     let _enter = env.span.enter();
     let bytes_len: usize = env.rsp.mbufs().iter().map(|b| b.readable().len()).sum();
-    let _send_span = tracing::info_span!(
-        "client.send",
-        req_id = env.req_id,
-        bytes = bytes_len,
-    )
-    .entered();
+    let _send_span =
+        tracing::info_span!("client.send", req_id = env.req_id, bytes = bytes_len,).entered();
     for buf in env.rsp.mbufs() {
         pending.extend_from_slice(buf.readable());
     }

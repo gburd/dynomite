@@ -284,6 +284,46 @@ pub struct ConfPool {
     pub remote_peer_connections: Option<u8>,
     /// `read_repairs_enabled:` - enable read-repair on quorum mismatch.
     pub read_repairs_enabled: Option<bool>,
+
+    /// `observability:` - opt-in observability knobs (currently:
+    /// distributed-tracing OTLP exporter). Absent / null disables
+    /// every observability surface, preserving today's silent
+    /// default. See [`ObservabilityConfig`].
+    #[serde(default)]
+    pub observability: Option<ObservabilityConfig>,
+}
+
+/// Opt-in observability configuration.
+///
+/// Absent or null disables every observability surface. Currently
+/// covers distributed-tracing only; metrics and log-format knobs
+/// land in adjacent milestones and reuse the same field.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::ObservabilityConfig;
+/// let cfg = ObservabilityConfig {
+///     otlp_traces_endpoint: Some("http://collector:4317".into()),
+///     service_name: Some("dynomited".into()),
+///     traces_sampling: Some(0.1),
+/// };
+/// assert!(cfg.otlp_traces_endpoint.is_some());
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, default)]
+pub struct ObservabilityConfig {
+    /// OTLP gRPC endpoint for distributed traces (e.g.
+    /// `http://localhost:4317`). When `None` the binary skips
+    /// the OTel SDK install entirely; tracing keeps using the
+    /// configured `tracing-subscriber` log layer only.
+    pub otlp_traces_endpoint: Option<String>,
+    /// Service name attached to every emitted span. Defaults to
+    /// `"dynomited"` when unset.
+    pub service_name: Option<String>,
+    /// Trace sampling ratio in `[0.0, 1.0]`. `1.0` records every
+    /// trace, `0.0` records none. Defaults to `1.0` when unset.
+    pub traces_sampling: Option<f64>,
 }
 
 impl ConfPool {

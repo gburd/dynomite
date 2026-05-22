@@ -15,6 +15,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tracing::Instrument as _;
 
 use crate::stats::snapshot::Snapshot;
 
@@ -156,7 +157,6 @@ impl StatsServer {
             "stats_server.run",
             local = %self.listener.local_addr().map_or_else(|_| String::from("?"), |a| a.to_string()),
         );
-        use tracing::Instrument as _;
         let listener = self.listener;
         let source = self.source;
         async move {
