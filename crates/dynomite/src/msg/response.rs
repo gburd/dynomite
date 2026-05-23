@@ -52,6 +52,40 @@ pub fn make_error(
     rsp
 }
 
+/// Build a synthetic Redis-status response carrying `payload` as
+/// the on-the-wire reply bytes.
+///
+/// The constructed message inherits the request's id (so the
+/// dispatcher can pair them), sets `is_request` to false, marks
+/// the type as [`MsgType::RspRedisStatus`], and attaches a single
+/// mbuf containing `payload` (verbatim, no encoding). Use this
+/// for synthesized replies whose wire form is fixed (`+OK\r\n`,
+/// `+PONG\r\n`, ...).
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::io::mbuf::MbufPool;
+/// use dynomite::msg::{response, Msg, MsgType};
+///
+/// let req = Msg::new(7, MsgType::ReqRedisQuit, true);
+/// let pool = MbufPool::default();
+/// let rsp = response::make_simple_redis(&req, &pool, b"+OK\r\n");
+/// assert_eq!(rsp.id(), 7);
+/// assert_eq!(rsp.ty(), MsgType::RspRedisStatus);
+/// assert_eq!(rsp.mlen(), 5);
+/// ```
+#[must_use]
+pub fn make_simple_redis(req: &Msg, pool: &crate::io::mbuf::MbufPool, payload: &[u8]) -> Msg {
+    let mut rsp = Msg::new(req.id(), MsgType::RspRedisStatus, false);
+    rsp.set_parent_id(req.id());
+    let mut buf = pool.get();
+    buf.recv(payload);
+    rsp.mbufs_mut().push_back(buf);
+    rsp.recompute_mlen();
+    rsp
+}
+
 /// Pair a response with its request: stamps the response's parent
 /// id and sets the request's `selected_rsp` to the response id.
 ///

@@ -56,7 +56,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use dynomite::cluster::dispatch::ClusterDispatcher;
-use dynomite::cluster::peer::{Peer, PeerEndpoint};
+use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
 use dynomite::conf::{ConfDynSeed, ConfListen, ConfPool, Config, EndpointKind};
 use dynomite::core::log::reopen_on_sighup;
@@ -354,8 +354,12 @@ impl Server {
                     peer_idx,
                     peer = %peer_addr,
                 );
+                let pool_for_supervisor = server_pool.clone();
                 tokio::spawn(
-                    async move { peer_supervisor(peer_addr, peer_rx).await }.instrument(span),
+                    async move {
+                        peer_supervisor(peer_addr, peer_idx, pool_for_supervisor, peer_rx).await
+                    }
+                    .instrument(span),
                 )
             };
             peer_handles.push(handle);
@@ -1024,6 +1028,8 @@ async fn run_one_backend_conn(
 )]
 async fn peer_supervisor(
     addr: SocketAddr,
+    peer_idx: u32,
+    pool: Arc<ServerPool>,
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
 ) -> Result<(), NetError> {
     let mut backoff_ms: u64 = 100;
@@ -1054,6 +1060,15 @@ async fn peer_supervisor(
             }
         };
         let _ = stream.set_nodelay(true);
+        // Mark the peer as routable while this TCP link is up.
+        // Without a gossip runtime the peer's authoritative state
+        // is unknown; the supervisor's view of the link is the
+        // only reliable signal we have. The dispatcher consults
+        // `PeerState::is_routable()` when planning replicas, so
+        // failing to publish this transition keeps every remote
+        // peer permanently `Down` and forces every cross-node
+        // route into a `NoTargets` plan.
+        set_peer_state(&pool, peer_idx, PeerState::Normal);
         let conn = Conn::new(
             Box::new(TcpTransport::new(stream, ConnRole::DnodePeerServer)),
             ConnRole::DnodePeerServer,
@@ -1067,7 +1082,9 @@ async fn peer_supervisor(
             // `self.requests` and reads from the borrowed one.
             tokio::sync::mpsc::channel::<OutboundRequest>(1).1,
         );
-        if let Err(e) = driver.run_with(&mut rx).await {
+        let driver_res = driver.run_with(&mut rx).await;
+        set_peer_state(&pool, peer_idx, PeerState::Down);
+        if let Err(e) = driver_res {
             tracing::warn!(
                 peer = %addr,
                 error = %e,
@@ -1077,6 +1094,24 @@ async fn peer_supervisor(
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn set_peer_state(pool: &Arc<ServerPool>, peer_idx: u32, state: PeerState) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut peers = pool.peers().write();
+    if let Some(p) = peers.iter_mut().find(|p| p.idx() == peer_idx) {
+        if p.state() != state {
+            tracing::debug!(
+                peer_idx,
+                from = ?p.state(),
+                to = ?state,
+                "peer state transition",
+            );
+            p.set_state(state, now);
+        }
     }
 }
 

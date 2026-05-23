@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 use crate::conf::DataStore;
 use crate::core::types::MsgId;
 use crate::io::reactor::ConnRole;
-use crate::msg::{Msg, MsgParseResult, MsgType};
+use crate::msg::{response, Msg, MsgParseResult, MsgType};
 use crate::net::conn::Conn;
 use crate::net::dispatcher::{DispatchOutcome, Dispatcher, OutboundEnvelope};
 use crate::net::NetError;
@@ -277,6 +277,7 @@ async fn drive_parser(
                     bytes = consumed,
                 );
                 let was_quit = msg.flags().quit;
+                let quit_msg_id = if was_quit { Some(msg.id()) } else { None };
                 let inline_send: Option<OutboundEnvelope> = req_span.in_scope(|| {
                     // Carry the consumed wire bytes inside the
                     // msg so the dispatcher can forward them to a
@@ -316,11 +317,29 @@ async fn drive_parser(
                 if let Some(env) = inline_send {
                     let _ = handler.response_tx.send(env).await;
                 }
-                if was_quit {
-                    // The C engine closes the client connection on
-                    // a parsed QUIT. Mirror that here by marking
-                    // the conn EOF; the outer client loop will
-                    // drain any pending responses and return.
+                if let Some(qid) = quit_msg_id {
+                    // Real Redis replies `+OK\r\n` to QUIT and then
+                    // closes the client connection. Synthesize the
+                    // reply here (the dispatcher returned `Drop`
+                    // because there is no key to route) and send it
+                    // through the same `response_tx` used by every
+                    // other reply, which pops the placeholder we
+                    // pushed onto `omsg_q` above. Without this the
+                    // outer client loop's exit condition
+                    // (`omsg_q.is_empty()`) is never met and the
+                    // connection deadlocks until the kernel times
+                    // out the read.
+                    let pool = conn.mbuf_pool().clone();
+                    let mut anchor = Msg::new(qid, MsgType::ReqRedisQuit, true);
+                    anchor.set_parent_id(qid);
+                    let rsp = response::make_simple_redis(&anchor, &pool, b"+OK\r\n");
+                    let env = OutboundEnvelope {
+                        req_id: qid,
+                        rsp,
+                        span: req_span.clone(),
+                    };
+                    let _ = handler.response_tx.send(env).await;
+                    // Mirror the C engine: close after replying.
                     conn.set_eof();
                     return Ok(());
                 }
