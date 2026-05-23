@@ -73,11 +73,51 @@ redis_pid() {
 
 restart_dynomited() {
     event restart "{\"reason\":\"sigkill\"}"
+    kill_stale_dynomited
     bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
         "$DC_NAME" "$TOKENS" "$SEEDS" \
         "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" \
         >> "$LOGS/restart-$DC_NAME.log" 2>&1 \
         || event restart_failed "{\"reason\":\"start-host.sh-nonzero\"}"
+}
+
+# Kill any dynomited process bound to this DC's config file. The
+# pidfile-tracked process is the common case, but a previous
+# start-host.sh that crashed mid-flight (between the binary spawn
+# and the pidfile write) can leave an untracked dynomited holding
+# the listen port; the next start-host.sh would then fail with
+# "Address already in use" and we'd loop indefinitely. Resolve by
+# pgrep'ing for any process whose argv contains our config file
+# path and SIGKILL'ing all matches before launching a new one.
+kill_stale_dynomited() {
+    local conf="$RUN/dynomite.yml"
+    # Match the binary path AND the conf file so we never touch a
+    # neighbour DC running on the same host (the per-DC conf path
+    # makes that match unique).
+    local pids
+    pids=$(pgrep -f "dynomited.*$conf" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        event kill_stale "{\"pids\":\"$(echo "$pids" | tr '\n' ',' | sed 's/,$//')\"}"
+        # SIGKILL every match. The pidfile-tracked process and any
+        # untracked siblings die together. Wait briefly for the
+        # kernel to reap them so the new dynomited's listen-bind
+        # and pidfile-flock do not race the dying process.
+        for pid in $pids; do
+            kill -KILL "$pid" 2>/dev/null || true
+        done
+        for _ in $(seq 1 50); do
+            local still
+            still=$(pgrep -f "dynomited.*$conf" 2>/dev/null || true)
+            [ -z "$still" ] && break
+            sleep 0.1
+        done
+    fi
+    # Drop a stale pidfile so start-host.sh's flock acquires
+    # cleanly. We just SIGKILL'd whoever held it; the file lock is
+    # released on close-on-exit, but the pidfile contents are still
+    # the dead pid - rather than rely on the new dynomited's
+    # pidfile-stale handling we remove it explicitly.
+    rm -f "$RUN/dynomited.pid" 2>/dev/null || true
 }
 
 trap 'event injector_exit "{}"; exit 0' TERM INT
