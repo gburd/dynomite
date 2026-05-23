@@ -40,7 +40,10 @@ use parking_lot::Mutex;
 use tracing::Level;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::MakeWriter;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::util::SubscriberInitExt as _;
+use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use crate::core::types::{DynError, Status};
 
@@ -192,6 +195,234 @@ impl OpenOptionsExt for OpenOptions {
     }
 }
 
+/// Bundle of tunables consumed by [`build_logs_layer`] and
+/// [`install_logs_only`].
+///
+/// Mirrors the legacy positional triple `(level, path, format)`
+/// that [`log_init_with_format`] takes; lifting it to a struct
+/// lets the binary share a single value between the OTLP-on and
+/// OTLP-off install paths.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{LogConfig, LogFormat, LOG_NOTICE};
+/// let cfg = LogConfig::new(LOG_NOTICE, None, LogFormat::Json);
+/// assert_eq!(cfg.verbosity, LOG_NOTICE);
+/// assert_eq!(cfg.format, LogFormat::Json);
+/// ```
+#[derive(Debug, Clone)]
+pub struct LogConfig {
+    /// Numeric verbosity (`0..=LOG_LEVEL_MAX`).
+    pub verbosity: u8,
+    /// Optional log file. When `None`, log records flow to standard
+    /// error.
+    pub output: Option<PathBuf>,
+    /// Wire shape for emitted records.
+    pub format: LogFormat,
+}
+
+impl LogConfig {
+    /// Convenience constructor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::core::log::{LogConfig, LogFormat, LOG_INFO};
+    /// let cfg = LogConfig::new(LOG_INFO, None, LogFormat::Default);
+    /// assert_eq!(cfg.verbosity, LOG_INFO);
+    /// ```
+    pub fn new(verbosity: u8, output: Option<PathBuf>, format: LogFormat) -> Self {
+        Self {
+            verbosity,
+            output,
+            format,
+        }
+    }
+}
+
+/// Boxed fmt layer returned by [`build_logs_layer`].
+///
+/// The layer is parameterised on [`tracing_subscriber::Registry`]
+/// so callers can drop it into any registry stack the binary
+/// builds (with or without an [`tracing_opentelemetry`] layer
+/// stacked on top).
+pub type LogsLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
+
+/// Token returned by [`build_logs_layer`] proving the SIGHUP
+/// log-reopen state has been initialised.
+///
+/// The token is zero-sized; its sole purpose is to make the
+/// "build the fmt layer, then install it as a global" handshake
+/// type-checked: callers cannot call [`reopen_on_sighup`] before
+/// the writer state has been wired, because they cannot construct
+/// a [`ReopenHandle`] without first calling [`build_logs_layer`]
+/// or one of its convenience wrappers.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{build_logs_layer, LogConfig, LogFormat, LOG_NOTICE};
+/// // Building the layer also populates the SIGHUP-reopen state.
+/// // The handle below is the proof of that wiring.
+/// // (The example does not install the layer as a global so it
+/// // can run side-by-side with the rest of the doctest suite.)
+/// let cfg = LogConfig::new(LOG_NOTICE, None, LogFormat::Default);
+/// let _ = build_logs_layer(&cfg);
+/// ```
+#[derive(Debug)]
+#[must_use = "the reopen handle must be threaded into install_global so SIGHUP-reopen is wired"]
+pub struct ReopenHandle {
+    _private: (),
+}
+
+/// Build the EnvFilter the install paths feed into the registry.
+///
+/// Honours `RUST_LOG` and falls back to the `tracing` level
+/// derived from the supplied `verbosity`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::core::log::{build_env_filter, LOG_NOTICE};
+/// let _filter = build_env_filter(LOG_NOTICE);
+/// ```
+pub fn build_env_filter(verbosity: u8) -> EnvFilter {
+    let level_filter = LevelFilter::from_level(tracing_level_for(clamp_level(verbosity)));
+    EnvFilter::builder()
+        .with_default_directive(level_filter.into())
+        .from_env_lossy()
+}
+
+fn init_reopen_state(verbosity: u8, path: Option<&Path>) -> Result<ReopenHandle, DynError> {
+    let sink: Box<dyn Write + Send> = match path {
+        Some(p) => Box::new(open_log_file(p).map_err(DynError::Io)?),
+        None => Box::new(io::stderr()),
+    };
+    let stored_path = path.map(PathBuf::from);
+
+    let state = State {
+        path: Mutex::new(stored_path),
+        sink: Mutex::new(sink),
+        nerror: Mutex::new(0),
+    };
+    STATE
+        .set(state)
+        .map_err(|_| DynError::generic("log: writer state already installed"))?;
+    CURRENT_LEVEL.store(clamp_level(verbosity), Ordering::Relaxed);
+    Ok(ReopenHandle { _private: () })
+}
+
+/// Build the fmt layer for the configured shape and wire the
+/// SIGHUP-reopen writer state.
+///
+/// Returns the boxed layer plus a [`ReopenHandle`] proving the
+/// internal writer state has been populated. The layer is *not*
+/// installed as a global; the caller composes it into a
+/// [`tracing_subscriber::Registry`] (typically together with an
+/// [`EnvFilter`] and an optional `OpenTelemetryLayer`) and calls
+/// `try_init`.
+///
+/// May only be called once per process: the underlying writer
+/// state is a `OnceLock` and a second call returns
+/// [`DynError::Generic`].
+///
+/// # Errors
+/// Returns [`DynError::Io`] when the configured `output` cannot
+/// be opened for append, and [`DynError::Generic`] when the
+/// writer state has already been initialised.
+///
+/// # Examples
+///
+/// ```no_run
+/// use dynomite::core::log::{build_env_filter, build_logs_layer, LogConfig, LogFormat, LOG_NOTICE};
+/// use tracing_subscriber::layer::SubscriberExt as _;
+/// use tracing_subscriber::util::SubscriberInitExt as _;
+///
+/// let cfg = LogConfig::new(LOG_NOTICE, None, LogFormat::Default);
+/// let (layer, _reopen) = build_logs_layer(&cfg).expect("build layer");
+/// tracing_subscriber::registry()
+///     .with(layer)
+///     .with(build_env_filter(LOG_NOTICE))
+///     .try_init()
+///     .expect("install");
+/// ```
+pub fn build_logs_layer(cfg: &LogConfig) -> Result<(LogsLayer, ReopenHandle), DynError> {
+    let reopen = init_reopen_state(cfg.verbosity, cfg.output.as_deref())?;
+    let layer = fmt_layer_for_format::<Registry>(cfg.format);
+    Ok((layer, reopen))
+}
+
+fn fmt_layer_for_format<S>(format: LogFormat) -> Box<dyn Layer<S> + Send + Sync + 'static>
+where
+    S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    match format {
+        LogFormat::Default => Box::new(
+            tracing_subscriber::fmt::Layer::default()
+                .with_writer(LoggerWriter)
+                .with_target(true),
+        ),
+        LogFormat::Json => Box::new(
+            tracing_subscriber::fmt::Layer::default()
+                .with_writer(LoggerWriter)
+                .with_target(true)
+                .json()
+                .flatten_event(false)
+                .with_current_span(true)
+                .with_span_list(false),
+        ),
+        LogFormat::Rfc5424 => Box::new(
+            tracing_subscriber::fmt::Layer::default()
+                .with_writer(LoggerWriter)
+                .event_format(syslog::Rfc5424Formatter::new())
+                .with_ansi(false),
+        ),
+        LogFormat::Rfc3164 => Box::new(
+            tracing_subscriber::fmt::Layer::default()
+                .with_writer(LoggerWriter)
+                .event_format(syslog::Rfc3164Formatter::new())
+                .with_ansi(false),
+        ),
+    }
+}
+
+/// Install a fmt-only global tracing subscriber.
+///
+/// Composes a [`Registry`] with the EnvFilter built from
+/// `cfg.verbosity` and the fmt layer built from `cfg.format`,
+/// then sets it as the global default. The SIGHUP-reopen writer
+/// state is wired as a side effect.
+///
+/// This is the OTLP-off install path; the OTLP-on install path
+/// lives in [`dynomited::observability::install_global`] and
+/// stacks an `OpenTelemetryLayer` on top of the same fmt layer.
+///
+/// May only be called once per process.
+///
+/// # Errors
+/// Returns [`DynError::Io`] when `cfg.output` cannot be opened
+/// for append, and [`DynError::Generic`] when a global tracing
+/// subscriber has already been installed.
+///
+/// # Examples
+///
+/// ```no_run
+/// use dynomite::core::log::{install_logs_only, LogConfig, LogFormat, LOG_NOTICE};
+/// install_logs_only(&LogConfig::new(LOG_NOTICE, None, LogFormat::Default))
+///     .expect("install logger");
+/// ```
+pub fn install_logs_only(cfg: &LogConfig) -> Status {
+    let env = build_env_filter(cfg.verbosity);
+    let (fmt_layer, _reopen) = build_logs_layer(cfg)?;
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(env)
+        .try_init()
+        .map_err(|e| DynError::generic(format!("install_logs_only: {e}")))?;
+    Ok(())
+}
+
 /// Install the global tracing subscriber.
 ///
 /// `level` is the C-style numeric verbosity in `0..=LOG_LEVEL_MAX`.
@@ -201,7 +432,8 @@ impl OpenOptionsExt for OpenOptions {
 ///
 /// This entry point preserves the historical default output shape
 /// ([`LogFormat::Default`]). To pick a different shape, call
-/// [`log_init_with_format`] directly.
+/// [`log_init_with_format`] directly. Both wrappers delegate to
+/// [`install_logs_only`].
 ///
 /// `log_init` may be called only once per process; subsequent calls
 /// return [`DynError::Generic`].
@@ -230,89 +462,11 @@ pub fn log_init(level: u8, path: Option<&Path>) -> Status {
 /// log_init_with_format(LOG_NOTICE, None, LogFormat::Json).expect("install logger");
 /// ```
 pub fn log_init_with_format(level: u8, path: Option<&Path>, format: LogFormat) -> Status {
-    let sink: Box<dyn Write + Send> = match path {
-        Some(p) => Box::new(open_log_file(p).map_err(DynError::Io)?),
-        None => Box::new(io::stderr()),
-    };
-    let stored_path = path.map(PathBuf::from);
-
-    let state = State {
-        path: Mutex::new(stored_path),
-        sink: Mutex::new(sink),
-        nerror: Mutex::new(0),
-    };
-    STATE
-        .set(state)
-        .map_err(|_| DynError::generic("log_init: subscriber already installed"))?;
-
-    install_subscriber(level, format).map_err(|e| {
-        // The OnceLock is already populated; surface the dispatch
-        // error verbatim. The caller is expected to abort.
-        DynError::generic(format!("log_init: {e}"))
+    install_logs_only(&LogConfig {
+        verbosity: level,
+        output: path.map(PathBuf::from),
+        format,
     })
-}
-
-fn install_subscriber(
-    level: u8,
-    format: LogFormat,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use tracing_subscriber::layer::SubscriberExt as _;
-    use tracing_subscriber::util::SubscriberInitExt as _;
-
-    let level_filter = LevelFilter::from_level(tracing_level_for(clamp_level(level)));
-    CURRENT_LEVEL.store(clamp_level(level), Ordering::Relaxed);
-    let env = EnvFilter::builder()
-        .with_default_directive(level_filter.into())
-        .from_env_lossy();
-
-    match format {
-        LogFormat::Default => {
-            // Preserve the original SubscriberBuilder path verbatim:
-            // a future regression in the layered Registry path must
-            // not silently change the historical default output.
-            tracing_subscriber::fmt()
-                .with_env_filter(env)
-                .with_writer(LoggerWriter)
-                .with_target(true)
-                .try_init()?;
-        }
-        LogFormat::Json => {
-            tracing_subscriber::fmt()
-                .with_env_filter(env)
-                .with_writer(LoggerWriter)
-                .with_target(true)
-                .json()
-                .flatten_event(false)
-                .with_current_span(true)
-                .with_span_list(false)
-                .try_init()?;
-        }
-        LogFormat::Rfc5424 => {
-            // Syslog wire format must never contain ANSI escapes; the
-            // SubscriberBuilder path strips ANSI only for the default
-            // `Format<L, T>` formatter, so we layer the registry by
-            // hand to set `with_ansi(false)` on the fmt layer.
-            let layer = tracing_subscriber::fmt::Layer::new()
-                .with_writer(LoggerWriter)
-                .event_format(syslog::Rfc5424Formatter::new())
-                .with_ansi(false);
-            tracing_subscriber::registry()
-                .with(env)
-                .with(layer)
-                .try_init()?;
-        }
-        LogFormat::Rfc3164 => {
-            let layer = tracing_subscriber::fmt::Layer::new()
-                .with_writer(LoggerWriter)
-                .event_format(syslog::Rfc3164Formatter::new())
-                .with_ansi(false);
-            tracing_subscriber::registry()
-                .with(env)
-                .with(layer)
-                .try_init()?;
-        }
-    }
-    Ok(())
 }
 
 /// Reopen the log file at the path remembered by [`log_init`].
@@ -497,6 +651,63 @@ mod tests {
         assert!(log_loggable(0));
         assert!(log_loggable(5));
         assert!(!log_loggable(6));
+    }
+
+    #[test]
+    fn build_logs_layer_writer_state_swaps_on_reopen() {
+        // The fmt layer returned by `build_logs_layer` writes
+        // through the shared STATE.sink. Renaming the configured
+        // file out from under the writer and then calling
+        // `reopen_on_sighup` must rebind STATE.sink to a freshly
+        // re-created file at the original path; events emitted
+        // before the rotate land in the renamed file, events
+        // emitted after the reopen land in the new file.
+        //
+        // STATE is a `OnceLock`, so this test is the only test
+        // in the module that initialises it. nextest runs each
+        // `#[test]` in its own process; when the suite is run
+        // under plain `cargo test` this test is the canonical
+        // owner of STATE.
+        use std::fs;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("dyn.log");
+        let cfg = LogConfig::new(LOG_NOTICE, Some(log_path.clone()), LogFormat::Default);
+        let (fmt_layer, _reopen) = build_logs_layer(&cfg).expect("build layer");
+
+        let env = build_env_filter(LOG_NOTICE);
+        let sub = tracing_subscriber::registry().with(fmt_layer).with(env);
+
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!(target: "dynomite::test", "first-line-marker");
+            // tracing's fmt layer writes synchronously inside
+            // `on_event`; no flush needed.
+            let rotated = dir.path().join("dyn.log.1");
+            fs::rename(&log_path, &rotated).expect("rotate file");
+            reopen_on_sighup().expect("reopen");
+            tracing::info!(target: "dynomite::test", "second-line-marker");
+        });
+
+        let rotated_contents =
+            fs::read_to_string(dir.path().join("dyn.log.1")).expect("read rotated");
+        let new_contents = fs::read_to_string(&log_path).expect("read new");
+
+        assert!(
+            rotated_contents.contains("first-line-marker"),
+            "rotated file missing first marker: {rotated_contents:?}",
+        );
+        assert!(
+            !rotated_contents.contains("second-line-marker"),
+            "rotated file unexpectedly contained second marker: {rotated_contents:?}",
+        );
+        assert!(
+            new_contents.contains("second-line-marker"),
+            "new file missing second marker: {new_contents:?}",
+        );
+        assert!(
+            !new_contents.contains("first-line-marker"),
+            "new file unexpectedly contained first marker: {new_contents:?}",
+        );
     }
 }
 

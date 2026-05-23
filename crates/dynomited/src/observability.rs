@@ -7,19 +7,22 @@
 //! the OTel-Collector and every other OTLP consumer) and
 //! installs a layered tracing subscriber:
 //!
+//! * the caller-provided fmt layer (built via
+//!   [`dynomite::core::log::build_logs_layer`]),
 //! * an `EnvFilter` honoring `RUST_LOG` (default: from the
 //!   verbosity level passed in),
-//! * a `fmt::layer` writing to stderr,
 //! * a `tracing_opentelemetry::OpenTelemetryLayer` fanning every
 //!   span to the OTLP collector.
 //!
 //! Because `tracing_subscriber` only allows one global default,
-//! callers must invoke this BEFORE
-//! [`dynomite::core::log::log_init`]. When the endpoint is unset
-//! the function returns `Ok(false)` and the binary keeps using
-//! the standard `log_init` path; the OTel SDK is therefore inert
-//! at run time unless the operator opts in, satisfying the
-//! brief's default-behavior-must-not-regress contract.
+//! callers must invoke this exactly once. The fmt layer (and
+//! its SIGHUP-reopen wiring) is part of the global subscriber
+//! whether OTLP is on or off; the [`dynomite::core::log`] module
+//! exposes [`dynomite::core::log::install_logs_only`] for the
+//! OTLP-off path. When the endpoint is unset the binary picks
+//! that path; when the endpoint is set this function picks the
+//! layered (fmt + EnvFilter + OTel) path while keeping the same
+//! fmt layer in the stack.
 
 use std::time::Duration;
 
@@ -29,14 +32,11 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::trace::{Sampler, TracerProvider};
 use opentelemetry_sdk::Resource;
 use thiserror::Error;
-use tracing::Level;
-use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 use dynomite::conf::ObservabilityConfig;
-use dynomite::core::log::{clamp_level, tracing_level_for};
+use dynomite::core::log::{build_env_filter, LogsLayer, ReopenHandle};
 
 /// Default service name attached to emitted spans when the
 /// configuration does not set [`ObservabilityConfig::service_name`].
@@ -80,64 +80,94 @@ impl Drop for TracerGuard {
     }
 }
 
-/// Install the OTLP layer as the global tracing subscriber when
-/// the configuration opts in.
+/// Returns whether the OTLP traces exporter is enabled by the
+/// supplied configuration.
 ///
-/// Must be called BEFORE
-/// [`dynomite::core::log::log_init`]: a global tracing subscriber
-/// can only be installed once and `log_init` installs its own.
-/// When the endpoint is unset (or the empty string), this
-/// function does nothing and returns `Ok(None)`; the caller
-/// keeps using `log_init` as before. When the endpoint is set,
-/// the returned guard owns the live `TracerProvider`; dropping
-/// it (or calling [`TracerGuard::shutdown`]) flushes pending
-/// spans and shuts the exporter down.
-///
-/// # Errors
-/// Returns [`ObservabilityError::Build`] when the gRPC exporter
-/// cannot be constructed or when a global subscriber is already
-/// installed (typically because `log_init` ran first).
+/// The check is intentionally small: the trace exporter is
+/// considered "on" iff `otlp_traces_endpoint` is `Some` and not
+/// the empty string. Callers use it to dispatch between the
+/// fmt-only install path
+/// ([`dynomite::core::log::install_logs_only`]) and the
+/// fmt-plus-OTel path ([`install_global`]).
 ///
 /// # Examples
 ///
 /// ```
 /// use dynomite::conf::ObservabilityConfig;
+/// use dynomited::observability::otlp_traces_enabled;
+///
+/// assert!(!otlp_traces_enabled(&ObservabilityConfig::default()));
+/// ```
+pub fn otlp_traces_enabled(cfg: &ObservabilityConfig) -> bool {
+    cfg.otlp_traces_endpoint
+        .as_deref()
+        .is_some_and(|s| !s.is_empty())
+}
+
+/// Install the layered fmt + EnvFilter + OTel global tracing
+/// subscriber.
+///
+/// `fmt_layer` is the boxed fmt layer built by
+/// [`dynomite::core::log::build_logs_layer`]; the `reopen` token
+/// proves the SIGHUP-reopen writer state has been initialised.
+/// Both are consumed: the layer is moved into the registry and
+/// the token is dropped once the subscriber is installed.
+///
+/// Callers are expected to gate this on
+/// [`otlp_traces_enabled`] and fall back to
+/// [`dynomite::core::log::install_logs_only`] when the endpoint
+/// is unset.
+///
+/// # Errors
+/// Returns [`ObservabilityError::Build`] when the gRPC exporter
+/// cannot be constructed, when the configured endpoint is
+/// missing, or when a global subscriber is already installed.
+///
+/// # Examples
+///
+/// ```no_run
+/// use dynomite::conf::ObservabilityConfig;
+/// use dynomite::core::log::{build_logs_layer, LogConfig, LogFormat, LOG_NOTICE};
 /// use dynomited::observability::install_global;
-/// // No endpoint configured -> install_global is a no-op and
-/// // the returned guard is None.
-/// let cfg = ObservabilityConfig::default();
-/// let g = install_global(&cfg, 5).expect("default cfg is a no-op");
-/// assert!(g.is_none());
+///
+/// let log_cfg = LogConfig::new(LOG_NOTICE, None, LogFormat::Default);
+/// let (fmt_layer, reopen) = build_logs_layer(&log_cfg).expect("layer");
+/// let obs = ObservabilityConfig {
+///     otlp_traces_endpoint: Some("http://localhost:4317".into()),
+///     otlp_logs_endpoint: None,
+///     service_name: Some("my-service".into()),
+///     traces_sampling: Some(1.0),
+/// };
+/// let _guard = install_global(&obs, LOG_NOTICE, fmt_layer, reopen)
+///     .expect("install");
 /// ```
 pub fn install_global(
     cfg: &ObservabilityConfig,
     verbosity: u8,
-) -> Result<Option<TracerGuard>, ObservabilityError> {
-    if cfg.otlp_traces_endpoint.as_deref().unwrap_or("").is_empty() {
-        return Ok(None);
+    fmt_layer: LogsLayer,
+    _reopen: ReopenHandle,
+) -> Result<TracerGuard, ObservabilityError> {
+    if !otlp_traces_enabled(cfg) {
+        return Err(ObservabilityError::Build(
+            "otlp_traces_endpoint is required".into(),
+        ));
     }
     let provider = init_otlp_tracer(cfg)?;
     let tracer = provider.tracer("dynomite");
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-    // EnvFilter honors RUST_LOG; default falls back to the
-    // verbosity level the CLI passed in (`-v`).
-    let level: Level = tracing_level_for(clamp_level(verbosity));
-    let level_filter = LevelFilter::from_level(level);
-    let env = EnvFilter::builder()
-        .with_default_directive(level_filter.into())
-        .from_env_lossy();
+    let env = build_env_filter(verbosity);
 
     let registry = tracing_subscriber::registry()
-        .with(env)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .with(otel_layer);
+        .with(fmt_layer)
+        .with(otel_layer)
+        .with(env);
     registry
         .try_init()
         .map_err(|e| ObservabilityError::Build(format!("set_global_default: {e}")))?;
-    Ok(Some(TracerGuard {
+    Ok(TracerGuard {
         provider: Some(provider),
-    }))
+    })
 }
 
 /// Build (but do not install) an OTLP `TracerProvider` for tests
@@ -210,22 +240,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_endpoint_returns_none_guard() {
+    fn otlp_traces_enabled_returns_false_for_default_config() {
         let cfg = ObservabilityConfig::default();
-        let g = install_global(&cfg, 5).expect("should be Ok");
-        assert!(g.is_none(), "no endpoint should mean no guard");
+        assert!(!otlp_traces_enabled(&cfg));
     }
 
     #[test]
-    fn empty_endpoint_string_is_treated_as_unset() {
+    fn otlp_traces_enabled_returns_false_for_empty_endpoint_string() {
         let cfg = ObservabilityConfig {
             otlp_traces_endpoint: Some(String::new()),
             otlp_logs_endpoint: None,
             service_name: None,
             traces_sampling: None,
         };
-        let g = install_global(&cfg, 5).expect("should be Ok");
-        assert!(g.is_none());
+        assert!(!otlp_traces_enabled(&cfg));
+    }
+
+    #[test]
+    fn otlp_traces_enabled_returns_true_for_set_endpoint() {
+        let cfg = ObservabilityConfig {
+            otlp_traces_endpoint: Some("http://localhost:4317".into()),
+            otlp_logs_endpoint: None,
+            service_name: None,
+            traces_sampling: None,
+        };
+        assert!(otlp_traces_enabled(&cfg));
     }
 
     #[test]
