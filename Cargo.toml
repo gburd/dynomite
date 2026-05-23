@@ -106,15 +106,18 @@ rcgen = "0.13"
 # default OTLP wire format the brief requires (Jaeger, Tempo,
 # Honeycomb, OTel-Collector all accept it).
 opentelemetry = "0.27"
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "logs"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "logs"] }
 tracing-opentelemetry = "0.28"
 
+# OTLP log appender: bridges `tracing` events to OpenTelemetry
+# log records so the binary can export logs over OTLP/gRPC to
+# the same collector that receives the trace stream. Tracks the
+# 0.27 family of the rest of the OTel stack.
+opentelemetry-appender-tracing = "0.27"
+
 # Log-format support: `time` for the syslog timestamps; `regex`
-# is dev-only (used by the format-shape tests). The OTLP log
-# appender that was scoped into this branch never landed; the
-# OTLP exporter above (tracing pillar) is sufficient for
-# observability for now.
+# is dev-only (used by the format-shape tests).
 time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
 regex = "1"
 
