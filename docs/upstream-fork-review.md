@@ -26,7 +26,7 @@ sorted by potential impact on the Rust port.
 
 ## Gap analysis
 
-### 1. Redis AUTH — `lampmanyao/dynomite`  **(P1 - real gap)**
+### 1. Redis AUTH  --  `lampmanyao/dynomite`  **(P1 - real gap)**
 
 Adds a `redis_requirepass: <password>` pool config option. When
 set, every server-side connection sends `AUTH <password>` as its
@@ -51,7 +51,7 @@ required`.
 **Estimated effort**: ~80 LOC + 2 unit tests + 1 integration test
 spawning `redis-server --requirepass`. Half a day.
 
-### 2. TCP+TLS for the peer plane — `DynomiteDB:ssl`  **(P2 - future)**
+### 2. TCP+TLS for the peer plane  --  `DynomiteDB:ssl`  **(P2 - future)**
 
 Our QUIC transport already provides TLS 1.3 end-to-end. Operators
 who can't enable QUIC (UDP blocked, kernel-level QUIC unavailable,
@@ -66,7 +66,7 @@ but unused) that selects plain / tls / quic.
 
 **Estimated effort**: 2-3 days of careful work.
 
-### 3. Multithreading — `DynomiteDB:topology`  **(no action)**
+### 3. Multithreading  --  `DynomiteDB:topology`  **(no action)**
 
 71 commits, 79 files, ~3000 LOC. Reorganizes the C engine to use
 per-peer pthread contexts, spinlocks for connection / message /
@@ -80,7 +80,7 @@ only one connection") are already in our pass-2 design.
 **Verdict**: zero action required; we're better off than the
 fork.
 
-### 4. Static-state crypto refactor — `DynomiteDB:cryptowork`  **(no action)**
+### 4. Static-state crypto refactor  --  `DynomiteDB:cryptowork`  **(no action)**
 
 Removes static globals (`aes_cipher`, `aes_key`, `aes_encrypt_ctx`)
 in favor of per-operation contexts. Our Rust crypto module
@@ -91,7 +91,7 @@ The fork also fixes a `unsigned char file_name[]` -> `char file_name[]`
 sign-mismatch bug for `fopen(3)`. Our port uses `&Path` so the bug
 cannot occur.
 
-### 5. Memcache parser fixes — `DynomiteDB:memcacheFix`  **(no action)**
+### 5. Memcache parser fixes  --  `DynomiteDB:memcacheFix`  **(no action)**
 
 Adds:
 - empty-key detection in `SW_KEY` (`keylen == 0` -> error)
@@ -110,7 +110,7 @@ implements:
 
 **Verdict**: confirmed parity, no action.
 
-### 6. Hash-command routing — `elijah:master`  **(no action)**
+### 6. Hash-command routing  --  `elijah:master`  **(no action)**
 
 Three hotfixes for `HGETALL`, `HKEYS`, `HSCAN` to use
 `ROUTING_TOKEN_OWNER_LOCAL_RACK_ONLY` instead of
@@ -124,19 +124,19 @@ $ grep -B1 -A4 '"hgetall"' crates/dynomite/src/proto/redis/commands.rs
 b"hgetall" => (MsgType::ReqRedisHgetall, true, false, RoutingOverride::TokenOwnerLocalRackOnly),
 ```
 
-### 7. C-language build break — `isakrubin`  **(n/a)**
+### 7. C-language build break  --  `isakrubin`  **(n/a)**
 
 Fixes a `volatile struct C2G_InQ` vs `extern struct C2G_InQ`
 declaration ambiguity that newer GCC rejects. Rust's type system
 makes this category of error unrepresentable.
 
-### 8. CI / docs / packaging — `noullove`, `ramezrafla`, `kalangi07`, `thaingo`, `andypeng2015`, `rinhtrinh1511`, `rprevot`, `SAY-5`, `jparap`, `ochinchina`  **(n/a)**
+### 8. CI / docs / packaging  --  `noullove`, `ramezrafla`, `kalangi07`, `thaingo`, `andypeng2015`, `rinhtrinh1511`, `rprevot`, `SAY-5`, `jparap`, `ochinchina`  **(n/a)**
 
 All recent forks with `ahead=0..1` are CI workflow tweaks,
 README edits, or out-of-tree config samples. Nothing for us
 to port.
 
-### 9. MongoDB protocol — `ipapapa`  **(out of scope)**
+### 9. MongoDB protocol  --  `ipapapa`  **(out of scope)**
 
 Ioannis Papapanagiotou (one of the original Dynomite authors)
 added a MongoDB backend in 2015. The work was never merged to

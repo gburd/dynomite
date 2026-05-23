@@ -5,8 +5,8 @@ the thin distributed replication layer for Redis and Memcached datastores
 inspired by the [Amazon Dynamo paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf).
 
 This project is a from-scratch Rust implementation that aims to be
-functionally identical to the original C codebase (carried under
-`_/dynomite/` for reference) while being usable both as:
+functionally identical to the original C codebase while being usable
+both as:
 
 * a standalone server binary (`dynomited`), and
 * a library crate (`dynomite`) that can be embedded directly in another

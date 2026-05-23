@@ -4,8 +4,10 @@ This file is the standing instructions for any agent (or human) working in
 this repository. It is read first on every session. The plan in `PLAN.md`
 is the *what*; this file is the *how*. Both are authoritative; this file
 takes precedence on process conflicts. The C reference tree under
-`_/dynomite/` is the spec - when behavior is ambiguous, re-read the C and
-match it.
+`docs/parity.md` is the spec - when behavior is ambiguous,
+consult it and follow the link to the upstream Netflix C source
+for the referenced function. The C tree is not vendored locally;
+see Section 2.
 
 The project is set up to run end-to-end without human approval. Agents are
 expected to keep their own notes, validate their own work, peer-review one
@@ -59,13 +61,17 @@ crates/fuzz/          # cargo-fuzz harnesses
 docs/book/            # mdBook reference manual
 docs/parity.md        # C-to-Rust symbol mapping
 docs/journal/         # rolling decision log (one .md per agent session)
-test/                 # Python conformance harness (carry-over)
 scripts/              # netem, multi-node helpers
-_/dynomite/           # C reference; READ-ONLY
 ```
 
-`_/dynomite/` is treated as read-only. Never modify it. If you need to
-build the C binary for differential testing, build it in `target/cref/`.
+The original Netflix C reference used to live under `_/dynomite/`
+but was removed in commit `2561d13` (2026-05-21) at operator
+request. The historical conformance scenarios that used to be
+Python (`_/dynomite/test/func_test.py` and friends) have been
+re-implemented in Rust in `crates/dynomited/tests/conformance/`.
+When behaviour is ambiguous, consult `docs/parity.md` for the
+mapping or fetch the C source from the upstream Netflix
+repository for inspection only.
 
 ---
 
@@ -129,7 +135,11 @@ fresh checkout produces an identical environment.
           shellHook = ''
             export RUST_BACKTRACE=1
             export RUSTFLAGS="-D warnings"
-            export DYNOMITE_C_REF="$PWD/_/dynomite"
+            # DYNOMITE_C_REF used to point at the vendored C reference
+            # under $PWD/_/dynomite. The tree was removed in 2561d13;
+            # set this manually if you have a local checkout of the
+            # upstream Netflix repository for differential testing.
+            # export DYNOMITE_C_REF="$HOME/path/to/netflix/dynomite"
           '';
         };
       });
@@ -727,8 +737,10 @@ The port is complete when:
    compile and run.
 9. `cargo public-api` shows a stable surface for two consecutive
    PRs.
-10. The Python conformance harness (ported from
-    `_/dynomite/test/`) is green against `dynomited`.
+10. The Python conformance scenarios from the upstream Netflix
+    tree (re-implemented in Rust under
+    `crates/dynomited/tests/conformance/`) are green against
+    `dynomited`.
 11. Both `.github/workflows/ci.yml` (GitHub Actions) and
     `.forgejo/workflows/ci.yml` (Codeberg Forgejo Actions) pass
     on the same commit. Both runners exercise the identical
@@ -849,8 +861,11 @@ write a `BLOCKED:` journal entry and stop. The lead will route it.
 
 * **Missing skill**: read it from the path printed in the system prompt
   before doing the work. Do not guess.
-* **Missing C file context**: re-read the C file in full. The C codebase
-  is small enough (~38k LOC) that re-reading is cheap.
+* **Missing C file context**: re-read the C file in full. The C
+  codebase is small enough (~38k LOC) that re-reading is cheap.
+  The C source is **not vendored** in this tree (see Section 2);
+  fetch it from the upstream Netflix repository if needed for
+  inspection.
 * **Missing Rust crate**: do not add a dependency without updating PLAN.md
   Section 2 and getting a journal entry approving the addition. The crate
   list there is the upper bound.

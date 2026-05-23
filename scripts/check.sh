@@ -7,7 +7,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 echo "==> rustfmt"
-cargo fmt --all -- --check
+# Restrict to our crates so the lamdb path-deps pulled in by the
+# `riak-storage` feature do not leak into the format check.
+cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -- --check
 
 echo "==> clippy"
 cargo clippy --workspace --all-targets --all-features -- -D warnings

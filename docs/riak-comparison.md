@@ -1,8 +1,8 @@
 # Riak vs Dynomite: feature comparison and adoption recommendations
 
 Survey of `basho/riak` (the meta-repo, plus `riak_kv`, `riak_core`,
-`riak_repl`, `riak_auth_mods` deps) against our Rust port of
-Netflix Dynomite. Conducted while the pass-2 multi-host chaos run
+`riak_repl`, `riak_auth_mods` deps) against this Rust
+implementation. Conducted while the pass-2 multi-host chaos run
 was in flight (run id `pass2-20260522-032705Z`).
 
 ## TL;DR
@@ -12,7 +12,7 @@ Riak is a **complete distributed database**; Dynomite is a
 memcache). They share the Dynamo lineage (consistent hashing,
 quorum reads/writes, gossip, vnodes) but operate at different
 layers of the stack. **About a third of Riak's architectural
-inventory has no equivalent in Dynomite by design** — anything
+inventory has no equivalent in Dynomite by design**  --  anything
 that touches the storage engine itself (CRDTs, MapReduce,
 secondary indexes, search, multi-backend) is the responsibility
 of the underlying redis/memcache.
@@ -114,7 +114,7 @@ read path without waiting for AAE.
 
 **Dynomite today**: the `DC_QUORUM` and `DC_EACH_SAFE_QUORUM`
 read paths fan out and accept the first reply (in the planned
-design — currently the reply coalescer isn't wired so all reads
+design  --  currently the reply coalescer isn't wired so all reads
 are effectively `DC_ONE`). No comparison of replies, no
 write-back of stale values.
 
@@ -162,7 +162,7 @@ cleanly.
 parameterise the existing dispatch test matrix over bucket
 types.
 
-#### D4. Real-time replication queue (low value, high effort) — **defer**
+#### D4. Real-time replication queue (low value, high effort)  --  **defer**
 
 **Riak**: `riak_repl` ships writes to a remote cluster
 asynchronously via a persistent queue. This is for
@@ -183,7 +183,7 @@ run two Dynomite clusters and use external tooling
 in-tree async cluster replication is a new product, not a
 feature.
 
-#### D5. Strong consistency mode (riak_ensemble) — **defer**
+#### D5. Strong consistency mode (riak_ensemble)  --  **defer**
 
 **Riak**: optional Paxos-based strongly consistent mode for
 specific buckets. Available since 2.x; rarely used in
@@ -197,7 +197,7 @@ real consensus database (etcd, ZooKeeper, FoundationDB)
 instead, and Riak's own production guidance has been to skip
 this for most workloads. Out of scope.
 
-#### D6. Vector clocks at the proxy (low value, high invasiveness) — **defer**
+#### D6. Vector clocks at the proxy (low value, high invasiveness)  --  **defer**
 
 **Riak**: every object carries a vector clock; replicas can
 detect concurrent writes and either return siblings (when
@@ -228,9 +228,9 @@ worth implementing in Dynomite proper.
 | **D1. Hinted handoff** | **yes** | configurable (`hinted_handoff: on`), default OFF until tested | 3-5 days | After pass-3 (post-coalescer) |
 | **D2. Read repair on quorum read** | **yes** | default ON when `read_consistency` >= DC_QUORUM (lands "free" with the coalescer) | ~1 day on top of coalescer | With the coalescer |
 | **D3. Bucket-type config** | **yes** | opt-in (define types in YAML; default pool config still applies) | 2-3 days | Independent, after pass-3 |
-| **D4. Async cross-cluster replication** | no | — | weeks | Out of scope |
-| **D5. Strong consistency mode** | no | — | months | Out of scope |
-| **D6. Vector clocks at proxy** | no | — | weeks + protocol break | Out of scope |
+| **D4. Async cross-cluster replication** | no |  --  | weeks | Out of scope |
+| **D5. Strong consistency mode** | no |  --  | months | Out of scope |
+| **D6. Vector clocks at proxy** | no |  --  | weeks + protocol break | Out of scope |
 | Phi-accrual (already shipped) | yes | default on, threshold 8 | 0 (done) | landed in `65ccb12` |
 | Already-covered Riak features (Category B) | n/a | already present | n/a | n/a |
 | Storage-engine features (Category A) | no | delegated to redis | n/a | by design |
@@ -239,9 +239,9 @@ worth implementing in Dynomite proper.
 
 If we land all three "yes" items, the natural sequence is:
 
-1. **Coalescer + read repair** (D2) — the coalescer is the biggest blocker for `DC_QUORUM`/`DC_EACH_SAFE_QUORUM` readiness anyway; read repair adds <10% to that work.
-2. **Bucket types** (D3) — independent, can land in parallel with the coalescer.
-3. **Hinted handoff** (D1) — needs the coalescer's reply-tracking machinery to know which targets succeeded vs failed, so it sequences after D2.
+1. **Coalescer + read repair** (D2)  --  the coalescer is the biggest blocker for `DC_QUORUM`/`DC_EACH_SAFE_QUORUM` readiness anyway; read repair adds <10% to that work.
+2. **Bucket types** (D3)  --  independent, can land in parallel with the coalescer.
+3. **Hinted handoff** (D1)  --  needs the coalescer's reply-tracking machinery to know which targets succeeded vs failed, so it sequences after D2.
 
 After all three, Dynomite would have feature parity with Riak's Dynamo lineage minus the storage-engine stack we deliberately don't own.
 

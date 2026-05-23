@@ -8,8 +8,7 @@ stack:
 * `GET /` (and the aliases `/info` and `/stats`) returns the legacy
   Netflix Dynomite JSON layout. This is the original wire format and
   remains byte-for-byte stable; existing scrapers, dashboards, and
-  scripts that target the C reference engine continue to work
-  unchanged.
+  scripts that target the legacy schema continue to work unchanged.
 * `GET /metrics` returns Prometheus 0.0.4 text exposition. Every
   metric family is annotated with a `# HELP` description and a
   `# TYPE` declaration. This is the recommended path for modern
