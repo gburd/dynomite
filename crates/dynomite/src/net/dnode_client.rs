@@ -73,10 +73,14 @@ pub async fn dnode_client_loop(
             }
             Some(env) = rx.recv() => {
                 // Forward dispatcher-produced responses back to
-                // the peer over this same transport. The wire
-                // framing already lives in the response's mbuf
-                // chain; the peer-server side prepends its own
-                // dnode header for outbound writes.
+                // the peer over this same transport. The peer-
+                // originator's `DnodeServerConn` parses incoming
+                // bytes with `DnodeParser`, so the response must
+                // be dnode-framed (header + payload). Without
+                // this header the originator's parser hangs in
+                // `NeedMore`, the dispatcher's `responder` mpsc
+                // never gets the reply, and the originating
+                // client times out.
                 let bytes: Vec<u8> = env
                     .rsp
                     .mbufs()
@@ -84,9 +88,22 @@ pub async fn dnode_client_loop(
                     .flat_map(|b| b.readable().to_vec())
                     .collect();
                 if !bytes.is_empty() {
+                    let mut header_buf = conn.mbuf_pool().get();
+                    crate::proto::dnode::dmsg_write(
+                        &mut header_buf,
+                        env.req_id,
+                        crate::proto::dnode::DmsgType::Res,
+                        0,
+                        true,
+                        None,
+                        u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+                    )
+                    .map_err(|e| NetError::Dnode(format!("{e:?}")))?;
+                    let header_len = header_buf.readable().len();
                     if let Some(t) = conn.transport_mut() {
+                        t.write_all(header_buf.readable()).await?;
                         t.write_all(&bytes).await?;
-                        conn.record_send(bytes.len());
+                        conn.record_send(header_len + bytes.len());
                     }
                 }
                 conn.outstanding_mut().remove(&env.req_id);
