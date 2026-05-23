@@ -273,3 +273,49 @@ value is real (helps operators design clusters and reason about
 failure tolerance) but it's a separate side project.
 
 **Estimated effort**: 1-2 days for a useful first cut.
+
+## Latent bug: `make_error` produces empty Msg with no payload
+
+**Source**: surfaced during the 2026-05-23 audit. Fixing F1
+(the three pre-v0.1.0 conformance failures, commit `490a258`)
+exposed it.
+
+**Symptom**: any code path that returns
+`DispatchOutcome::Error` - `NoTargets`, peer-channel full
+(`try_send` failure), datastore-channel full - sends 0 wire
+bytes to the client and the client hangs until its read
+timeout. The error Msg is built by
+`crate::msg::response::make_error`, which sets type / flags /
+error code / dyn-error code on a fresh `Msg::new(...)` but
+never attaches an mbuf with the on-the-wire error string. The
+client driver's `handle_response` iterates `env.rsp.mbufs()`
+and writes each chunk; with zero mbufs there is nothing to
+write.
+
+**Severity**: every operational error currently masquerades as
+a hang. Operators see "client timeout" and have no signal in
+their logs that the cluster actively decided to reject the
+request.
+
+**Fix**: wrap (or replace) `make_error` so it encodes the
+appropriate wire format alongside the metadata:
+
+* Redis: `-Dynomite: <message>\r\n` for `RspRedisError`,
+  `-DYNOMITE: <message>\r\n` (or the matching specific prefix
+  `-NOAUTH`, `-LOADING`, `-OOM`, `-BUSY`, `-NOSCRIPT`,
+  `-READONLY`, `-MISCONF`, `-BUSYKEY`) for the typed error
+  variants.
+* Memcache: `SERVER_ERROR <message>\r\n` for
+  `RspMcServerError`, `ERROR\r\n` for `RspMcError`.
+
+The message text comes from the `DynErrorCode`. Build the
+mbuf from the `Conn`'s `MbufPool` (the dispatcher does not
+hold one today; either thread one through or attach the mbuf
+in the client driver right before `handle_response`).
+
+**Estimated effort**: half a day. Add per-`DynErrorCode`
+message strings, attach the mbuf in `make_error`, write a
+regression test that exercises every error path in the
+dispatcher (`NoTargets`, both `try_send` paths) and asserts
+the client receives a parseable error reply rather than a
+timeout.
