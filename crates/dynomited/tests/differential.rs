@@ -52,12 +52,11 @@ fn c_binary_path() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let candidate = workspace_root().join("_/dynomite/src/dynomite");
-    if candidate.is_file() {
-        Some(candidate)
-    } else {
-        None
-    }
+    // The C reference tree used to live under `_/dynomite/`; it was
+    // removed in 2561d13. Operators who want to run the differential
+    // rig must set CONFORMANCE_C_BINARY explicitly. Until then the
+    // rig prints a skip notice and exits successfully.
+    None
 }
 
 fn corpus_path() -> PathBuf {

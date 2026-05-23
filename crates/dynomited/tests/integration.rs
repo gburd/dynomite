@@ -87,25 +87,6 @@ async fn read_exact_n(sock: &mut TcpStream, n: usize) -> Vec<u8> {
     buf
 }
 
-async fn read_until(sock: &mut TcpStream, suffix: &[u8]) -> Vec<u8> {
-    let mut acc: Vec<u8> = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !acc.ends_with(suffix) {
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for response suffix; got {:?}",
-            String::from_utf8_lossy(&acc)
-        );
-        let mut byte = [0u8; 1];
-        let n = sock.read(&mut byte).await.expect("read");
-        if n == 0 {
-            break;
-        }
-        acc.extend_from_slice(&byte[..n]);
-    }
-    acc
-}
-
 #[tokio::test]
 async fn redis_set_get_quit_round_trip() {
     let Some(redis_bin) = redis_server_in_path() else {
