@@ -57,6 +57,7 @@ use crate::cluster::snitch::{rack_distance, RackDistance};
 use crate::cluster::vnode;
 use crate::conf::HashType as ConfHashType;
 use crate::hashkit::{self, HashType};
+use crate::io::mbuf::MbufPool;
 use crate::msg::{ConsistencyLevel, Msg, MsgRouting, MsgType};
 use crate::net::dispatcher::{DispatchOutcome, Dispatcher, ServerSink};
 use crate::net::server::OutboundRequest;
@@ -155,6 +156,11 @@ pub struct ClusterDispatcher {
     /// is reachable for the consistency level the dispatcher
     /// falls back to a `DynomiteNoQuorumAchieved` error response.
     peer_backends: std::collections::HashMap<u32, mpsc::Sender<OutboundRequest>>,
+    /// Mbuf pool used to render synthetic error payloads.
+    /// `MbufPool` already wraps an `Arc`, so cloning the
+    /// dispatcher (and the pool with it) shares the same free
+    /// list across every cluster handle.
+    mbuf_pool: MbufPool,
 }
 
 impl ClusterDispatcher {
@@ -193,7 +199,53 @@ impl ClusterDispatcher {
             pool,
             backend: None,
             peer_backends: std::collections::HashMap::new(),
+            mbuf_pool: MbufPool::default(),
         }
+    }
+
+    /// Override the dispatcher's mbuf pool. Useful when the
+    /// embedding wants every synthetic error payload to come from
+    /// the same recycled buffers as the rest of the engine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use dynomite::cluster::dispatch::ClusterDispatcher;
+    /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// # use dynomite::cluster::peer::{Peer, PeerEndpoint};
+    /// # use dynomite::hashkit::DynToken;
+    /// # use dynomite::conf::{DataStore, HashType};
+    /// # use dynomite::msg::ConsistencyLevel;
+    /// # use dynomite::io::mbuf::MbufPool;
+    /// # use std::sync::Arc;
+    /// # let cfg = PoolConfig {
+    /// #    name: "p".into(), dc: "d".into(), rack: "r".into(),
+    /// #    data_store: DataStore::Redis, hash: HashType::Murmur,
+    /// #    read_consistency: ConsistencyLevel::DcOne,
+    /// #    write_consistency: ConsistencyLevel::DcOne,
+    /// #    timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
+    /// #    server_failure_limit: 2, auto_eject_hosts: false,
+    /// #    enable_gossip: false,
+    /// # };
+    /// # let local = Peer::new(
+    /// #    0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
+    /// #    vec![DynToken::from_u32(0)], true, true, false,
+    /// # );
+    /// let pool = Arc::new(ServerPool::new(cfg, vec![local]));
+    /// let _disp = ClusterDispatcher::new(pool).with_mbuf_pool(MbufPool::default());
+    /// ```
+    #[must_use]
+    pub fn with_mbuf_pool(mut self, pool: MbufPool) -> Self {
+        self.mbuf_pool = pool;
+        self
+    }
+
+    /// Borrow the dispatcher's mbuf pool. Exposed so embedders
+    /// can reuse the same pool when building synthetic responses
+    /// outside the dispatcher's own code paths.
+    #[must_use]
+    pub fn mbuf_pool(&self) -> &MbufPool {
+        &self.mbuf_pool
     }
 
     /// Attach a backend request channel. Calls to [`Self::dispatch`]
@@ -439,6 +491,7 @@ impl Dispatcher for ClusterDispatcher {
                     err_type,
                     0,
                     crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
+                    &self.mbuf_pool,
                 );
                 DispatchOutcome::Error(rsp)
             }
@@ -479,6 +532,7 @@ impl Dispatcher for ClusterDispatcher {
                             err_type,
                             0,
                             crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
+                            &self.mbuf_pool,
                         );
                         return DispatchOutcome::Error(rsp);
                     }
@@ -538,6 +592,7 @@ impl Dispatcher for ClusterDispatcher {
                         err_type,
                         0,
                         crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
+                        &self.mbuf_pool,
                     );
                     return DispatchOutcome::Error(rsp);
                 }
@@ -683,5 +738,87 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let plan = ClusterDispatcher::new(p).plan(&req, b"k");
         assert_eq!(plan, DispatchPlan::NoTargets);
+    }
+
+    /// Regression: any code path that returns
+    /// `DispatchOutcome::Error` used to send 0 wire bytes to the
+    /// client because [`crate::msg::response::make_error`] never
+    /// attached the wire-format error string. The client then
+    /// hung until its read timeout. After the fix, the error
+    /// response carries a parseable `-Dynomite: ...` reply that
+    /// the client can render as an error.
+    #[test]
+    fn no_targets_error_response_carries_dynomite_wire_bytes() {
+        let mut p0 = peer(0, "dc1", "rA", 10, true, true);
+        p0.set_state(PeerState::Down, 0);
+        let p = pool(
+            ConsistencyLevel::DcQuorum,
+            ConsistencyLevel::DcQuorum,
+            vec![p0],
+        );
+        let disp = ClusterDispatcher::new(p);
+        let mut req = Msg::new(1, MsgType::ReqRedisGet, true);
+        req.push_key(crate::msg::keypos::KeyPos::without_tag(b"k".to_vec()));
+        let (tx, _rx) = mpsc::channel(1);
+        let outcome = disp.dispatch(req, tx);
+        match outcome {
+            DispatchOutcome::Error(rsp) => {
+                assert_eq!(rsp.ty(), MsgType::RspRedisError);
+                assert!(rsp.flags().is_error);
+                let bytes: Vec<u8> = rsp
+                    .mbufs()
+                    .iter()
+                    .flat_map(|b| b.readable().to_vec())
+                    .collect();
+                assert!(
+                    !bytes.is_empty(),
+                    "NoTargets must produce on-wire bytes, not a 0-byte hang"
+                );
+                assert!(bytes.starts_with(b"-Dynomite: "));
+                assert!(bytes.ends_with(b"\r\n"));
+                assert_eq!(rsp.mlen() as usize, bytes.len());
+            }
+            other => panic!("expected DispatchOutcome::Error, got {other:?}"),
+        }
+    }
+
+    /// Memcache traffic with no quorum-eligible target must
+    /// surface a `SERVER_ERROR ...\r\n` reply rather than
+    /// hanging the client.
+    #[test]
+    fn no_targets_error_response_memcache_wire_bytes() {
+        // Build a memcache pool so the dispatcher's err_type
+        // selection lands on `RspMcServerError` (the dispatcher
+        // currently keys off the request `MsgType`, so a
+        // memcache request flows through the memcache wire
+        // shape).
+        let mut cfg = cfg(ConsistencyLevel::DcQuorum, ConsistencyLevel::DcQuorum);
+        cfg.data_store = DataStore::Memcache;
+        let mut p0 = peer(0, "dc1", "rA", 10, true, true);
+        p0.set_state(PeerState::Down, 0);
+        let pool_arc = ServerPool::new(cfg, vec![p0]);
+        pool_arc.preselect_remote_racks();
+        let disp = ClusterDispatcher::new(Arc::new(pool_arc));
+        let mut req = Msg::new(1, MsgType::ReqMcGet, true);
+        req.push_key(crate::msg::keypos::KeyPos::without_tag(b"k".to_vec()));
+        let (tx, _rx) = mpsc::channel(1);
+        let outcome = disp.dispatch(req, tx);
+        match outcome {
+            DispatchOutcome::Error(rsp) => {
+                assert_eq!(rsp.ty(), MsgType::RspMcServerError);
+                let bytes: Vec<u8> = rsp
+                    .mbufs()
+                    .iter()
+                    .flat_map(|b| b.readable().to_vec())
+                    .collect();
+                assert!(
+                    !bytes.is_empty(),
+                    "NoTargets must produce on-wire bytes, not a 0-byte hang"
+                );
+                assert!(bytes.starts_with(b"SERVER_ERROR "));
+                assert!(bytes.ends_with(b"\r\n"));
+            }
+            other => panic!("expected DispatchOutcome::Error, got {other:?}"),
+        }
     }
 }
