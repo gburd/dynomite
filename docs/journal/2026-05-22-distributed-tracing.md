@@ -158,16 +158,19 @@ to a mock collector under `--include-ignored`.
 
 - The brief asked the OTel install to happen *after* `log_init`
   but `tracing_subscriber` only allows one global default per
-  process, and `log_init` already installs one. The compromise
-  in this branch is: when the OTLP endpoint is configured,
-  `install_global` runs **before** `log_init` and stacks the
-  same EnvFilter+fmt(+ otel) layers itself; `log_init`'s
-  STATE-based SIGHUP log-reopen is therefore unavailable in
-  OTLP mode. The trade-off is documented in the module
-  rustdoc, the operator-facing tracing.md page, and surfaced
-  via a `tracing::debug!` line on startup. A follow-up that
-  reworks `log_init` into a layer-emitting builder would let
-  both surfaces co-exist; out of scope for this milestone.
+  process. The original Milestone A landing took the
+  compromise of running OTLP installation BEFORE `log_init`
+  and stacking its own EnvFilter+fmt+otel layers, leaving
+  `log_init`'s STATE-based SIGHUP log-reopen uninitialised
+  in OTLP mode.
+
+  **Resolved 2026-05-23**: `log_init` was reworked into a
+  layer-emitting builder (`build_logs_layer`,
+  `install_logs_only`). The single global subscriber is now
+  composed once with the fmt layer, the SIGHUP-reopen
+  handle, the EnvFilter, and (optionally) the OTel layer.
+  Both surfaces co-exist; SIGHUP log-reopen works whether
+  OTLP is on or off.
 - The OTLP integration test that takes a full SDK round-trip
   through gRPC is `#[ignore]`d because the BatchSpanProcessor's
   flush path can stall outside CI when the collector is slow

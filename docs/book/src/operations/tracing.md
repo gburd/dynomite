@@ -115,15 +115,14 @@ Jaeger within a few seconds.
 
 ## Trade-offs
 
-- **Single global subscriber.** `tracing` only allows one global
-  subscriber per process. When the OTLP exporter is on, the
-  binary installs a layered `EnvFilter` + `fmt` + OTel
-  subscriber **before** `dynomite::core::log::log_init`; the
-  log subsystem's STATE (used by `SIGHUP` log-reopen) is not
-  initialised in that mode. SIGHUP log-reopen is therefore
-  unavailable when the OTLP exporter is on. Operators that
-  depend on SIGHUP-driven log rotation should run with
-  `otlp_traces_endpoint` unset.
+- **Single global subscriber.** `tracing` only allows one
+  global subscriber per process, so the binary composes the
+  fmt layer (with the configured `--log-format` /
+  `log_format:` shape and the SIGHUP-reopen handle), the
+  `EnvFilter`, and the OTel layer into one Registry that is
+  installed exactly once. The fmt layer's SIGHUP-reopen
+  state is populated whether OTLP is on or off; SIGHUP-driven
+  log rotation works in both modes.
 - **Performance.** The OTel SDK's batch span processor runs on
   the existing tokio runtime; a 1.0 sampling ratio over a
   multi-thousand-QPS workload routinely doubles per-request

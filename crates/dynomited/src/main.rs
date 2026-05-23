@@ -12,12 +12,12 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use dynomite::conf::Config;
-use dynomite::core::log::{log_init_with_format, LogFormat};
+use dynomite::core::log::{build_logs_layer, install_logs_only, LogConfig, LogFormat};
 use dynomite::stats::describe_stats;
 use dynomited::asciilogo::ASCII_LOGO;
 use dynomited::cli::{print_usage, print_version, Cli};
 use dynomited::daemonize::{daemonize, DaemonizeOutcome};
-use dynomited::observability::{install_global, TracerGuard};
+use dynomited::observability::{install_global, otlp_traces_enabled, TracerGuard};
 use dynomited::pidfile::PidFile;
 use dynomited::server::Server;
 
@@ -136,49 +136,47 @@ fn run_server(cli: &Cli) -> ExitCode {
         }
     };
 
-    // Distributed-tracing OTLP exporter must be wired BEFORE
-    // `log_init` because both helpers install a global
-    // `tracing` subscriber and only one global default may be
-    // set per process. When `observability.otlp_traces_endpoint`
-    // is unset (the default-behavior path), install_global
-    // returns Ok(None) and we fall through to `log_init` as
-    // before. When the operator opts in, install_global wires a
-    // layered Registry+EnvFilter+fmt+OTel subscriber and we skip
-    // log_init's subscriber install (the fmt layer takes its
-    // place). The guard must outlive `runtime.block_on(...)` so
+    // Distributed-tracing OTLP exporter and the standard log
+    // pipeline now share the same global tracing subscriber.
+    // The fmt layer (and its SIGHUP-reopen wiring) is built
+    // exactly once via `build_logs_layer`; the registry is
+    // assembled either with `install_logs_only` (OTLP off, the
+    // default-behavior path) or by `install_global` which adds
+    // an `OpenTelemetryLayer` on top of the same fmt layer.
+    // The tracer guard must outlive `runtime.block_on(...)` so
     // the batch span processor flushes on shutdown.
-    //
-    // Known follow-up: `install_global` does not yet honor
-    // `log_format`; when OTLP traces are on the fmt layer uses
-    // the default text format regardless of the configured
-    // format. The unified log/OTel layer-builder refactor
-    // sequenced as a follow-up will plumb log_format through.
-    let tracer_guard: Option<TracerGuard> = match cfg.pool().observability.as_ref() {
-        Some(obs) => match install_global(obs, cli.verbosity) {
-            Ok(g) => g,
+    let log_cfg = LogConfig::new(
+        cli.verbosity,
+        cli.output.as_deref().map(std::path::PathBuf::from),
+        log_format,
+    );
+    let otlp_obs = cfg
+        .pool()
+        .observability
+        .as_ref()
+        .filter(|obs| otlp_traces_enabled(obs));
+    let tracer_guard: Option<TracerGuard> = if let Some(obs) = otlp_obs {
+        let (fmt_layer, reopen) = match build_logs_layer(&log_cfg) {
+            Ok(p) => p,
             Err(e) => {
-                eprintln!(
-                    "dynomite: OTLP exporter install failed: {e}; continuing without distributed tracing"
-                );
-                None
+                eprintln!("dynomite: log_init failed: {e}");
+                return ExitCode::from(1);
             }
-        },
-        None => None,
-    };
-
-    if tracer_guard.is_none() {
-        if let Err(e) = log_init_with_format(cli.verbosity, cli.output.as_deref(), log_format) {
+        };
+        match install_global(obs, cli.verbosity, fmt_layer, reopen) {
+            Ok(g) => Some(g),
+            Err(e) => {
+                eprintln!("dynomite: OTLP exporter install failed: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        if let Err(e) = install_logs_only(&log_cfg) {
             eprintln!("dynomite: log_init failed: {e}");
             return ExitCode::from(1);
         }
-    } else {
-        // OTLP path installed a fmt+otel layered subscriber
-        // already; the standalone log_init STATE (used by SIGHUP
-        // log-reopen) is intentionally unset. SIGHUP log-reopen
-        // is unavailable in OTLP-traces mode; operators that need
-        // both can run with otlp_traces_endpoint unset.
-        tracing::debug!("OTLP exporter installed; skipping log_init STATE setup");
-    }
+        None
+    };
 
     let _pid = match cli.pid_file.as_deref() {
         Some(path) => match PidFile::create(path) {
