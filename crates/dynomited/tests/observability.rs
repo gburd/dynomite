@@ -22,10 +22,15 @@ use std::time::Duration;
 
 use dynomite::conf::ObservabilityConfig;
 use dynomite::core::log::{build_logs_layer, reopen_on_sighup, LogConfig, LogFormat, LOG_NOTICE};
-use dynomited::observability::{init_otlp_tracer, install_global, otlp_traces_enabled};
+use dynomited::observability::{
+    init_otlp_logger, init_otlp_tracer, install_global, otlp_any_enabled, otlp_logs_enabled,
+    otlp_traces_enabled,
+};
 use opentelemetry::trace::{Tracer, TracerProvider as _};
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
+use tracing_subscriber::layer::SubscriberExt;
 
 #[test]
 fn otlp_traces_enabled_returns_false_for_default_config() {
@@ -42,6 +47,19 @@ fn otlp_traces_enabled_returns_false_for_empty_endpoint_string() {
         traces_sampling: None,
     };
     assert!(!otlp_traces_enabled(&cfg));
+}
+
+#[test]
+fn otlp_logs_enabled_returns_false_for_default_config() {
+    let cfg = ObservabilityConfig::default();
+    assert!(!otlp_logs_enabled(&cfg));
+    assert!(!otlp_any_enabled(&cfg));
+}
+
+#[test]
+fn init_otlp_logger_with_no_endpoint_returns_none() {
+    let cfg = ObservabilityConfig::default();
+    assert!(init_otlp_logger(&cfg).expect("ok").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -212,5 +230,61 @@ async fn otlp_grpc_bytes_reach_mock_listener() {
     assert!(
         bytes > 0,
         "expected the OTLP exporter to write bytes to the mock collector; saw {bytes}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "slow / flaky outside CI: relies on the SDK exporter task draining within 3s"]
+async fn otlp_log_appender_bytes_reach_mock_listener() {
+    // Mock OTLP/gRPC log endpoint.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let listener_handle = tokio::spawn(async move {
+        let mut total = 0usize;
+        let accept = tokio::time::timeout(Duration::from_secs(3), listener.accept()).await;
+        let Ok(Ok((mut sock, _))) = accept else {
+            return total;
+        };
+        let mut buf = [0u8; 8192];
+        let read_until = async {
+            loop {
+                match sock.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => total += n,
+                }
+            }
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(3), read_until).await;
+        total
+    });
+
+    let cfg = ObservabilityConfig {
+        otlp_traces_endpoint: None,
+        otlp_logs_endpoint: Some(format!("http://{addr}")),
+        service_name: Some("dynomited-test".into()),
+        traces_sampling: None,
+    };
+    let provider = init_otlp_logger(&cfg)
+        .expect("provider builds")
+        .expect("endpoint enabled");
+
+    // Scope the appender to the current task so the global
+    // subscriber installed by the rest of this test file is not
+    // disturbed. `with_default` is sync, so we drive the
+    // emitting work through it.
+    let bridge = OpenTelemetryTracingBridge::new(&provider);
+    let subscriber = tracing_subscriber::registry().with(bridge);
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!(target: "dynomited::test", marker = "otlp-log-appender", "hello-otlp");
+    });
+
+    // Best-effort flush + tear-down so the batch processor
+    // sends through the gRPC channel before the listener exits.
+    let _ = provider.shutdown();
+
+    let bytes = listener_handle.await.expect("listener task panicked");
+    assert!(
+        bytes > 0,
+        "expected the OTLP log appender to write bytes to the mock collector; saw {bytes}"
     );
 }

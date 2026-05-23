@@ -17,7 +17,7 @@ use dynomite::stats::describe_stats;
 use dynomited::asciilogo::ASCII_LOGO;
 use dynomited::cli::{print_usage, print_version, Cli};
 use dynomited::daemonize::{daemonize, DaemonizeOutcome};
-use dynomited::observability::{install_global, otlp_traces_enabled, TracerGuard};
+use dynomited::observability::{install_global, otlp_any_enabled, ObservabilityGuard};
 use dynomited::pidfile::PidFile;
 use dynomited::server::Server;
 
@@ -136,15 +136,17 @@ fn run_server(cli: &Cli) -> ExitCode {
         }
     };
 
-    // Distributed-tracing OTLP exporter and the standard log
-    // pipeline now share the same global tracing subscriber.
-    // The fmt layer (and its SIGHUP-reopen wiring) is built
-    // exactly once via `build_logs_layer`; the registry is
-    // assembled either with `install_logs_only` (OTLP off, the
-    // default-behavior path) or by `install_global` which adds
-    // an `OpenTelemetryLayer` on top of the same fmt layer.
-    // The tracer guard must outlive `runtime.block_on(...)` so
-    // the batch span processor flushes on shutdown.
+    // Distributed-tracing OTLP exporter, OTLP log appender,
+    // and the standard log pipeline now share the same global
+    // tracing subscriber. The fmt layer (and its SIGHUP-reopen
+    // wiring) is built exactly once via `build_logs_layer`; the
+    // registry is assembled either with `install_logs_only`
+    // (every OTLP knob off, the default-behavior path) or by
+    // `install_global` which adds an `OpenTelemetryLayer` and /
+    // or an `OpenTelemetryTracingBridge` log appender on top of
+    // the same fmt layer. The observability guard must outlive
+    // `runtime.block_on(...)` so the batch processors flush on
+    // shutdown.
     let log_cfg = LogConfig::new(
         cli.verbosity,
         cli.output.as_deref().map(std::path::PathBuf::from),
@@ -154,8 +156,8 @@ fn run_server(cli: &Cli) -> ExitCode {
         .pool()
         .observability
         .as_ref()
-        .filter(|obs| otlp_traces_enabled(obs));
-    let tracer_guard: Option<TracerGuard> = if let Some(obs) = otlp_obs {
+        .filter(|obs| otlp_any_enabled(obs));
+    let obs_guard: Option<ObservabilityGuard> = if let Some(obs) = otlp_obs {
         let (fmt_layer, reopen) = match build_logs_layer(&log_cfg) {
             Ok(p) => p,
             Err(e) => {
@@ -231,9 +233,10 @@ fn run_server(cli: &Cli) -> ExitCode {
             }
         }
     });
-    // Drop the tracer guard inside the runtime so the batch span
-    // processor's flush task has a runtime to run on.
-    if let Some(mut g) = tracer_guard {
+    // Drop the observability guard inside the runtime so the
+    // batch span and log processors' flush tasks have a runtime
+    // to run on.
+    if let Some(mut g) = obs_guard {
         runtime.block_on(async move { g.shutdown() });
     }
     exit
