@@ -30,12 +30,18 @@ echo "==> conformance suite (Stage 14)"
 # Redis is missing, every scenario returns a skip notice and
 # passes; otherwise the full multi-cluster matrix runs and the
 # JUnit XML report lands at `target/junit/conformance.xml`.
+#
+# The `conformance`, `differential`, and `integration` binaries
+# spawn real `dynomited` and `redis-server` processes and are
+# excluded from the default profile (see `.config/nextest.toml`)
+# so the parallel default run does not race them. They run here
+# under the `conformance` profile (test-threads=1).
 if command -v cargo-nextest >/dev/null 2>&1; then
   cargo nextest run \
     --profile conformance \
     -p dynomited \
     --features integration \
-    --test conformance --test differential
+    --test conformance --test differential --test integration
   src="target/nextest/conformance/junit.xml"
   dst="target/junit/conformance.xml"
   if [ -f "$src" ]; then
@@ -78,9 +84,16 @@ echo "==> conformance suite (Stage 14, --features integration)"
 # fail. We invoke nextest only when both `cargo-nextest` and
 # `redis-server` are available; otherwise we surface a notice
 # and continue.
+#
+# This pass uses the `conformance` profile so the
+# process-spawning binaries (excluded from the default profile)
+# actually execute, and so the `test-threads=1` setting prevents
+# the ephemeral-port races that otherwise made these tests
+# load-correlated flakes (F9 in
+# `docs/journal/2026-05-23-audit.md`).
 if command -v cargo-nextest >/dev/null 2>&1 \
    && command -v redis-server >/dev/null 2>&1; then
-    cargo nextest run --workspace --features integration
+    cargo nextest run --profile conformance --workspace --features integration
 else
     echo "   (skipped: cargo-nextest and/or redis-server not on PATH)"
 fi
