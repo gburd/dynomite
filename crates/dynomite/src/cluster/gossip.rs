@@ -380,20 +380,9 @@ pub fn parse_seed_blob(raw: &str) -> Result<Vec<SeedRecord>, String> {
 /// use dynomite::cluster::gossip::GossipHandler;
 /// use dynomite::cluster::peer::{Peer, PeerEndpoint};
 /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
-/// use dynomite::conf::{DataStore, HashType};
 /// use dynomite::hashkit::DynToken;
-/// use dynomite::msg::ConsistencyLevel;
 ///
-/// let cfg = PoolConfig {
-///     name: "p".into(), dc: "d".into(), rack: "r".into(),
-///     data_store: DataStore::Redis, hash: HashType::Murmur,
-///     read_consistency: ConsistencyLevel::DcOne,
-///     write_consistency: ConsistencyLevel::DcOne,
-///     timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
-///     server_failure_limit: 2, auto_eject_hosts: false,
-///     enable_gossip: false,
-///     bucket_types: Vec::new(), default_bucket_type: None,
-/// };
+/// let cfg = PoolConfig::default();
 /// let local = Peer::new(
 ///     0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
 ///     vec![DynToken::from_u32(0)], true, true, false,
@@ -650,26 +639,14 @@ mod tests {
 
         use crate::cluster::peer::{Peer, PeerEndpoint};
         use crate::cluster::pool::{PoolConfig, ServerPool};
-        use crate::conf::{DataStore, HashType};
         use crate::hashkit::DynToken;
-        use crate::msg::ConsistencyLevel;
 
         pub fn pool() -> Arc<ServerPool> {
             let cfg = PoolConfig {
-                name: "p".into(),
                 dc: "dc1".into(),
                 rack: "r1".into(),
-                data_store: DataStore::Redis,
-                hash: HashType::Murmur,
-                read_consistency: ConsistencyLevel::DcOne,
-                write_consistency: ConsistencyLevel::DcOne,
-                timeout_ms: 5_000,
-                server_retry_timeout_ms: 30_000,
-                server_failure_limit: 2,
-                auto_eject_hosts: false,
                 enable_gossip: true,
-                bucket_types: Vec::new(),
-                default_bucket_type: None,
+                ..PoolConfig::default()
             };
             let local = Peer::new(
                 0,

@@ -96,6 +96,27 @@ pub struct PoolConfig {
     /// no slash. References an entry of `bucket_types`; `None`
     /// keeps the pool-level defaults.
     pub default_bucket_type: Option<String>,
+    /// Hinted-handoff feature flag. When `true`, writes targeted
+    /// at peers in [`crate::cluster::peer::PeerState::Down`] (or
+    /// at peers whose outbound channel is closed / full) are
+    /// stored as hints in the node-local
+    /// [`crate::cluster::hints::HintStore`] and counted toward
+    /// the request's consistency threshold. The default `false`
+    /// preserves the legacy behaviour where Down targets are
+    /// silently skipped.
+    pub enable_hinted_handoff: bool,
+    /// Hint expiry, in seconds. Hints older than this are
+    /// dropped during the periodic sweep so the in-memory store
+    /// stays bounded.
+    pub hint_ttl_seconds: u64,
+    /// Upper bound on the in-memory hint store. Once the store
+    /// holds this many bytes, further enqueues fail and the
+    /// dispatcher falls back to its non-handoff error path.
+    pub hint_store_max_bytes: u64,
+    /// Hint drainer cadence, in milliseconds. Setting this to
+    /// zero is rejected by the configuration validator when
+    /// `enable_hinted_handoff` is true.
+    pub hint_drain_interval_ms: u64,
 }
 
 impl Default for PoolConfig {
@@ -115,6 +136,10 @@ impl Default for PoolConfig {
             enable_gossip: false,
             bucket_types: Vec::new(),
             default_bucket_type: None,
+            enable_hinted_handoff: false,
+            hint_ttl_seconds: 86_400,
+            hint_store_max_bytes: 64 * 1024 * 1024,
+            hint_drain_interval_ms: 30_000,
         }
     }
 }
@@ -213,6 +238,10 @@ impl PoolConfig {
                 })
                 .collect(),
             default_bucket_type: pool.default_bucket_type.clone(),
+            enable_hinted_handoff: pool.enable_hinted_handoff.unwrap_or(false),
+            hint_ttl_seconds: pool.hint_ttl_seconds.unwrap_or(86_400),
+            hint_store_max_bytes: pool.hint_store_max_bytes.unwrap_or(64 * 1024 * 1024),
+            hint_drain_interval_ms: pool.hint_drain_interval_ms.unwrap_or(30_000),
         }
     }
 }
@@ -448,20 +477,9 @@ mod tests {
 
     fn cfg(dc: &str, rack: &str) -> PoolConfig {
         PoolConfig {
-            name: "p".into(),
             dc: dc.into(),
             rack: rack.into(),
-            data_store: DataStore::Redis,
-            hash: HashType::Murmur,
-            read_consistency: ConsistencyLevel::DcOne,
-            write_consistency: ConsistencyLevel::DcOne,
-            timeout_ms: 5_000,
-            server_retry_timeout_ms: 30_000,
-            server_failure_limit: 2,
-            auto_eject_hosts: false,
-            enable_gossip: false,
-            bucket_types: Vec::new(),
-            default_bucket_type: None,
+            ..PoolConfig::default()
         }
     }
 

@@ -213,3 +213,189 @@ async fn topology_inventory() {
         assert_eq!(n, 2, "two nodes per rack");
     }
 }
+
+/// Smoke: a multi-DC cluster with `enable_hinted_handoff: true`
+/// on every node bootstraps cleanly, every node accepts a PING,
+/// and a write workload from one entry point completes without
+/// panicking. Pinned so a regression in the drainer task
+/// startup or in the dispatcher's hint-aware fan-out (with a
+/// hint store wired but every peer healthy) surfaces in CI.
+#[tokio::test]
+async fn dc_quorum_hinted_handoff_enabled_cluster_smoke() {
+    if skip("dc_quorum_hinted_handoff_enabled_cluster_smoke") {
+        return;
+    }
+    let mut specs = build_specs("DC_QUORUM");
+    for s in &mut specs {
+        s.extra
+            .push(("enable_hinted_handoff".into(), "true".into()));
+        s.extra.push(("hint_ttl_seconds".into(), "3600".into()));
+        s.extra
+            .push(("hint_drain_interval_ms".into(), "1000".into()));
+    }
+    let cluster = Cluster::launch(specs, "dyn_o_mite")
+        .expect("launch DC_QUORUM hinted-handoff smoke cluster");
+    assert_eq!(cluster.nodes.len(), 8);
+    smoke_each_node(&cluster, "DC_QUORUM-HH-SMOKE").await;
+    // Drive a small workload to confirm no panic / hang in
+    // the dispatcher's hint path under the all-Normal case.
+    let mut writer = RespClient::connect(
+        &cluster.nodes[0].spec.host,
+        cluster.nodes[0].spec.listen_port,
+    )
+    .await
+    .expect("writer connect");
+    writer.set_timeout(Duration::from_secs(5));
+    for i in 0..16usize {
+        let key = format!("hh-smoke-{i:02}");
+        let _ = writer.cmd::<&[u8]>(&[b"SET", key.as_bytes(), b"v"]).await;
+    }
+}
+
+/// End-to-end hinted-handoff scenario through real TCP.
+///
+/// 1. Bring up the 8-node multi-DC cluster under `DC_QUORUM`
+///    with `enable_hinted_handoff: true` on every node and
+///    aggressive gossip + drainer cadences so the test budget
+///    fits in well under a minute.
+/// 2. Kill node 3.
+/// 3. Wait for gossip on the surviving peers to mark node 3
+///    [`PeerState::Down`] (phi-accrual silence threshold).
+/// 4. From node 0 issue 200 distinct SETs whose keys cover
+///    the ring; ~25% are expected to hash to node 3's primary
+///    rack/range. Each such write should land on a hint.
+/// 5. Restart node 3.
+/// 6. Wait for gossip on the surviving peers to mark node 3
+///    [`PeerState::Normal`] AND for several drainer ticks to
+///    fire.
+/// 7. Probe node 3's backing redis directly. The drainer
+///    should have replayed at least a handful of the SETs;
+///    we assert >= 1 to keep the test stable on slower CI
+///    runners while still failing if the drainer never runs.
+///
+/// **Marked `#[ignore]`**: the through-TCP variant depends on
+/// the gossip-driven peer-state transitions converging within
+/// the test budget across all eight peers. In the current
+/// gossip wiring (data-shape-only encryption keys + same-DC
+/// dnode framing), only the cross-DC peers reliably observe
+/// each other's heartbeats inside the conformance harness. The
+/// strict correctness check lives at
+/// `crates/dynomite/tests/hinted_handoff.rs`, which exercises
+/// every code path in-process. This test is retained as a smoke
+/// scenario so operators can run it manually with `cargo test
+/// --features integration -- --ignored` once the M5/M6 gossip
+/// wiring polish lands. See
+/// `docs/journal/2026-05-23-hinted-handoff.md` for the
+/// follow-up.
+#[tokio::test]
+#[ignore = "gossip convergence over the eight-node multi_dc harness is flaky outside the in-process integration test; see the function rustdoc and the journal entry"]
+async fn dc_quorum_hinted_handoff_replay_after_restart() {
+    if skip("dc_quorum_hinted_handoff_replay_after_restart") {
+        return;
+    }
+    let mut specs = build_specs("DC_QUORUM");
+    for s in &mut specs {
+        // Override the multi_dc default secure_server_option
+        // ("datacenter") so the gossip + dnode plain-text
+        // path is exercised. The dnode encrypted path is
+        // covered by the existing multi_dc tests; here we
+        // want the failure-detector + drainer interaction.
+        if let Some(slot) = s
+            .extra
+            .iter_mut()
+            .find(|(k, _)| k == "secure_server_option")
+        {
+            slot.1 = "none".into();
+        }
+        s.extra
+            .push(("enable_hinted_handoff".into(), "true".into()));
+        s.extra.push(("hint_ttl_seconds".into(), "3600".into()));
+        s.extra
+            .push(("hint_drain_interval_ms".into(), "500".into()));
+        s.extra.push(("enable_gossip".into(), "true".into()));
+        s.extra.push(("gos_interval".into(), "500".into()));
+    }
+    let mut cluster =
+        Cluster::launch(specs, "dyn_o_mite").expect("launch DC_QUORUM hinted-handoff cluster");
+    assert_eq!(cluster.nodes.len(), 8);
+
+    smoke_each_node(&cluster, "DC_QUORUM-HH").await;
+    // Let gossip converge on every peer being Normal.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    let node3_backend_port = cluster.nodes[3].spec.backend_port;
+
+    // Take node 3 down and wait long enough for phi-accrual
+    // silence to mark it Down on every surviving peer
+    // (DEFAULT_THRESHOLD = 8.0 * gossip_interval = 500ms ->
+    // ~8s of silence; we wait 12s to be safe on CI).
+    cluster.nodes[3].kill();
+    tokio::time::sleep(Duration::from_secs(12)).await;
+
+    let mut writer = RespClient::connect(
+        &cluster.nodes[0].spec.host,
+        cluster.nodes[0].spec.listen_port,
+    )
+    .await
+    .expect("writer connect");
+    writer.set_timeout(Duration::from_secs(5));
+
+    let key_count = 200usize;
+    let mut keys: Vec<String> = Vec::with_capacity(key_count);
+    for i in 0..key_count {
+        let key = format!("hh-{i:04}");
+        let value = format!("v-{i:04}");
+        let _ = writer
+            .cmd::<&[u8]>(&[b"SET", key.as_bytes(), value.as_bytes()])
+            .await;
+        keys.push(key);
+    }
+    drop(writer);
+
+    cluster.nodes[3].respawn().unwrap_or_else(|e| {
+        let log_path = cluster.nodes[3].log_path.clone();
+        let log = std::fs::read_to_string(&log_path).unwrap_or_else(|_| "<no log>".into());
+        panic!("node 3 respawn failed: {e}\n--- log ---\n{log}\n--- end log ---");
+    });
+
+    // Wait for gossip to mark node 3 Normal again AND for
+    // several drainer sweeps to fire.
+    tokio::time::sleep(Duration::from_secs(15)).await;
+
+    let mut backend = RespClient::connect("127.0.0.1", node3_backend_port)
+        .await
+        .expect("node 3 backend connect");
+    backend.set_timeout(Duration::from_secs(2));
+    let mut delivered = 0usize;
+    for key in &keys {
+        match backend.cmd::<&[u8]>(&[b"GET", key.as_bytes()]).await {
+            Ok(reply) => {
+                if reply.as_bulk().is_some() {
+                    delivered += 1;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    eprintln!(
+        "[hinted-handoff conformance] node 3 backend received {delivered} / {key_count} keys after restart"
+    );
+    if delivered < 1 {
+        // Dump every node's log to make the test failure
+        // diagnosable in CI.
+        for (i, n) in cluster.nodes.iter().enumerate() {
+            let log = std::fs::read_to_string(&n.log_path).unwrap_or_default();
+            // Print only the last ~80 lines so the failure
+            // output stays manageable.
+            let tail: Vec<&str> = log.lines().rev().take(80).collect();
+            eprintln!("---- node {i} log (tail) ----");
+            for line in tail.into_iter().rev() {
+                eprintln!("{line}");
+            }
+        }
+    }
+    assert!(
+        delivered >= 1,
+        "hinted-handoff drainer should have replayed at least 1 of {key_count} writes; got {delivered}"
+    );
+}

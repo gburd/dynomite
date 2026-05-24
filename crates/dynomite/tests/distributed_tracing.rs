@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 use dynomite::cluster::dispatch::ClusterDispatcher;
 use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
-use dynomite::conf::{DataStore, HashType};
 use dynomite::hashkit::DynToken;
 use dynomite::msg::{ConsistencyLevel, Msg, MsgType};
 use dynomite::net::{Dispatcher, OutboundEnvelope};
@@ -50,20 +49,11 @@ where
 
 fn pool_config(read: ConsistencyLevel, write: ConsistencyLevel) -> PoolConfig {
     PoolConfig {
-        name: "p".into(),
         dc: "dc1".into(),
         rack: "rA".into(),
-        data_store: DataStore::Redis,
-        hash: HashType::Murmur,
         read_consistency: read,
         write_consistency: write,
-        timeout_ms: 5_000,
-        server_retry_timeout_ms: 30_000,
-        server_failure_limit: 2,
-        auto_eject_hosts: false,
-        enable_gossip: false,
-        bucket_types: Vec::new(),
-        default_bucket_type: None,
+        ..PoolConfig::default()
     }
 }
 
