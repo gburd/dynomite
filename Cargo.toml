@@ -48,6 +48,20 @@ crossbeam-queue = "0.3"
 parking_lot = "0.12"
 ahash = "0.8"
 quiche = "0.22"
+
+# TLS for the peer plane and the Riak gateways. Pinned to the
+# 0.26 family of `tokio-rustls` (which re-exports `rustls` 0.23)
+# because that train is the only one with stable `aws-lc-rs` /
+# `ring` provider selection. We pin `webpki-roots` to the matching
+# 0.26 train and `rustls-pemfile` to 2.x for the cert/key loaders.
+# `hyper-rustls` 0.27 tracks the same family and gives the Riak
+# HTTP gateway tests a client-side connector without dragging in
+# `reqwest`.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-pemfile = "2"
+webpki-roots = "0.26"
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "webpki-tokio", "tls12"] }
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 cipher = { version = "0.4", features = ["block-padding"] }

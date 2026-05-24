@@ -7,6 +7,7 @@
 //! sentinel-driven defaults.
 
 use std::fmt;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -284,6 +285,27 @@ pub struct ConfPool {
     pub stats_interval: Option<i64>,
     /// `enable_gossip:` - enable / disable gossip thread.
     pub enable_gossip: Option<bool>,
+    /// `peer_tls_cert:` - PEM certificate path for the dnode
+    /// listener and outbound dnode connections. When both this
+    /// field and [`Self::peer_tls_key`] are set the peer plane
+    /// runs over TLS; when both are absent the peer plane runs
+    /// in plaintext (the historical behaviour). Setting one
+    /// without the other is rejected at validation time.
+    #[serde(default)]
+    pub peer_tls_cert: Option<PathBuf>,
+    /// `peer_tls_key:` - PEM private-key path matching
+    /// [`Self::peer_tls_cert`].
+    #[serde(default)]
+    pub peer_tls_key: Option<PathBuf>,
+    /// `peer_tls_ca:` - optional PEM CA bundle. When set, the
+    /// dnode listener requires every inbound peer to present a
+    /// certificate signed by a CA from this bundle (mutual TLS).
+    /// When unset, the listener still terminates TLS but does
+    /// not request a client certificate. The outbound side uses
+    /// this bundle as its trust anchor; when unset, the bundled
+    /// `webpki_roots` Mozilla bundle is used.
+    #[serde(default)]
+    pub peer_tls_ca: Option<PathBuf>,
     /// `mbuf_size:` - mbuf chunk size in bytes.
     pub mbuf_size: Option<i64>,
     /// `max_msgs:` - allocated message buffer size.
@@ -404,6 +426,9 @@ pub struct ConfPool {
 ///     aae_enabled: Some(false),
 ///     aae_full_sweep_interval_seconds: None,
 ///     aae_segment_interval_seconds: None,
+///     tls_cert: None,
+///     tls_key: None,
+///     tls_ca: None,
 /// };
 /// assert!(r.validate().is_ok());
 /// ```
@@ -429,6 +454,25 @@ pub struct ConfRiak {
     /// seconds. When unset, `dyn_riak::aae::config::DEFAULT_SEGMENT_SECONDS`
     /// (60s) is used.
     pub aae_segment_interval_seconds: Option<u64>,
+    /// `tls_cert:` - PEM certificate path for the Riak PBC and
+    /// HTTP listeners. When both `tls_cert` and `tls_key` are
+    /// set, both Riak listeners terminate TLS; when both are
+    /// absent, both listeners run in plaintext (the historical
+    /// behaviour). Setting one without the other is rejected at
+    /// validation time.
+    #[serde(default)]
+    pub tls_cert: Option<PathBuf>,
+    /// `tls_key:` - PEM private-key path matching
+    /// [`Self::tls_cert`].
+    #[serde(default)]
+    pub tls_key: Option<PathBuf>,
+    /// `tls_ca:` - optional PEM CA bundle for mutual TLS on the
+    /// Riak listeners. When set, every inbound client must
+    /// present a certificate signed by a CA from this bundle.
+    /// When unset, the listeners terminate TLS without
+    /// requesting a client certificate.
+    #[serde(default)]
+    pub tls_ca: Option<PathBuf>,
 }
 
 impl ConfRiak {
@@ -487,7 +531,51 @@ impl ConfRiak {
                 });
             }
         }
+        validate_tls_pair(
+            "tls_cert",
+            "tls_key",
+            self.tls_cert.as_deref(),
+            self.tls_key.as_deref(),
+        )?;
+        if self.tls_ca.is_some() && self.tls_cert.is_none() {
+            return Err(ConfError::BadServer {
+                field: "tls_ca",
+                value: self
+                    .tls_ca
+                    .as_ref()
+                    .map_or_else(String::new, |p| p.display().to_string()),
+                reason: "requires tls_cert and tls_key to also be set".into(),
+            });
+        }
         Ok(())
+    }
+}
+
+/// Cross-check a `(cert, key)` TLS pair: both must be `Some` or
+/// both must be `None`. The `cert_field` and `key_field` static
+/// strings name the YAML keys for the error message.
+fn validate_tls_pair(
+    cert_field: &'static str,
+    key_field: &'static str,
+    cert: Option<&std::path::Path>,
+    key: Option<&std::path::Path>,
+) -> Result<(), ConfError> {
+    match (cert, key) {
+        (Some(_), Some(_)) | (None, None) => Ok(()),
+        (Some(c), None) => Err(ConfError::BadServer {
+            field: cert_field,
+            value: c.display().to_string(),
+            reason: format!(
+                "{cert_field} is set but {key_field} is not; both must be set together"
+            ),
+        }),
+        (None, Some(k)) => Err(ConfError::BadServer {
+            field: key_field,
+            value: k.display().to_string(),
+            reason: format!(
+                "{key_field} is set but {cert_field} is not; both must be set together"
+            ),
+        }),
     }
 }
 
@@ -858,6 +946,7 @@ impl ConfPool {
 
         self.validate_bucket_types()?;
         self.validate_hinted_handoff()?;
+        self.validate_peer_tls()?;
         if let Some(r) = &self.riak {
             r.validate()?;
         }
@@ -1016,6 +1105,32 @@ impl ConfPool {
                         .to_string(),
                 });
             }
+        }
+        Ok(())
+    }
+
+    /// Cross-check the peer-plane TLS knobs.
+    ///
+    /// `peer_tls_cert` and `peer_tls_key` must both be set or
+    /// both be unset. `peer_tls_ca` is independent (it controls
+    /// optional mutual TLS) but only meaningful when the cert /
+    /// key pair is set.
+    fn validate_peer_tls(&self) -> Result<(), ConfError> {
+        validate_tls_pair(
+            "peer_tls_cert",
+            "peer_tls_key",
+            self.peer_tls_cert.as_deref(),
+            self.peer_tls_key.as_deref(),
+        )?;
+        if self.peer_tls_ca.is_some() && self.peer_tls_cert.is_none() {
+            return Err(ConfError::BadServer {
+                field: "peer_tls_ca",
+                value: self
+                    .peer_tls_ca
+                    .as_ref()
+                    .map_or_else(String::new, |p| p.display().to_string()),
+                reason: "requires peer_tls_cert and peer_tls_key to also be set".into(),
+            });
         }
         Ok(())
     }
@@ -1456,5 +1571,110 @@ p:
         assert_eq!(r.aae_enabled, Some(true));
         assert_eq!(r.aae_full_sweep_interval_seconds, Some(3600));
         assert_eq!(r.aae_segment_interval_seconds, Some(30));
+    }
+
+    #[test]
+    fn peer_tls_pair_unset_is_ok() {
+        let mut p = pool();
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok(), "plaintext default must validate");
+    }
+
+    #[test]
+    fn peer_tls_pair_both_set_is_ok() {
+        let mut p = pool();
+        p.peer_tls_cert = Some(std::path::PathBuf::from("/etc/dynomite/peer.crt"));
+        p.peer_tls_key = Some(std::path::PathBuf::from("/etc/dynomite/peer.key"));
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn peer_tls_cert_without_key_rejected() {
+        let mut p = pool();
+        p.peer_tls_cert = Some(std::path::PathBuf::from("/x.crt"));
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfError::BadServer {
+                    field: "peer_tls_cert",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn peer_tls_key_without_cert_rejected() {
+        let mut p = pool();
+        p.peer_tls_key = Some(std::path::PathBuf::from("/x.key"));
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfError::BadServer {
+                    field: "peer_tls_key",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn peer_tls_ca_without_cert_rejected() {
+        let mut p = pool();
+        p.peer_tls_ca = Some(std::path::PathBuf::from("/x.ca"));
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfError::BadServer {
+                    field: "peer_tls_ca",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn riak_tls_cert_without_key_rejected() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            pbc_listen: Some("127.0.0.1:8087".into()),
+            tls_cert: Some(std::path::PathBuf::from("/x.crt")),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfError::BadServer {
+                    field: "tls_cert",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn riak_tls_pair_both_set_is_ok() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            pbc_listen: Some("127.0.0.1:8087".into()),
+            tls_cert: Some(std::path::PathBuf::from("/x.crt")),
+            tls_key: Some(std::path::PathBuf::from("/x.key")),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok());
     }
 }
