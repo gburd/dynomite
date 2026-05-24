@@ -81,6 +81,10 @@ pub enum MessageCode {
     IndexReq = 25,
     /// `RpbIndexResp` -- 26.
     IndexResp = 26,
+    /// `RpbMapRedReq` -- 23. MapReduce job submission.
+    MapRedReq = 23,
+    /// `RpbMapRedResp` -- 24. MapReduce response slice.
+    MapRedResp = 24,
 }
 
 impl MessageCode {
@@ -108,6 +112,8 @@ impl MessageCode {
             22 => Self::SetBucketResp,
             25 => Self::IndexReq,
             26 => Self::IndexResp,
+            23 => Self::MapRedReq,
+            24 => Self::MapRedResp,
             other => return Err(other),
         })
     }
@@ -836,12 +842,20 @@ mod tests {
 
     #[test]
     fn message_code_rejects_unknown_byte() {
-        // Codes 3-6 (client-id management) and 23, 24, 27+ (auth,
-        // search, CRDTs, MapReduce) are reserved by Riak but not
-        // implemented in this crate yet.
+        // Codes 3-6 (client-id management) and 27+ (auth, search,
+        // CRDTs) are reserved by Riak but not implemented in this
+        // crate yet. Codes 23 and 24 (MapReduce) are now
+        // recognised by this crate.
         assert!(MessageCode::from_u8(3).is_err());
         assert!(MessageCode::from_u8(99).is_err());
         assert!(MessageCode::from_u8(255).is_err());
+    }
+
+    #[test]
+    fn message_code_round_trips_mapred() {
+        for code in [MessageCode::MapRedReq, MessageCode::MapRedResp] {
+            assert_eq!(MessageCode::from_u8(code.as_u8()).expect("known"), code);
+        }
     }
 
     #[test]
