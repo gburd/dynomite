@@ -614,6 +614,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dyn-riak"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "dyn-encoding",
+ "dynomite",
+ "noxu-db",
+ "prost",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "dynomite"
 version = "0.0.1"
 dependencies = [

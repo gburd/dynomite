@@ -5,6 +5,7 @@ members = [
     "crates/dynomited",
     "crates/dyn-hash-tool",
     "crates/dyn-encoding",
+    "crates/dyn-riak",
 ]
 exclude = [
     "crates/fuzz",
