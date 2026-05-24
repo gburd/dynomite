@@ -17,6 +17,13 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 echo "==> build"
 cargo build --workspace --all-targets --locked
 
+echo "==> build (--features riak)"
+# Build verification only: confirm the optional Riak protocol
+# surface compiles cleanly. The full Riak integration test
+# matrix runs under the regular nextest pass below when
+# `--features riak` is requested explicitly.
+cargo build -p dynomited --features riak --all-targets --locked
+
 echo "==> nextest"
 if command -v cargo-nextest >/dev/null 2>&1; then
   cargo nextest run --workspace --all-features

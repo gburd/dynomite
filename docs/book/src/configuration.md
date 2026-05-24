@@ -139,3 +139,47 @@ Operational notes:
   drainer does not dominate the per-tick scheduling cost when
   many peers come back at once. The default 30 seconds matches
   the gossip period.
+
+## Riak mode
+
+The optional Riak protocol surface (`crates/dyn-riak`) is
+wired into `dynomited` behind the `riak` Cargo feature. When
+the binary is built with `--features riak`, the `riak:` block
+of the pool body controls the PBC listener, the HTTP gateway,
+and the optional active-anti-entropy (AAE) scheduler. The
+block is parsed and validated even under the default build so
+YAML files authored against the Riak-enabled binary still
+validate without the feature flag; under the default build the
+fields are inert at run time.
+
+```yaml
+my_pool:
+  ...
+  riak:
+    pbc_listen: 127.0.0.1:8087
+    http_listen: 127.0.0.1:8098
+    aae_enabled: true
+    aae_full_sweep_interval_seconds: 86400
+    aae_segment_interval_seconds: 60
+```
+
+Every field is optional. Setting only `pbc_listen` enables the
+PBC listener with no HTTP gateway; setting only `http_listen`
+runs HTTP without PBC. The two listeners share a single
+backing `Datastore` so request accounting accumulates in one
+place.
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `pbc_listen` | `host:port` | Riak PBC listener bind address. |
+| `http_listen` | `host:port` | Riak HTTP gateway bind address. |
+| `aae_enabled` | bool | Spawn the AAE scheduler. Default `false`. |
+| `aae_full_sweep_interval_seconds` | u64 | Cadence over which one full sweep across every peer pair completes. Default 86400. |
+| `aae_segment_interval_seconds` | u64 | Cadence of one (peer, time-bucket) exchange tick. Default 60. Must be <= `aae_full_sweep_interval_seconds`. |
+
+The CLI offers three matching overrides for the same knobs:
+`--riak-pbc-listen=HOST:PORT`, `--riak-http-listen=HOST:PORT`,
+and `--riak-aae-enabled`. They are visible in
+`dynomited --help` only when the binary was built with
+`--features riak`. See [Riak mode](./operations/riak.md) for
+operator-facing details.
