@@ -24,18 +24,12 @@
 //! use dynomite::cluster::pool::{PoolConfig, ServerPool};
 //! use dynomite::cluster::peer::{Peer, PeerEndpoint};
 //! use dynomite::hashkit::DynToken;
-//! use dynomite::msg::{ConsistencyLevel, Msg, MsgType};
-//! use dynomite::conf::{DataStore, HashType};
+//! use dynomite::msg::{Msg, MsgType};
 //! use std::sync::Arc;
 //!
 //! let cfg = PoolConfig {
-//!     name: "p".into(), dc: "d".into(), rack: "r".into(),
-//!     data_store: DataStore::Redis, hash: HashType::Murmur,
-//!     read_consistency: ConsistencyLevel::DcOne,
-//!     write_consistency: ConsistencyLevel::DcOne,
-//!     timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
-//!     server_failure_limit: 2, auto_eject_hosts: false,
-//!     enable_gossip: false,
+//!     dc: "d".into(), rack: "r".into(),
+//!     ..PoolConfig::default()
 //! };
 //! let local = Peer::new(
 //!     0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
@@ -170,15 +164,7 @@ impl ClusterDispatcher {
     /// # use dynomite::conf::{DataStore, HashType};
     /// # use dynomite::msg::ConsistencyLevel;
     /// # use std::sync::Arc;
-    /// # let cfg = PoolConfig {
-    /// #    name: "p".into(), dc: "d".into(), rack: "r".into(),
-    /// #    data_store: DataStore::Redis, hash: HashType::Murmur,
-    /// #    read_consistency: ConsistencyLevel::DcOne,
-    /// #    write_consistency: ConsistencyLevel::DcOne,
-    /// #    timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
-    /// #    server_failure_limit: 2, auto_eject_hosts: false,
-    /// #    enable_gossip: false,
-    /// # };
+    /// # let cfg = PoolConfig::default();
     /// # let local = Peer::new(
     /// #    0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
     /// #    vec![DynToken::from_u32(0)], true, true, false,
@@ -277,11 +263,16 @@ impl ClusterDispatcher {
             return DispatchPlan::LocalDatastore;
         }
         let token = hashkit::hash(map_hash(cfg.hash), key);
-        let consistency = if matches!(req.ty(), MsgType::Unknown) || req.flags().is_read {
-            cfg.read_consistency
-        } else {
-            cfg.write_consistency
+        let bucket = crate::proto::redis::bucket_name(key);
+        let bucket_type = cfg.resolve_bucket_type(bucket);
+        let is_read = matches!(req.ty(), MsgType::Unknown) || req.flags().is_read;
+        let consistency = match (bucket_type, is_read) {
+            (Some(bt), true) => bt.read_consistency,
+            (Some(bt), false) => bt.write_consistency,
+            (None, true) => cfg.read_consistency,
+            (None, false) => cfg.write_consistency,
         };
+        let n_val_cap = bucket_type.map_or(0, |bt| bt.n_val);
         let dcs = self.pool.datacenters().read();
         let routable = collect_routable(&dcs, &peers, &token);
         if routable.is_empty() {
@@ -290,7 +281,28 @@ impl ClusterDispatcher {
         let (local, remote): (Vec<_>, Vec<_>) = routable
             .into_iter()
             .partition(|(dc_idx, _, _)| dcs[*dc_idx].name() == cfg.dc);
-        plan_with_consistency(cfg, &dcs, &peers, consistency, req.routing(), local, remote)
+        let plan =
+            plan_with_consistency(cfg, &dcs, &peers, consistency, req.routing(), local, remote);
+        cap_replicas(plan, n_val_cap)
+    }
+}
+
+/// Apply the bucket-type `n_val` fan-out cap to a freshly
+/// computed plan. Only `DispatchPlan::Replicas` is affected; the
+/// other variants pass through unchanged. `cap == 0` means "no
+/// cap" and is the no-op used for keys without a matching bucket
+/// type.
+fn cap_replicas(plan: DispatchPlan, cap: u8) -> DispatchPlan {
+    if cap == 0 {
+        return plan;
+    }
+    let cap = cap as usize;
+    match plan {
+        DispatchPlan::Replicas(mut targets) if targets.len() > cap => {
+            targets.truncate(cap);
+            DispatchPlan::Replicas(targets)
+        }
+        other => other,
     }
 }
 
@@ -568,6 +580,8 @@ mod tests {
             server_failure_limit: 2,
             auto_eject_hosts: false,
             enable_gossip: false,
+            bucket_types: Vec::new(),
+            default_bucket_type: None,
         }
     }
 
@@ -683,5 +697,226 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let plan = ClusterDispatcher::new(p).plan(&req, b"k");
         assert_eq!(plan, DispatchPlan::NoTargets);
+    }
+
+    use crate::cluster::pool::{BucketType, PoolConfig};
+
+    fn pool_with_bucket_types(
+        pool_read: ConsistencyLevel,
+        pool_write: ConsistencyLevel,
+        bucket_types: Vec<BucketType>,
+        default_bucket_type: Option<&str>,
+        peers: Vec<Peer>,
+    ) -> Arc<ServerPool> {
+        let cfg = PoolConfig {
+            read_consistency: pool_read,
+            write_consistency: pool_write,
+            dc: "dc1".into(),
+            rack: "rA".into(),
+            bucket_types,
+            default_bucket_type: default_bucket_type.map(str::to_string),
+            ..PoolConfig::default()
+        };
+        let pool = ServerPool::new(cfg, peers);
+        pool.preselect_remote_racks();
+        Arc::new(pool)
+    }
+
+    fn three_local_peers() -> Vec<Peer> {
+        vec![
+            peer(0, "dc1", "rA", 10, true, true),
+            peer(1, "dc1", "rB", 20, false, true),
+            peer(2, "dc1", "rC", 30, false, true),
+        ]
+    }
+
+    #[test]
+    fn bucket_type_overrides_pool_consistency() {
+        // Pool default is DC_ONE, the bucket forces DC_QUORUM.
+        let bts = vec![BucketType {
+            name: "hot".into(),
+            read_consistency: ConsistencyLevel::DcQuorum,
+            write_consistency: ConsistencyLevel::DcQuorum,
+            n_val: 0,
+        }];
+        let p = pool_with_bucket_types(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            bts,
+            None,
+            three_local_peers(),
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"hot/key1");
+        match plan {
+            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            other => panic!("expected DC_QUORUM fan-out, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slashless_key_falls_back_to_pool_default() {
+        let bts = vec![BucketType {
+            name: "hot".into(),
+            read_consistency: ConsistencyLevel::DcQuorum,
+            write_consistency: ConsistencyLevel::DcQuorum,
+            n_val: 0,
+        }];
+        let p = pool_with_bucket_types(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            bts,
+            None,
+            three_local_peers(),
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"plain-key");
+        // No slash and no default_bucket_type -> pool DC_ONE.
+        // The local rack hosts peer 0 so the plan short-circuits.
+        assert!(matches!(plan, DispatchPlan::LocalDatastore));
+    }
+
+    #[test]
+    fn unknown_bucket_uses_default_bucket_type_when_set() {
+        let bts = vec![BucketType {
+            name: "safe".into(),
+            read_consistency: ConsistencyLevel::DcQuorum,
+            write_consistency: ConsistencyLevel::DcQuorum,
+            n_val: 0,
+        }];
+        let p = pool_with_bucket_types(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            bts,
+            Some("safe"),
+            three_local_peers(),
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        // Slashless key: bucket is None, default_bucket_type=safe applies
+        // so we get the bucket-type's DC_QUORUM fan-out.
+        let plan = ClusterDispatcher::new(p.clone()).plan(&req, b"plain-key");
+        match plan {
+            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            other => panic!("expected DC_QUORUM via default bucket, got {other:?}"),
+        }
+        // Slashed key with an unknown bucket prefix also falls
+        // through to the default bucket type.
+        let plan = ClusterDispatcher::new(p).plan(&req, b"unknown-bucket/key");
+        match plan {
+            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            other => panic!("expected DC_QUORUM via default bucket, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_bucket_with_no_default_uses_pool_default() {
+        let bts = vec![BucketType {
+            name: "safe".into(),
+            read_consistency: ConsistencyLevel::DcQuorum,
+            write_consistency: ConsistencyLevel::DcQuorum,
+            n_val: 0,
+        }];
+        let p = pool_with_bucket_types(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            bts,
+            None,
+            three_local_peers(),
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"unknown-bucket/key");
+        assert!(matches!(plan, DispatchPlan::LocalDatastore));
+    }
+
+    #[test]
+    fn n_val_one_caps_replicas_to_first_target() {
+        let bts = vec![BucketType {
+            name: "thin".into(),
+            read_consistency: ConsistencyLevel::DcQuorum,
+            write_consistency: ConsistencyLevel::DcQuorum,
+            n_val: 1,
+        }];
+        let p = pool_with_bucket_types(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            bts,
+            None,
+            three_local_peers(),
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"thin/key");
+        match plan {
+            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 1),
+            other => panic!("expected single-target plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n_val_two_caps_replicas_to_first_two_targets() {
+        let bts = vec![BucketType {
+            name: "medium".into(),
+            read_consistency: ConsistencyLevel::DcQuorum,
+            write_consistency: ConsistencyLevel::DcQuorum,
+            n_val: 2,
+        }];
+        let p = pool_with_bucket_types(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            bts,
+            None,
+            three_local_peers(),
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"medium/key");
+        match plan {
+            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 2),
+            other => panic!("expected two-target plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n_val_zero_does_not_cap() {
+        let bts = vec![BucketType {
+            name: "any".into(),
+            read_consistency: ConsistencyLevel::DcQuorum,
+            write_consistency: ConsistencyLevel::DcQuorum,
+            n_val: 0,
+        }];
+        let p = pool_with_bucket_types(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            bts,
+            None,
+            three_local_peers(),
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"any/key");
+        match plan {
+            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            other => panic!("expected uncapped plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n_val_larger_than_replicas_is_a_no_op() {
+        let bts = vec![BucketType {
+            name: "big".into(),
+            read_consistency: ConsistencyLevel::DcQuorum,
+            write_consistency: ConsistencyLevel::DcQuorum,
+            n_val: 7,
+        }];
+        let p = pool_with_bucket_types(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            bts,
+            None,
+            three_local_peers(),
+        );
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        let plan = ClusterDispatcher::new(p).plan(&req, b"big/key");
+        match plan {
+            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            other => panic!("expected uncapped plan, got {other:?}"),
+        }
     }
 }

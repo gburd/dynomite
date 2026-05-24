@@ -300,6 +300,124 @@ pub struct ConfPool {
     /// See [`ObservabilityConfig`].
     #[serde(default)]
     pub observability: Option<ObservabilityConfig>,
+
+    /// `bucket_types:` - per-bucket routing-property bundles.
+    ///
+    /// Each entry is a [`ConfBucketType`] keyed by name. The
+    /// dispatcher extracts the bucket name from the request key
+    /// (the prefix before the first `/`; see
+    /// [`crate::proto::redis::bucket_name`]) and, when a matching
+    /// entry exists, swaps in that type's `read_consistency`,
+    /// `write_consistency`, and `n_val` for the lifetime of that
+    /// request. Pool-level fields stay the fallback for keys
+    /// without a slash, for keys whose bucket prefix is unknown,
+    /// and for any field the bucket-type stanza leaves at its
+    /// default. Empty list disables the feature; entries must have
+    /// unique names.
+    #[serde(default)]
+    pub bucket_types: Vec<ConfBucketType>,
+
+    /// `default_bucket_type:` - name of the bucket type to apply
+    /// when the request key has no slash (or has an empty prefix).
+    /// Must reference an entry of `bucket_types` when set; unset
+    /// (the default) falls all the way back to pool-level
+    /// consistency.
+    #[serde(default)]
+    pub default_bucket_type: Option<String>,
+}
+
+/// Routing-property bundle attached to a key bucket.
+///
+/// Bucket types let operators give different key classes
+/// different SLAs without running multiple pools. Cache-style
+/// keys can pin to `DC_ONE` while transactional keys sit on
+/// `DC_EACH_SAFE_QUORUM`; the same dynomited binary serves both.
+///
+/// `n_val` caps the replica fan-out for the lifetime of one
+/// request: when the topology offers more replicas than `n_val`,
+/// the dispatcher takes the first `n_val` (the existing rack /
+/// DC ordering puts preferred replicas first). A value of `0`
+/// means "no cap" and is treated identically to omitting the
+/// field.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::{ConfBucketType, ConsistencyLevel};
+/// let bt = ConfBucketType {
+///     name: "sessions".into(),
+///     read_consistency: "DC_QUORUM".into(),
+///     write_consistency: "DC_EACH_SAFE_QUORUM".into(),
+///     n_val: 3,
+/// };
+/// assert_eq!(bt.name, "sessions");
+/// assert_eq!(
+///     ConsistencyLevel::parse("read_consistency", &bt.read_consistency).unwrap(),
+///     ConsistencyLevel::DcQuorum,
+/// );
+/// assert_eq!(bt.n_val, 3);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfBucketType {
+    /// Bucket name. Compared verbatim against the bytes returned
+    /// by [`crate::proto::redis::bucket_name`]; no normalisation
+    /// is performed. Names must be unique within a pool and must
+    /// not be empty.
+    pub name: String,
+    /// Read-side consistency level for keys in this bucket.
+    /// Stored as a string so the YAML round-trip is
+    /// human-readable; parsed via
+    /// [`ConsistencyLevel::parse`](crate::conf::ConsistencyLevel::parse)
+    /// during validation.
+    pub read_consistency: String,
+    /// Write-side consistency level for keys in this bucket.
+    /// See [`ConfBucketType::read_consistency`].
+    pub write_consistency: String,
+    /// Replication-factor cap. The dispatcher trims its replica
+    /// fan-out to at most this many targets. `0` means "no cap";
+    /// any positive value caps the fan-out to the leading
+    /// `n_val` peers (rack-local first).
+    #[serde(default)]
+    pub n_val: u8,
+}
+
+impl ConfBucketType {
+    /// Parse [`Self::read_consistency`] into the typed enum.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::{ConfBucketType, ConsistencyLevel};
+    /// let bt = ConfBucketType {
+    ///     name: "s".into(),
+    ///     read_consistency: "DC_QUORUM".into(),
+    ///     write_consistency: "DC_ONE".into(),
+    ///     n_val: 0,
+    /// };
+    /// assert_eq!(bt.read_level().unwrap(), ConsistencyLevel::DcQuorum);
+    /// ```
+    pub fn read_level(&self) -> Result<ConsistencyLevel, ConfError> {
+        ConsistencyLevel::parse("read_consistency", &self.read_consistency)
+    }
+
+    /// Parse [`Self::write_consistency`] into the typed enum.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::{ConfBucketType, ConsistencyLevel};
+    /// let bt = ConfBucketType {
+    ///     name: "s".into(),
+    ///     read_consistency: "DC_ONE".into(),
+    ///     write_consistency: "DC_SAFE_QUORUM".into(),
+    ///     n_val: 0,
+    /// };
+    /// assert_eq!(bt.write_level().unwrap(), ConsistencyLevel::DcSafeQuorum);
+    /// ```
+    pub fn write_level(&self) -> Result<ConsistencyLevel, ConfError> {
+        ConsistencyLevel::parse("write_consistency", &self.write_consistency)
+    }
 }
 
 /// Opt-in observability configuration.
@@ -518,6 +636,8 @@ impl ConfPool {
             })?;
         }
 
+        self.validate_bucket_types()?;
+
         match &self.servers {
             None => return Err(ConfError::MissingRequired("servers")),
             Some(s) if s.is_empty() => return Err(ConfError::MissingRequired("servers")),
@@ -602,6 +722,39 @@ impl ConfPool {
                 value: n,
                 reason: "must be between 100000 and 1000000 messages",
             });
+        }
+        Ok(())
+    }
+
+    fn validate_bucket_types(&self) -> Result<(), ConfError> {
+        use std::collections::BTreeSet;
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for bt in &self.bucket_types {
+            if bt.name.is_empty() {
+                return Err(ConfError::BadServer {
+                    field: "bucket_types",
+                    value: String::new(),
+                    reason: "bucket-type name must not be empty".to_string(),
+                });
+            }
+            if !seen.insert(bt.name.as_str()) {
+                return Err(ConfError::BadServer {
+                    field: "bucket_types",
+                    value: bt.name.clone(),
+                    reason: "duplicate bucket-type name".to_string(),
+                });
+            }
+            ConsistencyLevel::parse("read_consistency", &bt.read_consistency)?;
+            ConsistencyLevel::parse("write_consistency", &bt.write_consistency)?;
+        }
+        if let Some(name) = &self.default_bucket_type {
+            if !self.bucket_types.iter().any(|bt| &bt.name == name) {
+                return Err(ConfError::BadServer {
+                    field: "default_bucket_type",
+                    value: name.clone(),
+                    reason: "references an undefined bucket-type name".to_string(),
+                });
+            }
         }
         Ok(())
     }
@@ -782,5 +935,108 @@ tokens: '0'
             Some("http://collector:4317")
         );
         assert_eq!(obs.service_name.as_deref(), Some("dynomited"));
+    }
+
+    #[test]
+    fn bucket_types_round_trip() {
+        let yaml = r"
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+bucket_types:
+- name: hot
+  read_consistency: DC_QUORUM
+  write_consistency: DC_EACH_SAFE_QUORUM
+  n_val: 3
+- name: cold
+  read_consistency: DC_ONE
+  write_consistency: DC_ONE
+  n_val: 1
+default_bucket_type: cold
+";
+        let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.bucket_types.len(), 2);
+        assert_eq!(p.bucket_types[0].name, "hot");
+        assert_eq!(p.bucket_types[0].n_val, 3);
+        assert_eq!(
+            p.bucket_types[0].read_level().unwrap(),
+            crate::conf::ConsistencyLevel::DcQuorum,
+        );
+        assert_eq!(p.default_bucket_type.as_deref(), Some("cold"));
+        // Re-emit and re-parse: round-trip preserves the data.
+        let dumped = serde_yaml::to_string(&p).unwrap();
+        let p2: ConfPool = serde_yaml::from_str(&dumped).unwrap();
+        assert_eq!(p2.bucket_types, p.bucket_types);
+        assert_eq!(p2.default_bucket_type, p.default_bucket_type);
+    }
+
+    #[test]
+    fn bucket_types_default_is_empty() {
+        let mut p = pool();
+        p.apply_defaults();
+        assert!(p.bucket_types.is_empty());
+        assert!(p.default_bucket_type.is_none());
+        assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn duplicate_bucket_type_name_rejected() {
+        let mut p = pool();
+        p.bucket_types = vec![
+            ConfBucketType {
+                name: "a".into(),
+                read_consistency: "DC_ONE".into(),
+                write_consistency: "DC_ONE".into(),
+                n_val: 0,
+            },
+            ConfBucketType {
+                name: "a".into(),
+                read_consistency: "DC_ONE".into(),
+                write_consistency: "DC_ONE".into(),
+                n_val: 0,
+            },
+        ];
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfError::BadServer {
+                    field: "bucket_types",
+                    ..
+                }
+            ),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn bucket_type_unknown_consistency_rejected() {
+        let mut p = pool();
+        p.bucket_types = vec![ConfBucketType {
+            name: "a".into(),
+            read_consistency: "DC_PURPLE".into(),
+            write_consistency: "DC_ONE".into(),
+            n_val: 0,
+        }];
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(matches!(err, ConfError::BadConsistency { .. }));
+    }
+
+    #[test]
+    fn unknown_default_bucket_type_rejected() {
+        let mut p = pool();
+        p.default_bucket_type = Some("missing".into());
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "default_bucket_type",
+                ..
+            }
+        ));
     }
 }

@@ -62,6 +62,8 @@ fn pool_config(read: ConsistencyLevel, write: ConsistencyLevel) -> PoolConfig {
         server_failure_limit: 2,
         auto_eject_hosts: false,
         enable_gossip: false,
+        bucket_types: Vec::new(),
+        default_bucket_type: None,
     }
 }
 
