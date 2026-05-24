@@ -64,3 +64,5 @@ pub mod server;
 
 pub use crate::error::RiakError;
 pub use crate::server::{handle_conn, serve_pbc};
+
+pub mod aae;
