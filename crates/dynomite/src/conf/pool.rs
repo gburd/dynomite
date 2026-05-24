@@ -223,8 +223,20 @@ pub struct ConfPool {
     pub backlog: Option<i64>,
     /// `client_connections:` - max client connections.
     pub client_connections: Option<i64>,
-    /// `data_store:` - 0 = redis, 1 = memcache.
+    /// `data_store:` - 0 = redis, 1 = memcache, 2 = noxu.
+    /// Operators may also write the textual form (`redis`,
+    /// `memcache`, `noxu`); the deserializer normalises both
+    /// shapes to the integer code that the rest of the engine
+    /// consumes.
+    #[serde(default, deserialize_with = "deserialize_data_store")]
     pub data_store: Option<i64>,
+    /// `noxu_path:` - filesystem directory the in-process Noxu
+    /// DB datastore opens its environment at. Required when
+    /// `data_store: noxu` is selected; ignored otherwise. The
+    /// directory must be writable; an existing environment is
+    /// reused, otherwise one is created.
+    #[serde(default)]
+    pub noxu_path: Option<PathBuf>,
     /// `preconnect:` - eagerly establish connections at startup.
     pub preconnect: Option<bool>,
     /// `redis_requirepass:` - optional password sent as `AUTH <pw>`
@@ -910,7 +922,10 @@ impl ConfPool {
         self.validate_max_msgs()?;
 
         if let Some(n) = self.data_store {
-            DataStore::from_int(n)?;
+            let ds = DataStore::from_int(n)?;
+            if ds == DataStore::Noxu {
+                self.validate_noxu()?;
+            }
         }
         if let Some(tag) = &self.hash_tag {
             if tag.chars().count() != 2 {
@@ -1072,6 +1087,36 @@ impl ConfPool {
         Ok(())
     }
 
+    /// Validate the cross-field invariants of the Noxu
+    /// datastore selection.
+    ///
+    /// Selecting `data_store: noxu` is permitted only when the
+    /// binary was built with `--features riak`; without it,
+    /// `dynomited` cannot construct a `NoxuDatastore` because
+    /// the `dyn-riak` crate (which owns the type) is not
+    /// linked. The check is gated on a `cfg!(feature = ...)`
+    /// expression that the parent crate threads through via
+    /// the [`crate::conf::set_noxu_supported`] toggle: the
+    /// engine ships with the toggle off, the `dynomited` binary
+    /// turns it on under `--features riak`. The toggle is
+    /// global because `data_store: noxu` is a build-time
+    /// configuration constraint, not a per-pool one.
+    ///
+    /// `noxu_path:` must be set and non-empty.
+    fn validate_noxu(&self) -> Result<(), ConfError> {
+        if !crate::conf::is_noxu_supported() {
+            return Err(ConfError::BadNoxuConfig(
+                "noxu data_store requires dynomited built with --features riak",
+            ));
+        }
+        match self.noxu_path.as_deref() {
+            Some(p) if !p.as_os_str().is_empty() => Ok(()),
+            _ => Err(ConfError::BadNoxuConfig(
+                "data_store: noxu requires a non-empty 'noxu_path:' directive",
+            )),
+        }
+    }
+
     fn validate_hinted_handoff(&self) -> Result<(), ConfError> {
         if self.enable_hinted_handoff != Some(true) {
             return Ok(());
@@ -1174,6 +1219,69 @@ fn check_non_negative(field: &'static str, v: Option<i64>) -> Result<(), ConfErr
     Ok(())
 }
 
+/// Custom deserializer for `data_store:` that accepts either the
+/// historical integer form (`0`, `1`, `2`) or the textual form
+/// (`redis`, `memcache`, `noxu`). Both shapes normalise to the
+/// integer code that the rest of the engine consumes.
+fn deserialize_data_store<'de, D>(de: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct V;
+    impl<'de> Visitor<'de> for V {
+        type Value = Option<i64>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a data_store value: integer (0, 1, 2) or string (redis, memcache, noxu)")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D2: serde::Deserializer<'de>>(
+            self,
+            de: D2,
+        ) -> Result<Self::Value, D2::Error> {
+            de.deserialize_any(V)
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            DataStore::from_int(v)
+                .map(|d| Some(d.as_int()))
+                .map_err(|e| E::custom(e.to_string()))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            let n = i64::try_from(v).map_err(|_| E::custom("data_store integer overflow"))?;
+            self.visit_i64(n)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            DataStore::from_name(v)
+                .map(|d| Some(d.as_int()))
+                .map_err(|_| {
+                    E::custom(format!(
+                        "data_store: unknown name '{v}'; expected one of: redis, memcache, noxu"
+                    ))
+                })
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    de.deserialize_any(V)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1244,6 +1352,112 @@ mod tests {
         p.data_store = Some(7);
         p.apply_defaults();
         assert!(matches!(p.validate("p"), Err(ConfError::BadDataStore(7))));
+    }
+
+    /// Lock serialising tests that mutate the process-wide
+    /// `NOXU_SUPPORTED` flag. cargo test runs tests on multiple
+    /// threads; without serialisation a parallel test can flip
+    /// the flag back before the assertion runs.
+    static NOXU_FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn data_store_noxu_requires_riak_feature() {
+        let _g = NOXU_FLAG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Default state: noxu support flag is off; selecting
+        // noxu must be rejected with the documented message.
+        let prev = crate::conf::is_noxu_supported();
+        crate::conf::set_noxu_supported(false);
+        let mut p = pool();
+        p.data_store = Some(2);
+        p.noxu_path = Some("/tmp/test".into());
+        p.apply_defaults();
+        let err = p.validate("p");
+        crate::conf::set_noxu_supported(prev);
+        match err {
+            Err(ConfError::BadNoxuConfig(msg)) => {
+                assert!(msg.contains("--features riak"), "unexpected message: {msg}");
+            }
+            other => panic!("expected BadNoxuConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn data_store_noxu_requires_path() {
+        let _g = NOXU_FLAG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = crate::conf::is_noxu_supported();
+        crate::conf::set_noxu_supported(true);
+        let mut p = pool();
+        p.data_store = Some(2);
+        p.noxu_path = None;
+        p.apply_defaults();
+        let err = p.validate("p");
+        crate::conf::set_noxu_supported(prev);
+        match err {
+            Err(ConfError::BadNoxuConfig(msg)) => {
+                assert!(msg.contains("noxu_path"), "unexpected message: {msg}");
+            }
+            other => panic!("expected BadNoxuConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn data_store_noxu_yaml_round_trip_string_form() {
+        // String form `data_store: noxu` and integer form
+        // `data_store: 2` both normalise to integer 2 on parse.
+        let yaml = r"
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+data_store: noxu
+noxu_path: /tmp/test
+";
+        let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.data_store, Some(2));
+        assert_eq!(
+            p.noxu_path.as_deref(),
+            Some(std::path::Path::new("/tmp/test"))
+        );
+        // Re-emit and re-parse: round-trip is stable.
+        let dumped = serde_yaml::to_string(&p).unwrap();
+        let p2: ConfPool = serde_yaml::from_str(&dumped).unwrap();
+        assert_eq!(p2.data_store, p.data_store);
+        assert_eq!(p2.noxu_path, p.noxu_path);
+    }
+
+    #[test]
+    fn data_store_yaml_int_form_still_works() {
+        let yaml = r"
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+data_store: 2
+noxu_path: /tmp/test
+";
+        let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.data_store, Some(2));
+    }
+
+    #[test]
+    fn data_store_string_form_unknown_rejected() {
+        let yaml = r"
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+data_store: postgres
+";
+        let err = serde_yaml::from_str::<ConfPool>(yaml).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown name") || msg.contains("data_store"),
+            "unexpected message: {msg}"
+        );
     }
 
     #[test]

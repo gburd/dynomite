@@ -261,79 +261,133 @@ impl Server {
             .as_ref()
             .and_then(|s| s.entries().first())
             .ok_or(ServerError::MissingConfig("servers"))?;
-        if datastore.is_unix() {
-            return Err(ServerError::BadConfig {
-                field: "servers",
-                reason: "unix-socket datastores are not yet wired in the binary".into(),
-            });
-        }
-        let backend_addr: SocketAddr = format!("{}:{}", datastore.host(), datastore.port())
-            .parse()
-            .or_else(|_| -> Result<SocketAddr, ServerError> {
-                let mut iter = (datastore.host(), datastore.port())
-                    .to_socket_addrs()
-                    .map_err(ServerError::Io)?;
-                iter.next().ok_or(ServerError::BadConfig {
-                    field: "servers",
-                    reason: format!(
-                        "could not resolve datastore endpoint '{}:{}'",
-                        datastore.host(),
-                        datastore.port()
-                    ),
-                })
-            })?;
+        let backend_data_store = pool_config.data_store;
+        let preconnect = conf_pool.preconnect.unwrap_or(false);
         let backend_capacity =
             usize::from(conf_pool.datastore_connections.unwrap_or(8)).max(1) * 64;
         let (backend_tx, backend_rx) =
             tokio::sync::mpsc::channel::<OutboundRequest>(backend_capacity);
-        // Backend supervisor: keeps a single `ServerConn` alive
-        // against the configured datastore. It runs in its own
-        // task so `build()` does not block on a slow / refused
-        // backend; the `preconnect: true` config option still
-        // gets respected by attempting one synchronous connect
-        // before returning. The supervisor reconnects with
-        // exponential-ish backoff on failure so transient redis
-        // restarts do not break the proxy permanently.
-        let preconnect = conf_pool.preconnect.unwrap_or(false);
-        let backend_data_store = pool_config.data_store;
-        if preconnect {
-            // Best-effort eager connect: surface a failure only if
-            // the user asked for it explicitly via preconnect=true.
-            match tokio::time::timeout(
-                Duration::from_secs(5),
-                tokio::net::TcpStream::connect(backend_addr),
-            )
-            .await
-            {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    return Err(ServerError::BadConfig {
-                        field: "servers",
-                        reason: format!(
-                            "preconnect=true: could not connect to datastore '{backend_addr}': {e}"
-                        ),
-                    });
+
+        // When `data_store: noxu` is selected, open the Noxu
+        // environment exactly once and share it across the
+        // backend supervisor and the Riak PBC / HTTP listener.
+        // Noxu's environment lock is exclusive per directory,
+        // so re-opening it would fail with
+        // `Environment locked`.
+        #[cfg(feature = "riak")]
+        let noxu_shared: Option<Arc<dyn_riak::datastore::NoxuDatastore>> =
+            if backend_data_store == dynomite::conf::DataStore::Noxu {
+                let path = conf_pool.noxu_path.clone().ok_or(ServerError::BadConfig {
+                    field: "noxu_path",
+                    reason: "data_store: noxu requires a non-empty 'noxu_path:' directive".into(),
+                })?;
+                match dyn_riak::datastore::NoxuDatastore::open_in(&path) {
+                    Ok(ds) => Some(Arc::new(ds)),
+                    Err(e) => {
+                        return Err(ServerError::BadConfig {
+                            field: "noxu_path",
+                            reason: format!(
+                                "could not open Noxu environment at '{}': {e}",
+                                path.display()
+                            ),
+                        });
+                    }
                 }
-                Err(_) => {
-                    return Err(ServerError::BadConfig {
+            } else {
+                None
+            };
+
+        // Backend supervisor selection. The historical TCP path
+        // dials a remote Redis / Memcache backend; the Noxu
+        // path delegates to an in-process supervisor that
+        // executes against the shared Noxu environment.
+        let backend_handle: JoinHandle<Result<(), NetError>> = if backend_data_store
+            == dynomite::conf::DataStore::Noxu
+        {
+            #[cfg(feature = "riak")]
+            {
+                let noxu = noxu_shared
+                    .as_ref()
+                    .expect("invariant: noxu_shared populated when data_store == Noxu")
+                    .clone();
+                tokio::spawn(async move {
+                    crate::noxu_backend::noxu_backend_supervisor(noxu, backend_rx).await
+                })
+            }
+            #[cfg(not(feature = "riak"))]
+            {
+                return Err(ServerError::BadConfig {
+                    field: "data_store",
+                    reason: "noxu data_store requires dynomited built with --features riak".into(),
+                });
+            }
+        } else {
+            if datastore.is_unix() {
+                return Err(ServerError::BadConfig {
+                    field: "servers",
+                    reason: "unix-socket datastores are not yet wired in the binary".into(),
+                });
+            }
+            let backend_addr: SocketAddr = format!("{}:{}", datastore.host(), datastore.port())
+                .parse()
+                .or_else(|_| -> Result<SocketAddr, ServerError> {
+                    let mut iter = (datastore.host(), datastore.port())
+                        .to_socket_addrs()
+                        .map_err(ServerError::Io)?;
+                    iter.next().ok_or(ServerError::BadConfig {
                         field: "servers",
                         reason: format!(
-                            "preconnect=true: connect to datastore '{backend_addr}' timed out after 5s"
+                            "could not resolve datastore endpoint '{}:{}'",
+                            datastore.host(),
+                            datastore.port()
                         ),
-                    });
+                    })
+                })?;
+            // Backend supervisor: keeps a single `ServerConn` alive
+            // against the configured datastore. It runs in its own
+            // task so `build()` does not block on a slow / refused
+            // backend; the `preconnect: true` config option still
+            // gets respected by attempting one synchronous connect
+            // before returning. The supervisor reconnects with
+            // exponential-ish backoff on failure so transient redis
+            // restarts do not break the proxy permanently.
+            if preconnect {
+                match tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tokio::net::TcpStream::connect(backend_addr),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => {
+                        return Err(ServerError::BadConfig {
+                            field: "servers",
+                            reason: format!(
+                                "preconnect=true: could not connect to datastore '{backend_addr}': {e}"
+                            ),
+                        });
+                    }
+                    Err(_) => {
+                        return Err(ServerError::BadConfig {
+                            field: "servers",
+                            reason: format!(
+                                "preconnect=true: connect to datastore '{backend_addr}' timed out after 5s"
+                            ),
+                        });
+                    }
                 }
             }
-        }
-        let backend_requirepass = conf_pool.redis_requirepass.clone();
-        let backend_handle: JoinHandle<Result<(), NetError>> = tokio::spawn(async move {
-            backend_supervisor(
-                backend_addr,
-                backend_rx,
-                backend_data_store,
-                backend_requirepass,
-            )
-            .await
-        });
+            let backend_requirepass = conf_pool.redis_requirepass.clone();
+            tokio::spawn(async move {
+                backend_supervisor(
+                    backend_addr,
+                    backend_rx,
+                    backend_data_store,
+                    backend_requirepass,
+                )
+                .await
+            })
+        };
 
         // Spawn one peer supervisor per non-local peer so the
         // dispatcher can fan `Replicas` plans across the
@@ -498,8 +552,19 @@ impl Server {
         #[cfg(feature = "riak")]
         let riak_handles = match conf_pool.riak.as_ref() {
             Some(r) => {
-                let ds: Arc<dyn dynomite::embed::Datastore> =
-                    Arc::new(dynomite::embed::MemoryDatastore::new());
+                // Reuse the same backing store the request
+                // dispatcher routes to: when `data_store: noxu`
+                // is selected the Riak PBC listener serves
+                // requests against the same Noxu environment
+                // the Redis-front dispatcher writes to. Other
+                // values fall back to the in-process
+                // `MemoryDatastore` so the Riak surface remains
+                // a stand-alone protocol on Redis / Memcache
+                // deployments.
+                let ds: Arc<dyn dynomite::embed::Datastore> = match noxu_shared.as_ref() {
+                    Some(noxu) => noxu.clone(),
+                    None => Arc::new(dynomite::embed::MemoryDatastore::new()),
+                };
                 crate::riak::build_handles(r, ds)
                     .await
                     .map_err(|e| ServerError::BadConfig {
@@ -1202,7 +1267,7 @@ async fn run_one_backend_conn(
                     let head_id = pending.front().map_or(0, |p| p.0);
                     let mut msg = Msg::new(head_id, MsgType::Unknown, false);
                     let result = match data_store {
-                        dynomite::conf::DataStore::Redis => {
+                        dynomite::conf::DataStore::Redis | dynomite::conf::DataStore::Noxu => {
                             dynomite::proto::redis::redis_parse_rsp(&mut msg, &accumulated)
                         }
                         dynomite::conf::DataStore::Memcache => {

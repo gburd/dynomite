@@ -203,6 +203,7 @@ impl PoolConfig {
         };
         let data_store = match pool.data_store {
             Some(1) => DataStore::Memcache,
+            Some(2) => DataStore::Noxu,
             _ => DataStore::Redis,
         };
         Self {

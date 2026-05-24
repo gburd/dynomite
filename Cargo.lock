@@ -917,6 +917,7 @@ dependencies = [
  "opentelemetry_sdk",
  "parking_lot",
  "predicates",
+ "prost",
  "rcgen",
  "rustls",
  "rustls-pemfile",
