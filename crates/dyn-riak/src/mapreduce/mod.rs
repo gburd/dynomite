@@ -72,7 +72,15 @@ pub mod job;
 pub mod phase;
 pub mod registry;
 
-pub use crate::mapreduce::executor::{run_job, MrError, PhaseOutput};
+#[cfg(feature = "wasm")]
+pub mod wasm;
+
+pub use crate::mapreduce::executor::{run_job, run_job_with_wasm, MrError, PhaseOutput, WasmHook};
 pub use crate::mapreduce::job::{Inputs, KeyDatum, MapReduceJob};
 pub use crate::mapreduce::phase::Phase;
 pub use crate::mapreduce::registry::{MapFn, PhaseRegistry, ReduceFn};
+
+#[cfg(feature = "wasm")]
+pub use crate::mapreduce::wasm::{
+    load_modules_from_config, WasmLimits, WasmModuleStore, WasmStoreError,
+};

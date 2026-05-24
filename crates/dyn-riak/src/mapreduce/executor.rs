@@ -62,10 +62,38 @@ pub enum MrError {
     #[error("unsupported MapReduce inputs: {0}")]
     UnsupportedInputs(&'static str),
 
-    /// Wasm fitting is reserved for a future task; the executor
-    /// rejects this phase variant for now.
-    #[error("wasm-module phases are not implemented in this slice")]
+    /// Wasm fitting is not enabled on this executor (no
+    /// [`WasmHook`] was provided to [`run_job_with_wasm`], or the
+    /// caller used the no-Wasm entry point [`run_job`]).
+    #[error("wasm-module phases are not enabled on this executor")]
     WasmNotImplemented,
+
+    /// Wasm phase referenced a `module_id` that is not registered
+    /// in the [`WasmHook`].
+    #[error("wasm module not found: {0}")]
+    WasmModuleNotFound(String),
+
+    /// Wasm phase exceeded its fuel budget or wall-clock timeout.
+    /// Both fuel exhaustion and epoch-based interruption surface
+    /// here so callers do not have to discriminate between them.
+    #[error("wasm phase exceeded execution time / fuel limit")]
+    WasmExecutionTimeout,
+
+    /// Wasm phase tried to grow its linear memory beyond the
+    /// configured per-call cap.
+    #[error("wasm phase exceeded memory limit")]
+    WasmMemoryLimit,
+
+    /// Wasm runtime surfaced an error other than the typed
+    /// memory / time / fuel cases (trap, missing export, bad
+    /// pointer, instantiation failure, ...).
+    #[error("wasm runtime error: {0}")]
+    WasmRuntime(String),
+
+    /// Wasm phase input or output failed CBOR encoding /
+    /// decoding.
+    #[error("wasm phase encoding error: {0}")]
+    WasmEncoding(String),
 
     /// Link phase needs a datastore that can resolve `(bucket, key)`
     /// references and walk their links. The current substrate does
@@ -82,6 +110,31 @@ pub enum MrError {
     /// JSON shaping failure inside a phase.
     #[error("json: {0}")]
     Json(String),
+}
+
+/// Hook invoked when a [`Phase::WasmModule`] is encountered.
+///
+/// The executor itself is Wasm-runtime-agnostic. A concrete
+/// implementation (such as `crate::mapreduce::wasm::WasmModuleStore`,
+/// available behind the `wasm` cargo feature) is plugged in by the
+/// embedder via [`run_job_with_wasm`]. Without a hook, Wasm phases
+/// surface as [`MrError::WasmNotImplemented`].
+///
+/// Implementations are passed the entire input batch for one phase
+/// invocation and are expected to return the entire output batch.
+/// The trait method is intentionally synchronous: the executor
+/// dispatches Wasm calls onto a [`tokio::task::spawn_blocking`]
+/// thread so the runtime is not blocked by long-running modules.
+pub trait WasmHook: Send + Sync {
+    /// Run one Wasm-fitted phase invocation. The hook owns memory,
+    /// fuel, and timeout enforcement; errors surface through
+    /// [`MrError`].
+    fn apply_phase(
+        &self,
+        module_id: &str,
+        fn_name: &str,
+        inputs: &[Value],
+    ) -> Result<Vec<Value>, MrError>;
 }
 
 /// One phase output entry.
@@ -106,6 +159,26 @@ pub struct PhaseOutput {
 pub async fn run_job(
     job: MapReduceJob,
     registry: Arc<PhaseRegistry>,
+) -> Result<Vec<PhaseOutput>, MrError> {
+    run_job_with_wasm(job, registry, None).await
+}
+
+/// Run a MapReduce job with an optional Wasm-phase hook.
+///
+/// Identical to [`run_job`] except [`Phase::WasmModule`] phases are
+/// dispatched through `wasm` when it is `Some`. When `wasm` is
+/// `None`, Wasm phases surface as [`MrError::WasmNotImplemented`],
+/// preserving the no-Wasm path for embedders who do not enable the
+/// `wasm` feature.
+///
+/// # Errors
+///
+/// Returns [`MrError`] on the first phase failure or unsupported
+/// shape. The pipeline is cancelled at the first error.
+pub async fn run_job_with_wasm(
+    job: MapReduceJob,
+    registry: Arc<PhaseRegistry>,
+    wasm: Option<Arc<dyn WasmHook>>,
 ) -> Result<Vec<PhaseOutput>, MrError> {
     // Resolve inputs into a Vec<Value>. The executor materialises
     // every input upfront; large bucket-scan inputs would land in
@@ -135,7 +208,7 @@ pub async fn run_job(
         let phase_idx = u32::try_from(idx)
             .map_err(|_| MrError::Pipeline("phase index exceeds u32 range".into()))?;
         let is_last = idx + 1 == n_phases;
-        let outputs = run_phase(phase_idx, phase, current, &registry).await?;
+        let outputs = run_phase(phase_idx, phase, current, &registry, wasm.as_ref()).await?;
 
         if phase.keep() || is_last {
             for v in &outputs {
@@ -158,6 +231,7 @@ async fn run_phase(
     phase: &Phase,
     inputs: Vec<Value>,
     registry: &Arc<PhaseRegistry>,
+    wasm: Option<&Arc<dyn WasmHook>>,
 ) -> Result<Vec<Value>, MrError> {
     // Channel sizing: 64 is plenty for serial map/reduce processing
     // since each phase task drains as fast as the previous one
@@ -183,8 +257,17 @@ async fn run_phase(
     // owns the runtime and we want errors to surface synchronously.
     let phase_clone = phase.clone();
     let registry_clone = Arc::clone(registry);
+    let wasm_clone = wasm.cloned();
     let phase_join = tokio::spawn(async move {
-        run_phase_task(phase_idx, phase_clone, rx_in, tx_out, registry_clone).await
+        run_phase_task(
+            phase_idx,
+            phase_clone,
+            rx_in,
+            tx_out,
+            registry_clone,
+            wasm_clone,
+        )
+        .await
     });
 
     // Collect outbound items.
@@ -209,6 +292,7 @@ async fn run_phase_task(
     mut rx: mpsc::Receiver<Value>,
     tx: mpsc::Sender<Value>,
     registry: Arc<PhaseRegistry>,
+    wasm: Option<Arc<dyn WasmHook>>,
 ) -> Result<(), MrError> {
     match phase {
         Phase::Map { fn_name, arg, .. } => {
@@ -275,7 +359,43 @@ async fn run_phase_task(
             // lands.
             Err(MrError::LinkNotImplemented)
         }
-        Phase::WasmModule { .. } => Err(MrError::WasmNotImplemented),
+        Phase::WasmModule {
+            module_id, fn_name, ..
+        } => {
+            let hook = wasm.ok_or(MrError::WasmNotImplemented)?;
+            // Reduce-style: drain inbound, hand the whole batch
+            // to the Wasm module, push its output downstream.
+            let mut buf: Vec<Value> = Vec::new();
+            while let Some(v) = rx.recv().await {
+                buf.push(v);
+            }
+            let mid = module_id.clone();
+            let fname = fn_name.clone();
+            let outs = tokio::task::spawn_blocking(move || hook.apply_phase(&mid, &fname, &buf))
+                .await
+                .map_err(|e| MrError::Pipeline(format!("wasm join: {e}")))?
+                .map_err(|e| match e {
+                    MrError::WasmModuleNotFound(_)
+                    | MrError::WasmExecutionTimeout
+                    | MrError::WasmMemoryLimit
+                    | MrError::WasmRuntime(_)
+                    | MrError::WasmEncoding(_)
+                    | MrError::WasmNotImplemented => e,
+                    other => MrError::PhaseFailed {
+                        phase: phase_idx,
+                        kind: "wasm",
+                        message: other.to_string(),
+                    },
+                })?;
+            for o in outs {
+                if tx.send(o).await.is_err() {
+                    return Err(MrError::Pipeline(
+                        "downstream phase dropped its inbound channel".into(),
+                    ));
+                }
+            }
+            Ok(())
+        }
     }
 }
 

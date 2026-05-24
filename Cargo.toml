@@ -81,6 +81,14 @@ prometheus = "0.13"
 ciborium = "0.2"
 prost = "0.13"
 
+# WebAssembly runtime for the optional dyn-riak MapReduce Wasm
+# fitting. Default features are kept off so the dependency is
+# minimal: we only want module compilation (cranelift) and the
+# in-process runtime, plus WAT support so tests can ship modules
+# as text. Pinned at the 26.x series; bumping requires a journal
+# entry.
+wasmtime = { version = "26", default-features = false, features = ["cranelift", "runtime", "wat"] }
+
 # Schema-first wire codecs (dyn-encoding crate). Pinned to track
 # the rest of the workspace; bumping requires a journal entry.
 # `flatbuffers` is the official Google runtime; we use its runtime
