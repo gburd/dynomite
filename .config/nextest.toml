@@ -8,6 +8,16 @@
 
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 2 }
+# The Stage 14 conformance, differential, and `dynomited`
+# integration binaries spawn real `dynomited` and `redis-server`
+# processes; running them in parallel with the rest of the
+# workspace races on ephemeral-port allocation and was a
+# load-correlated flake source under `--all-features` (F9 in
+# `docs/journal/2026-05-23-audit.md`). The default profile
+# excludes these process-spawning integration binaries;
+# `scripts/check.sh` runs them under the `conformance` profile
+# (test-threads=1) where they belong.
+default-filter = "not (binary(conformance) | binary(differential) | binary(integration))"
 
 [profile.conformance]
 # Conformance scenarios spawn real `dynomited` and `redis-server`
@@ -16,6 +26,9 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 test-threads = 1
 slow-timeout = { period = "30s", terminate-after = 2 }
 fail-fast = false
+# Override the default profile's exclusion: the conformance
+# profile is precisely where these binaries are meant to run.
+default-filter = "all()"
 
 [profile.conformance.junit]
 # Path is relative to the per-profile store directory; the
