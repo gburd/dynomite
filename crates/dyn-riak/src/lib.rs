@@ -67,3 +67,4 @@ pub use crate::proto::http::serve_http;
 pub use crate::server::{handle_conn, serve_pbc};
 
 pub mod aae;
+pub mod datatypes;

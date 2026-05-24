@@ -37,3 +37,4 @@ noxu-db = { workspace = true, optional = true }
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = { workspace = true }
+hegeltest = { workspace = true }

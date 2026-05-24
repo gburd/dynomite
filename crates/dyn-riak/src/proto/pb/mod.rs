@@ -31,6 +31,7 @@
 //! protobuf codec without touching the PBC path.
 
 pub mod codec;
+pub mod datatypes;
 pub mod framer;
 pub mod messages;
 
@@ -48,4 +49,12 @@ pub use crate::proto::pb::messages::{
     RpbIndexResp, RpbListBucketsReq, RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp, RpbPair,
     RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, INDEX_QUERY_TYPE_EQ,
     INDEX_QUERY_TYPE_RANGE,
+};
+
+// CRDT operations -- v0.0.3 slice. Re-exported below the existing
+// blocks so parallel branches do not conflict.
+pub use crate::proto::pb::datatypes::{
+    CounterOp, DtFetchReq, DtFetchResp, DtOp, DtUpdateReq, DtUpdateResp, DtValue, GSetOp, HllOp,
+    SetOp, DATA_TYPE_COUNTER, DATA_TYPE_GSET, DATA_TYPE_HLL, DATA_TYPE_MAP, DATA_TYPE_SET,
+    DT_FETCH_REQ_CODE, DT_FETCH_RESP_CODE, DT_UPDATE_REQ_CODE, DT_UPDATE_RESP_CODE,
 };
