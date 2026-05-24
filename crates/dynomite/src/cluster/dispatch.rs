@@ -53,7 +53,7 @@ use crate::conf::HashType as ConfHashType;
 use crate::hashkit::{self, HashType};
 use crate::io::mbuf::MbufPool;
 use crate::msg::{ConsistencyLevel, Msg, MsgRouting, MsgType};
-use crate::net::dispatcher::{DispatchOutcome, Dispatcher, ServerSink};
+use crate::net::dispatcher::{DispatchOutcome, Dispatcher, OutboundEnvelope, ServerSink};
 use crate::net::server::OutboundRequest;
 
 /// Build the `dispatch.plan` info span and enter it. Returns the
@@ -70,10 +70,10 @@ fn enter_plan_span(
         DispatchPlan::Drop => "drop",
         DispatchPlan::NoTargets => "no_targets",
         DispatchPlan::LocalDatastore => "local_datastore",
-        DispatchPlan::Replicas(_) => "replicas",
+        DispatchPlan::Replicas { .. } => "replicas",
     };
     let targets = match plan {
-        DispatchPlan::Replicas(t) => t.len(),
+        DispatchPlan::Replicas { targets, .. } => targets.len(),
         _ => 0,
     };
     let span = tracing::info_span!("dispatch.plan", req_id, plan = kind, targets,).entered();
@@ -122,8 +122,17 @@ pub struct ReplicaTarget {
 pub enum DispatchPlan {
     /// Hand the request straight to the local datastore.
     LocalDatastore,
-    /// Forward to one or more peer replicas.
-    Replicas(Vec<ReplicaTarget>),
+    /// Forward to one or more peer replicas. The carried
+    /// consistency level is the one the planner resolved for
+    /// this request (after applying any bucket-type override),
+    /// so the dispatcher's reply coalescer does not have to
+    /// re-resolve it.
+    Replicas {
+        /// Replica peers the request must be routed to.
+        targets: Vec<ReplicaTarget>,
+        /// Resolved consistency level.
+        consistency: ConsistencyLevel,
+    },
     /// Reply with an error: the cluster has no quorum-eligible
     /// targets.
     NoTargets,
@@ -351,9 +360,15 @@ fn cap_replicas(plan: DispatchPlan, cap: u8) -> DispatchPlan {
     }
     let cap = cap as usize;
     match plan {
-        DispatchPlan::Replicas(mut targets) if targets.len() > cap => {
+        DispatchPlan::Replicas {
+            mut targets,
+            consistency,
+        } if targets.len() > cap => {
             targets.truncate(cap);
-            DispatchPlan::Replicas(targets)
+            DispatchPlan::Replicas {
+                targets,
+                consistency,
+            }
         }
         other => other,
     }
@@ -465,7 +480,10 @@ fn plan_with_consistency(
     if targets.is_empty() {
         return DispatchPlan::LocalDatastore;
     }
-    DispatchPlan::Replicas(targets)
+    DispatchPlan::Replicas {
+        targets,
+        consistency,
+    }
 }
 
 impl Dispatcher for ClusterDispatcher {
@@ -531,6 +549,7 @@ impl Dispatcher for ClusterDispatcher {
                         responder,
                         span: req_span.clone(),
                         ty: crate::proto::dnode::DmsgType::Req,
+                        target_peer_idx: None,
                     };
                     if tx.try_send(env).is_err() {
                         // Backend channel full or closed: surface
@@ -553,67 +572,464 @@ impl Dispatcher for ClusterDispatcher {
                 }
                 DispatchOutcome::Pending
             }
-            DispatchPlan::Replicas(targets) => {
-                if targets.is_empty() {
-                    return DispatchOutcome::Drop;
+            DispatchPlan::Replicas {
+                targets,
+                consistency,
+            } => self.dispatch_replicas(&req, &req_span, &targets, consistency, responder),
+        }
+    }
+}
+
+impl ClusterDispatcher {
+    /// Fan a request out across replicas and install the per-
+    /// request reply coalescer.
+    ///
+    /// The single-target case short-circuits to a direct
+    /// forward (no coalescer needed). The multi-target case
+    /// spawns a coalescer task on the ambient tokio runtime; the
+    /// task drains the per-target replies, picks one according
+    /// to the consistency level, and forwards the chosen reply
+    /// to the original `responder`. Divergent replicas are
+    /// scheduled for read-repair writes via the same
+    /// `peer_backends` channels.
+    fn dispatch_replicas(
+        &self,
+        req: &Msg,
+        req_span: &tracing::Span,
+        targets: &[ReplicaTarget],
+        consistency: ConsistencyLevel,
+        responder: ServerSink,
+    ) -> DispatchOutcome {
+        if targets.is_empty() {
+            return DispatchOutcome::Drop;
+        }
+        // Snapshot the wire bytes once. Each target gets its
+        // own clone (the ServerConn / DnodeServerConn takes
+        // ownership of `bytes`).
+        let bytes: Vec<u8> = req
+            .mbufs()
+            .iter()
+            .flat_map(|b| b.readable().to_vec())
+            .collect();
+        if bytes.is_empty() {
+            return DispatchOutcome::Drop;
+        }
+        // Single-target path: no coalescing needed; forward
+        // directly to the original responder.
+        if targets.len() == 1 {
+            return self.dispatch_replicas_direct(req, req_span, targets, &bytes, responder);
+        }
+        // Multi-target path: install the coalescer.
+        let cfg = self.pool.config();
+        let local_dc = cfg.dc.clone();
+        // Channel each replica's reply lands on; bounded to
+        // `targets.len() + 1` so even when every replica plus a
+        // late repair reply lands in the same scheduling tick
+        // the channel never blocks the reply.
+        let (intermediate_tx, intermediate_rx) =
+            mpsc::channel::<OutboundEnvelope>(targets.len() + 1);
+        // Build the tracker's target list and capture the
+        // per-target dispatch state.
+        let target_pairs: Vec<(u32, String)> =
+            targets.iter().map(|t| (t.peer_idx, t.dc.clone())).collect();
+        // Read repair context: the original primary key (single-
+        // key requests only) and the request type.
+        let repair_key: Option<Vec<u8>> = req
+            .keys()
+            .first()
+            .map(|kp| kp.tag_bytes().to_vec())
+            .filter(|k| !k.is_empty());
+        let repair_ctx = repair_key.map(|key| ReadRepairContext {
+            req_id: req.id(),
+            req_ty: req.ty(),
+            key,
+            mbuf_pool: self.mbuf_pool.clone(),
+            peer_backends: self.peer_backends.clone(),
+            local_backend: self.backend.clone(),
+            target_is_local: targets.iter().map(|t| (t.peer_idx, t.is_local)).collect(),
+        });
+        // Fan out: each per-target outbound feeds the coalescer
+        // channel, NOT the client's responder.
+        let mut sent = 0usize;
+        for target in targets {
+            if target.is_local {
+                if let Some(tx) = self.backend.as_ref() {
+                    let env = OutboundRequest {
+                        bytes: bytes.clone(),
+                        req_id: req.id(),
+                        responder: intermediate_tx.clone(),
+                        span: req_span.clone(),
+                        ty: crate::proto::dnode::DmsgType::Req,
+                        target_peer_idx: Some(target.peer_idx),
+                    };
+                    if tx.try_send(env).is_ok() {
+                        sent += 1;
+                    }
                 }
-                // Snapshot the wire bytes once. Each target gets
-                // its own clone (the ServerConn / DnodeServerConn
-                // takes ownership of `bytes`).
-                let bytes: Vec<u8> = req
-                    .mbufs()
-                    .iter()
-                    .flat_map(|b| b.readable().to_vec())
-                    .collect();
-                if bytes.is_empty() {
-                    return DispatchOutcome::Drop;
+            } else if let Some(tx) = self.peer_backends.get(&target.peer_idx) {
+                let env = OutboundRequest {
+                    bytes: bytes.clone(),
+                    req_id: req.id(),
+                    responder: intermediate_tx.clone(),
+                    span: req_span.clone(),
+                    ty: crate::proto::dnode::DmsgType::Req,
+                    target_peer_idx: Some(target.peer_idx),
+                };
+                if tx.try_send(env).is_ok() {
+                    sent += 1;
                 }
-                let mut sent = 0usize;
-                for target in &targets {
-                    if target.is_local {
-                        if let Some(tx) = self.backend.as_ref() {
-                            let env = OutboundRequest {
-                                bytes: bytes.clone(),
-                                req_id: req.id(),
-                                responder: responder.clone(),
-                                span: req_span.clone(),
-                                ty: crate::proto::dnode::DmsgType::Req,
-                            };
-                            if tx.try_send(env).is_ok() {
-                                sent += 1;
-                            }
-                        }
-                    } else if let Some(tx) = self.peer_backends.get(&target.peer_idx) {
-                        let env = OutboundRequest {
-                            bytes: bytes.clone(),
-                            req_id: req.id(),
-                            responder: responder.clone(),
-                            span: req_span.clone(),
-                            ty: crate::proto::dnode::DmsgType::Req,
-                        };
-                        if tx.try_send(env).is_ok() {
-                            sent += 1;
+            }
+        }
+        // Drop the local clone of the intermediate sender so the
+        // coalescer task observes RX close once every per-target
+        // sender has been dropped. (`OutboundRequest` owns one
+        // sender each; once they finish they drop it.)
+        drop(intermediate_tx);
+        if sent == 0 {
+            return DispatchOutcome::Error(self.no_quorum_error(req));
+        }
+        let req_id = req.id();
+        let req_ty = req.ty();
+        let mbuf_pool = self.mbuf_pool.clone();
+        tokio::spawn(coalesce_actor(
+            req_id,
+            req_ty,
+            consistency,
+            target_pairs,
+            local_dc,
+            intermediate_rx,
+            responder,
+            mbuf_pool,
+            repair_ctx,
+        ));
+        DispatchOutcome::Pending
+    }
+
+    fn dispatch_replicas_direct(
+        &self,
+        req: &Msg,
+        req_span: &tracing::Span,
+        targets: &[ReplicaTarget],
+        bytes: &[u8],
+        responder: ServerSink,
+    ) -> DispatchOutcome {
+        debug_assert_eq!(targets.len(), 1);
+        let target = &targets[0];
+        let env = OutboundRequest {
+            bytes: bytes.to_vec(),
+            req_id: req.id(),
+            responder,
+            span: req_span.clone(),
+            ty: crate::proto::dnode::DmsgType::Req,
+            target_peer_idx: Some(target.peer_idx),
+        };
+        let sent = if target.is_local {
+            self.backend
+                .as_ref()
+                .is_some_and(|tx| tx.try_send(env).is_ok())
+        } else {
+            self.peer_backends
+                .get(&target.peer_idx)
+                .is_some_and(|tx| tx.try_send(env).is_ok())
+        };
+        if sent {
+            DispatchOutcome::Pending
+        } else {
+            DispatchOutcome::Error(self.no_quorum_error(req))
+        }
+    }
+
+    fn no_quorum_error(&self, req: &Msg) -> Msg {
+        let err_type = if matches!(req.ty(), MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
+            MsgType::RspRedisError
+        } else {
+            MsgType::RspMcServerError
+        };
+        crate::msg::response::make_error(
+            req,
+            err_type,
+            0,
+            crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
+            &self.mbuf_pool,
+        )
+    }
+}
+
+/// Context required to schedule read-repair writes once the
+/// coalescer has identified a winner and a divergent set.
+#[derive(Clone)]
+struct ReadRepairContext {
+    req_id: crate::core::types::MsgId,
+    req_ty: MsgType,
+    /// Original primary key (single-key requests only). The v1
+    /// repair scheduler operates over single-key Redis reads;
+    /// multi-key fragmentation goes through a separate path.
+    key: Vec<u8>,
+    mbuf_pool: MbufPool,
+    peer_backends: std::collections::HashMap<u32, mpsc::Sender<OutboundRequest>>,
+    local_backend: Option<mpsc::Sender<OutboundRequest>>,
+    target_is_local: std::collections::HashMap<u32, bool>,
+}
+
+/// Per-fan-out coalescer task body.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "actor task captures the entire dispatch context; bundling into a struct adds churn for no callsite gain"
+)]
+async fn coalesce_actor(
+    req_id: crate::core::types::MsgId,
+    req_ty: MsgType,
+    consistency: ConsistencyLevel,
+    targets: Vec<(u32, String)>,
+    local_dc: String,
+    mut intermediate_rx: mpsc::Receiver<OutboundEnvelope>,
+    client_tx: ServerSink,
+    mbuf_pool: MbufPool,
+    repair_ctx: Option<ReadRepairContext>,
+) {
+    use crate::proto::redis::{CoalesceOutcome, CoalesceTracker};
+    let mut tracker = CoalesceTracker::new(req_id, consistency, targets, &local_dc);
+    let mut emitted = false;
+    while let Some(env) = intermediate_rx.recv().await {
+        let source = env.source_peer_idx.unwrap_or(u32::MAX);
+        let span = env.span.clone();
+        let outcome = tracker.record_reply(source, env.rsp);
+        match outcome {
+            CoalesceOutcome::Pending => {}
+            CoalesceOutcome::Ready {
+                winner,
+                divergent_targets,
+            } => {
+                if !emitted {
+                    let winner_bytes: Vec<u8> = winner
+                        .mbufs()
+                        .iter()
+                        .flat_map(|b| b.readable().to_vec())
+                        .collect();
+                    let out_env = OutboundEnvelope {
+                        req_id,
+                        rsp: *winner,
+                        span: span.clone(),
+                        source_peer_idx: None,
+                    };
+                    let _ = client_tx.send(out_env).await;
+                    emitted = true;
+                    if !divergent_targets.is_empty() {
+                        if let Some(ctx) = repair_ctx.as_ref() {
+                            schedule_read_repair(ctx, &divergent_targets, &winner_bytes, &span);
                         }
                     }
                 }
-                if sent == 0 {
-                    let err_type =
-                        if matches!(req.ty(), MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
-                            MsgType::RspRedisError
-                        } else {
-                            MsgType::RspMcServerError
-                        };
+            }
+            CoalesceOutcome::Error(reason) => {
+                if !emitted {
+                    let err_type = if matches!(req_ty, MsgType::ReqRedisGet | MsgType::ReqRedisSet)
+                    {
+                        MsgType::RspRedisError
+                    } else {
+                        MsgType::RspMcServerError
+                    };
+                    let anchor = Msg::new(req_id, req_ty, true);
                     let rsp = crate::msg::response::make_error(
-                        &req,
+                        &anchor,
                         err_type,
                         0,
                         crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
-                        &self.mbuf_pool,
+                        &mbuf_pool,
                     );
-                    return DispatchOutcome::Error(rsp);
+                    let _ = client_tx
+                        .send(OutboundEnvelope {
+                            req_id,
+                            rsp,
+                            span: span.clone(),
+                            source_peer_idx: None,
+                        })
+                        .await;
+                    emitted = true;
                 }
-                DispatchOutcome::Pending
+                tracing::debug!(target: "dynomite::coalesce", req_id, reason = %reason, "coalesce error");
             }
+        }
+    }
+    if !emitted {
+        // No reply was emitted and the channel closed (every
+        // per-target sender dropped without producing a reply).
+        // Surface a quorum-unreachable error so the client does
+        // not hang.
+        let err_type = if matches!(req_ty, MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
+            MsgType::RspRedisError
+        } else {
+            MsgType::RspMcServerError
+        };
+        let anchor = Msg::new(req_id, req_ty, true);
+        let rsp = crate::msg::response::make_error(
+            &anchor,
+            err_type,
+            0,
+            crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
+            &mbuf_pool,
+        );
+        let _ = client_tx
+            .send(OutboundEnvelope {
+                req_id,
+                rsp,
+                span: tracing::Span::none(),
+                source_peer_idx: None,
+            })
+            .await;
+    }
+}
+
+/// Build a sink the read-repair task can drop replies into. The
+/// scheduler is fire-and-forget: every reply is discarded.
+fn repair_sink() -> ServerSink {
+    let (tx, mut rx) = mpsc::channel::<OutboundEnvelope>(8);
+    tokio::spawn(async move {
+        while rx.recv().await.is_some() {
+            // Drop the envelope; the original client already
+            // received its reply on the main responder.
+        }
+    });
+    tx
+}
+
+/// Decode a winning RESP reply into the bytes we want to write
+/// back to divergent replicas.
+///
+/// Returns `Some(bytes)` for a bulk-string winner (we ship a
+/// `SET key value` to the divergent replica) or for a nil reply
+/// (we ship a `DEL key`). Returns `None` for any other shape
+/// (errors, integers, multibulk, ...) since the v1 repair
+/// scheduler only handles single-bulk Redis GET-style winners.
+fn decode_winner_for_repair(payload: &[u8]) -> Option<RepairAction> {
+    if payload == b"$-1\r\n" {
+        return Some(RepairAction::Delete);
+    }
+    if !payload.starts_with(b"$") {
+        return None;
+    }
+    // `$<len>\r\n<value>\r\n`
+    let crlf = payload.iter().position(|&b| b == b'\r')?;
+    if payload.get(crlf + 1).copied() != Some(b'\n') {
+        return None;
+    }
+    let len_str = std::str::from_utf8(&payload[1..crlf]).ok()?;
+    let len: usize = len_str.parse().ok()?;
+    let body_start = crlf + 2;
+    let body_end = body_start.checked_add(len)?;
+    if payload.len() < body_end + 2 {
+        return None;
+    }
+    if &payload[body_end..body_end + 2] != b"\r\n" {
+        return None;
+    }
+    Some(RepairAction::Write(payload[body_start..body_end].to_vec()))
+}
+
+/// Action a read-repair task should take against a divergent
+/// replica.
+enum RepairAction {
+    /// Ship `SET key <bytes>` to overwrite the stale value.
+    Write(Vec<u8>),
+    /// Ship `DEL key` to drop the stale value (winning reply
+    /// was a nil bulk).
+    Delete,
+}
+
+/// Build the wire bytes for a Redis repair write.
+fn build_repair_bytes(action: &RepairAction, key: &[u8]) -> Vec<u8> {
+    match action {
+        RepairAction::Write(value) => {
+            let mut out = Vec::with_capacity(key.len() + value.len() + 32);
+            out.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$");
+            out.extend_from_slice(key.len().to_string().as_bytes());
+            out.extend_from_slice(b"\r\n");
+            out.extend_from_slice(key);
+            out.extend_from_slice(b"\r\n$");
+            out.extend_from_slice(value.len().to_string().as_bytes());
+            out.extend_from_slice(b"\r\n");
+            out.extend_from_slice(value);
+            out.extend_from_slice(b"\r\n");
+            out
+        }
+        RepairAction::Delete => {
+            let mut out = Vec::with_capacity(key.len() + 24);
+            out.extend_from_slice(b"*2\r\n$3\r\nDEL\r\n$");
+            out.extend_from_slice(key.len().to_string().as_bytes());
+            out.extend_from_slice(b"\r\n");
+            out.extend_from_slice(key);
+            out.extend_from_slice(b"\r\n");
+            out
+        }
+    }
+}
+
+/// Schedule fire-and-forget read-repair writes to every
+/// divergent target. The function only awaits a bounded mpsc
+/// permit; it never blocks for the repair to complete or for
+/// the divergent replica to ack.
+///
+/// The repair shape is decoded from `winner_bytes`:
+///
+/// * Bulk-string winner -> `SET key <value>`.
+/// * Nil bulk winner -> `DEL key`.
+/// * Anything else -> skipped (entropy reconciliation will
+///   handle it later). This v1 limitation is documented in the
+///   dispatcher tests and in `docs/parity.md`.
+///
+/// Repair writes are tagged with `DmsgType::ReqForward` so the
+/// receiving peer's `dnode_client_loop` rewrites the parsed
+/// request's routing tag to `LocalNodeOnly`, preventing a
+/// recursive multi-replica fan-out at the divergent peer.
+fn schedule_read_repair(
+    ctx: &ReadRepairContext,
+    divergent: &[u32],
+    winner_bytes: &[u8],
+    span: &tracing::Span,
+) {
+    if !matches!(ctx.req_ty, MsgType::ReqRedisGet) {
+        return;
+    }
+    let Some(action) = decode_winner_for_repair(winner_bytes) else {
+        return;
+    };
+    let bytes = build_repair_bytes(&action, &ctx.key);
+    let sink = repair_sink();
+    for &peer_idx in divergent {
+        let is_local = ctx.target_is_local.get(&peer_idx).copied().unwrap_or(false);
+        let env = OutboundRequest {
+            bytes: bytes.clone(),
+            req_id: ctx.req_id,
+            responder: sink.clone(),
+            span: span.clone(),
+            ty: crate::proto::dnode::DmsgType::ReqForward,
+            target_peer_idx: Some(peer_idx),
+        };
+        let sent = if is_local {
+            ctx.local_backend
+                .as_ref()
+                .is_some_and(|tx| tx.try_send(env).is_ok())
+        } else {
+            ctx.peer_backends
+                .get(&peer_idx)
+                .is_some_and(|tx| tx.try_send(env).is_ok())
+        };
+        if sent {
+            let _ = &ctx.mbuf_pool;
+            tracing::debug!(
+                target: "dynomite::read_repair",
+                req_id = ctx.req_id,
+                peer_idx,
+                bytes = bytes.len(),
+                "scheduled read-repair write",
+            );
+        } else {
+            tracing::debug!(
+                target: "dynomite::read_repair",
+                req_id = ctx.req_id,
+                peer_idx,
+                "read-repair drop: backend channel unavailable or full",
+            );
         }
     }
 }
@@ -711,7 +1127,7 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let plan = ClusterDispatcher::new(p).plan(&req, b"k");
         match plan {
-            DispatchPlan::Replicas(rs) => {
+            DispatchPlan::Replicas { targets: rs, .. } => {
                 assert_eq!(rs.len(), 2);
                 for r in rs {
                     assert_eq!(r.dc, "dc1");
@@ -734,7 +1150,7 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let plan = ClusterDispatcher::new(p).plan(&req, b"k");
         match plan {
-            DispatchPlan::Replicas(rs) => {
+            DispatchPlan::Replicas { targets: rs, .. } => {
                 assert_eq!(rs.len(), 2);
                 let dcs: Vec<&str> = rs.iter().map(|r| r.dc.as_str()).collect();
                 assert!(dcs.contains(&"dc1"));
@@ -890,7 +1306,7 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let plan = ClusterDispatcher::new(p).plan(&req, b"hot/key1");
         match plan {
-            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            DispatchPlan::Replicas { targets: rs, .. } => assert_eq!(rs.len(), 3),
             other => panic!("expected DC_QUORUM fan-out, got {other:?}"),
         }
     }
@@ -937,14 +1353,14 @@ mod tests {
         // so we get the bucket-type's DC_QUORUM fan-out.
         let plan = ClusterDispatcher::new(p.clone()).plan(&req, b"plain-key");
         match plan {
-            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            DispatchPlan::Replicas { targets: rs, .. } => assert_eq!(rs.len(), 3),
             other => panic!("expected DC_QUORUM via default bucket, got {other:?}"),
         }
         // Slashed key with an unknown bucket prefix also falls
         // through to the default bucket type.
         let plan = ClusterDispatcher::new(p).plan(&req, b"unknown-bucket/key");
         match plan {
-            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            DispatchPlan::Replicas { targets: rs, .. } => assert_eq!(rs.len(), 3),
             other => panic!("expected DC_QUORUM via default bucket, got {other:?}"),
         }
     }
@@ -987,7 +1403,7 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let plan = ClusterDispatcher::new(p).plan(&req, b"thin/key");
         match plan {
-            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 1),
+            DispatchPlan::Replicas { targets: rs, .. } => assert_eq!(rs.len(), 1),
             other => panic!("expected single-target plan, got {other:?}"),
         }
     }
@@ -1010,7 +1426,7 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let plan = ClusterDispatcher::new(p).plan(&req, b"medium/key");
         match plan {
-            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 2),
+            DispatchPlan::Replicas { targets: rs, .. } => assert_eq!(rs.len(), 2),
             other => panic!("expected two-target plan, got {other:?}"),
         }
     }
@@ -1033,7 +1449,7 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let plan = ClusterDispatcher::new(p).plan(&req, b"any/key");
         match plan {
-            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            DispatchPlan::Replicas { targets: rs, .. } => assert_eq!(rs.len(), 3),
             other => panic!("expected uncapped plan, got {other:?}"),
         }
     }
@@ -1056,7 +1472,7 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let plan = ClusterDispatcher::new(p).plan(&req, b"big/key");
         match plan {
-            DispatchPlan::Replicas(rs) => assert_eq!(rs.len(), 3),
+            DispatchPlan::Replicas { targets: rs, .. } => assert_eq!(rs.len(), 3),
             other => panic!("expected uncapped plan, got {other:?}"),
         }
     }

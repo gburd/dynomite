@@ -35,7 +35,7 @@ fn is_data_plane_ty(ty: DmsgType) -> bool {
 pub struct DnodeServerConn {
     conn: Conn,
     requests: mpsc::Receiver<OutboundRequest>,
-    pending: std::collections::VecDeque<(MsgId, tracing::Span)>,
+    pending: std::collections::VecDeque<(MsgId, tracing::Span, Option<u32>)>,
 }
 
 impl DnodeServerConn {
@@ -132,7 +132,8 @@ impl DnodeServerConn {
                     write_res?;
                     self.conn.record_send(header_len + req_bytes.len());
                     if is_data_plane_ty(req_ty) {
-                        self.pending.push_back((req_id, req_span));
+                        self.pending
+                            .push_back((req_id, req_span, req.target_peer_idx));
                         pending_responder = Some(req.responder);
                     } else {
                         // Gossip / control-plane frames are
@@ -193,10 +194,10 @@ impl DnodeServerConn {
                     parser.reset();
 
                     // Build the response Msg from the payload bytes.
-                    let (req_id, req_span) = self
+                    let (req_id, req_span, source_peer_idx) = self
                         .pending
                         .pop_front()
-                        .unwrap_or_else(|| (dmsg.id, tracing::Span::current()));
+                        .unwrap_or_else(|| (dmsg.id, tracing::Span::current(), None));
                     let parse_span = tracing::info_span!(
                         parent: &req_span,
                         "peer.parse",
@@ -218,6 +219,7 @@ impl DnodeServerConn {
                             req_id,
                             rsp,
                             span: req_span,
+                            source_peer_idx,
                         }
                     });
                     if let Some(sender) = responder.as_ref() {

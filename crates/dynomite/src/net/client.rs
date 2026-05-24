@@ -327,6 +327,7 @@ async fn drive_parser(
                                 req_id: rsp.id(),
                                 rsp,
                                 span: tracing::Span::current(),
+                                source_peer_idx: None,
                             })
                         }
                     };
@@ -355,6 +356,7 @@ async fn drive_parser(
                         req_id: qid,
                         rsp,
                         span: req_span.clone(),
+                        source_peer_idx: None,
                     };
                     let _ = handler.response_tx.send(env).await;
                     // Mirror the C engine: close after replying.

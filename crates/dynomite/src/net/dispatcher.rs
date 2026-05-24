@@ -66,6 +66,11 @@ pub type ServerSink = mpsc::Sender<OutboundEnvelope>;
 /// client-side FSM so the response writeback nests under the
 /// originating client span. The default is
 /// [`tracing::Span::none`].
+///
+/// `source_peer_idx` identifies the peer this response came from
+/// when the dispatcher fanned the request to multiple replicas.
+/// `None` is used for synthetic / inline / single-target paths
+/// where the source is unambiguous.
 #[derive(Debug)]
 pub struct OutboundEnvelope {
     /// Request id the response is for.
@@ -74,6 +79,10 @@ pub struct OutboundEnvelope {
     pub rsp: Msg,
     /// Originating request span for cross-task propagation.
     pub span: tracing::Span,
+    /// Index of the peer this reply was produced by, when known.
+    /// Set by the per-target server / dnode-server drivers and
+    /// consumed by the per-request reply coalescer.
+    pub source_peer_idx: Option<u32>,
 }
 
 /// Dispatcher that drops every request and emits no response.
