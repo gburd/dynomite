@@ -20,6 +20,7 @@
   - [Metrics](./operations/metrics.md)
   - [Distributed tracing and OTLP logs](./operations/tracing.md)
   - [Riak mode](./operations/riak.md)
+  - [Admin CLI (dyn-admin)](./operations/admin.md)
   - [Release process](./operations/release.md)
 - [Embedding API](./embedding/index.md)
   - [Server lifecycle](./embedding/server.md)
