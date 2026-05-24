@@ -207,7 +207,7 @@ impl ServerConn {
             let id = self.pending_responses.front().map_or(0, |(i, _, _)| *i);
             let mut msg = Msg::new(id, MsgType::Unknown, false);
             let result = match self.data_store {
-                DataStore::Redis => redis_parse_rsp(&mut msg, accumulated),
+                DataStore::Redis | DataStore::Noxu => redis_parse_rsp(&mut msg, accumulated),
                 DataStore::Memcache => memcache_parse_rsp(&mut msg, accumulated),
             };
             match result {

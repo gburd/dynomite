@@ -52,6 +52,42 @@ pub use tokens::{TokenComponent, TokenList};
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Process-wide flag set by an embedder to declare that the
+/// `data_store: noxu` configuration value is supported by this
+/// build.
+///
+/// The engine ships with the flag off; the `dynomited` binary
+/// flips it to `true` at startup when compiled with
+/// `--features riak` (which is the gate that pulls in the
+/// `dyn-riak::NoxuDatastore` type). Pool validation rejects
+/// `data_store: noxu` with [`ConfError::BadNoxuConfig`] when
+/// the flag is `false`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::{is_noxu_supported, set_noxu_supported};
+/// let prev = is_noxu_supported();
+/// set_noxu_supported(true);
+/// assert!(is_noxu_supported());
+/// set_noxu_supported(prev);
+/// ```
+static NOXU_SUPPORTED: AtomicBool = AtomicBool::new(false);
+
+/// Set the process-wide "noxu data_store is supported" flag.
+///
+/// Idempotent. See [`NOXU_SUPPORTED`] for the contract.
+pub fn set_noxu_supported(on: bool) {
+    NOXU_SUPPORTED.store(on, Ordering::SeqCst);
+}
+
+/// Read the process-wide "noxu data_store is supported" flag.
+#[must_use]
+pub fn is_noxu_supported() -> bool {
+    NOXU_SUPPORTED.load(Ordering::SeqCst)
+}
 
 /// Top-level configuration value: a single named [`ConfPool`].
 ///

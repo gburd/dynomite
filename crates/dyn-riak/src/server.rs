@@ -59,7 +59,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
-use dynomite::embed::hooks::DatastoreByteStream;
+use dynomite::embed::hooks::{DatastoreByteStream, DatastoreError};
 use dynomite::embed::Datastore;
 use dynomite::msg::{Msg, MsgType};
 
@@ -68,9 +68,10 @@ use crate::proto::pb::framer::{read_frame, write_frame, Frame};
 use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 use crate::proto::pb::messages::{
     MessageCode, RpbBucketProps, RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp,
-    RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbListBucketsReq,
+    RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbIndexResp, RpbListBucketsReq,
     RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp, RpbPingReq, RpbPingResp, RpbPutReq,
-    RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
+    RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, INDEX_QUERY_TYPE_EQ,
+    INDEX_QUERY_TYPE_RANGE,
 };
 
 /// Maximum number of bucket / key entries packed into a single
@@ -254,10 +255,7 @@ async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame
         MessageCode::SetBucketReq => single_frame(handle_set_bucket(&frame.body)?),
         MessageCode::ListBucketsReq => handle_list_buckets(&frame.body, datastore)?,
         MessageCode::ListKeysReq => handle_list_keys(&frame.body, datastore)?,
-        MessageCode::IndexReq => single_frame(handle_unsupported::<RpbIndexReq>(
-            &frame.body,
-            "secondary-index queries not implemented for this datastore",
-        )?),
+        MessageCode::IndexReq => single_frame(handle_index(&frame.body, datastore).await?),
         MessageCode::MapRedReq => single_frame(handle_mapred(&frame.body).await?),
         // Response codes are illegal inbound.
         MessageCode::ErrorResp
@@ -313,13 +311,26 @@ fn handle_server_info(body: &[u8]) -> Result<Frame, RiakError> {
 }
 
 async fn handle_get(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
-    let _req = RpbGetReq::decode(body)?;
+    let req = RpbGetReq::decode(body)?;
     // Trampoline through the substrate so dispatch counts tick.
-    // The K/V semantics will move to a richer trait in the
-    // follow-up slice.
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
-    let resp = RpbGetResp::default();
+    // For datastores that implement the Riak K/V layer (today:
+    // `NoxuDatastore`), fetch the object and emit it as a
+    // single-content `RpbGetResp`. Datastores that report
+    // `Unsupported` fall back to the legacy empty response so
+    // the `MemoryDatastore` trampoline continues to behave
+    // identically.
+    let resp = match datastore.riak_get(&req.bucket, &req.key).await {
+        Ok(Some(v)) => RpbGetResp {
+            content: vec![v],
+            ..RpbGetResp::default()
+        },
+        Ok(None) | Err(DatastoreError::Unsupported(_)) => RpbGetResp::default(),
+        Err(e) => {
+            return Ok(error_frame(format!("riak get: {e}")));
+        }
+    };
     Ok(Frame::new(
         MessageCode::GetResp.as_u8(),
         resp.encode_to_vec(),
@@ -327,22 +338,118 @@ async fn handle_get(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, Ria
 }
 
 async fn handle_put(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
-    let _req = RpbPutReq::decode(body)?;
+    let req = RpbPutReq::decode(body)?;
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
-    let resp = RpbPutResp::default();
-    Ok(Frame::new(
-        MessageCode::PutResp.as_u8(),
-        resp.encode_to_vec(),
-    ))
+    let key = match req.key.as_ref() {
+        Some(k) if !k.is_empty() => k.clone(),
+        _ => {
+            // Server-assigned keys are not yet implemented; the
+            // client must supply one.
+            return Ok(error_frame(
+                "riak put: server-assigned keys not implemented; supply 'key'".into(),
+            ));
+        }
+    };
+    let indexes: Vec<(Vec<u8>, Vec<u8>)> = req
+        .indexes
+        .iter()
+        .filter_map(|p| p.value.as_ref().map(|v| (p.key.clone(), v.clone())))
+        .collect();
+    match datastore
+        .riak_put(&req.bucket, &key, &req.value, &indexes)
+        .await
+    {
+        Ok(()) | Err(DatastoreError::Unsupported(_)) => Ok(Frame::new(
+            MessageCode::PutResp.as_u8(),
+            RpbPutResp::default().encode_to_vec(),
+        )),
+        Err(e) => Ok(error_frame(format!("riak put: {e}"))),
+    }
 }
 
 async fn handle_del(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
-    let _req = RpbDelReq::decode(body)?;
+    let req = RpbDelReq::decode(body)?;
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
-    // RpbDelResp is body-less.
-    Ok(Frame::new(MessageCode::DelResp.as_u8(), Vec::new()))
+    match datastore.riak_delete(&req.bucket, &req.key).await {
+        Ok(_) | Err(DatastoreError::Unsupported(_)) => {
+            Ok(Frame::new(MessageCode::DelResp.as_u8(), Vec::new()))
+        }
+        Err(e) => Ok(error_frame(format!("riak del: {e}"))),
+    }
+}
+
+/// Run a 2i secondary-index query against the datastore.
+///
+/// Both equality (`qtype = 0`) and range (`qtype = 1`) queries
+/// are honoured. Streaming responses are not implemented in
+/// this slice; the entire result set is packed into a single
+/// [`RpbIndexResp`] frame with `done = Some(true)`. The
+/// `pagination_sort`, `term_regex`, `continuation`, and
+/// `cover_context` fields on the request are accepted but not
+/// acted on; supporting them is tracked in the journal entry
+/// for this slice.
+///
+/// 2i queries do NOT trampoline through [`Datastore::dispatch`]
+/// because the existing list / property paths (the only other
+/// non-KV ops) also bypass it; the substrate's dispatch counter
+/// is reserved for K/V operations.
+async fn handle_index(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+    let req = RpbIndexReq::decode(body)?;
+    let result = match req.qtype {
+        INDEX_QUERY_TYPE_EQ => {
+            let value = req.key.as_deref().unwrap_or(b"");
+            datastore
+                .riak_index_eq(&req.bucket, &req.index, value)
+                .await
+        }
+        INDEX_QUERY_TYPE_RANGE => {
+            let min = req.range_min.as_deref().unwrap_or(b"");
+            let max = req.range_max.as_deref().unwrap_or(b"");
+            datastore
+                .riak_index_range(&req.bucket, &req.index, min, max)
+                .await
+        }
+        other => {
+            return Ok(error_frame(format!(
+                "riak index: unsupported qtype {other}; expected 0 (eq) or 1 (range)"
+            )));
+        }
+    };
+    match result {
+        Ok(mut keys) => {
+            if let Some(cap) = req.max_results {
+                let cap = cap as usize;
+                if keys.len() > cap {
+                    keys.truncate(cap);
+                }
+            }
+            let resp = RpbIndexResp {
+                keys,
+                results: Vec::new(),
+                continuation: None,
+                done: Some(true),
+            };
+            Ok(Frame::new(
+                MessageCode::IndexResp.as_u8(),
+                resp.encode_to_vec(),
+            ))
+        }
+        Err(DatastoreError::Unsupported(_)) => Ok(error_frame(
+            "secondary-index queries not implemented for this datastore".into(),
+        )),
+        Err(e) => Ok(error_frame(format!("riak index: {e}"))),
+    }
+}
+
+/// Build an `RpbErrorResp` frame from a human-readable message.
+fn error_frame(message: String) -> Frame {
+    let resp = RpbErrorResp {
+        errmsg: message.into_bytes(),
+        errcode: 1,
+    };
+    Frame::new(MessageCode::ErrorResp.as_u8(), resp.encode_to_vec())
 }
 
 fn handle_get_bucket(body: &[u8]) -> Result<Frame, RiakError> {
@@ -442,24 +549,6 @@ async fn handle_mapred(body: &[u8]) -> Result<Frame, RiakError> {
             ))
         }
     }
-}
-
-/// Decode `body` as `T` (so a malformed inbound frame surfaces a
-/// `Decode` error instead of being silently rejected) and emit an
-/// `RpbErrorResp` carrying `message`.
-fn handle_unsupported<T>(body: &[u8], message: &str) -> Result<Frame, RiakError>
-where
-    T: prost::Message + Default,
-{
-    let _ = T::decode(body)?;
-    let resp = RpbErrorResp {
-        errmsg: message.as_bytes().to_vec(),
-        errcode: 1,
-    };
-    Ok(Frame::new(
-        MessageCode::ErrorResp.as_u8(),
-        resp.encode_to_vec(),
-    ))
 }
 
 // ------------------------------------------------------------------
