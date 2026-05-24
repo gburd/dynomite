@@ -29,9 +29,12 @@
 //! ```
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use crate::cluster::failure_detector::DEFAULT_THRESHOLD;
 use crate::cluster::peer::PeerState;
+use crate::cluster::pool::ServerPool;
 use crate::hashkit::{token::parse_token, DynToken};
 
 /// Default gossip period (ms) - mirrors `CONF_DEFAULT_GOS_INTERVAL`
@@ -352,6 +355,214 @@ pub fn parse_seed_blob(raw: &str) -> Result<Vec<SeedRecord>, String> {
     Ok(out)
 }
 
+/// Authoritative owner of [`PeerState`] transitions for the
+/// gossip plane.
+///
+/// The handler holds an `Arc<ServerPool>` and feeds the
+/// per-peer phi-accrual failure detectors as gossip frames
+/// arrive. A periodic tick re-evaluates phi for every non-local
+/// peer and toggles `PeerState` between `Normal` and `Down` based
+/// on the configured threshold:
+///
+/// * a peer is `Normal` once at least one heartbeat has been
+///   recorded AND `phi(now) <= threshold`,
+/// * a peer is `Down` when no heartbeat has ever been recorded
+///   OR `phi(now) > threshold`.
+///
+/// The handler is the single place that mutates `peer.state`
+/// once gossip is wired; the supervisor loop that owns the TCP
+/// link no longer publishes peer-state transitions of its own.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use dynomite::cluster::gossip::GossipHandler;
+/// use dynomite::cluster::peer::{Peer, PeerEndpoint};
+/// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+/// use dynomite::conf::{DataStore, HashType};
+/// use dynomite::hashkit::DynToken;
+/// use dynomite::msg::ConsistencyLevel;
+///
+/// let cfg = PoolConfig {
+///     name: "p".into(), dc: "d".into(), rack: "r".into(),
+///     data_store: DataStore::Redis, hash: HashType::Murmur,
+///     read_consistency: ConsistencyLevel::DcOne,
+///     write_consistency: ConsistencyLevel::DcOne,
+///     timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
+///     server_failure_limit: 2, auto_eject_hosts: false,
+///     enable_gossip: false,
+///     bucket_types: Vec::new(), default_bucket_type: None,
+/// };
+/// let local = Peer::new(
+///     0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
+///     vec![DynToken::from_u32(0)], true, true, false,
+/// );
+/// let pool = Arc::new(ServerPool::new(cfg, vec![local]));
+/// let handler = GossipHandler::new(pool);
+/// assert!((handler.threshold() - 8.0).abs() < f64::EPSILON);
+/// ```
+#[derive(Debug)]
+pub struct GossipHandler {
+    pool: Arc<ServerPool>,
+    threshold: f64,
+    interval: Duration,
+}
+
+impl GossipHandler {
+    /// Build a fresh handler over `pool` using the default
+    /// phi-accrual threshold ([`crate::cluster::failure_detector::DEFAULT_THRESHOLD`]).
+    #[must_use]
+    pub fn new(pool: Arc<ServerPool>) -> Self {
+        Self {
+            pool,
+            threshold: DEFAULT_THRESHOLD,
+            interval: Duration::from_millis(DEFAULT_GOSSIP_INTERVAL_MS),
+        }
+    }
+
+    /// Override the phi threshold (default 8.0).
+    #[must_use]
+    pub fn with_threshold(mut self, threshold: f64) -> Self {
+        self.threshold = threshold;
+        self
+    }
+
+    /// Override the gossip interval used by the periodic tick
+    /// when the handler is driven by the binary's run loop. The
+    /// in-process tests do not depend on this value.
+    #[must_use]
+    pub fn with_interval(mut self, interval: Duration) -> Self {
+        self.interval = interval;
+        self
+    }
+
+    /// Phi threshold the handler is configured with.
+    #[must_use]
+    pub fn threshold(&self) -> f64 {
+        self.threshold
+    }
+
+    /// Configured gossip interval.
+    #[must_use]
+    pub fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    /// Borrow the underlying pool.
+    #[must_use]
+    pub fn pool(&self) -> &Arc<ServerPool> {
+        &self.pool
+    }
+
+    /// Record an inbound gossip heartbeat from the peer
+    /// identified by `pname` (a `host:port` string matching the
+    /// peer's [`crate::cluster::peer::PeerEndpoint::pname`]).
+    ///
+    /// Mutates the peer's failure detector and immediately
+    /// promotes the peer's state to [`PeerState::Normal`] when
+    /// `phi(now)` is below the threshold; this gives gossip a
+    /// snappy first-contact transition without waiting for the
+    /// next periodic tick.
+    ///
+    /// Unknown pnames are ignored.
+    pub fn record_heartbeat_pname(&self, pname: &str, now: Instant) {
+        let mut peers = self.pool.peers().write();
+        for p in peers.iter_mut() {
+            if p.is_local() {
+                continue;
+            }
+            if p.endpoint().pname() == pname {
+                p.failure_detector_mut().record_heartbeat(now);
+                if p.failure_detector().phi(now) <= self.threshold && p.state() != PeerState::Normal
+                {
+                    p.set_state(PeerState::Normal, now_secs_wall());
+                }
+                return;
+            }
+        }
+    }
+
+    /// Record an inbound gossip heartbeat against a known peer
+    /// index. Used by tests and by callers that already resolved
+    /// the originating peer.
+    pub fn record_heartbeat_idx(&self, peer_idx: u32, now: Instant) {
+        let mut peers = self.pool.peers().write();
+        if let Some(p) = peers.iter_mut().find(|p| p.idx() == peer_idx) {
+            if p.is_local() {
+                return;
+            }
+            p.failure_detector_mut().record_heartbeat(now);
+            if p.failure_detector().phi(now) <= self.threshold && p.state() != PeerState::Normal {
+                p.set_state(PeerState::Normal, now_secs_wall());
+            }
+        }
+    }
+
+    /// Walk every non-local peer and reconcile its `PeerState`
+    /// with the failure detector's current view of `phi(now)`.
+    /// Returns the list of `(peer_idx, new_state)` transitions
+    /// the call applied (handy in tests).
+    ///
+    /// This is the failure-detector tick the binary runs on a
+    /// periodic timer. Calling it never panics and it never
+    /// blocks on I/O.
+    pub fn evaluate(&self, now: Instant) -> Vec<(u32, PeerState)> {
+        let mut peers = self.pool.peers().write();
+        let mut transitions = Vec::new();
+        for p in peers.iter_mut() {
+            if p.is_local() {
+                continue;
+            }
+            let target = if p.failure_detector().last_heartbeat().is_some()
+                && p.failure_detector().phi(now) <= self.threshold
+            {
+                PeerState::Normal
+            } else {
+                PeerState::Down
+            };
+            if p.state() != target {
+                p.set_state(target, now_secs_wall());
+                transitions.push((p.idx(), target));
+            }
+        }
+        transitions
+    }
+
+    /// Mark the peer identified by `pname` as [`PeerState::Down`]
+    /// without consulting the failure detector. Used by the
+    /// gossip-shutdown path so the dispatcher can short-circuit
+    /// routing to a peer that announced its own departure.
+    pub fn mark_down_pname(&self, pname: &str) {
+        let mut peers = self.pool.peers().write();
+        for p in peers.iter_mut() {
+            if p.is_local() {
+                continue;
+            }
+            if p.endpoint().pname() == pname && p.state() != PeerState::Down {
+                p.set_state(PeerState::Down, now_secs_wall());
+                return;
+            }
+        }
+    }
+
+    /// Reset the per-peer failure detector. Used when a peer is
+    /// removed and re-added so historical jitter does not bias
+    /// the new suspicion value.
+    pub fn reset_detector(&self, peer_idx: u32) {
+        let mut peers = self.pool.peers().write();
+        if let Some(p) = peers.iter_mut().find(|p| p.idx() == peer_idx) {
+            p.failure_detector_mut().reset();
+        }
+    }
+}
+
+fn now_secs_wall() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +640,155 @@ mod tests {
         s.add_or_update(node("d", "r", "h", 7, 0));
         s.run_failure_detector(1000, 1000); // delta = 40s, now > 40s
         assert_eq!(s.nodes().next().unwrap().state, PeerState::Down);
+    }
+
+    /// Construction helper for the `GossipHandler` test suite.
+    /// The handler operates on a real `ServerPool`, so each test
+    /// builds a small two-peer pool (one local, one remote).
+    mod handler_helpers {
+        use std::sync::Arc;
+
+        use crate::cluster::peer::{Peer, PeerEndpoint};
+        use crate::cluster::pool::{PoolConfig, ServerPool};
+        use crate::conf::{DataStore, HashType};
+        use crate::hashkit::DynToken;
+        use crate::msg::ConsistencyLevel;
+
+        pub fn pool() -> Arc<ServerPool> {
+            let cfg = PoolConfig {
+                name: "p".into(),
+                dc: "dc1".into(),
+                rack: "r1".into(),
+                data_store: DataStore::Redis,
+                hash: HashType::Murmur,
+                read_consistency: ConsistencyLevel::DcOne,
+                write_consistency: ConsistencyLevel::DcOne,
+                timeout_ms: 5_000,
+                server_retry_timeout_ms: 30_000,
+                server_failure_limit: 2,
+                auto_eject_hosts: false,
+                enable_gossip: true,
+                bucket_types: Vec::new(),
+                default_bucket_type: None,
+            };
+            let local = Peer::new(
+                0,
+                PeerEndpoint::tcp("127.0.0.1".into(), 8101),
+                "r1".into(),
+                "dc1".into(),
+                vec![DynToken::from_u32(0)],
+                true,
+                true,
+                false,
+            );
+            let remote = Peer::new(
+                1,
+                PeerEndpoint::tcp("127.0.0.1".into(), 8102),
+                "r1".into(),
+                "dc1".into(),
+                vec![DynToken::from_u32(2_147_483_648)],
+                false,
+                true,
+                false,
+            );
+            Arc::new(ServerPool::new(cfg, vec![local, remote]))
+        }
+    }
+
+    fn remote_state(pool: &super::ServerPool) -> PeerState {
+        pool.peers()
+            .read()
+            .iter()
+            .find(|p| !p.is_local())
+            .map_or(PeerState::Unknown, super::super::peer::Peer::state)
+    }
+
+    #[test]
+    fn handler_first_heartbeat_promotes_to_normal() {
+        let pool = handler_helpers::pool();
+        let handler = GossipHandler::new(pool.clone());
+        let t0 = std::time::Instant::now();
+        assert_eq!(remote_state(&pool), PeerState::Down);
+        handler.record_heartbeat_pname("127.0.0.1:8102", t0);
+        // After the first received heartbeat the remote peer is
+        // promoted out of the initial `Down` state.
+        assert_eq!(remote_state(&pool), PeerState::Normal);
+    }
+
+    #[test]
+    fn handler_steady_heartbeats_keep_peer_normal() {
+        // Drive 100 heartbeats at 1s intervals; phi must stay
+        // below 1.0 throughout and the peer must remain `Normal`.
+        let pool = handler_helpers::pool();
+        let handler = GossipHandler::new(pool.clone());
+        let t0 = std::time::Instant::now();
+        for i in 0..100 {
+            let now = t0 + std::time::Duration::from_secs(i);
+            handler.record_heartbeat_pname("127.0.0.1:8102", now);
+            handler.evaluate(now);
+        }
+        let after_last =
+            t0 + std::time::Duration::from_secs(99) + std::time::Duration::from_millis(10);
+        let phi = pool
+            .peers()
+            .read()
+            .iter()
+            .find(|p| !p.is_local())
+            .map_or(0.0, |p| p.failure_detector().phi(after_last));
+        assert!(
+            phi < 1.0,
+            "phi should be < 1.0 right after a heartbeat, got {phi}"
+        );
+        assert_eq!(remote_state(&pool), PeerState::Normal);
+    }
+
+    #[test]
+    fn handler_silence_transitions_peer_to_down() {
+        // Stop heartbeats; advance the clock 60s; assert the
+        // periodic evaluation transitions the peer to `Down`.
+        let pool = handler_helpers::pool();
+        let handler = GossipHandler::new(pool.clone());
+        let t0 = std::time::Instant::now();
+        for i in 0..100 {
+            let now = t0 + std::time::Duration::from_secs(i);
+            handler.record_heartbeat_pname("127.0.0.1:8102", now);
+        }
+        // Advance 60 seconds past the last heartbeat with no new
+        // gossip; phi crosses the default threshold of 8.0.
+        let later = t0 + std::time::Duration::from_secs(159);
+        let transitions = handler.evaluate(later);
+        assert_eq!(transitions, vec![(1, PeerState::Down)]);
+        assert_eq!(remote_state(&pool), PeerState::Down);
+    }
+
+    #[test]
+    fn handler_evaluate_no_data_keeps_peer_down() {
+        // A peer we have never heard from stays `Down`.
+        let pool = handler_helpers::pool();
+        let handler = GossipHandler::new(pool.clone());
+        let t0 = std::time::Instant::now();
+        let transitions = handler.evaluate(t0);
+        assert!(transitions.is_empty());
+        assert_eq!(remote_state(&pool), PeerState::Down);
+    }
+
+    #[test]
+    fn handler_unknown_pname_is_silent() {
+        let pool = handler_helpers::pool();
+        let handler = GossipHandler::new(pool.clone());
+        let t0 = std::time::Instant::now();
+        handler.record_heartbeat_pname("10.0.0.99:9999", t0);
+        assert_eq!(remote_state(&pool), PeerState::Down);
+    }
+
+    #[test]
+    fn handler_mark_down_overrides_normal() {
+        let pool = handler_helpers::pool();
+        let handler = GossipHandler::new(pool.clone());
+        let t0 = std::time::Instant::now();
+        handler.record_heartbeat_pname("127.0.0.1:8102", t0);
+        assert_eq!(remote_state(&pool), PeerState::Normal);
+        handler.mark_down_pname("127.0.0.1:8102");
+        assert_eq!(remote_state(&pool), PeerState::Down);
     }
 }
