@@ -1,0 +1,67 @@
+//! Tictac active anti-entropy (AAE).
+//!
+//! Tictac AAE is Riak's continuously-running merkle-tree
+//! synchroniser. Each node maintains a per-vnode rolling merkle
+//! tree (the "Tictac" tree) over `(bucket, key, vclock)` tuples;
+//! peers periodically exchange tree summaries and repair the
+//! divergent leaves.
+//!
+//! This module layers Tictac AAE on top of the existing entropy
+//! primitives in `crate::dynomite::entropy::*` (which already
+//! ship a length-prefixed framing, AES-128-CBC reconciliation
+//! channel, and snapshot source/sink traits). Tictac AAE keeps
+//! the same wire shape (4-byte BE length + payload) but layers
+//! a three-phase exchange protocol on top:
+//!
+//! * `ROOT-SYNC` exchanges the top-level (per-time-bucket) root
+//!   vector.
+//! * `TREE-SYNC` recurses into one diverging time bucket and
+//!   exchanges the per-segment hash vector.
+//! * `KEY-SYNC` enumerates the diverging keys in one
+//!   `(time_bucket, segment)` pair so the repair scheduler can
+//!   act.
+//!
+//! # Submodules
+//!
+//! * [`tictac`] -- the merkle tree itself.
+//! * [`exchange`] -- per-pair three-phase wire protocol.
+//! * [`scheduler`] -- the cadence driver (mockable clock).
+//! * [`repair`] -- per-divergence repair-task dispatch.
+//! * [`config`] -- operator-facing knobs.
+//!
+//! # Example
+//!
+//! ```
+//! use dyn_riak::aae::config::ConfAae;
+//! use dyn_riak::aae::tictac::{Tree, TreeShape};
+//!
+//! let cfg = ConfAae::default();
+//! let shape = TreeShape {
+//!     n_time_buckets: cfg.n_time_buckets,
+//!     n_segments: cfg.n_segments,
+//!     time_window_seconds: cfg.time_window_seconds,
+//! };
+//! let mut tree = Tree::new(shape);
+//! tree.insert(b"users", b"alice", b"vc1", 0);
+//! assert!(!tree.roots().is_empty());
+//! ```
+
+pub mod config;
+pub mod exchange;
+pub mod repair;
+pub mod scheduler;
+pub mod tictac;
+
+pub use crate::aae::config::ConfAae;
+pub use crate::aae::exchange::{
+    decode_key_sync, decode_root_sync, decode_tree_sync, encode_key_sync, encode_root_sync,
+    encode_tree_sync, Divergence, Exchange, ExchangeError, ExchangeFrame, LocalPeerView, PeerView,
+    EXCHANGE_MAGIC, FRAME_HEADER_LEN, MAX_PAYLOAD_LEN, PHASE_KEY_SYNC, PHASE_ROOT_SYNC,
+    PHASE_TREE_SYNC,
+};
+pub use crate::aae::repair::{
+    LexicographicOrder, MpscRepairSink, Outcome, RepairDirection, RepairScheduler, RepairSink,
+    RepairTask, VClockOrder,
+};
+pub use crate::aae::scheduler::{Clock, MockClock, Scheduler, SweepPlan, SweepTick, SystemClock};
+pub use crate::aae::tictac::{KeyEntry, Tree, TreeError, TreeShape};
