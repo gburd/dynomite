@@ -56,7 +56,8 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use dynomite::cluster::dispatch::ClusterDispatcher;
-use dynomite::cluster::peer::{Peer, PeerEndpoint};
+use dynomite::cluster::hints::HintStore;
+use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
 use dynomite::conf::{ConfDynSeed, ConfListen, ConfPool, Config, EndpointKind};
 use dynomite::core::log::reopen_on_sighup;
@@ -152,6 +153,14 @@ pub struct Server {
     /// used as the payload of every outbound gossip frame so
     /// receiving peers know who sent it.
     local_pname: String,
+    /// Optional hint store. `Some` exactly when the pool's
+    /// `enable_hinted_handoff` flag is true; in that case the
+    /// `hint_drainer_task` periodically ships pending hints to
+    /// peers that have transitioned back to `Normal`.
+    hint_store: Option<Arc<HintStore>>,
+    /// Period of the hint drainer sweep when `hint_store` is
+    /// set. Mirrors the `hint_drain_interval_ms:` YAML key.
+    hint_drain_interval: Duration,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
 }
@@ -333,7 +342,19 @@ impl Server {
         // transitions; the gossip handler owns `PeerState`
         // authority. The supervisor only owns the TCP / dnode
         // request-response channel for data-plane traffic.
+        // Build the dispatcher with the local backend wired.
+        // The hint store and the dispatcher share the same
+        // `Arc<HintStore>` so the drainer task and the dispatch
+        // path operate against the same in-memory queue.
+        let hint_store = if pool_config.enable_hinted_handoff {
+            Some(Arc::new(HintStore::new(pool_config.hint_store_max_bytes)))
+        } else {
+            None
+        };
         let mut dispatcher = ClusterDispatcher::new(server_pool.clone()).with_backend(backend_tx);
+        if let Some(store) = hint_store.as_ref() {
+            dispatcher = dispatcher.with_hint_store(store.clone());
+        }
         let mut peer_handles: Vec<JoinHandle<Result<(), NetError>>> = Vec::new();
         let mut gossip_peer_txs: Vec<(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)> =
             Vec::new();
@@ -452,6 +473,8 @@ impl Server {
             gossip_handler,
             gossip_peer_txs,
             local_pname,
+            hint_store,
+            hint_drain_interval: Duration::from_millis(pool_config.hint_drain_interval_ms.max(1)),
             shutdown_tx,
             shutdown_rx,
         })
@@ -550,6 +573,8 @@ impl Server {
             gossip_handler,
             gossip_peer_txs,
             local_pname,
+            hint_store,
+            hint_drain_interval,
             shutdown_tx,
             mut shutdown_rx,
         } = self;
@@ -625,6 +650,28 @@ impl Server {
             tracing::info!(pool = %pool_name, "gossip task spawned");
         }
 
+        // Spawn the hint drainer when hinted handoff is
+        // configured. The drainer ticks at
+        // `hint_drain_interval`: each tick (a) drops expired
+        // hints, and (b) for every peer in `Normal` state ships
+        // the pending hints via the same per-peer outbound
+        // channels the dispatcher uses.
+        let hint_drainer_handle: Option<JoinHandle<()>> = hint_store.as_ref().map(|store| {
+            let store = store.clone();
+            let pool_for_drainer = pool.clone();
+            let txs = gossip_peer_txs.clone();
+            let cancel = cancel_future(shutdown_rx.clone());
+            let interval = hint_drain_interval;
+            tracing::info!(
+                pool = %pool_name,
+                interval_ms = u64::try_from(interval.as_millis()).unwrap_or(u64::MAX),
+                "hint drainer task spawned"
+            );
+            tokio::spawn(async move {
+                hint_drainer_task(store, pool_for_drainer, txs, interval, cancel).await;
+            })
+        });
+
         let stats_handle: Option<JoinHandle<io::Result<()>>> = stats.map(|s| {
             let mut cancel_rx = shutdown_rx.clone();
             tokio::spawn(async move {
@@ -670,6 +717,10 @@ impl Server {
         }
         gossip_task_handle.abort();
         let _ = gossip_task_handle.await;
+        if let Some(h) = hint_drainer_handle {
+            h.abort();
+            let _ = h.await;
+        }
         // Now that the gossip task is gone, drop the explicit
         // gossip channel handles so reference counts settle.
         drop(gossip_peer_txs);
@@ -1289,6 +1340,132 @@ fn send_gossip_shutdown(
                 error = %e,
                 "gossip_shutdown channel push failed"
             );
+        }
+    }
+}
+
+/// Periodic drainer for the node-local hint store.
+///
+/// Each tick performs two passes:
+///
+/// 1. Drop hints whose deadline has passed
+///    ([`HintStore::expire_now`]). Bounds the in-memory
+///    store so a long-running peer outage does not consume
+///    unbounded memory.
+/// 2. For each peer in [`PeerState::Normal`], take that
+///    peer's pending hints and ship them via the wired
+///    per-peer outbound channel as `DmsgType::ReqForward`
+///    so the receiving peer's `dnode_client_loop` rewrites
+///    the parsed request's routing tag to `LocalNodeOnly`
+///    (no recursive fan-out at the destination). The hint
+///    is fire-and-forget: the responder is a disposable
+///    sink so the receiving peer's reply is dropped.
+///
+/// Runs until `cancel` resolves.
+async fn hint_drainer_task(
+    store: Arc<HintStore>,
+    pool: Arc<ServerPool>,
+    peer_txs: Vec<(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)>,
+    interval: Duration,
+    cancel: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+) {
+    use dynomite::net::dispatcher::OutboundEnvelope;
+    use dynomite::proto::dnode::DmsgType;
+    let mut cancel = cancel;
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Map peer_idx -> (channel, pname) for O(1) lookup.
+    let txs_by_idx: std::collections::HashMap<
+        u32,
+        (String, tokio::sync::mpsc::Sender<OutboundRequest>),
+    > = peer_txs
+        .into_iter()
+        .map(|(idx, pname, tx)| (idx, (pname, tx)))
+        .collect();
+    loop {
+        tokio::select! {
+            biased;
+            () = &mut cancel => return,
+            _ = ticker.tick() => {
+                let dropped = store.expire_now(std::time::Instant::now());
+                if dropped > 0 {
+                    tracing::debug!(
+                        target: "dynomite::hints",
+                        dropped,
+                        "hint drainer expired entries"
+                    );
+                }
+                // Snapshot the per-peer state so we never hold
+                // the peer-table read lock while shipping hints.
+                let live_peers: Vec<u32> = {
+                    let peers = pool.peers().read();
+                    peers
+                        .iter()
+                        .filter(|p| !p.is_local() && matches!(p.state(), PeerState::Normal))
+                        .map(dynomite::cluster::Peer::idx)
+                        .collect()
+                };
+                for peer_idx in live_peers {
+                    let Some((_pname, tx)) = txs_by_idx.get(&peer_idx) else {
+                        continue;
+                    };
+                    let hints = store.take_for(peer_idx);
+                    if hints.is_empty() {
+                        continue;
+                    }
+                    let count = hints.len();
+                    let mut shipped = 0usize;
+                    let mut requeued = 0usize;
+                    for h in hints {
+                        let payload_len = h.payload.len();
+                        let (rsp_tx, mut rsp_rx) =
+                            tokio::sync::mpsc::channel::<OutboundEnvelope>(1);
+                        // Drop the disposable response on the
+                        // floor so the channel does not back
+                        // up under high replay rates.
+                        tokio::spawn(async move {
+                            while rsp_rx.recv().await.is_some() {}
+                        });
+                        let req = OutboundRequest {
+                            bytes: h.payload.clone(),
+                            req_id: 0,
+                            responder: rsp_tx,
+                            span: tracing::Span::none(),
+                            ty: DmsgType::ReqForward,
+                            target_peer_idx: Some(peer_idx),
+                        };
+                        if tx.try_send(req).is_ok() {
+                            shipped += 1;
+                        } else {
+                            // Channel full or closed: put the
+                            // hint back so the next sweep can
+                            // retry. We only re-enqueue when
+                            // the deadline has not already
+                            // passed.
+                            let ttl_remaining = h
+                                .deadline
+                                .checked_duration_since(std::time::Instant::now())
+                                .unwrap_or_else(|| Duration::from_secs(1));
+                            if ttl_remaining > Duration::from_secs(0)
+                                && store
+                                    .enqueue(peer_idx, h.payload, ttl_remaining)
+                                    .is_ok()
+                            {
+                                requeued += 1;
+                            }
+                            let _ = payload_len;
+                        }
+                    }
+                    tracing::debug!(
+                        target: "dynomite::hints",
+                        peer_idx,
+                        count,
+                        shipped,
+                        requeued,
+                        "hint drainer pass"
+                    );
+                }
+            }
         }
     }
 }

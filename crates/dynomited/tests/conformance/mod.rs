@@ -275,14 +275,16 @@ impl DynomitedNode {
         std::fs::write(&config_path, &yaml)?;
         let pid_file = dir.join(format!("{}.pid", spec.name));
         let log_path = dir.join(format!("{}.log", spec.name));
+        let log = std::fs::File::create(&log_path)?;
+        let log_err = log.try_clone()?;
 
         let mut cmd = Command::new(bin);
         cmd.arg("-c")
             .arg(&config_path)
             .arg("-p")
             .arg(&pid_file)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(log_err));
         cmd.process_group(0);
         let child = cmd.spawn()?;
 
@@ -333,6 +335,68 @@ impl DynomitedNode {
             Ok(None) => Some(true),
             Err(_) => None,
         }
+    }
+
+    /// Send `SIGTERM` (with `SIGKILL` fallback) to the dynomited
+    /// process group and wait for it to exit. Idempotent: a
+    /// node that has already been killed reports success.
+    pub fn kill(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            terminate_pg(&mut c);
+        }
+    }
+
+    /// Respawn the dynomited child against the same
+    /// configuration. Used by tests that simulate a node
+    /// reboot mid-workload.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying I/O error if the child cannot be
+    /// spawned or fails to rebind within `DEFAULT_TIMEOUT`.
+    pub fn respawn(&mut self) -> io::Result<()> {
+        if self.child.is_some() {
+            return Ok(());
+        }
+        // The previous child may have left a pidfile behind
+        // (e.g. SIGKILL after the grace window). Remove it so
+        // the new dynomited's flock attempt does not race the
+        // stale exclusive lock.
+        let _ = std::fs::remove_file(&self.pid_file);
+        let bin = which_in_path("dynomited")
+            .map_or_else(|| assert_cmd::cargo::cargo_bin("dynomited"), |p| p);
+        // Retry the spawn-and-bind dance: the previous instance
+        // may still be holding the listen port (kernel cleanup
+        // can lag behind a SIGKILL by several seconds).
+        let mut last_err: Option<io::Error> = None;
+        let attempts = 6;
+        for _ in 0..attempts {
+            let log = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.log_path)?;
+            let log_err = log.try_clone()?;
+            let mut cmd = Command::new(&bin);
+            cmd.arg("-c")
+                .arg(&self.config_path)
+                .arg("-p")
+                .arg(&self.pid_file)
+                .stdout(Stdio::from(log))
+                .stderr(Stdio::from(log_err));
+            cmd.process_group(0);
+            let mut child = cmd.spawn()?;
+            if wait_for_listen(self.spec.listen_port, Instant::now() + DEFAULT_TIMEOUT) {
+                self.child = Some(child);
+                return Ok(());
+            }
+            terminate_pg(&mut child);
+            last_err = Some(io::Error::other(
+                "dynomited respawn failed to bind listen port",
+            ));
+            std::thread::sleep(Duration::from_secs(1));
+            let _ = std::fs::remove_file(&self.pid_file);
+        }
+        Err(last_err.unwrap_or_else(|| io::Error::other("respawn loop exhausted attempts")))
     }
 }
 

@@ -44,6 +44,7 @@ pub mod datacenter;
 pub mod dispatch;
 pub mod failure_detector;
 pub mod gossip;
+pub mod hints;
 pub mod peer;
 pub mod pool;
 pub mod snitch;
@@ -54,6 +55,7 @@ pub use self::dispatch::{ClusterDispatcher, DispatchPlan, ReplicaTarget};
 pub use self::gossip::{
     parse_seed_node, GossipConfig, GossipHandler, GossipNode, GossipState, GossipStep, SeedRecord,
 };
+pub use self::hints::{Hint, HintStore, HintStoreError, HintStoreStats};
 pub use self::peer::{Peer, PeerEndpoint, PeerState};
 pub use self::pool::{PoolConfig, ServerPool};
 pub use self::snitch::{rack_distance, RackDistance};

@@ -12,7 +12,7 @@ use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
 use dynomite::cluster::snitch::{pick_target_rack, rack_distance, RackDistance};
 use dynomite::cluster::vnode;
-use dynomite::conf::{ConfDynSeed, DataStore, HashType};
+use dynomite::conf::ConfDynSeed;
 use dynomite::hashkit::DynToken;
 use dynomite::msg::{ConsistencyLevel, Msg, MsgType};
 use dynomite::net::auto_eject::{AutoEject, AutoEjectState};
@@ -23,20 +23,11 @@ use dynomite::seeds::SeedsProvider;
 
 fn cfg(dc: &str, rack: &str, read: ConsistencyLevel, write: ConsistencyLevel) -> PoolConfig {
     PoolConfig {
-        name: "p".into(),
         dc: dc.into(),
         rack: rack.into(),
-        data_store: DataStore::Redis,
-        hash: HashType::Murmur,
         read_consistency: read,
         write_consistency: write,
-        timeout_ms: 5_000,
-        server_retry_timeout_ms: 30_000,
-        server_failure_limit: 2,
-        auto_eject_hosts: false,
-        enable_gossip: false,
-        bucket_types: Vec::new(),
-        default_bucket_type: None,
+        ..PoolConfig::default()
     }
 }
 
