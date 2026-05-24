@@ -17,10 +17,46 @@ use parking_lot::RwLock;
 
 use crate::cluster::datacenter::Datacenter;
 use crate::cluster::peer::Peer;
-use crate::conf::{ConfPool, DataStore, HashType};
+use crate::conf::{ConfPool, ConsistencyLevel as ConfConsistencyLevel, DataStore, HashType};
 
 use crate::msg::ConsistencyLevel;
 use crate::net::auto_eject::AutoEject;
+
+/// Convert a YAML-form consistency string from a bucket-type
+/// stanza into the runtime [`ConsistencyLevel`] enum.
+///
+/// Values that fail validation fall back to `DcOne`; the
+/// configuration validator runs first, so by the time this is
+/// called every string is already known to be one of the four
+/// canonical names (case-insensitive).
+fn bucket_type_consistency(raw: &str) -> ConsistencyLevel {
+    match ConfConsistencyLevel::parse("bucket_type_consistency", raw) {
+        Ok(ConfConsistencyLevel::DcQuorum) => ConsistencyLevel::DcQuorum,
+        Ok(ConfConsistencyLevel::DcSafeQuorum) => ConsistencyLevel::DcSafeQuorum,
+        Ok(ConfConsistencyLevel::DcEachSafeQuorum) => ConsistencyLevel::DcEachSafeQuorum,
+        Ok(ConfConsistencyLevel::DcOne) | Err(_) => ConsistencyLevel::DcOne,
+    }
+}
+
+/// Resolved bucket-type bundle stored on the live
+/// [`PoolConfig`].
+///
+/// Mirrors [`crate::conf::ConfBucketType`] but with the
+/// consistency strings already parsed into
+/// [`ConsistencyLevel`] and the field-name semantics finalised
+/// for the dispatcher's hot path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BucketType {
+    /// Bucket name. Compared verbatim against the prefix
+    /// returned by [`crate::proto::redis::bucket_name`].
+    pub name: String,
+    /// Read consistency override.
+    pub read_consistency: ConsistencyLevel,
+    /// Write consistency override.
+    pub write_consistency: ConsistencyLevel,
+    /// Replica fan-out cap. `0` means no cap.
+    pub n_val: u8,
+}
 
 /// Minimal projection of the YAML pool block consumed by the
 /// cluster runtime.
@@ -53,6 +89,65 @@ pub struct PoolConfig {
     pub auto_eject_hosts: bool,
     /// Whether gossip is enabled (`enable_gossip`).
     pub enable_gossip: bool,
+    /// Per-bucket routing-property bundles. Empty when the
+    /// `bucket_types:` YAML stanza is unset.
+    pub bucket_types: Vec<BucketType>,
+    /// Name of the bucket type to apply when the request key has
+    /// no slash. References an entry of `bucket_types`; `None`
+    /// keeps the pool-level defaults.
+    pub default_bucket_type: Option<String>,
+}
+
+impl Default for PoolConfig {
+    fn default() -> Self {
+        Self {
+            name: "p".into(),
+            dc: "localdc".into(),
+            rack: "localrack".into(),
+            data_store: DataStore::Redis,
+            hash: HashType::Murmur,
+            read_consistency: ConsistencyLevel::DcOne,
+            write_consistency: ConsistencyLevel::DcOne,
+            timeout_ms: 5_000,
+            server_retry_timeout_ms: 30_000,
+            server_failure_limit: 2,
+            auto_eject_hosts: false,
+            enable_gossip: false,
+            bucket_types: Vec::new(),
+            default_bucket_type: None,
+        }
+    }
+}
+
+impl PoolConfig {
+    /// Look up a bucket type by name.
+    ///
+    /// Returns the matching [`BucketType`] when one is
+    /// configured. The dispatcher consults this on every request
+    /// to swap in per-bucket consistency / fan-out settings.
+    #[must_use]
+    pub fn lookup_bucket_type(&self, name: &[u8]) -> Option<&BucketType> {
+        self.bucket_types
+            .iter()
+            .find(|bt| bt.name.as_bytes() == name)
+    }
+
+    /// Resolve the bucket type that applies to a request whose
+    /// extracted bucket name is `bucket`. `None` falls back to
+    /// `default_bucket_type` (also possibly `None`).
+    #[must_use]
+    pub fn resolve_bucket_type(&self, bucket: Option<&[u8]>) -> Option<&BucketType> {
+        if let Some(b) = bucket {
+            if let Some(bt) = self.lookup_bucket_type(b) {
+                return Some(bt);
+            }
+        }
+        // Either no bucket prefix on the key, or the prefix did
+        // not match any configured type. Fall through to the
+        // default bucket type when one is named.
+        let name = self.default_bucket_type.as_deref()?;
+        self.lookup_bucket_type(name.as_bytes())
+    }
 }
 
 impl PoolConfig {
@@ -107,6 +202,17 @@ impl PoolConfig {
                 .unwrap_or(2),
             auto_eject_hosts: pool.auto_eject_hosts.unwrap_or(false),
             enable_gossip: pool.enable_gossip.unwrap_or(false),
+            bucket_types: pool
+                .bucket_types
+                .iter()
+                .map(|bt| BucketType {
+                    name: bt.name.clone(),
+                    read_consistency: bucket_type_consistency(&bt.read_consistency),
+                    write_consistency: bucket_type_consistency(&bt.write_consistency),
+                    n_val: bt.n_val,
+                })
+                .collect(),
+            default_bucket_type: pool.default_bucket_type.clone(),
         }
     }
 }
@@ -127,21 +233,10 @@ impl PoolConfig {
 /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
 /// use dynomite::cluster::peer::{Peer, PeerEndpoint};
 /// use dynomite::hashkit::DynToken;
-/// use dynomite::conf::{DataStore, HashType};
-/// use dynomite::msg::ConsistencyLevel;
 /// let cfg = PoolConfig {
-///     name: "p".into(),
 ///     dc: "dc1".into(),
 ///     rack: "r1".into(),
-///     data_store: DataStore::Redis,
-///     hash: HashType::Murmur,
-///     read_consistency: ConsistencyLevel::DcOne,
-///     write_consistency: ConsistencyLevel::DcOne,
-///     timeout_ms: 5_000,
-///     server_retry_timeout_ms: 30_000,
-///     server_failure_limit: 2,
-///     auto_eject_hosts: false,
-///     enable_gossip: false,
+///     ..PoolConfig::default()
 /// };
 /// let local = Peer::new(
 ///     0, PeerEndpoint::tcp("127.0.0.1".into(), 8101), "r1".into(), "dc1".into(),
@@ -174,15 +269,7 @@ impl ServerPool {
     /// # use dynomite::hashkit::DynToken;
     /// # use dynomite::conf::{DataStore, HashType};
     /// # use dynomite::msg::ConsistencyLevel;
-    /// # let cfg = PoolConfig {
-    /// #    name: "p".into(), dc: "d".into(), rack: "r".into(),
-    /// #    data_store: DataStore::Redis, hash: HashType::Murmur,
-    /// #    read_consistency: ConsistencyLevel::DcOne,
-    /// #    write_consistency: ConsistencyLevel::DcOne,
-    /// #    timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
-    /// #    server_failure_limit: 2, auto_eject_hosts: false,
-    /// #    enable_gossip: false,
-    /// # };
+    /// # let cfg = PoolConfig::default();
     /// # let local = Peer::new(
     /// #    0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
     /// #    vec![DynToken::from_u32(0)], true, true, false,
@@ -324,15 +411,7 @@ impl ServerPool {
     /// # use dynomite::hashkit::DynToken;
     /// # use dynomite::conf::{DataStore, HashType};
     /// # use dynomite::msg::{ConsistencyLevel, Msg, MsgType};
-    /// # let cfg = PoolConfig {
-    /// #    name: "p".into(), dc: "d".into(), rack: "r".into(),
-    /// #    data_store: DataStore::Redis, hash: HashType::Murmur,
-    /// #    read_consistency: ConsistencyLevel::DcOne,
-    /// #    write_consistency: ConsistencyLevel::DcOne,
-    /// #    timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
-    /// #    server_failure_limit: 2, auto_eject_hosts: false,
-    /// #    enable_gossip: false,
-    /// # };
+    /// # let cfg = PoolConfig::default();
     /// # let local = Peer::new(
     /// #    0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
     /// #    vec![DynToken::from_u32(0)], true, true, false,
@@ -381,6 +460,8 @@ mod tests {
             server_failure_limit: 2,
             auto_eject_hosts: false,
             enable_gossip: false,
+            bucket_types: Vec::new(),
+            default_bucket_type: None,
         }
     }
 
