@@ -649,6 +649,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "dyn-admin"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "dyn-riak",
+ "dynomite",
+ "predicates",
+ "prost",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "dyn-encoding"
 version = "0.0.1"
 dependencies = [
