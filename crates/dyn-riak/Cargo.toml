@@ -18,6 +18,11 @@ default = []
 # to the in-process Noxu DB storage engine. Off by default so the
 # crate compiles cleanly without the `lamdb` checkout next door.
 noxu = ["dep:noxu-db"]
+# Build the Wasm phase fitting for MapReduce. Pulls in `wasmtime`
+# and `ciborium`. Off by default so operators who do not need
+# user-defined Wasm phases do not pay for the wasmtime
+# compilation.
+wasm = ["dep:wasmtime", "dep:ciborium"]
 
 [dependencies]
 dynomite = { path = "../dynomite" }
@@ -33,6 +38,8 @@ http-body-util = "0.1"
 hyper = { version = "1.9", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 noxu-db = { workspace = true, optional = true }
+wasmtime = { workspace = true, optional = true }
+ciborium = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
