@@ -20,6 +20,7 @@
 //! assert_eq!(req.keys()[0].key(), b"foo");
 //! ```
 
+pub mod bucket;
 pub mod coalesce;
 pub mod commands;
 pub mod fragment;
@@ -28,6 +29,7 @@ pub mod parser;
 pub mod repair;
 pub mod verify;
 
+pub use self::bucket::bucket_name;
 pub use self::coalesce::{accumulate_fragment_integer, redis_post_coalesce, redis_pre_coalesce};
 pub use self::commands::CommandClass;
 pub use self::fragment::{redis_fragment, FragmentDispatcher, FragmentOutcome};

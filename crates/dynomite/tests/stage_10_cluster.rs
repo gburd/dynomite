@@ -35,6 +35,8 @@ fn cfg(dc: &str, rack: &str, read: ConsistencyLevel, write: ConsistencyLevel) ->
         server_failure_limit: 2,
         auto_eject_hosts: false,
         enable_gossip: false,
+        bucket_types: Vec::new(),
+        default_bucket_type: None,
     }
 }
 
