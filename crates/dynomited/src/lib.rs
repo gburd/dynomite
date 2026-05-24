@@ -18,5 +18,7 @@ pub mod cli;
 pub mod daemonize;
 pub mod observability;
 pub mod pidfile;
+#[cfg(feature = "riak")]
+pub mod riak;
 pub mod server;
 pub mod signals;

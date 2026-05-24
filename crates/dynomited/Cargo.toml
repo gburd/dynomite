@@ -58,9 +58,16 @@ integration = []
 # suite can exercise QUIC at the library level. Compiles in
 # `quiche` plus its build-time dependencies.
 quic = ["dynomite/quic"]
+# Enable the Riak protocol surface: PBC server, HTTP gateway,
+# and (optional) active anti-entropy scheduler. Pulls in the
+# `dyn-riak` crate. Off by default; turning the feature on
+# does not change behaviour for operators who do not configure
+# a `riak:` block in their YAML.
+riak = ["dep:dyn-riak"]
 
 [dependencies]
 dynomite = { path = "../dynomite" }
+dyn-riak = { path = "../dyn-riak", optional = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
