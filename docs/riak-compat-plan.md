@@ -10,6 +10,16 @@ The plan is a *multi-month* program of work. It is written so the
 follow-on stages can be parallelised across worker agents without each
 agent having to rederive the architecture.
 
+> **2026-05-24 update**: per operator direction, the Riak protocol
+> modules and the `NoxuDatastore` bridge live in a dedicated workspace
+> member at `crates/dyn-riak/` rather than under `crate::dynomite`.
+> The dynomite engine remains a pure substrate. Where this document
+> uses paths like `crate::proto::riak::*` or `crate::storage::*`,
+> read them as `dyn_riak::proto::*` and `dyn_riak::datastore::*`.
+> The `crates/dyn-riak/` v0.0.1 slice (Ping + Get + Put + Del PBC
+> surface, plus the `noxu`-gated `NoxuDatastore`) landed under
+> `docs/journal/2026-05-24-dyn-riak-scaffold.md`.
+
 ---
 
 ## 1. Architecture overview
