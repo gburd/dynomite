@@ -20,6 +20,17 @@ use crate::net::server::OutboundRequest;
 use crate::net::NetError;
 use crate::proto::dnode::{dmsg_write, DmsgType, DnodeParser, ParseStep};
 
+/// True when the dnode message type expects a matching response
+/// frame from the peer (data plane). Gossip variants are
+/// fire-and-forget and never push onto the per-connection
+/// pending queue.
+fn is_data_plane_ty(ty: DmsgType) -> bool {
+    matches!(
+        ty,
+        DmsgType::Req | DmsgType::ReqForward | DmsgType::Res | DmsgType::Unknown
+    )
+}
+
 /// Outbound DNODE peer connection driver.
 pub struct DnodeServerConn {
     conn: Conn,
@@ -98,11 +109,12 @@ impl DnodeServerConn {
                     let req_span = req.span.clone();
                     let req_bytes = req.bytes;
                     let req_id = req.req_id;
+                    let req_ty = req.ty;
                     let mut header_buf = self.conn.mbuf_pool().get();
                     dmsg_write(
                         &mut header_buf,
                         req_id,
-                        DmsgType::Req,
+                        if matches!(req_ty, DmsgType::Unknown) { DmsgType::Req } else { req_ty },
                         0,
                         true,
                         None,
@@ -119,8 +131,16 @@ impl DnodeServerConn {
                     .await;
                     write_res?;
                     self.conn.record_send(header_len + req_bytes.len());
-                    self.pending.push_back((req_id, req_span));
-                    pending_responder = Some(req.responder);
+                    if is_data_plane_ty(req_ty) {
+                        self.pending.push_back((req_id, req_span));
+                        pending_responder = Some(req.responder);
+                    } else {
+                        // Gossip / control-plane frames are
+                        // fire-and-forget; the responder is
+                        // dropped here and the originator does
+                        // not block waiting for an ACK.
+                        drop(req.responder);
+                    }
                 }
                 read_res = async {
                     if let Some(t) = self.conn.transport_mut() {

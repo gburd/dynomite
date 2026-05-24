@@ -25,6 +25,7 @@ use crate::msg::{Msg, MsgParseResult, MsgType};
 use crate::net::conn::Conn;
 use crate::net::dispatcher::OutboundEnvelope;
 use crate::net::NetError;
+use crate::proto::dnode::DmsgType;
 
 /// Outbound server-side connection driver.
 ///
@@ -49,6 +50,13 @@ pub struct ServerConn {
 /// span when distributed tracing is enabled. The default value
 /// is [`tracing::Span::none`], which has no overhead when no
 /// subscriber is installed.
+///
+/// `ty` selects the dnode message-type header emitted on the
+/// peer plane. Data-plane callers leave it at
+/// [`DmsgType::Req`]; the gossip task uses
+/// [`DmsgType::GossipSyn`] / [`DmsgType::GossipShutdown`] for
+/// fire-and-forget control frames whose `responder` is never
+/// signalled.
 #[derive(Debug)]
 pub struct OutboundRequest {
     /// Wire bytes already encoded by the dispatcher.
@@ -60,6 +68,9 @@ pub struct OutboundRequest {
     /// Originating client request span; entered by the receiver
     /// to nest backend / peer work under the request tree.
     pub span: tracing::Span,
+    /// dnode message-type header emitted by the peer driver.
+    /// Defaults to [`DmsgType::Req`] for data-plane requests.
+    pub ty: DmsgType,
 }
 
 impl ServerConn {

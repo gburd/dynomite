@@ -212,6 +212,7 @@ impl ClusterDispatcher {
     /// #    timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
     /// #    server_failure_limit: 2, auto_eject_hosts: false,
     /// #    enable_gossip: false,
+    /// #    bucket_types: Vec::new(), default_bucket_type: None,
     /// # };
     /// # let local = Peer::new(
     /// #    0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
@@ -529,6 +530,7 @@ impl Dispatcher for ClusterDispatcher {
                         req_id: req.id(),
                         responder,
                         span: req_span.clone(),
+                        ty: crate::proto::dnode::DmsgType::Req,
                     };
                     if tx.try_send(env).is_err() {
                         // Backend channel full or closed: surface
@@ -575,6 +577,7 @@ impl Dispatcher for ClusterDispatcher {
                                 req_id: req.id(),
                                 responder: responder.clone(),
                                 span: req_span.clone(),
+                                ty: crate::proto::dnode::DmsgType::Req,
                             };
                             if tx.try_send(env).is_ok() {
                                 sent += 1;
@@ -586,6 +589,7 @@ impl Dispatcher for ClusterDispatcher {
                             req_id: req.id(),
                             responder: responder.clone(),
                             span: req_span.clone(),
+                            ty: crate::proto::dnode::DmsgType::Req,
                         };
                         if tx.try_send(env).is_ok() {
                             sent += 1;
