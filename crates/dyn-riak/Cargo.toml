@@ -1,0 +1,36 @@
+[package]
+name = "dyn-riak"
+description = "Riak-compatible protocol surface (HTTP + PBC) and storage bridge for the Dynomite Rust port"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Build the `NoxuDatastore` implementation that bridges this crate
+# to the in-process Noxu DB storage engine. Off by default so the
+# crate compiles cleanly without the `lamdb` checkout next door.
+noxu = ["dep:noxu-db"]
+
+[dependencies]
+dynomite = { path = "../dynomite" }
+dyn-encoding = { path = "../dyn-encoding" }
+bytes = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+noxu-db = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }
