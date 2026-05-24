@@ -35,7 +35,7 @@ pub struct ServerConn {
     conn: Conn,
     requests: mpsc::Receiver<OutboundRequest>,
     data_store: DataStore,
-    pending_responses: std::collections::VecDeque<(MsgId, tracing::Span)>,
+    pending_responses: std::collections::VecDeque<(MsgId, tracing::Span, Option<u32>)>,
 }
 
 /// Envelope sent into the server driver.
@@ -71,6 +71,13 @@ pub struct OutboundRequest {
     /// dnode message-type header emitted by the peer driver.
     /// Defaults to [`DmsgType::Req`] for data-plane requests.
     pub ty: DmsgType,
+    /// Index of the target peer the dispatcher is forwarding the
+    /// request to. The local backend driver and dnode-peer driver
+    /// stamp this onto the [`OutboundEnvelope`] they produce so
+    /// the reply coalescer can identify the responding replica.
+    /// `None` is used for single-target paths where the responder
+    /// already implies the source.
+    pub target_peer_idx: Option<u32>,
 }
 
 impl ServerConn {
@@ -160,7 +167,8 @@ impl ServerConn {
                         .await;
                     write_res?;
                     self.conn.record_send(req_bytes.len());
-                    self.pending_responses.push_back((out_req.req_id, req_span));
+                    self.pending_responses
+                        .push_back((out_req.req_id, req_span, out_req.target_peer_idx));
                     pending_responder = Some(out_req.responder);
                 }
                 read_res = async {
@@ -195,8 +203,8 @@ impl ServerConn {
             let head_span = self
                 .pending_responses
                 .front()
-                .map_or_else(tracing::Span::current, |(_, s)| s.clone());
-            let id = self.pending_responses.front().map_or(0, |(i, _)| *i);
+                .map_or_else(tracing::Span::current, |(_, s, _)| s.clone());
+            let id = self.pending_responses.front().map_or(0, |(i, _, _)| *i);
             let mut msg = Msg::new(id, MsgType::Unknown, false);
             let result = match self.data_store {
                 DataStore::Redis => redis_parse_rsp(&mut msg, accumulated),
@@ -210,8 +218,10 @@ impl ServerConn {
                     }
                     let bytes = accumulated[..consumed].to_vec();
                     accumulated.drain(0..consumed);
-                    let (req_id, req_span) =
-                        self.pending_responses.pop_front().unwrap_or((0, head_span));
+                    let (req_id, req_span, source_peer_idx) = self
+                        .pending_responses
+                        .pop_front()
+                        .unwrap_or((0, head_span, None));
                     let parse_span = tracing::info_span!(
                         parent: &req_span,
                         "backend.parse",
@@ -229,6 +239,7 @@ impl ServerConn {
                             req_id,
                             rsp,
                             span: req_span,
+                            source_peer_idx,
                         }
                     });
                     if let Some(sender) = responder.as_ref() {
