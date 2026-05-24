@@ -1,0 +1,12 @@
+//! Subcommand implementations for the `dyn-admin` CLI.
+//!
+//! Each module owns one subcommand. All of them return
+//! [`crate::AdminError`] so a single match in `main` renders failures
+//! uniformly.
+
+pub mod cluster_list;
+pub mod metrics;
+pub mod ping;
+pub mod ring;
+pub mod stats;
+pub mod status;

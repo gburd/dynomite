@@ -1,0 +1,35 @@
+[package]
+name = "dyn-admin"
+description = "Cluster admin CLI for the Dynomite Rust port (riak-admin equivalent)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "dyn-admin"
+path = "src/main.rs"
+
+[dependencies]
+dyn-riak = { path = "../dyn-riak" }
+clap = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+prost = { workspace = true }
+
+[dev-dependencies]
+dynomite = { path = "../dynomite" }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
