@@ -682,6 +682,7 @@ dependencies = [
  "bytes",
  "dyn-encoding",
  "dynomite",
+ "hegeltest",
  "http-body-util",
  "hyper",
  "hyper-util",
