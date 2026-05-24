@@ -30,6 +30,21 @@ echo "==> conformance suite (Stage 14)"
 # Redis is missing, every scenario returns a skip notice and
 # passes; otherwise the full multi-cluster matrix runs and the
 # JUnit XML report lands at `target/junit/conformance.xml`.
+#
+# The differential rig at crates/dynomited/tests/differential.rs
+# additionally compares the Rust dynomited against the C
+# dynomite reference when the latter is available. The C
+# binary is NOT built by default: it is opt-in via the
+# `DYNOMITE_DIFFERENTIAL` environment variable. When set to a
+# non-empty value we invoke `scripts/build_cref.sh` first,
+# which materialises the binary under `target/cref/build/src/`
+# and writes its absolute path to `target/cref/path` for the
+# test rig to pick up. Without that flag the rig still runs
+# but skips the C-side comparison.
+if [ -n "${DYNOMITE_DIFFERENTIAL:-}" ]; then
+  echo "   DYNOMITE_DIFFERENTIAL=$DYNOMITE_DIFFERENTIAL set; building C reference"
+  "$ROOT/scripts/build_cref.sh" >/dev/null
+fi
 if command -v cargo-nextest >/dev/null 2>&1; then
   cargo nextest run \
     --profile conformance \

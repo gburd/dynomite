@@ -1987,3 +1987,76 @@ CI plumbing:
   Modules still below 90% after Stage 14 (entropy, gossip
   runtime, signal-driven SIGHUP path) are listed in the
   Stage 14 journal entry and are the entry point for Stage 15.
+
+# Differential rig findings
+
+The Stage 14 differential rig at
+`crates/dynomited/tests/differential.rs` walks the
+`tests/fixtures/conformance/commands.txt` corpus through one
+Rust dynomited node and one C `dynomite` reference instance
+side-by-side. The C binary is built on demand by
+`scripts/build_cref.sh` from the `_/dynomite` submodule; the
+rig discovers it via the `CONFORMANCE_C_BINARY` environment
+variable or the `target/cref/path` marker file written by the
+build script.
+
+The rig is non-blocking by default: it logs divergences,
+records both replies under
+`target/conformance/divergence/<line>.{rust,c}`, and passes.
+Set `DIFFERENTIAL_STRICT=1` to flip the rig into a hard gate.
+
+## 2026-05-24 baseline (rust f77b091, C 2046b05)
+
+Comparing 88 RESP-prefixed lines from the corpus against the
+freshly-built C reference produced two structural divergences
+plus one timing-sensitive divergence. None of them indicate a
+parity gap in the dynomite engines themselves; the corpus
+command and the rig's reply-reading heuristic together
+coincidentally surface implementation choices the two
+implementations make differently:
+
+| Corpus line | Input shape                            | Rust reply           | C reply                     | Cause       |
+|-------------|----------------------------------------|----------------------|-----------------------------|-------------|
+| 83          | `PTTL k04` after `EXPIRE k04 60`       | `:59998\r\n`         | `:59999\r\n`                | clock skew  |
+| 107         | `SET p01 1` followed by `SET p02 2`    | `+OK\r\n`            | `+OK\r\n+OK\r\n`            | reply flush |
+| 108         | `GET p01` followed by `GET p02`        | `$1\r\n1\r\n`        | `$1\r\n1\r\n$1\r\n2\r\n`    | reply flush |
+
+**Line 83 (clock skew)**. PTTL reports a millisecond TTL
+computed at reply time. The two clusters back onto
+independent `redis-server` instances spawned a few
+milliseconds apart, so the absolute remaining TTL differs by
+one or two milliseconds depending on schedule order. Both
+replies are correct.
+
+**Lines 107, 108 (reply coalescing)**. The values exchanged
+are identical; the difference is in *reply coalescing*. The
+Rust dynomited writes the first reply to the socket and
+yields before the second request finishes; the C dynomite
+holds both replies in its outbound buffer and flushes them
+together, so the client sees a single recv() delivering both.
+The rig's `drive()` heuristic stops after the first
+CRLF-terminated frame, which surfaces this as a "missing
+reply" only on the Rust side.
+
+None of these are fixed in this stage. Three follow-up items
+are tracked, none of which block the rig from being usable
+as a parity oracle:
+
+1. **Test-driver loop (test-only)**. Replace the CRLF-stop
+   heuristic in `drive()` with a RESP frame counter that
+   knows how many top-level replies to wait for given the
+   pipelined input. This fixes lines 107 and 108 for both
+   implementations.
+2. **Time-sensitive corpus entries (test-only)**. Either
+   skip PTTL/TTL replies in the strict comparator or
+   compare them with a tolerance window. Easiest fix is to
+   tag corpus lines with a per-line equivalence rule.
+3. **Reply batching parity (engine)**. Decide whether the
+   Rust dispatcher should match the C coalescing behaviour
+   (one syscall per pipelined batch). The semantic outcome
+   is identical either way; this is a throughput-shaping
+   choice, not a correctness gap.
+
+All three items are filed under "Project-wide follow-ups"
+and will be addressed alongside the wider differential gate
+work that flips `DIFFERENTIAL_STRICT=1` on by default.
