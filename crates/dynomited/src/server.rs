@@ -137,6 +137,12 @@ pub struct Server {
     stats_listen_addr: Option<SocketAddr>,
     enable_gossip: bool,
     has_recon_keys: bool,
+    /// Optional Riak listener bundle. `Some` exactly when the
+    /// pool's `riak:` block configures a PBC or HTTP address.
+    /// Owned here so [`Server::run`] can spawn the listeners
+    /// alongside the existing client / dnode / stats tasks.
+    #[cfg(feature = "riak")]
+    riak_handles: Option<crate::riak::RiakHandles>,
     /// Shared gossip handler (peer-state authority + phi-accrual
     /// failure detector). Built unconditionally so the
     /// `dnode_proxy` factory always has somewhere to deliver
@@ -456,6 +462,21 @@ impl Server {
             |a| format!("{}:{}", a.ip(), a.port()),
         );
 
+        #[cfg(feature = "riak")]
+        let riak_handles = match conf_pool.riak.as_ref() {
+            Some(r) => {
+                let ds: Arc<dyn dynomite::embed::Datastore> =
+                    Arc::new(dynomite::embed::MemoryDatastore::new());
+                crate::riak::build_handles(r, ds)
+                    .await
+                    .map_err(|e| ServerError::BadConfig {
+                        field: "riak",
+                        reason: e.to_string(),
+                    })?
+            }
+            None => None,
+        };
+
         Ok(Self {
             pool_name,
             pool: server_pool,
@@ -470,6 +491,8 @@ impl Server {
             stats_listen_addr,
             enable_gossip: conf_pool.enable_gossip.unwrap_or(false),
             has_recon_keys: !conf_pool.recon_key_file.as_deref().unwrap_or("").is_empty(),
+            #[cfg(feature = "riak")]
+            riak_handles,
             gossip_handler,
             gossip_peer_txs,
             local_pname,
@@ -508,6 +531,22 @@ impl Server {
     #[must_use]
     pub fn stats_listen_addr(&self) -> Option<SocketAddr> {
         self.stats_listen_addr
+    }
+
+    /// Address the optional Riak PBC listener bound to.
+    /// Available only with the `riak` Cargo feature.
+    #[cfg(feature = "riak")]
+    #[must_use]
+    pub fn riak_pbc_addr(&self) -> Option<SocketAddr> {
+        self.riak_handles.as_ref().and_then(|h| h.pbc_addr)
+    }
+
+    /// Address the optional Riak HTTP gateway bound to.
+    /// Available only with the `riak` Cargo feature.
+    #[cfg(feature = "riak")]
+    #[must_use]
+    pub fn riak_http_addr(&self) -> Option<SocketAddr> {
+        self.riak_handles.as_ref().and_then(|h| h.http_addr)
     }
 
     /// Cheap clonable shutdown handle. Surviving copies can request
@@ -570,6 +609,8 @@ impl Server {
             stats_listen_addr,
             enable_gossip,
             has_recon_keys,
+            #[cfg(feature = "riak")]
+            mut riak_handles,
             gossip_handler,
             gossip_peer_txs,
             local_pname,
@@ -682,6 +723,37 @@ impl Server {
             })
         });
 
+        // Optional Riak surface (PBC + HTTP + AAE). The handles
+        // are bound by `Server::build`; here we just spawn the
+        // listener tasks and the AAE scheduler. They share the
+        // same shutdown signal as the rest of the run loop.
+        #[cfg(feature = "riak")]
+        let (riak_pbc_handle, riak_http_handle, riak_aae_handle) = match riak_handles.as_mut() {
+            Some(h) => {
+                let aae_cfg = h.aae.clone();
+                let (p, http) = crate::riak::spawn_listeners(h, &shutdown_rx);
+                let aae = aae_cfg.map(|cfg| {
+                    let txs = gossip_peer_txs.clone();
+                    let cancel = shutdown_rx.clone();
+                    tracing::info!(
+                        pool = %pool_name,
+                        full_sweep_seconds = cfg.full_sweep_interval_seconds,
+                        segment_seconds = cfg.segment_interval_seconds,
+                        "riak aae scheduler spawned"
+                    );
+                    crate::riak::spawn_aae(cfg, txs, cancel)
+                });
+                if let Some(a) = h.pbc_addr {
+                    tracing::info!(pool = %pool_name, addr = %a, "riak pbc listener spawned");
+                }
+                if let Some(a) = h.http_addr {
+                    tracing::info!(pool = %pool_name, addr = %a, "riak http gateway spawned");
+                }
+                (p, http, aae)
+            }
+            None => (None, None, None),
+        };
+
         let mut signals = SignalSet::install().map_err(ServerError::Signals)?;
         let supervise_result = supervise(
             &shutdown_tx,
@@ -720,6 +792,16 @@ impl Server {
         if let Some(h) = hint_drainer_handle {
             h.abort();
             let _ = h.await;
+        }
+        #[cfg(feature = "riak")]
+        {
+            for h in [riak_pbc_handle, riak_http_handle, riak_aae_handle]
+                .into_iter()
+                .flatten()
+            {
+                h.abort();
+                let _ = h.await;
+            }
         }
         // Now that the gossip task is gone, drop the explicit
         // gossip channel handles so reference counts settle.

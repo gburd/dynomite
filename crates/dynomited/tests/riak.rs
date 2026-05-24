@@ -1,0 +1,231 @@
+//! End-to-end integration tests for the optional Riak protocol surface.
+//!
+//! Compiled only when `dynomited` is built with the `riak` Cargo
+//! feature. Each test:
+//!
+//! 1. Picks ephemeral ports for the client / dnode / stats listeners
+//!    and for the Riak PBC and HTTP listeners.
+//! 2. Builds a [`dynomited::server::Server`] from an in-memory YAML
+//!    config that wires the Riak block.
+//! 3. Drives a single request against the relevant listener and
+//!    asserts the response shape.
+//! 4. Calls [`dynomited::server::ShutdownHandle::shutdown`] and waits
+//!    for the run loop to drain.
+//!
+//! The tests deliberately drive the server in-process (rather than
+//! spawning the binary) so they need no external `redis-server` or
+//! filesystem state. They run on every CI invocation that includes
+//! `--features riak`.
+
+#![cfg(feature = "riak")]
+
+use std::time::Duration;
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+
+use dynomite::conf::Config;
+use dynomited::server::Server;
+
+fn pick_port() -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let p = l.local_addr().unwrap().port();
+    drop(l);
+    p
+}
+
+fn pick_distinct_ports(n: usize) -> Vec<u16> {
+    let mut out = Vec::new();
+    while out.len() < n {
+        let p = pick_port();
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+fn yaml(
+    listen: u16,
+    dyn_listen: u16,
+    stats_listen: u16,
+    riak_pbc: Option<u16>,
+    riak_http: Option<u16>,
+    aae: bool,
+) -> String {
+    let mut s = format!(
+        "p:\n  listen: 127.0.0.1:{listen}\n  dyn_listen: 127.0.0.1:{dyn_listen}\n  stats_listen: 127.0.0.1:{stats_listen}\n  tokens: '101134286'\n  servers:\n  - 127.0.0.1:22122:1\n  data_store: 0\n",
+    );
+    if riak_pbc.is_some() || riak_http.is_some() || aae {
+        s.push_str("  riak:\n");
+        if let Some(p) = riak_pbc {
+            use std::fmt::Write as _;
+            writeln!(s, "    pbc_listen: 127.0.0.1:{p}").unwrap();
+        }
+        if let Some(p) = riak_http {
+            use std::fmt::Write as _;
+            writeln!(s, "    http_listen: 127.0.0.1:{p}").unwrap();
+        }
+        if aae {
+            s.push_str("    aae_enabled: true\n");
+            s.push_str("    aae_full_sweep_interval_seconds: 60\n");
+            s.push_str("    aae_segment_interval_seconds: 5\n");
+        }
+    }
+    s
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn riak_pbc_ping_round_trip() {
+    let ports = pick_distinct_ports(4);
+    let cfg = Config::parse_str(&yaml(
+        ports[0],
+        ports[1],
+        ports[2],
+        Some(ports[3]),
+        None,
+        false,
+    ))
+    .unwrap();
+
+    let server = Server::build(cfg).await.expect("build");
+    let pbc_addr = server.riak_pbc_addr().expect("pbc bound");
+    assert!(server.riak_http_addr().is_none());
+    let handle = server.shutdown_handle();
+    let supervisor = tokio::spawn(async move { server.run().await });
+
+    // Wait for the listener to be ready. The TcpListener is
+    // bound by Server::build, so a connect attempt should
+    // succeed on the first poll; we still allow a few retries
+    // for tokio's scheduler.
+    let mut sock = None;
+    for _ in 0..20 {
+        if let Ok(s) = TcpStream::connect(pbc_addr).await {
+            sock = Some(s);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let mut sock = sock.expect("connect to riak pbc");
+    sock.set_nodelay(true).ok();
+
+    // RpbPingReq is message code 1 with an empty body. Frame is
+    // [4-byte BE total-length][1-byte msg-code][body]. Total
+    // length is `1 + body.len()` = 1.
+    let frame = {
+        let body: Vec<u8> = Vec::new();
+        let total: u32 = u32::try_from(body.len() + 1).unwrap();
+        let mut out = Vec::with_capacity(5 + body.len());
+        out.extend_from_slice(&total.to_be_bytes());
+        out.push(1u8);
+        out.extend_from_slice(&body);
+        out
+    };
+    sock.write_all(&frame).await.expect("write ping");
+
+    // Read the reply: 4-byte length + 1-byte code + body.
+    let mut len_buf = [0u8; 4];
+    sock.read_exact(&mut len_buf).await.expect("read len");
+    let total = u32::from_be_bytes(len_buf) as usize;
+    assert!((1..1024).contains(&total), "total={total}");
+    let mut payload = vec![0u8; total];
+    sock.read_exact(&mut payload).await.expect("read payload");
+    // The first byte is the message code. RpbPingResp = 2.
+    assert_eq!(payload[0], 2u8, "expected RpbPingResp code");
+    // Body is empty for a ping response.
+    let body = &payload[1..];
+    assert!(body.is_empty(), "RpbPingResp has empty body; got {body:?}");
+
+    drop(sock);
+    handle.shutdown();
+    let res = tokio::time::timeout(Duration::from_secs(5), supervisor)
+        .await
+        .expect("supervisor stuck")
+        .expect("join");
+    assert!(res.is_ok(), "run returned: {res:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn riak_http_ping_returns_200() {
+    let ports = pick_distinct_ports(4);
+    let cfg = Config::parse_str(&yaml(
+        ports[0],
+        ports[1],
+        ports[2],
+        None,
+        Some(ports[3]),
+        false,
+    ))
+    .unwrap();
+
+    let server = Server::build(cfg).await.expect("build");
+    let http_addr = server.riak_http_addr().expect("http bound");
+    assert!(server.riak_pbc_addr().is_none());
+    let handle = server.shutdown_handle();
+    let supervisor = tokio::spawn(async move { server.run().await });
+
+    // Drive a raw HTTP/1.1 GET /ping. The dyn-riak gateway
+    // accepts both GET and HEAD on /ping with a 200 response.
+    let mut sock = None;
+    for _ in 0..20 {
+        if let Ok(s) = TcpStream::connect(http_addr).await {
+            sock = Some(s);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let mut sock = sock.expect("connect to riak http");
+    sock.set_nodelay(true).ok();
+
+    let request = format!("GET /ping HTTP/1.1\r\nHost: {http_addr}\r\nConnection: close\r\n\r\n");
+    sock.write_all(request.as_bytes())
+        .await
+        .expect("write request");
+
+    // Read until EOF or until we see the status line plus a few
+    // bytes of headers; we only assert on the status.
+    let mut buf = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(2), sock.read_to_end(&mut buf)).await;
+    let head_text = String::from_utf8_lossy(&buf);
+    assert!(
+        head_text.starts_with("HTTP/1.1 200"),
+        "expected 200 status; got: {head_text:?}"
+    );
+
+    handle.shutdown();
+    let res = tokio::time::timeout(Duration::from_secs(5), supervisor)
+        .await
+        .expect("supervisor stuck")
+        .expect("join");
+    assert!(res.is_ok(), "run returned: {res:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn riak_aae_enabled_does_not_block_shutdown() {
+    let ports = pick_distinct_ports(4);
+    let cfg = Config::parse_str(&yaml(
+        ports[0],
+        ports[1],
+        ports[2],
+        Some(ports[3]),
+        None,
+        true,
+    ))
+    .unwrap();
+
+    let server = Server::build(cfg).await.expect("build");
+    assert!(server.riak_pbc_addr().is_some());
+    let handle = server.shutdown_handle();
+    let supervisor = tokio::spawn(async move { server.run().await });
+    // Give the AAE task time to fire its first tick under the
+    // configured 5s segment interval, but we do not actually
+    // need to observe it. The point of the test is that
+    // shutdown still completes promptly.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    handle.shutdown();
+    let res = tokio::time::timeout(Duration::from_secs(5), supervisor)
+        .await
+        .expect("supervisor stuck after shutdown")
+        .expect("join");
+    assert!(res.is_ok(), "run returned: {res:?}");
+}

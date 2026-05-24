@@ -746,6 +746,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "clap_mangen",
+ "dyn-riak",
  "dynomite",
  "nix",
  "opentelemetry",
