@@ -87,17 +87,248 @@ impl WireValue for SetOp {
     }
 }
 
-/// `HllOp` -- HyperLogLog add batch. Reserved for the HLL slice.
+/// `HllOp` -- HyperLogLog add batch.
+///
+/// `add_value` carries the items to fold into the register
+/// array; the on-the-wire field name matches Riak's `riak_dt`
+/// schema for the (later-added) batched form.
 #[derive(Clone, Eq, PartialEq, Message)]
 pub struct HllOp {
     /// Elements to fold into the HLL register array.
     #[prost(bytes = "vec", repeated, tag = "1")]
-    pub adds: Vec<Vec<u8>>,
+    pub add_value: Vec<Vec<u8>>,
 }
 
 impl WireValue for HllOp {
     fn wire_type_id() -> WireTypeId {
         WireTypeId::new("riak.HllOp")
+    }
+}
+
+/// `HllValue` -- HyperLogLog cardinality response wrapper.
+///
+/// Used as the body of an `HllValue` PBC message when a client
+/// asks for the standalone cardinality projection (some Riak
+/// drivers use the inline `DtValue.hll_value` `uint64` field;
+/// others prefer the wrapped form for symmetry with the other
+/// per-type responses).
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct HllValue {
+    /// Estimated number of distinct items folded into the HLL.
+    #[prost(uint64, tag = "1")]
+    pub cardinality: u64,
+}
+
+impl WireValue for HllValue {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.HllValue")
+    }
+}
+
+// ---- Map field-type constants ---------------------------------------------
+
+/// `MapField.field_type == COUNTER`. Wire-encoded as `1`.
+pub const MAP_FIELD_TYPE_COUNTER: i32 = 1;
+/// `MapField.field_type == SET`. Wire-encoded as `2`.
+pub const MAP_FIELD_TYPE_SET: i32 = 2;
+/// `MapField.field_type == REGISTER`. Wire-encoded as `3`.
+pub const MAP_FIELD_TYPE_REGISTER: i32 = 3;
+/// `MapField.field_type == FLAG`. Wire-encoded as `4`.
+pub const MAP_FIELD_TYPE_FLAG: i32 = 4;
+/// `MapField.field_type == MAP`. Wire-encoded as `5`.
+pub const MAP_FIELD_TYPE_MAP: i32 = 5;
+
+// ---- Map nested message types --------------------------------------------
+
+/// `MapField` -- key in a Riak map.
+///
+/// `field_type` is one of the [`MAP_FIELD_TYPE_*`](MAP_FIELD_TYPE_COUNTER)
+/// constants. The `(name, field_type)` pair is the canonical
+/// identifier; two fields with the same name but different
+/// types are distinct.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct MapField {
+    /// Field name.
+    #[prost(bytes = "vec", tag = "1")]
+    pub name: Vec<u8>,
+    /// Field type (one of `MAP_FIELD_TYPE_*`).
+    #[prost(int32, tag = "2")]
+    pub field_type: i32,
+}
+
+impl WireValue for MapField {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.MapField")
+    }
+}
+
+/// `RegisterOp` -- LWW register assignment payload.
+///
+/// `value` carries the new register contents. `ts_micros` is
+/// optional: when absent the server stamps with its current
+/// wall-clock; when present the timestamp is honoured (used by
+/// replay / hand-off paths that need deterministic ordering).
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct RegisterOp {
+    /// New register value.
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: Vec<u8>,
+    /// Optional client-supplied timestamp in microseconds since
+    /// the Unix epoch.
+    #[prost(uint64, optional, tag = "2")]
+    pub ts_micros: Option<u64>,
+}
+
+impl WireValue for RegisterOp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.RegisterOp")
+    }
+}
+
+/// `FlagOp` -- enable-wins-flag toggle payload.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct FlagOp {
+    /// `true` enables the flag, `false` disables it.
+    #[prost(bool, tag = "1")]
+    pub enable: bool,
+}
+
+impl WireValue for FlagOp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.FlagOp")
+    }
+}
+
+/// `ScalarOp` -- per-type op carried by a [`MapUpdate`].
+///
+/// At most one of the optional fields is present; the field
+/// that is set names the datatype the update targets. The
+/// nested-map case carries a boxed [`MapOp`] so the surface
+/// type stays `Sized` while the schema remains recursive.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct ScalarOp {
+    /// Counter increment (signed delta).
+    #[prost(message, optional, tag = "1")]
+    pub counter_op: Option<CounterOp>,
+    /// OR-Set add/remove batch.
+    #[prost(message, optional, tag = "2")]
+    pub set_op: Option<SetOp>,
+    /// LWW-register assignment.
+    #[prost(message, optional, tag = "3")]
+    pub register_op: Option<RegisterOp>,
+    /// EW-flag toggle.
+    #[prost(message, optional, tag = "4")]
+    pub flag_op: Option<FlagOp>,
+    /// Nested map op. Boxed because [`MapOp`] is recursive.
+    #[prost(message, optional, boxed, tag = "5")]
+    pub map_op: Option<Box<MapOp>>,
+}
+
+impl WireValue for ScalarOp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.ScalarOp")
+    }
+}
+
+/// `MapUpdate` -- one field-level update carried by [`MapOp`].
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct MapUpdate {
+    /// Field to update.
+    #[prost(message, optional, tag = "1")]
+    pub field: Option<MapField>,
+    /// Per-type operation.
+    #[prost(message, optional, tag = "2")]
+    pub op: Option<ScalarOp>,
+}
+
+impl WireValue for MapUpdate {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.MapUpdate")
+    }
+}
+
+/// `MapOp` -- batch of updates and removes against a map.
+///
+/// Each entry in `updates` modifies one field; each entry in
+/// `removes` tombstones the field's currently-observed add
+/// tags. Server-side semantics are observed-remove with the
+/// add-wins tie-break: a concurrent update against a removed
+/// field survives the merge.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct MapOp {
+    /// Field updates.
+    #[prost(message, repeated, tag = "1")]
+    pub updates: Vec<MapUpdate>,
+    /// Field removals.
+    #[prost(message, repeated, tag = "2")]
+    pub removes: Vec<MapField>,
+}
+
+impl WireValue for MapOp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.MapOp")
+    }
+}
+
+/// `ScalarValue` -- per-type projection carried by a
+/// [`MapEntry`].
+///
+/// At most one of the fields is set; the field that is set
+/// matches the field-type tag in the enclosing `MapField`.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct ScalarValue {
+    /// Counter projection.
+    #[prost(sint64, optional, tag = "1")]
+    pub counter_value: Option<i64>,
+    /// OR-Set projection.
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub set_value: Vec<Vec<u8>>,
+    /// Register projection.
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub register_value: Option<Vec<u8>>,
+    /// Flag projection.
+    #[prost(bool, optional, tag = "4")]
+    pub flag_value: Option<bool>,
+    /// Nested map projection. Boxed because [`MapValue`] is
+    /// recursive.
+    #[prost(message, optional, boxed, tag = "5")]
+    pub map_value: Option<Box<MapValue>>,
+}
+
+impl WireValue for ScalarValue {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.ScalarValue")
+    }
+}
+
+/// `MapEntry` -- one (field, value) pair in a [`MapValue`].
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct MapEntry {
+    /// Field key.
+    #[prost(message, optional, tag = "1")]
+    pub field: Option<MapField>,
+    /// Field value.
+    #[prost(message, optional, tag = "2")]
+    pub value: Option<ScalarValue>,
+}
+
+impl WireValue for MapEntry {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.MapEntry")
+    }
+}
+
+/// `MapValue` -- list of present (field, value) pairs.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct MapValue {
+    /// Present field entries.
+    #[prost(message, repeated, tag = "1")]
+    pub entries: Vec<MapEntry>,
+}
+
+impl WireValue for MapValue {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.MapValue")
     }
 }
 
@@ -128,7 +359,9 @@ pub struct DtOp {
     /// OR-Set operation.
     #[prost(message, optional, tag = "2")]
     pub set_op: Option<SetOp>,
-    // Tag 3 reserved for `map_op` (MapOp) -- map slice not shipped.
+    /// Map operation. Boxed because [`MapOp`] is recursive.
+    #[prost(message, optional, boxed, tag = "3")]
+    pub map_op: Option<Box<MapOp>>,
     /// HyperLogLog operation.
     #[prost(message, optional, tag = "4")]
     pub hll_op: Option<HllOp>,
@@ -156,7 +389,11 @@ pub struct DtValue {
     /// OR-Set / G-Set projection.
     #[prost(bytes = "vec", repeated, tag = "2")]
     pub set_value: Vec<Vec<u8>>,
-    // Tag 3 reserved for `map_value` (repeated MapEntry).
+    /// Map projection. Carries the present (field, value)
+    /// entries. Boxed because [`MapValue`] embeds nested map
+    /// values transitively.
+    #[prost(message, optional, boxed, tag = "3")]
+    pub map_value: Option<Box<MapValue>>,
     /// HLL cardinality estimate.
     #[prost(uint64, optional, tag = "4")]
     pub hll_value: Option<u64>,
@@ -320,7 +557,9 @@ pub struct DtUpdateResp {
     /// OR-Set post-merge value.
     #[prost(bytes = "vec", repeated, tag = "4")]
     pub set_value: Vec<Vec<u8>>,
-    // Tag 5 reserved for `map_value` (repeated MapEntry).
+    /// Map post-merge value.
+    #[prost(message, optional, boxed, tag = "5")]
+    pub map_value: Option<Box<MapValue>>,
     /// HLL cardinality estimate.
     #[prost(uint64, optional, tag = "6")]
     pub hll_value: Option<u64>,
@@ -457,6 +696,7 @@ mod tests {
             context: Some(b"new-ctx".to_vec()),
             counter_value: Some(100),
             set_value: vec![],
+            map_value: None,
             hll_value: None,
             gset_value: vec![],
         };
@@ -488,5 +728,240 @@ mod tests {
         assert_eq!(DT_FETCH_RESP_CODE, 81);
         assert_eq!(DT_UPDATE_REQ_CODE, 82);
         assert_eq!(DT_UPDATE_RESP_CODE, 83);
+    }
+
+    // ---- Map / HLL wire types -- second CRDT slice ----------------
+
+    #[test]
+    fn map_field_round_trips() {
+        let f = MapField {
+            name: b"hits".to_vec(),
+            field_type: MAP_FIELD_TYPE_COUNTER,
+        };
+        let bytes = f.encode_to_vec();
+        let back = MapField::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, f);
+    }
+
+    #[test]
+    fn map_field_type_constants_are_canonical() {
+        assert_eq!(MAP_FIELD_TYPE_COUNTER, 1);
+        assert_eq!(MAP_FIELD_TYPE_SET, 2);
+        assert_eq!(MAP_FIELD_TYPE_REGISTER, 3);
+        assert_eq!(MAP_FIELD_TYPE_FLAG, 4);
+        assert_eq!(MAP_FIELD_TYPE_MAP, 5);
+    }
+
+    #[test]
+    fn scalar_op_round_trips_for_each_arm() {
+        let counter = ScalarOp {
+            counter_op: Some(CounterOp { increment: Some(3) }),
+            ..ScalarOp::default()
+        };
+        let set = ScalarOp {
+            set_op: Some(SetOp {
+                adds: vec![b"a".to_vec()],
+                removes: vec![],
+            }),
+            ..ScalarOp::default()
+        };
+        let register = ScalarOp {
+            register_op: Some(RegisterOp {
+                value: b"v".to_vec(),
+                ts_micros: Some(42),
+            }),
+            ..ScalarOp::default()
+        };
+        let flag = ScalarOp {
+            flag_op: Some(FlagOp { enable: true }),
+            ..ScalarOp::default()
+        };
+        for op in [counter, set, register, flag] {
+            let bytes = op.encode_to_vec();
+            let back = ScalarOp::decode(bytes.as_slice()).expect("decode");
+            assert_eq!(back, op);
+        }
+    }
+
+    #[test]
+    fn map_op_with_updates_and_removes_round_trips() {
+        let op = MapOp {
+            updates: vec![MapUpdate {
+                field: Some(MapField {
+                    name: b"hits".to_vec(),
+                    field_type: MAP_FIELD_TYPE_COUNTER,
+                }),
+                op: Some(ScalarOp {
+                    counter_op: Some(CounterOp { increment: Some(7) }),
+                    ..ScalarOp::default()
+                }),
+            }],
+            removes: vec![MapField {
+                name: b"old".to_vec(),
+                field_type: MAP_FIELD_TYPE_FLAG,
+            }],
+        };
+        let bytes = op.encode_to_vec();
+        let back = MapOp::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, op);
+    }
+
+    #[test]
+    fn nested_map_op_round_trips() {
+        let inner = MapOp {
+            updates: vec![MapUpdate {
+                field: Some(MapField {
+                    name: b"inner".to_vec(),
+                    field_type: MAP_FIELD_TYPE_COUNTER,
+                }),
+                op: Some(ScalarOp {
+                    counter_op: Some(CounterOp { increment: Some(1) }),
+                    ..ScalarOp::default()
+                }),
+            }],
+            removes: vec![],
+        };
+        let outer = MapOp {
+            updates: vec![MapUpdate {
+                field: Some(MapField {
+                    name: b"outer".to_vec(),
+                    field_type: MAP_FIELD_TYPE_MAP,
+                }),
+                op: Some(ScalarOp {
+                    map_op: Some(Box::new(inner)),
+                    ..ScalarOp::default()
+                }),
+            }],
+            removes: vec![],
+        };
+        let bytes = outer.encode_to_vec();
+        let back = MapOp::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, outer);
+    }
+
+    #[test]
+    fn map_value_round_trips() {
+        let value = MapValue {
+            entries: vec![
+                MapEntry {
+                    field: Some(MapField {
+                        name: b"hits".to_vec(),
+                        field_type: MAP_FIELD_TYPE_COUNTER,
+                    }),
+                    value: Some(ScalarValue {
+                        counter_value: Some(7),
+                        ..ScalarValue::default()
+                    }),
+                },
+                MapEntry {
+                    field: Some(MapField {
+                        name: b"on".to_vec(),
+                        field_type: MAP_FIELD_TYPE_FLAG,
+                    }),
+                    value: Some(ScalarValue {
+                        flag_value: Some(true),
+                        ..ScalarValue::default()
+                    }),
+                },
+            ],
+        };
+        let bytes = value.encode_to_vec();
+        let back = MapValue::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, value);
+    }
+
+    #[test]
+    fn dt_op_with_map_payload_round_trips() {
+        let op = DtOp {
+            map_op: Some(Box::new(MapOp {
+                updates: vec![MapUpdate {
+                    field: Some(MapField {
+                        name: b"hits".to_vec(),
+                        field_type: MAP_FIELD_TYPE_COUNTER,
+                    }),
+                    op: Some(ScalarOp {
+                        counter_op: Some(CounterOp { increment: Some(2) }),
+                        ..ScalarOp::default()
+                    }),
+                }],
+                removes: vec![],
+            })),
+            ..DtOp::default()
+        };
+        let bytes = op.encode_to_vec();
+        let back = DtOp::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, op);
+        assert!(back.counter_op.is_none());
+        assert!(back.set_op.is_none());
+        assert!(back.hll_op.is_none());
+    }
+
+    #[test]
+    fn dt_value_with_map_payload_round_trips() {
+        let value = DtValue {
+            map_value: Some(Box::new(MapValue {
+                entries: vec![MapEntry {
+                    field: Some(MapField {
+                        name: b"r".to_vec(),
+                        field_type: MAP_FIELD_TYPE_REGISTER,
+                    }),
+                    value: Some(ScalarValue {
+                        register_value: Some(b"hello".to_vec()),
+                        ..ScalarValue::default()
+                    }),
+                }],
+            })),
+            ..DtValue::default()
+        };
+        let bytes = value.encode_to_vec();
+        let back = DtValue::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, value);
+    }
+
+    #[test]
+    fn hll_op_add_value_round_trips() {
+        let op = HllOp {
+            add_value: vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+        };
+        let bytes = op.encode_to_vec();
+        let back = HllOp::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, op);
+    }
+
+    #[test]
+    fn hll_value_round_trips() {
+        let v = HllValue {
+            cardinality: 12_345,
+        };
+        let bytes = v.encode_to_vec();
+        let back = HllValue::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, v);
+    }
+
+    #[test]
+    fn dt_update_resp_round_trips_with_map_value() {
+        let resp = DtUpdateResp {
+            key: Some(b"k".to_vec()),
+            context: None,
+            counter_value: None,
+            set_value: vec![],
+            map_value: Some(Box::new(MapValue {
+                entries: vec![MapEntry {
+                    field: Some(MapField {
+                        name: b"on".to_vec(),
+                        field_type: MAP_FIELD_TYPE_FLAG,
+                    }),
+                    value: Some(ScalarValue {
+                        flag_value: Some(true),
+                        ..ScalarValue::default()
+                    }),
+                }],
+            })),
+            hll_value: None,
+            gset_value: vec![],
+        };
+        let bytes = resp.encode_to_vec();
+        let back = DtUpdateResp::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, resp);
     }
 }

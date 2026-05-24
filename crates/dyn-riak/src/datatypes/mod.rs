@@ -47,6 +47,12 @@ pub mod register;
 pub mod set;
 pub mod vclock;
 
+// Map and HyperLogLog land in the second CRDT slice; appended
+// below the original four-type block so parallel branches do
+// not conflict.
+pub mod hll;
+pub mod map;
+
 use std::cmp::Ordering;
 
 pub use crate::datatypes::counter::PnCounter;
@@ -54,6 +60,9 @@ pub use crate::datatypes::flag::EwFlag;
 pub use crate::datatypes::register::LwwRegister;
 pub use crate::datatypes::set::OrSet;
 pub use crate::datatypes::vclock::{Vclock, VclockOrder};
+
+pub use crate::datatypes::hll::HyperLogLog;
+pub use crate::datatypes::map::{FieldKey, FieldType, FieldValue, Map, MapOp, NestedOp};
 
 /// Identifier for a replica that produces CRDT operations.
 ///
