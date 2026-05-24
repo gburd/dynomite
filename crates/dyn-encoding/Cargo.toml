@@ -17,6 +17,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 ciborium = { workspace = true }
 prost = { workspace = true }
+flatbuffers = { workspace = true }
+capnp = { workspace = true }
+bebop = { workspace = true }
+bson = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

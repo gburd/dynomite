@@ -3,19 +3,27 @@
 //! `dyn-encoding` defines a small, object-safe trait surface that lets
 //! a single connection negotiate between a number of structured
 //! encodings on a per-request basis. The crate ships baseline
-//! implementations for the three encodings that map cleanest onto
-//! the Rust ecosystem:
+//! implementations for all seven encodings called out in the brief:
 //!
-//! * [`JsonCodec`]  -- `application/json`  (via `serde_json`)
-//! * [`CborCodec`]  -- `application/cbor`  (via `ciborium`)
+//! * [`JsonCodec`] -- `application/json` (via `serde_json`)
+//! * [`CborCodec`] -- `application/cbor` (via `ciborium`)
 //! * [`ProtobufCodec`] -- `application/x-protobuf` (via `prost`)
+//! * [`FlatbuffersCodec`] -- `application/octet-stream;schema=flatbuffers`
+//!   (via `flatbuffers`)
+//! * [`CapnpCodec`] -- `application/capnproto` (via `capnp`)
+//! * [`BebopCodec`] -- `application/x-bebop` (via `bebop`)
+//! * [`BsonCodec`] -- `application/bson` (via `bson`)
 //!
-//! Four further encodings (FlatBuffers, Cap'n Proto, Bebop, BSON) are
-//! deferred. The trait surface is shaped so adding any of them is a
-//! mechanical exercise: a new module under `codec/`, a new `register`
-//! entry point bounded on the codec's native trait
-//! (`flatbuffers::Follow + Push`, `capnp::message::Builder`, ...),
-//! and a single line in [`CodecRegistry::with_baseline`].
+//! Schema-first codecs (protobuf, FlatBuffers, Cap'n Proto, Bebop)
+//! reify bytes through per-type traits exported alongside each
+//! codec ([`FlatbuffersWire`], [`CapnpWire`], [`BebopWire`]; the
+//! protobuf codec uses `prost::Message` directly). Schema-less
+//! codecs (JSON, CBOR, BSON) reuse `serde::Serialize +
+//! DeserializeOwned`. The trait surface is shaped so adding an
+//! eighth codec is a mechanical exercise: a new module under
+//! `codec/`, a new `register` entry point bounded on the codec's
+//! native trait, and a single line in
+//! [`CodecRegistry::with_baseline`].
 //!
 //! # Two-layer design
 //!
@@ -95,7 +103,11 @@ mod error;
 mod registry;
 mod value;
 
+pub use crate::codec::bebop::{BebopCodec, BebopWire};
+pub use crate::codec::bson::BsonCodec;
+pub use crate::codec::capnp::{CapnpCodec, CapnpWire};
 pub use crate::codec::cbor::CborCodec;
+pub use crate::codec::flatbuffers::{FlatbuffersCodec, FlatbuffersWire};
 pub use crate::codec::json::JsonCodec;
 pub use crate::codec::protobuf::ProtobufCodec;
 pub use crate::error::CodecError;

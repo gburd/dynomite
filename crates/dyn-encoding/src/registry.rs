@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::codec::{cbor::CborCodec, json::JsonCodec, protobuf::ProtobufCodec};
+use crate::codec::{
+    bebop::BebopCodec, bson::BsonCodec, capnp::CapnpCodec, cbor::CborCodec,
+    flatbuffers::FlatbuffersCodec, json::JsonCodec, protobuf::ProtobufCodec,
+};
 use crate::value::WireCodec;
 
 /// Bag of [`WireCodec`] implementations indexed by content-type.
@@ -25,19 +28,25 @@ impl CodecRegistry {
         }
     }
 
-    /// Build a registry pre-populated with the three baseline codecs:
-    /// [`JsonCodec`], [`CborCodec`], and [`ProtobufCodec`]. The
-    /// codecs are returned with empty type tables; callers attach
-    /// their message types through the codec-specific `register`
-    /// entry points before installing the codecs into the registry,
-    /// or use [`Self::register`] to install codecs that already have
-    /// their type tables populated.
+    /// Build a registry pre-populated with the seven baseline
+    /// codecs: [`JsonCodec`], [`CborCodec`], [`ProtobufCodec`],
+    /// [`FlatbuffersCodec`], [`CapnpCodec`], [`BebopCodec`], and
+    /// [`BsonCodec`]. The codecs are returned with empty type
+    /// tables; callers attach their message types through the
+    /// codec-specific `register` entry points before installing the
+    /// codecs into the registry, or use [`Self::register`] to
+    /// install codecs that already have their type tables
+    /// populated.
     #[must_use]
     pub fn with_baseline() -> Self {
         let mut r = Self::new();
         r.register(JsonCodec::new());
         r.register(CborCodec::new());
         r.register(ProtobufCodec::new());
+        r.register(FlatbuffersCodec::new());
+        r.register(CapnpCodec::new());
+        r.register(BebopCodec::new());
+        r.register(BsonCodec::new());
         r
     }
 
@@ -110,12 +119,17 @@ mod tests {
     }
 
     #[test]
-    fn baseline_registers_all_three_content_types() {
+    fn baseline_registers_all_seven_content_types() {
         let r = CodecRegistry::with_baseline();
         let cts: Vec<&'static str> = r.content_types().collect();
         assert!(cts.contains(&"application/json"));
         assert!(cts.contains(&"application/cbor"));
         assert!(cts.contains(&"application/x-protobuf"));
+        assert!(cts.contains(&"application/octet-stream;schema=flatbuffers"));
+        assert!(cts.contains(&"application/capnproto"));
+        assert!(cts.contains(&"application/x-bebop"));
+        assert!(cts.contains(&"application/bson"));
+        assert_eq!(cts.len(), 7);
     }
 
     #[test]

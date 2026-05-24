@@ -57,48 +57,61 @@ let codec = registry.for_content_type("application/cbor").unwrap();
 
 ## Baseline codecs
 
-Three codecs ship in version 0.0.1.
+Seven codecs ship in version 0.0.1.
 
-| Module    | Content-type             | Backend       |
-|-----------|--------------------------|---------------|
-| `json`    | `application/json`       | `serde_json`  |
-| `cbor`    | `application/cbor`       | `ciborium`    |
-| `protobuf`| `application/x-protobuf` | `prost`       |
+| Module        | Content-type                                  | Backend       |
+|---------------|-----------------------------------------------|---------------|
+| `json`        | `application/json`                            | `serde_json`  |
+| `cbor`        | `application/cbor`                            | `ciborium`    |
+| `protobuf`    | `application/x-protobuf`                      | `prost`       |
+| `flatbuffers` | `application/octet-stream;schema=flatbuffers` | `flatbuffers` |
+| `capnp`       | `application/capnproto`                       | `capnp`       |
+| `bebop`       | `application/x-bebop`                         | `bebop`       |
+| `bson`        | `application/bson`                            | `bson`        |
 
-All three follow the same registration pattern: types are attached
+All seven follow the same registration pattern: types are attached
 to a codec instance through `register::<T>()` before the codec is
 installed in the registry. The bound on `T` differs per codec:
 
-* `JsonCodec::register::<T>()`     -- `T: WireValue + Serialize + DeserializeOwned`
-* `CborCodec::register::<T>()`     -- `T: WireValue + Serialize + DeserializeOwned`
-* `ProtobufCodec::register::<T>()` -- `T: WireValue + prost::Message + Default`
+* `JsonCodec::register::<T>()`        -- `T: WireValue + Serialize + DeserializeOwned`
+* `CborCodec::register::<T>()`        -- `T: WireValue + Serialize + DeserializeOwned`
+* `BsonCodec::register::<T>()`        -- `T: WireValue + Serialize + DeserializeOwned`
+* `ProtobufCodec::register::<T>()`    -- `T: WireValue + prost::Message + Default`
+* `FlatbuffersCodec::register::<T>()` -- `T: FlatbuffersWire`
+* `CapnpCodec::register::<T>()`       -- `T: CapnpWire`
+* `BebopCodec::register::<T>()`       -- `T: BebopWire`
 
-The protobuf codec deliberately avoids `prost-build`. Generated
-`.proto` -> Rust pipelines belong in the `dyn-riak` crate, not in
-this codec abstraction. For testing, a tiny fixture message is
-declared by hand using the `prost::Message` derive macro.
+The protobuf codec deliberately avoids `prost-build`. The three
+schema-first newcomers similarly avoid their respective code
+generators (`flatc`, `capnpc`, `bebopc`); each defines a small
+per-codec trait so the schema and conversion glue live in the
+crate that owns the message types (typically `dyn-riak`), not in
+this codec abstraction. For testing, hand-rolled fixtures live
+inline in each codec module's `tests` block.
 
 ## Adding a codec
 
-The four deferred encodings (FlatBuffers, Cap'n Proto, Bebop, BSON)
-slot in mechanically:
+The trait surface is shaped to host new encodings without churn:
 
-1. Add the upstream crate to `[workspace.dependencies]` in the root
-   `Cargo.toml`.
+1. Add the upstream crate to `[workspace.dependencies]` in the
+   root `Cargo.toml`.
 2. Add a feature-flagged or unconditional dependency in
    `crates/dyn-encoding/Cargo.toml`.
 3. Create `src/codec/<name>.rs` modeled on the JSON codec module.
    The bound on `register::<T>()` is the new format's native trait
-   (`flatbuffers::Follow + Push`, `capnp::Owned`, ...).
+   (`flatbuffers::Follow + Push`, `capnp::Owned`, ...), or a
+   crate-defined trait if the upstream API does not fit.
 4. Add `pub mod <name>;` to `src/codec/mod.rs` and the corresponding
    `pub use` in `src/lib.rs`.
 5. Add the codec to `CodecRegistry::with_baseline` if it should be
    on by default.
 6. Mirror the test suite from JSON/CBOR/protobuf: round-trip,
-   idempotent encode, unknown-type-id, malformed-bytes.
+   idempotent encode, unknown-type-id (encode + decode),
+   malformed-bytes.
 
-Sketch notes on each deferred codec live in
-`docs/journal/2026-05-24-dyn-encoding-scaffold.md`.
+The deferred-codec sketches and the on-the-ground deltas are in
+`docs/journal/2026-05-24-dyn-encoding-scaffold.md` and
+`docs/journal/2026-05-24-dyn-encoding-deferred-codecs.md`.
 
 ## Acknowledgements
 
