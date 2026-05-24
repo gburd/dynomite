@@ -230,6 +230,7 @@ fn dt_update_resp_round_trips_for_orset() {
         context: Some(b"new-ctx".to_vec()),
         counter_value: None,
         set_value: vec![b"alpha".to_vec(), b"beta".to_vec()],
+        map_value: None,
         hll_value: None,
         gset_value: vec![],
     };
@@ -304,5 +305,254 @@ fn dt_op_with_set_payload_round_trips() {
     };
     let bytes = op.encode_to_vec();
     let back = DtOp::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(back, op);
+}
+
+// ---- Map and HLL integration tests (second CRDT slice) ---------------------
+
+use dyn_riak::datatypes::{
+    map::{FieldKey, FieldType, FieldValue, Map, MapOp as MapEngOp, NestedOp},
+    HyperLogLog,
+};
+use dyn_riak::proto::pb::{
+    FlagOp, HllOp, HllValue, MapEntry, MapField, MapOp as MapWireOp, MapUpdate, MapValue,
+    RegisterOp, ScalarOp, ScalarValue, MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_FLAG,
+    MAP_FIELD_TYPE_REGISTER,
+};
+
+#[test]
+fn map_three_typed_fields_add_remove_merge_round_trip() {
+    let a = aid("a");
+    let b = aid("b");
+
+    let cf = FieldKey::new(b"hits".to_vec(), FieldType::Counter);
+    let ff = FieldKey::new(b"on".to_vec(), FieldType::EwFlag);
+    let rf = FieldKey::new(b"name".to_vec(), FieldType::LwwRegister);
+
+    let mut left = Map::new();
+    left.apply(
+        &a,
+        &MapEngOp::Update {
+            field: cf.clone(),
+            op: NestedOp::Counter(5),
+        },
+    );
+    left.apply(
+        &a,
+        &MapEngOp::Update {
+            field: ff.clone(),
+            op: NestedOp::Flag(true),
+        },
+    );
+    left.apply(
+        &a,
+        &MapEngOp::Update {
+            field: rf.clone(),
+            op: NestedOp::RegisterAssign {
+                value: b"alice".to_vec(),
+                ts_micros: 100,
+            },
+        },
+    );
+
+    let mut right = Map::new();
+    right.apply(
+        &b,
+        &MapEngOp::Update {
+            field: cf.clone(),
+            op: NestedOp::Counter(3),
+        },
+    );
+    right.apply(
+        &b,
+        &MapEngOp::Update {
+            field: rf.clone(),
+            op: NestedOp::RegisterAssign {
+                value: b"bob".to_vec(),
+                ts_micros: 200,
+            },
+        },
+    );
+    // Concurrently, the right replica removes the flag.
+    right.apply(&b, &MapEngOp::Remove { field: ff.clone() });
+
+    left.merge(&right);
+
+    let v = left.value();
+    assert_eq!(v.len(), 3, "all three fields present after merge");
+    match v.get(&cf) {
+        Some(FieldValue::Counter(c)) => assert_eq!(c.value(), 8),
+        _ => panic!("counter merged value missing"),
+    }
+    match v.get(&ff) {
+        Some(FieldValue::EwFlag(f)) => {
+            assert!(f.value(), "enable on left wins concurrent remove on right");
+        }
+        _ => panic!("flag missing"),
+    }
+    match v.get(&rf) {
+        Some(FieldValue::LwwRegister(r)) => {
+            assert_eq!(r.value(), b"bob".to_vec(), "later timestamp wins");
+        }
+        _ => panic!("register missing"),
+    }
+}
+
+#[test]
+fn hll_two_replicas_distinct_items_merged_estimate_within_5pct() {
+    let mut left = HyperLogLog::new();
+    let mut right = HyperLogLog::new();
+    for i in 0u32..5_000 {
+        left.add(i.to_be_bytes());
+    }
+    for i in 5_000u32..10_000 {
+        right.add(i.to_be_bytes());
+    }
+    left.merge(&right);
+    let est = left.value();
+    // 1.04/sqrt(16384) ~= 0.81% expected error; +/-5% is
+    // generous and avoids statistical flake at 10k items.
+    assert!(
+        (9_500..=10_500).contains(&est),
+        "merged HLL estimate {est} outside [9500, 10500]"
+    );
+}
+
+#[test]
+fn hll_idempotent_under_set_equality() {
+    let mut left = HyperLogLog::new();
+    let mut right = HyperLogLog::new();
+    for i in 0u32..10_000 {
+        left.add(i.to_be_bytes());
+        right.add(i.to_be_bytes());
+    }
+    let est_before = left.value();
+    left.merge(&right);
+    let est_after = left.value();
+    assert!(
+        (9_500..=10_500).contains(&est_before),
+        "pre-merge estimate {est_before} outside [9500, 10500]"
+    );
+    assert_eq!(
+        est_before, est_after,
+        "merging equal HLLs leaves the estimate unchanged"
+    );
+}
+
+#[test]
+fn dt_op_with_map_payload_round_trips_via_prost() {
+    let op = DtOp {
+        map_op: Some(Box::new(MapWireOp {
+            updates: vec![MapUpdate {
+                field: Some(MapField {
+                    name: b"hits".to_vec(),
+                    field_type: MAP_FIELD_TYPE_COUNTER,
+                }),
+                op: Some(ScalarOp {
+                    counter_op: Some(CounterOp { increment: Some(7) }),
+                    ..ScalarOp::default()
+                }),
+            }],
+            removes: vec![MapField {
+                name: b"old".to_vec(),
+                field_type: MAP_FIELD_TYPE_FLAG,
+            }],
+        })),
+        ..DtOp::default()
+    };
+    let bytes = op.encode_to_vec();
+    let back = DtOp::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(back, op);
+}
+
+#[test]
+fn dt_value_with_map_payload_round_trips_via_prost() {
+    let value = DtValue {
+        map_value: Some(Box::new(MapValue {
+            entries: vec![
+                MapEntry {
+                    field: Some(MapField {
+                        name: b"name".to_vec(),
+                        field_type: MAP_FIELD_TYPE_REGISTER,
+                    }),
+                    value: Some(ScalarValue {
+                        register_value: Some(b"alice".to_vec()),
+                        ..ScalarValue::default()
+                    }),
+                },
+                MapEntry {
+                    field: Some(MapField {
+                        name: b"on".to_vec(),
+                        field_type: MAP_FIELD_TYPE_FLAG,
+                    }),
+                    value: Some(ScalarValue {
+                        flag_value: Some(true),
+                        ..ScalarValue::default()
+                    }),
+                },
+            ],
+        })),
+        ..DtValue::default()
+    };
+    let bytes = value.encode_to_vec();
+    let back = DtValue::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(back, value);
+}
+
+#[test]
+fn dt_op_with_hll_payload_round_trips_via_prost() {
+    let op = DtOp {
+        hll_op: Some(HllOp {
+            add_value: vec![b"alpha".to_vec(), b"beta".to_vec()],
+        }),
+        ..DtOp::default()
+    };
+    let bytes = op.encode_to_vec();
+    let back = DtOp::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(back, op);
+}
+
+#[test]
+fn dt_value_with_hll_payload_round_trips_via_prost() {
+    let value = DtValue {
+        hll_value: Some(123_456),
+        ..DtValue::default()
+    };
+    let bytes = value.encode_to_vec();
+    let back = DtValue::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(back, value);
+    assert_eq!(back.hll_value, Some(123_456));
+}
+
+#[test]
+fn hll_value_message_round_trips() {
+    let v = HllValue { cardinality: 42 };
+    let bytes = v.encode_to_vec();
+    let back = HllValue::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(back, v);
+}
+
+#[test]
+fn scalar_op_register_assign_round_trips() {
+    let op = ScalarOp {
+        register_op: Some(RegisterOp {
+            value: b"hello".to_vec(),
+            ts_micros: Some(99),
+        }),
+        ..ScalarOp::default()
+    };
+    let bytes = op.encode_to_vec();
+    let back = ScalarOp::decode(bytes.as_slice()).expect("decode");
+    assert_eq!(back, op);
+}
+
+#[test]
+fn scalar_op_flag_round_trips() {
+    let op = ScalarOp {
+        flag_op: Some(FlagOp { enable: true }),
+        ..ScalarOp::default()
+    };
+    let bytes = op.encode_to_vec();
+    let back = ScalarOp::decode(bytes.as_slice()).expect("decode");
     assert_eq!(back, op);
 }
