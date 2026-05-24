@@ -245,29 +245,35 @@ teardown() {
 trap teardown EXIT INT TERM
 
 log "================================================================"
-log "multi-host chaos coordinator (pass 1) starting"
-log "  run id: $RUN_ID"
+log "multi-host chaos coordinator starting"
+log "  run id:   $RUN_ID"
 log "  duration: $DURATION s"
-log "  logs: $LOCAL_LOGS"
+log "  mode:     $MODE"
+log "  hosts:    floki arnold nuc meh"
+log "  logs:     $LOCAL_LOGS"
 log "================================================================"
 
 "${ARNOLD_SSH[@]}" "[ -d /scratch/dynomite-chaos/src ]" || { log "arnold:src missing"; exit 1; }
-"${NUC_SSH[@]}" "[ -d /scratch/dynomite-chaos/src ]" || { log "nuc:src missing"; exit 1; }
+"${NUC_SSH[@]}"    "[ -d /scratch/dynomite-chaos/src ]" || { log "nuc:src missing"; exit 1; }
+"${MEH_SSH[@]}"    "[ -d /scratch/dynomite-chaos/src ]" || { log "meh:src missing"; exit 1; }
 
 start_floki
 start_host dc-arnold "$TOKENS_ARNOLD" "$(arnold_seeds)" "${ARNOLD_SSH[@]}"
 start_host dc-nuc    "$TOKENS_NUC"    "$(nuc_seeds)"    "${NUC_SSH[@]}"
+start_host dc-meh    "$TOKENS_MEH"    "$(meh_seeds)"    "${MEH_SSH[@]}"
 
 # Brief settle so any deferred state is in place.
 sleep 5
 
 start_workload dc-floki  /bin/bash             bash -lc
 start_workload dc-arnold /bin/bash             "${ARNOLD_SSH[@]}"
-start_workload dc-nuc    /usr/local/bin/bash   "${NUC_SSH[@]}"
+start_workload dc-nuc    /bin/bash             "${NUC_SSH[@]}"
+start_workload dc-meh    /bin/bash             "${MEH_SSH[@]}"
 
 start_injector dc-floki  /bin/bash             bash -lc
 start_injector dc-arnold /bin/bash             "${ARNOLD_SSH[@]}"
 start_injector dc-nuc    /usr/local/bin/bash   "${NUC_SSH[@]}"
+start_injector dc-meh    /bin/bash             "${MEH_SSH[@]}"
 
 log "==> all components up; sleeping for $DURATION seconds"
 sleep "$DURATION"
