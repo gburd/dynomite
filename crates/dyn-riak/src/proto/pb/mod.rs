@@ -32,6 +32,7 @@
 
 pub mod codec;
 pub mod framer;
+pub mod mapreduce;
 pub mod messages;
 
 pub use crate::proto::pb::codec::{codec_registry, PbCodecBundle, PBC_CONTENT_TYPE};
@@ -49,3 +50,7 @@ pub use crate::proto::pb::messages::{
     RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, INDEX_QUERY_TYPE_EQ,
     INDEX_QUERY_TYPE_RANGE,
 };
+
+// MapReduce ops added by the v0.0.3 slice. Re-exported below the
+// previous block so parallel branches do not conflict.
+pub use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
