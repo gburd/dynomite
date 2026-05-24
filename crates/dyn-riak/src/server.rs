@@ -68,9 +68,9 @@ use crate::proto::pb::framer::{read_frame, write_frame, Frame};
 use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 use crate::proto::pb::messages::{
     MessageCode, RpbBucketProps, RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp,
-    RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbListBucketsReq, RpbListBucketsResp,
-    RpbListKeysReq, RpbListKeysResp, RpbPingReq, RpbPingResp, RpbPutReq, RpbPutResp,
-    RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
+    RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbListBucketsReq,
+    RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp, RpbPingReq, RpbPingResp, RpbPutReq,
+    RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
 };
 
 /// Maximum number of bucket / key entries packed into a single
@@ -242,10 +242,7 @@ where
 /// call. Returns a stream of one or more frames; list-buckets and
 /// list-keys produce multi-frame streams chunked at
 /// [`LIST_CHUNK_SIZE`].
-async fn process_frame(
-    frame: &Frame,
-    datastore: &dyn Datastore,
-) -> Result<FrameStream, RiakError> {
+async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<FrameStream, RiakError> {
     let code = MessageCode::from_u8(frame.code).map_err(RiakError::UnknownMessageCode)?;
     let stream: FrameStream = match code {
         MessageCode::PingReq => single_frame(handle_ping(&frame.body)?),
@@ -497,7 +494,9 @@ enum ListChunkState {
     Done,
 }
 
-fn buckets_to_frames(s: DatastoreByteStream) -> impl Stream<Item = Result<Frame, RiakError>> + Send {
+fn buckets_to_frames(
+    s: DatastoreByteStream,
+) -> impl Stream<Item = Result<Frame, RiakError>> + Send {
     futures_util::stream::unfold(
         ListChunkState::Streaming(s, Vec::with_capacity(LIST_CHUNK_SIZE)),
         |state| async move {
@@ -508,10 +507,8 @@ fn buckets_to_frames(s: DatastoreByteStream) -> impl Stream<Item = Result<Frame,
                         buckets: Vec::new(),
                         done: Some(true),
                     };
-                    let frame = Frame::new(
-                        MessageCode::ListBucketsResp.as_u8(),
-                        resp.encode_to_vec(),
-                    );
+                    let frame =
+                        Frame::new(MessageCode::ListBucketsResp.as_u8(), resp.encode_to_vec());
                     Some((Ok(frame), ListChunkState::Done))
                 }
                 ListChunkState::Streaming(mut stream, mut buffer) => loop {
@@ -520,10 +517,8 @@ fn buckets_to_frames(s: DatastoreByteStream) -> impl Stream<Item = Result<Frame,
                             buckets: buffer,
                             done: Some(false),
                         };
-                        let frame = Frame::new(
-                            MessageCode::ListBucketsResp.as_u8(),
-                            resp.encode_to_vec(),
-                        );
+                        let frame =
+                            Frame::new(MessageCode::ListBucketsResp.as_u8(), resp.encode_to_vec());
                         return Some((
                             Ok(frame),
                             ListChunkState::Streaming(stream, Vec::with_capacity(LIST_CHUNK_SIZE)),
@@ -536,10 +531,8 @@ fn buckets_to_frames(s: DatastoreByteStream) -> impl Stream<Item = Result<Frame,
                                 errmsg: format!("list-buckets failed: {e}").into_bytes(),
                                 errcode: 1,
                             };
-                            let frame = Frame::new(
-                                MessageCode::ErrorResp.as_u8(),
-                                resp.encode_to_vec(),
-                            );
+                            let frame =
+                                Frame::new(MessageCode::ErrorResp.as_u8(), resp.encode_to_vec());
                             return Some((Ok(frame), ListChunkState::Done));
                         }
                         None => {
@@ -605,10 +598,8 @@ fn keys_to_frames(s: DatastoreByteStream) -> impl Stream<Item = Result<Frame, Ri
                                 errmsg: format!("list-keys failed: {e}").into_bytes(),
                                 errcode: 1,
                             };
-                            let frame = Frame::new(
-                                MessageCode::ErrorResp.as_u8(),
-                                resp.encode_to_vec(),
-                            );
+                            let frame =
+                                Frame::new(MessageCode::ErrorResp.as_u8(), resp.encode_to_vec());
                             return Some((Ok(frame), ListChunkState::Done));
                         }
                         None => {
@@ -627,10 +618,8 @@ fn keys_to_frames(s: DatastoreByteStream) -> impl Stream<Item = Result<Frame, Ri
                                 keys: buffer,
                                 done: Some(false),
                             };
-                            let frame = Frame::new(
-                                MessageCode::ListKeysResp.as_u8(),
-                                resp.encode_to_vec(),
-                            );
+                            let frame =
+                                Frame::new(MessageCode::ListKeysResp.as_u8(), resp.encode_to_vec());
                             return Some((Ok(frame), ListChunkState::Terminate));
                         }
                     }

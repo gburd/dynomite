@@ -616,9 +616,10 @@ fn json_array_chunks(
                     first_emitted: false,
                 },
             )),
-            JsonChunkState::Close => {
-                Some((Ok(HttpFrame::data(Bytes::from_static(b"]"))), JsonChunkState::Done))
-            }
+            JsonChunkState::Close => Some((
+                Ok(HttpFrame::data(Bytes::from_static(b"]"))),
+                JsonChunkState::Done,
+            )),
             JsonChunkState::Streaming {
                 mut stream,
                 mut first_emitted,
@@ -670,7 +671,8 @@ fn json_array_chunks(
                             // characters; a future slice may switch
                             // to base64 for binary keys.
                             let s = String::from_utf8_lossy(&entry).into_owned();
-                            let encoded = serde_json::to_vec(&s).unwrap_or_else(|_| b"\"\"".to_vec());
+                            let encoded =
+                                serde_json::to_vec(&s).unwrap_or_else(|_| b"\"\"".to_vec());
                             buf.extend_from_slice(&encoded);
                             packed += 1;
                         }
@@ -708,17 +710,11 @@ fn length_prefixed_chunks(
                     match stream.next().await {
                         None => {
                             buf.extend_from_slice(&0u32.to_be_bytes());
-                            return Some((
-                                Ok(HttpFrame::data(Bytes::from(buf))),
-                                LpState::Done,
-                            ));
+                            return Some((Ok(HttpFrame::data(Bytes::from(buf))), LpState::Done));
                         }
                         Some(Err(_e)) => {
                             buf.extend_from_slice(&0u32.to_be_bytes());
-                            return Some((
-                                Ok(HttpFrame::data(Bytes::from(buf))),
-                                LpState::Done,
-                            ));
+                            return Some((Ok(HttpFrame::data(Bytes::from(buf))), LpState::Done));
                         }
                         Some(Ok(entry)) => {
                             let len = u32::try_from(entry.len()).unwrap_or(u32::MAX);
@@ -849,7 +845,9 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get(TRANSFER_ENCODING).map(|v| v.to_str().ok()),
+            resp.headers()
+                .get(TRANSFER_ENCODING)
+                .map(|v| v.to_str().ok()),
             Some(Some("chunked"))
         );
         assert_eq!(

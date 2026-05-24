@@ -170,7 +170,8 @@ async fn http_ping_put_get_delete_listkeys_round_trip() {
         "list-keys must use chunked transfer-encoding: {resp}"
     );
     assert!(
-        resp.to_lowercase().contains("content-type: application/json"),
+        resp.to_lowercase()
+            .contains("content-type: application/json"),
         "list-keys must declare JSON content-type: {resp}"
     );
     let body = decode_chunked_body(&resp);
