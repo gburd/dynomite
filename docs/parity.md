@@ -1067,6 +1067,49 @@ when it spans buffers.
 
 ## Deviations
 
+### D0: Noxu 2i storage layout
+
+The Rust port introduces a `data_store: noxu` configuration
+value that is not present in the C reference engine. When
+selected, the in-process Noxu DB datastore (Riak-shaped) backs
+both the Redis-front proxy and the Riak PBC / HTTP listeners.
+
+The 2i (secondary index) layer for `NoxuDatastore` deviates
+from Riak's exact bucket-namespace shape. Upstream Riak uses
+a separate `2i_partition_table` keyspace; we instead store
+forward and reverse 2i records inside the same Noxu
+environment as the primary K/V data, distinguished by a
+2-byte tag prefix:
+
+* Primary: `K\0{bucket}\0{key}` -> object value.
+* Forward 2i: `I\0{bucket}\0{name}\0<u32-be vlen>{value}{key}`
+  -> empty body. The fixed-width length prefix on the value
+  keeps prefix scans unambiguous when binary index values
+  contain the structural separator byte.
+* Reverse 2i: `R\0{bucket}\0{key}` -> length-prefixed list of
+  `(name, encoded_value)` pairs, used to clean stale forward
+  entries on delete or overwrite.
+
+This keeps the 2i path transparent in Noxu (every record is
+visible to a normal cursor scan, no special database
+configuration is required) at the cost of giving up the
+upstream namespace shape. Bucket names and index names must
+not embed a NUL byte; the writer rejects offending input with
+`NoxuDatastoreError::InvalidName`.
+
+`_int` indexes encode their values as 8-byte big-endian
+unsigned integers so range scans iterate in numeric order;
+the encoder accepts ASCII decimal input as well, mirroring
+the shape Riak clients send. `_bin` and unsuffixed indexes
+store value bytes verbatim.
+
+The wire shape of `RpbPutReq` carries the indexes at a
+top-level tag (100) rather than nested under `RpbContent` at
+tag 4, because the v0.0.1 dyn-riak slice modelled
+`RpbPutReq.value` as a flat `bytes` field at tag 4 (already a
+documented deviation). The eventual `RpbContent` refactor will
+move the indexes back inside.
+
 ### D1: Hinted handoff at the proxy layer
 
 The C reference engine does NOT implement hinted handoff at

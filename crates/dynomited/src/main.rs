@@ -24,6 +24,15 @@ use dynomited::server::Server;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
+    // Toggle the engine's `data_store: noxu` build-time gate on
+    // when this binary was compiled with `--features riak`. The
+    // gate's default is off; when off, the configuration
+    // validator rejects `data_store: noxu` with a documented
+    // error message. The flag is process-wide and read by
+    // `dynomite::conf::ConfPool::validate`.
+    #[cfg(feature = "riak")]
+    dynomite::conf::set_noxu_supported(true);
+
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(err) => {

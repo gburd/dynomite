@@ -271,7 +271,7 @@ async fn drive_parser(
         let mut msg = Msg::new(id, MsgType::Unknown, true);
         let consumed_before = msg.parser_pos();
         let parse_result = match handler.data_store {
-            DataStore::Redis => redis_parse_req(&mut msg, accumulated),
+            DataStore::Redis | DataStore::Noxu => redis_parse_req(&mut msg, accumulated),
             DataStore::Memcache => memcache_parse_req(&mut msg, accumulated),
         };
         match parse_result {
