@@ -123,6 +123,30 @@ pub trait Datastore: Send + Sync {
     /// The returned future is `'static`; the caller may move it
     /// across tokio tasks freely.
     fn dispatch(&self, req: Msg) -> BoxFuture<'_, Result<Msg, DatastoreError>>;
+
+    /// Stream the names of every bucket the datastore is aware of,
+    /// one [`bytes::Bytes`] per bucket.
+    ///
+    /// The default implementation returns a one-shot stream that
+    /// yields a single [`DatastoreError::Unsupported`] item, so an
+    /// existing impl that does not enumerate buckets does not have
+    /// to be modified to compile against the new trait surface.
+    /// Implementations that can enumerate override this method.
+    ///
+    /// The returned stream is `'static` and `Send`; transports that
+    /// stream chunks of bucket names to clients (PBC frames, HTTP
+    /// chunked bodies, ...) consume it from a tokio task.
+    fn list_buckets_stream(&self) -> DatastoreByteStream {
+        Box::pin(unsupported_byte_stream())
+    }
+
+    /// Stream every key in `bucket`, one [`bytes::Bytes`] per key.
+    ///
+    /// Same default as [`Datastore::list_buckets_stream`]: a
+    /// single-item stream carrying [`DatastoreError::Unsupported`].
+    fn list_keys_stream(&self, _bucket: &[u8]) -> DatastoreByteStream {
+        Box::pin(unsupported_byte_stream())
+    }
 }
 
 /// In-memory datastore used by examples and integration tests.
@@ -182,6 +206,20 @@ impl Datastore for MemoryDatastore {
             let mut rsp = Msg::new(req.id(), MsgType::Unknown, false);
             rsp.set_parent_id(req.id());
             Ok(rsp)
+        })
+    }
+
+    fn list_buckets_stream(&self) -> DatastoreByteStream {
+        let snapshot = self.list_buckets_snapshot();
+        Box::pin(VecByteStream {
+            items: snapshot.into_iter(),
+        })
+    }
+
+    fn list_keys_stream(&self, bucket: &[u8]) -> DatastoreByteStream {
+        let snapshot = self.list_keys_snapshot(bucket);
+        Box::pin(VecByteStream {
+            items: snapshot.into_iter(),
         })
     }
 }
@@ -591,5 +629,171 @@ impl MetricsSink for LoggingMetricsSink {
         // honest while logging the manifest size for diagnostics.
         tracing::debug!(bytes = json.len(), "metrics manifest");
         Vec::new()
+    }
+}
+
+// ---------- Streaming Datastore extensions ---------------------------------
+//
+// The streaming list path lets transports emit the bucket / key
+// catalogue in chunks instead of buffering it. A `Datastore` impl
+// produces one `Bytes` per entry; the transport (PBC server, HTTP
+// gateway) buffers an implementation-chosen number of entries per
+// outbound frame.
+
+use bytes::Bytes;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
+use std::task::{Context, Poll};
+
+/// Type alias for the byte stream returned by
+/// [`Datastore::list_buckets_stream`] and
+/// [`Datastore::list_keys_stream`].
+///
+/// Each `Bytes` item is one bucket name or key. The stream may
+/// surface a [`DatastoreError`] mid-iteration; transports translate
+/// that into a wire-level error response and stop emitting frames.
+pub type DatastoreByteStream =
+    Pin<Box<dyn futures_core::Stream<Item = Result<Bytes, DatastoreError>> + Send>>;
+
+/// Build a one-shot stream that yields a single
+/// [`DatastoreError::Unsupported`] item. The default body for
+/// [`Datastore::list_buckets_stream`] /
+/// [`Datastore::list_keys_stream`] so existing impls keep working
+/// without modification.
+fn unsupported_byte_stream(
+) -> impl futures_core::Stream<Item = Result<Bytes, DatastoreError>> + Send {
+    UnsupportedListStream { emitted: false }
+}
+
+struct UnsupportedListStream {
+    emitted: bool,
+}
+
+impl futures_core::Stream for UnsupportedListStream {
+    type Item = Result<Bytes, DatastoreError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.emitted {
+            return Poll::Ready(None);
+        }
+        self.emitted = true;
+        Poll::Ready(Some(Err(DatastoreError::Unsupported(MsgType::Unknown))))
+    }
+}
+
+/// `futures_core::Stream` that drains an owned `Vec<Bytes>` one
+/// item at a time. Used by [`MemoryDatastore`] to back its
+/// streaming list overrides.
+struct VecByteStream {
+    items: std::vec::IntoIter<Bytes>,
+}
+
+impl futures_core::Stream for VecByteStream {
+    type Item = Result<Bytes, DatastoreError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.items.next() {
+            Some(b) => Poll::Ready(Some(Ok(b))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+// ---------- MemoryDatastore listing index ----------------------------------
+//
+// `MemoryDatastore`'s public field layout (a single `Arc<Mutex<...>>`
+// holding the dispatch counter) was committed before the streaming
+// list path existed. To keep the published surface unchanged, the
+// per-instance bucket/key index is held in a process-wide registry
+// keyed by the `Arc<Mutex<MemoryStore>>` pointer identity. Cloning
+// a `MemoryDatastore` shares its `inner` `Arc`, so clones see the
+// same listing -- mirroring the existing dispatch-count behaviour.
+
+#[derive(Debug, Default)]
+struct MemoryListing {
+    buckets: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ListingHandle {
+    inner: Arc<Mutex<MemoryListing>>,
+}
+
+fn listing_for(ds: &MemoryDatastore) -> ListingHandle {
+    static REGISTRY: OnceLock<Mutex<Vec<(usize, ListingHandle)>>> = OnceLock::new();
+    let registry = REGISTRY.get_or_init(|| Mutex::new(Vec::new()));
+    let id = Arc::as_ptr(&ds.inner) as usize;
+    let mut g = registry.lock();
+    if let Some((_, h)) = g.iter().find(|(k, _)| *k == id) {
+        return h.clone();
+    }
+    let h = ListingHandle::default();
+    g.push((id, h.clone()));
+    h
+}
+
+impl MemoryDatastore {
+    /// Insert `(bucket, key)` into the in-memory listing index.
+    ///
+    /// Idempotent: inserting the same `(bucket, key)` pair twice is
+    /// a no-op. Tests use this helper to seed the streaming list
+    /// path without speaking the real Riak protocol.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::embed::hooks::MemoryDatastore;
+    /// let ds = MemoryDatastore::new();
+    /// ds.insert(b"users", b"alice");
+    /// ds.insert(b"users", b"bob");
+    /// assert_eq!(ds.list_buckets_snapshot().len(), 1);
+    /// assert_eq!(ds.list_keys_snapshot(b"users").len(), 2);
+    /// ```
+    pub fn insert(&self, bucket: &[u8], key: &[u8]) {
+        let h = listing_for(self);
+        let mut g = h.inner.lock();
+        g.buckets
+            .entry(bucket.to_vec())
+            .or_default()
+            .insert(key.to_vec());
+    }
+
+    /// Snapshot of the bucket name set, sorted lexicographically.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::embed::hooks::MemoryDatastore;
+    /// let ds = MemoryDatastore::new();
+    /// assert!(ds.list_buckets_snapshot().is_empty());
+    /// ```
+    #[must_use]
+    pub fn list_buckets_snapshot(&self) -> Vec<Bytes> {
+        let h = listing_for(self);
+        let g = h.inner.lock();
+        g.buckets
+            .keys()
+            .map(|b| Bytes::copy_from_slice(b))
+            .collect()
+    }
+
+    /// Snapshot of the keys in `bucket`, sorted lexicographically.
+    /// Returns an empty vector when the bucket is unknown.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::embed::hooks::MemoryDatastore;
+    /// let ds = MemoryDatastore::new();
+    /// assert!(ds.list_keys_snapshot(b"missing").is_empty());
+    /// ```
+    #[must_use]
+    pub fn list_keys_snapshot(&self, bucket: &[u8]) -> Vec<Bytes> {
+        let h = listing_for(self);
+        let g = h.inner.lock();
+        g.buckets
+            .get(bucket)
+            .map(|s| s.iter().map(|k| Bytes::copy_from_slice(k)).collect())
+            .unwrap_or_default()
     }
 }
