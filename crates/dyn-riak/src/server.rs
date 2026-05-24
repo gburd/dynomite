@@ -54,6 +54,7 @@ use std::sync::Arc;
 use prost::Message as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 
 use dynomite::embed::Datastore;
 use dynomite::msg::{Msg, MsgType};
@@ -98,14 +99,82 @@ pub async fn serve_pbc(
     listener: TcpListener,
     datastore: Arc<dyn Datastore>,
 ) -> Result<(), RiakError> {
+    serve_pbc_inner(listener, datastore, None).await
+}
+
+/// Run the PBC accept loop on `listener`, terminating TLS for
+/// every accepted connection via `acceptor`.
+///
+/// Per-connection TLS-handshake failures are logged at
+/// `tracing::warn!` and otherwise ignored, matching the
+/// plaintext-server policy of swallowing per-connection errors.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use tokio::net::TcpListener;
+/// use tokio_rustls::TlsAcceptor;
+/// use dyn_riak::serve_pbc_tls;
+/// use dynomite::embed::{Datastore, MemoryDatastore};
+///
+/// # async fn demo(acceptor: TlsAcceptor) -> std::io::Result<()> {
+/// let listener = TcpListener::bind("127.0.0.1:8087").await?;
+/// let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+/// let _h = tokio::spawn(serve_pbc_tls(listener, ds, acceptor));
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+pub async fn serve_pbc_tls(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    acceptor: TlsAcceptor,
+) -> Result<(), RiakError> {
+    serve_pbc_inner(listener, datastore, Some(acceptor)).await
+}
+
+async fn serve_pbc_inner(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    acceptor: Option<TlsAcceptor>,
+) -> Result<(), RiakError> {
     loop {
         let (sock, peer) = listener.accept().await?;
         let datastore = Arc::clone(&datastore);
-        tokio::spawn(async move {
-            if let Err(e) = handle_conn(sock, datastore).await {
-                tracing::warn!(%peer, error = %e, "riak pbc connection ended with error");
+        match acceptor.as_ref() {
+            Some(acc) => {
+                let acc = acc.clone();
+                tokio::spawn(async move {
+                    match acc.accept(sock).await {
+                        Ok(tls) => {
+                            if let Err(e) = handle_conn(tls, datastore).await {
+                                tracing::warn!(
+                                    %peer,
+                                    error = %e,
+                                    "riak pbc tls connection ended with error"
+                                );
+                            }
+                        }
+                        Err(e) => tracing::warn!(
+                            %peer,
+                            error = %e,
+                            "riak pbc tls handshake failed"
+                        ),
+                    }
+                });
             }
-        });
+            None => {
+                tokio::spawn(async move {
+                    if let Err(e) = handle_conn(sock, datastore).await {
+                        tracing::warn!(%peer, error = %e, "riak pbc connection ended with error");
+                    }
+                });
+            }
+        }
     }
 }
 
