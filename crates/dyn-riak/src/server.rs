@@ -49,12 +49,16 @@
 //!   richer K/V trait wires these against the `NoxuDatastore`
 //!   storage engine.
 
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_core::Stream;
+use futures_util::StreamExt;
 use prost::Message as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 
+use dynomite::embed::hooks::DatastoreByteStream;
 use dynomite::embed::Datastore;
 use dynomite::msg::{Msg, MsgType};
 
@@ -63,10 +67,27 @@ use crate::proto::pb::framer::{read_frame, write_frame, Frame};
 use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 use crate::proto::pb::messages::{
     MessageCode, RpbBucketProps, RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp,
-    RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbListBucketsReq, RpbListKeysReq,
-    RpbPingReq, RpbPingResp, RpbPutReq, RpbPutResp, RpbServerInfoReq, RpbSetBucketReq,
-    RpbSetBucketResp,
+    RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbListBucketsReq, RpbListBucketsResp,
+    RpbListKeysReq, RpbListKeysResp, RpbPingReq, RpbPingResp, RpbPutReq, RpbPutResp,
+    RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
 };
+
+/// Maximum number of bucket / key entries packed into a single
+/// streaming `RpbListBucketsResp` / `RpbListKeysResp` frame.
+///
+/// Riak's reference server uses an implementation-defined chunk
+/// size; 256 entries per frame is comfortably below the framer's
+/// 16 MiB cap for any practical key size while keeping per-frame
+/// overhead low.
+pub(crate) const LIST_CHUNK_SIZE: usize = 256;
+
+/// A boxed stream of outbound PBC frames.
+///
+/// Most ops produce a single-frame stream; list-buckets and
+/// list-keys produce a multi-frame stream where every frame except
+/// the terminator carries `done = false` (or absent) and the final
+/// frame carries `done = true`.
+pub(crate) type FrameStream = Pin<Box<dyn Stream<Item = Result<Frame, RiakError>> + Send>>;
 
 /// Run the PBC accept loop on `listener`.
 ///
@@ -140,35 +161,38 @@ where
             Err(other) => return Err(other),
         };
 
-        let response = process_frame(&frame, datastore.as_ref()).await?;
-        write_frame(&mut writer, &response).await?;
+        let mut response = process_frame(&frame, datastore.as_ref()).await?;
+        while let Some(item) = response.next().await {
+            let f = item?;
+            write_frame(&mut writer, &f).await?;
+        }
     }
 }
 
-/// Per-frame dispatch. Pure function aside from the datastore call.
-async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+/// Per-frame dispatch. Pure function aside from the datastore
+/// call. Returns a stream of one or more frames; list-buckets and
+/// list-keys produce multi-frame streams chunked at
+/// [`LIST_CHUNK_SIZE`].
+async fn process_frame(
+    frame: &Frame,
+    datastore: &dyn Datastore,
+) -> Result<FrameStream, RiakError> {
     let code = MessageCode::from_u8(frame.code).map_err(RiakError::UnknownMessageCode)?;
-    match code {
-        MessageCode::PingReq => handle_ping(&frame.body),
-        MessageCode::ServerInfoReq => handle_server_info(&frame.body),
-        MessageCode::GetReq => handle_get(&frame.body, datastore).await,
-        MessageCode::PutReq => handle_put(&frame.body, datastore).await,
-        MessageCode::DelReq => handle_del(&frame.body, datastore).await,
-        MessageCode::GetBucketReq => handle_get_bucket(&frame.body),
-        MessageCode::SetBucketReq => handle_set_bucket(&frame.body),
-        MessageCode::ListBucketsReq => handle_unsupported::<RpbListBucketsReq>(
-            &frame.body,
-            "list-buckets not implemented for this datastore",
-        ),
-        MessageCode::ListKeysReq => handle_unsupported::<RpbListKeysReq>(
-            &frame.body,
-            "list-keys not implemented for this datastore",
-        ),
-        MessageCode::IndexReq => handle_unsupported::<RpbIndexReq>(
+    let stream: FrameStream = match code {
+        MessageCode::PingReq => single_frame(handle_ping(&frame.body)?),
+        MessageCode::ServerInfoReq => single_frame(handle_server_info(&frame.body)?),
+        MessageCode::GetReq => single_frame(handle_get(&frame.body, datastore).await?),
+        MessageCode::PutReq => single_frame(handle_put(&frame.body, datastore).await?),
+        MessageCode::DelReq => single_frame(handle_del(&frame.body, datastore).await?),
+        MessageCode::GetBucketReq => single_frame(handle_get_bucket(&frame.body)?),
+        MessageCode::SetBucketReq => single_frame(handle_set_bucket(&frame.body)?),
+        MessageCode::ListBucketsReq => handle_list_buckets(&frame.body, datastore)?,
+        MessageCode::ListKeysReq => handle_list_keys(&frame.body, datastore)?,
+        MessageCode::IndexReq => single_frame(handle_unsupported::<RpbIndexReq>(
             &frame.body,
             "secondary-index queries not implemented for this datastore",
-        ),
-        MessageCode::MapRedReq => handle_mapred(&frame.body).await,
+        )?),
+        MessageCode::MapRedReq => single_frame(handle_mapred(&frame.body).await?),
         // Response codes are illegal inbound.
         MessageCode::ErrorResp
         | MessageCode::PingResp
@@ -187,9 +211,15 @@ async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame
                 errcode: 0,
             }
             .encode_to_vec();
-            Ok(Frame::new(MessageCode::ErrorResp.as_u8(), body))
+            single_frame(Frame::new(MessageCode::ErrorResp.as_u8(), body))
         }
-    }
+    };
+    Ok(stream)
+}
+
+/// Wrap a single [`Frame`] in a one-item [`FrameStream`].
+fn single_frame(f: Frame) -> FrameStream {
+    Box::pin(futures_util::stream::once(async move { Ok(f) }))
 }
 
 fn handle_ping(body: &[u8]) -> Result<Frame, RiakError> {
@@ -366,6 +396,181 @@ where
     ))
 }
 
+// ------------------------------------------------------------------
+// Streaming list handlers.
+// ------------------------------------------------------------------
+//
+// Both producers consume the datastore's `Bytes` stream, batch up to
+// `LIST_CHUNK_SIZE` entries per outbound frame, and finish with a
+// body-less `done = true` terminator. Datastore errors mid-stream
+// translate to an `RpbErrorResp` and stop the producer.
+//
+// A client that ignores the `done` flag and just reads the first
+// frame still works: it sees the first chunk, which is a partial
+// list. The streaming-list journal entry documents this behaviour.
+
+fn handle_list_buckets(body: &[u8], datastore: &dyn Datastore) -> Result<FrameStream, RiakError> {
+    let _req = RpbListBucketsReq::decode(body)?;
+    let stream = datastore.list_buckets_stream();
+    Ok(Box::pin(buckets_to_frames(stream)))
+}
+
+fn handle_list_keys(body: &[u8], datastore: &dyn Datastore) -> Result<FrameStream, RiakError> {
+    let req = RpbListKeysReq::decode(body)?;
+    let stream = datastore.list_keys_stream(&req.bucket);
+    Ok(Box::pin(keys_to_frames(stream)))
+}
+
+/// Producer state for the streaming list path.
+enum ListChunkState {
+    Streaming(DatastoreByteStream, Vec<Vec<u8>>),
+    Terminate,
+    Done,
+}
+
+fn buckets_to_frames(s: DatastoreByteStream) -> impl Stream<Item = Result<Frame, RiakError>> + Send {
+    futures_util::stream::unfold(
+        ListChunkState::Streaming(s, Vec::with_capacity(LIST_CHUNK_SIZE)),
+        |state| async move {
+            match state {
+                ListChunkState::Done => None,
+                ListChunkState::Terminate => {
+                    let resp = RpbListBucketsResp {
+                        buckets: Vec::new(),
+                        done: Some(true),
+                    };
+                    let frame = Frame::new(
+                        MessageCode::ListBucketsResp.as_u8(),
+                        resp.encode_to_vec(),
+                    );
+                    Some((Ok(frame), ListChunkState::Done))
+                }
+                ListChunkState::Streaming(mut stream, mut buffer) => loop {
+                    if buffer.len() >= LIST_CHUNK_SIZE {
+                        let resp = RpbListBucketsResp {
+                            buckets: buffer,
+                            done: Some(false),
+                        };
+                        let frame = Frame::new(
+                            MessageCode::ListBucketsResp.as_u8(),
+                            resp.encode_to_vec(),
+                        );
+                        return Some((
+                            Ok(frame),
+                            ListChunkState::Streaming(stream, Vec::with_capacity(LIST_CHUNK_SIZE)),
+                        ));
+                    }
+                    match stream.next().await {
+                        Some(Ok(b)) => buffer.push(b.to_vec()),
+                        Some(Err(e)) => {
+                            let resp = RpbErrorResp {
+                                errmsg: format!("list-buckets failed: {e}").into_bytes(),
+                                errcode: 1,
+                            };
+                            let frame = Frame::new(
+                                MessageCode::ErrorResp.as_u8(),
+                                resp.encode_to_vec(),
+                            );
+                            return Some((Ok(frame), ListChunkState::Done));
+                        }
+                        None => {
+                            if buffer.is_empty() {
+                                let resp = RpbListBucketsResp {
+                                    buckets: Vec::new(),
+                                    done: Some(true),
+                                };
+                                let frame = Frame::new(
+                                    MessageCode::ListBucketsResp.as_u8(),
+                                    resp.encode_to_vec(),
+                                );
+                                return Some((Ok(frame), ListChunkState::Done));
+                            }
+                            let resp = RpbListBucketsResp {
+                                buckets: buffer,
+                                done: Some(false),
+                            };
+                            let frame = Frame::new(
+                                MessageCode::ListBucketsResp.as_u8(),
+                                resp.encode_to_vec(),
+                            );
+                            return Some((Ok(frame), ListChunkState::Terminate));
+                        }
+                    }
+                },
+            }
+        },
+    )
+}
+
+fn keys_to_frames(s: DatastoreByteStream) -> impl Stream<Item = Result<Frame, RiakError>> + Send {
+    futures_util::stream::unfold(
+        ListChunkState::Streaming(s, Vec::with_capacity(LIST_CHUNK_SIZE)),
+        |state| async move {
+            match state {
+                ListChunkState::Done => None,
+                ListChunkState::Terminate => {
+                    let resp = RpbListKeysResp {
+                        keys: Vec::new(),
+                        done: Some(true),
+                    };
+                    let frame = Frame::new(MessageCode::ListKeysResp.as_u8(), resp.encode_to_vec());
+                    Some((Ok(frame), ListChunkState::Done))
+                }
+                ListChunkState::Streaming(mut stream, mut buffer) => loop {
+                    if buffer.len() >= LIST_CHUNK_SIZE {
+                        let resp = RpbListKeysResp {
+                            keys: buffer,
+                            done: Some(false),
+                        };
+                        let frame =
+                            Frame::new(MessageCode::ListKeysResp.as_u8(), resp.encode_to_vec());
+                        return Some((
+                            Ok(frame),
+                            ListChunkState::Streaming(stream, Vec::with_capacity(LIST_CHUNK_SIZE)),
+                        ));
+                    }
+                    match stream.next().await {
+                        Some(Ok(b)) => buffer.push(b.to_vec()),
+                        Some(Err(e)) => {
+                            let resp = RpbErrorResp {
+                                errmsg: format!("list-keys failed: {e}").into_bytes(),
+                                errcode: 1,
+                            };
+                            let frame = Frame::new(
+                                MessageCode::ErrorResp.as_u8(),
+                                resp.encode_to_vec(),
+                            );
+                            return Some((Ok(frame), ListChunkState::Done));
+                        }
+                        None => {
+                            if buffer.is_empty() {
+                                let resp = RpbListKeysResp {
+                                    keys: Vec::new(),
+                                    done: Some(true),
+                                };
+                                let frame = Frame::new(
+                                    MessageCode::ListKeysResp.as_u8(),
+                                    resp.encode_to_vec(),
+                                );
+                                return Some((Ok(frame), ListChunkState::Done));
+                            }
+                            let resp = RpbListKeysResp {
+                                keys: buffer,
+                                done: Some(false),
+                            };
+                            let frame = Frame::new(
+                                MessageCode::ListKeysResp.as_u8(),
+                                resp.encode_to_vec(),
+                            );
+                            return Some((Ok(frame), ListChunkState::Terminate));
+                        }
+                    }
+                },
+            }
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,8 +606,19 @@ mod tests {
         // Code 99 is unused.
         let frame = Frame::new(99, Vec::new());
         let ds = MemoryDatastore::new();
-        let err = process_frame(&frame, &ds).await.expect_err("unknown");
+        let Err(err) = process_frame(&frame, &ds).await else {
+            panic!("expected error for unknown code");
+        };
         assert!(matches!(err, RiakError::UnknownMessageCode(99)));
+    }
+
+    /// Drain a [`FrameStream`] into a `Vec<Frame>` for tests.
+    async fn collect_frames(mut s: FrameStream) -> Vec<Frame> {
+        let mut out = Vec::new();
+        while let Some(item) = s.next().await {
+            out.push(item.expect("stream item"));
+        }
+        out
     }
 
     #[tokio::test]
@@ -411,9 +627,11 @@ mod tests {
         // we reply with an RpbErrorResp instead.
         let frame = Frame::new(MessageCode::GetResp.as_u8(), Vec::new());
         let ds = MemoryDatastore::new();
-        let resp = process_frame(&frame, &ds).await.expect("ok");
-        assert_eq!(resp.code, MessageCode::ErrorResp.as_u8());
-        let parsed = RpbErrorResp::decode(resp.body.as_slice()).expect("decode");
+        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].code, MessageCode::ErrorResp.as_u8());
+        let parsed = RpbErrorResp::decode(frames[0].body.as_slice()).expect("decode");
         assert!(!parsed.errmsg.is_empty());
     }
 
@@ -422,7 +640,9 @@ mod tests {
         // GetReq with a truncated length-delimited string field.
         let frame = Frame::new(MessageCode::GetReq.as_u8(), vec![0x0a, 0xff]);
         let ds = MemoryDatastore::new();
-        let err = process_frame(&frame, &ds).await.expect_err("decode");
+        let Err(err) = process_frame(&frame, &ds).await else {
+            panic!("expected decode error");
+        };
         assert!(matches!(err, RiakError::Decode(_)));
     }
 
@@ -441,5 +661,130 @@ mod tests {
         );
         let _ = process_frame(&frame, ds.as_ref()).await.expect("ok");
         assert_eq!(ds.dispatch_count(), 1);
+    }
+
+    // ---- streaming list ----
+
+    #[tokio::test]
+    async fn list_buckets_empty_yields_one_terminator_frame() {
+        let ds = MemoryDatastore::new();
+        let frame = Frame::new(
+            MessageCode::ListBucketsReq.as_u8(),
+            RpbListBucketsReq::default().encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].code, MessageCode::ListBucketsResp.as_u8());
+        let resp = RpbListBucketsResp::decode(frames[0].body.as_slice()).expect("decode");
+        assert_eq!(resp.done, Some(true));
+        assert!(resp.buckets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_keys_chunks_at_chunk_size() {
+        let ds = MemoryDatastore::new();
+        // 1000 keys -> 3 full chunks (256) + 1 partial (232) + 1 terminator = 5 frames.
+        for i in 0..1000u16 {
+            ds.insert(b"u", format!("k{i:04}").as_bytes());
+        }
+        let frame = Frame::new(
+            MessageCode::ListKeysReq.as_u8(),
+            RpbListKeysReq {
+                bucket: b"u".to_vec(),
+                ..RpbListKeysReq::default()
+            }
+            .encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 5, "expected 4 chunks plus a terminator");
+        let mut total_keys = 0usize;
+        for (i, f) in frames.iter().enumerate() {
+            assert_eq!(f.code, MessageCode::ListKeysResp.as_u8());
+            let resp = RpbListKeysResp::decode(f.body.as_slice()).expect("decode");
+            if i == frames.len() - 1 {
+                assert_eq!(resp.done, Some(true), "final frame must carry done=true");
+                assert!(resp.keys.is_empty(), "terminator carries no keys");
+            } else {
+                assert!(
+                    resp.done == Some(false) || resp.done.is_none(),
+                    "non-terminator frame must not carry done=true"
+                );
+                total_keys += resp.keys.len();
+                if i < 3 {
+                    assert_eq!(resp.keys.len(), LIST_CHUNK_SIZE);
+                } else {
+                    assert_eq!(resp.keys.len(), 1000 - 3 * LIST_CHUNK_SIZE);
+                }
+            }
+        }
+        assert_eq!(total_keys, 1000);
+    }
+
+    #[tokio::test]
+    async fn list_buckets_streams_multiple_buckets() {
+        let ds = MemoryDatastore::new();
+        for i in 0..512u16 {
+            ds.insert(format!("b{i:04}").as_bytes(), b"k");
+        }
+        let frame = Frame::new(
+            MessageCode::ListBucketsReq.as_u8(),
+            RpbListBucketsReq::default().encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let frames = collect_frames(stream).await;
+        // 512 / 256 = 2 full chunks, then one empty terminator.
+        assert_eq!(frames.len(), 3);
+        let last = RpbListBucketsResp::decode(frames[2].body.as_slice()).expect("decode");
+        assert_eq!(last.done, Some(true));
+        assert!(last.buckets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_keys_against_unsupported_datastore_yields_error_frame() {
+        // A datastore that does not override the streaming methods
+        // gets the default body which yields a single Unsupported
+        // error.
+        struct Noop;
+        impl Datastore for Noop {
+            fn protocol(&self) -> dynomite::embed::hooks::Protocol {
+                dynomite::embed::hooks::Protocol::Custom
+            }
+            fn dispatch(
+                &self,
+                req: Msg,
+            ) -> dynomite::embed::hooks::BoxFuture<
+                '_,
+                Result<Msg, dynomite::embed::hooks::DatastoreError>,
+            > {
+                Box::pin(async move {
+                    let mut rsp = Msg::new(req.id(), MsgType::Unknown, false);
+                    rsp.set_parent_id(req.id());
+                    Ok(rsp)
+                })
+            }
+        }
+        let ds = Noop;
+        let frame = Frame::new(
+            MessageCode::ListKeysReq.as_u8(),
+            RpbListKeysReq {
+                bucket: b"u".to_vec(),
+                ..RpbListKeysReq::default()
+            }
+            .encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].code, MessageCode::ErrorResp.as_u8());
+        let resp = RpbErrorResp::decode(frames[0].body.as_slice()).expect("decode");
+        assert!(
+            resp.errmsg
+                .windows(b"unsupported".len())
+                .any(|w| w == b"unsupported"),
+            "errmsg should mention the unsupported variant: {:?}",
+            String::from_utf8_lossy(&resp.errmsg)
+        );
     }
 }
