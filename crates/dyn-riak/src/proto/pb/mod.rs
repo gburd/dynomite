@@ -62,3 +62,11 @@ pub use crate::proto::pb::datatypes::{
 // MapReduce ops added by the v0.0.3 slice. Re-exported below the
 // previous block so parallel branches do not conflict.
 pub use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
+
+// Map and HyperLogLog wire types -- second CRDT slice. Re-exported
+// below the prior block so parallel branches do not conflict.
+pub use crate::proto::pb::datatypes::{
+    FlagOp, HllValue, MapEntry, MapField, MapOp, MapUpdate, MapValue, RegisterOp, ScalarOp,
+    ScalarValue, MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_FLAG, MAP_FIELD_TYPE_MAP,
+    MAP_FIELD_TYPE_REGISTER, MAP_FIELD_TYPE_SET,
+};
