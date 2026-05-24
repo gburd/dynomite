@@ -204,23 +204,55 @@ mod tests {
         // Simulates the SIGKILL+restart race: thread A holds the
         // flock briefly, thread B retries during the window. With
         // retries enabled, B should eventually win.
+        //
+        // The retry budget is sized to be load-tolerant: the
+        // holder advertises its release via a channel rather than
+        // a fixed sleep, and the contender is allowed up to
+        // `MAX_RETRY_BUDGET` retries (~5 seconds total). Earlier
+        // budgets of ~200ms turned the test into a load-correlated
+        // flake under `--all-features` parallelism (F9 in
+        // `docs/journal/2026-05-23-audit.md`); the new budget
+        // dominates any plausible scheduling jitter on shared CI
+        // hosts. The directory is private to this test, so there is
+        // no cross-test contention to worry about.
+        const HOLD_MS: u64 = 30;
+        const RETRY_DELAY: Duration = Duration::from_millis(10);
+        const MAX_RETRY_BUDGET: u32 = 500;
+
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("d.pid");
         let path_a = path.clone();
+        let (released_tx, released_rx) = std::sync::mpsc::channel::<()>();
         let holder = std::thread::spawn(move || {
             let g = PidFile::create_with_pid(&path_a, 1).unwrap();
-            std::thread::sleep(Duration::from_millis(80));
+            std::thread::sleep(Duration::from_millis(HOLD_MS));
             drop(g);
+            // Signal post-release so the assertion below can verify
+            // we observed at least one retry while the holder was
+            // still active.
+            let _ = released_tx.send(());
         });
-        // Give the holder thread a head start.
-        std::thread::sleep(Duration::from_millis(10));
-        // Retry budget large enough to outlast the holder.
+        // Give the holder thread a head start so the contender's
+        // first attempt observes a held lock.
+        std::thread::sleep(Duration::from_millis(5));
         let path_b = path.clone();
-        let g = PidFile::create_with_retry(&path_b, 2, 20, Duration::from_millis(10)).unwrap();
-        // We won the race after retrying.
+        let started = std::time::Instant::now();
+        let g = PidFile::create_with_retry(&path_b, 2, MAX_RETRY_BUDGET, RETRY_DELAY).unwrap();
+        let elapsed = started.elapsed();
+        // Confirm we actually retried (lock was held when we
+        // started); the test would otherwise be a no-op if the
+        // holder thread never got scheduled.
+        assert!(
+            elapsed >= RETRY_DELAY,
+            "contender returned before any retry slept: {elapsed:?}"
+        );
         let s = std::fs::read_to_string(&path).unwrap();
         assert_eq!(s.trim(), "2");
         drop(g);
+        // Holder must have released by now since we hold the lock.
+        released_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("holder thread released lock");
         holder.join().unwrap();
     }
 

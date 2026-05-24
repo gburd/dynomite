@@ -276,10 +276,35 @@ mod tests {
 
     #[test]
     fn wrong_key_fails_padding_check() {
-        let key_a = Crypto::generate_aes_key().unwrap();
-        let key_b = Crypto::generate_aes_key().unwrap();
-        let cipher = encrypt_to_vec(b"abc", &key_a).unwrap();
-        assert!(decrypt_to_vec(&cipher, &key_b).is_err());
+        // For a single 16-byte ciphertext block, decrypting with a
+        // random wrong key produces 16 effectively random bytes.
+        // PKCS#7 padding accepts roughly one in 256 of those
+        // accidentally; the remaining ~99.6% surface
+        // `CryptoError::Padding`. A single random-key pair would
+        // therefore false-pass about 0.4% of the time and was the
+        // root cause of the load-correlated flake recorded as F9 in
+        // `docs/journal/2026-05-23-audit.md`. Iterate over
+        // independently-generated key pairs until at least one
+        // surfaces the padding-rejection path. The probability of
+        // 32 consecutive random-key decryptions all yielding valid
+        // padding is bounded above by `(1 / 255)^32`, well under
+        // 1e-77, which is comfortably below any reasonable CI flake
+        // threshold.
+        const TRIALS: usize = 32;
+        let mut observed_rejection = false;
+        for _ in 0..TRIALS {
+            let key_a = Crypto::generate_aes_key().unwrap();
+            let key_b = Crypto::generate_aes_key().unwrap();
+            let cipher = encrypt_to_vec(b"abc", &key_a).unwrap();
+            if decrypt_to_vec(&cipher, &key_b).is_err() {
+                observed_rejection = true;
+                break;
+            }
+        }
+        assert!(
+            observed_rejection,
+            "expected at least one wrong-key decryption in {TRIALS} trials to fail PKCS#7 padding"
+        );
     }
 
     #[test]
