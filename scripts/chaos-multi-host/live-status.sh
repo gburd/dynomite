@@ -24,6 +24,7 @@ SSH_BASE_OPTS=(-o IdentitiesOnly=yes -i "$SSH_KEY"
 
 ARNOLD_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" arnold)
 NUC_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" -o ProxyJump=arnold gburd@nuc)
+MEH_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" meh)
 
 printf '%s\n' "================================================================"
 printf '  multi-host chaos status @ %s\n' "$(date -u +%H:%M:%SZ)"
@@ -142,5 +143,6 @@ fi
 
 snapshot_host dc-arnold "${ARNOLD_SSH[@]}"
 snapshot_host dc-nuc "${NUC_SSH[@]}"
+snapshot_host dc-meh "${MEH_SSH[@]}"
 
 printf '\n%s\n' "================================================================"
