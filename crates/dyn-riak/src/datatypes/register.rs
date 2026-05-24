@@ -88,7 +88,18 @@ impl Crdt for LwwRegister {
             (None, Some(_)) => true,
             (None | Some(_), None) => false,
             (Some(self_actor), Some(other_actor)) => {
-                lww_order(other.ts_micros, other_actor, self.ts_micros, self_actor).is_gt()
+                let ord = lww_order(other.ts_micros, other_actor, self.ts_micros, self_actor);
+                if ord.is_gt() {
+                    true
+                } else if ord.is_eq() {
+                    // (ts, actor) tied: break the tie by value
+                    // bytes so merge stays commutative even when
+                    // two writers picked the same microsecond and
+                    // actor identifier with different payloads.
+                    other.value > self.value
+                } else {
+                    false
+                }
             }
         };
         if take_other {
