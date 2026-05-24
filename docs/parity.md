@@ -1067,6 +1067,50 @@ when it spans buffers.
 
 ## Deviations
 
+### D2: read repair v1 selects the winner by vote count, not by per-write timestamp
+
+The reference engine's read-repair surface reads timestamps
+emitted via the Lua-rewrite path
+(`redis_rewrite_query_with_timestamp_md`,
+`_/dynomite/src/dyn_dnode_request.c` and the helpers under
+`dyn_redis_repair.c`) and prefers the freshest write when
+resolving divergent replicas. The Rust port's first cut of the
+reply coalescer
+(`dynomite::proto::redis::CoalesceTracker`) and the dispatcher's
+read-repair scheduler
+(`dynomite::cluster::dispatch::schedule_read_repair`) instead
+picks the winner by *vote count*: the payload that matches the
+most replica replies wins, with ties broken toward the
+lowest-`peer_idx` reply. When no key reaches the consistency
+level's quorum threshold, `DC_QUORUM` falls back to plurality
+(highest-vote bucket); `DC_SAFE_QUORUM` and
+`DC_EACH_SAFE_QUORUM` surface a `DynomiteNoQuorumAchieved` error
+instead. Repair writes are limited to single-key Redis `GET`
+responses where the winning reply is a bulk string
+(`SET key value`) or a nil bulk (`DEL key`); other shapes
+(integers, multibulks, errors) are skipped and entropy
+reconciliation handles them. Repair traffic is shipped through
+the per-peer outbound channel as `DmsgType::ReqForward`; the
+receiving peer's `dnode_client_loop` rewrites the parsed
+request's routing tag to `MsgRouting::LocalNodeOnly` so the
+divergent replica writes locally and does not re-fan the repair
+out to its own replicas.
+
+The timestamp-based path (Lua rewrite + per-key TS metadata)
+remains as the documented next step; it slots into the same
+`CoalesceOutcome::Ready` callback by replacing the vote-count
+tiebreaker with the timestamp comparison. Tracked in
+`docs/riak-comparison.md` section D2.
+
+Pinned by:
+- `dynomite::proto::redis::coalesce::replica_coalesce_tests`
+  (14 unit tests covering every consistency level and
+  divergence shape).
+- `crates/dynomite/tests/read_repair.rs` (in-process
+  three-replica fan-out and repair-write observation).
+- `crates/dynomited/tests/conformance/multi_dc.rs::dc_quorum_read_repair_round_trip`
+  (through-TCP shape check).
+
 ### Stage 11: entropy crypto uses PKCS#7 padding instead of zero-padding-required-by-caller
 
 The reference engine sets `EVP_CIPHER_CTX_set_padding(ctx, 0)` in

@@ -128,7 +128,7 @@ fn dispatch_dc_quorum_fanout_local_dc_only() {
     let req = Msg::new(1, MsgType::ReqRedisGet, true);
     let plan = disp.plan(&req, b"x");
     match plan {
-        DispatchPlan::Replicas(rs) => {
+        DispatchPlan::Replicas { targets: rs, .. } => {
             assert_eq!(rs.len(), 2);
             for r in &rs {
                 assert_eq!(r.dc, "dc1");
@@ -158,7 +158,7 @@ fn dispatch_dc_safe_quorum_includes_local_dc_peers() {
     let req = Msg::new(1, MsgType::ReqRedisGet, true);
     let plan = disp.plan(&req, b"x");
     match plan {
-        DispatchPlan::Replicas(rs) => {
+        DispatchPlan::Replicas { targets: rs, .. } => {
             assert!(rs.iter().all(|r: &ReplicaTarget| r.dc == "dc1"));
         }
         DispatchPlan::LocalDatastore => {}
@@ -185,7 +185,7 @@ fn dispatch_dc_each_safe_quorum_fans_out_per_dc() {
     let req = Msg::new(1, MsgType::ReqRedisGet, true);
     let plan = disp.plan(&req, b"x");
     let dcs: Vec<String> = match plan {
-        DispatchPlan::Replicas(rs) => rs.into_iter().map(|r| r.dc).collect(),
+        DispatchPlan::Replicas { targets: rs, .. } => rs.into_iter().map(|r| r.dc).collect(),
         DispatchPlan::LocalDatastore => vec!["dc1".into()],
         other => panic!("unexpected: {other:?}"),
     };

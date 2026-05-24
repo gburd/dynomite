@@ -518,7 +518,7 @@ impl ServerHandle {
                 "cluster has no quorum-eligible targets".into(),
             )),
             DispatchPlan::LocalDatastore => self.inner.dispatch_local(req).await,
-            DispatchPlan::Replicas(targets) => {
+            DispatchPlan::Replicas { targets, .. } => {
                 self.inner.stats.pool_incr_by(PoolField::ForwardError, 0); // touch counter table
                 self.inner.stats.server_incr(ServerField::ReadRequests);
                 // Snapshot the targets' addresses outside any

@@ -185,6 +185,7 @@ async fn drive_dnode_parser(
                 // Feed the decoded payload through the datastore
                 // parser to reconstruct a Msg.
                 let mut msg = Msg::new(dmsg.id, MsgType::Unknown, true);
+                let dmsg_ty = dmsg.ty;
                 msg.set_dmsg(dmsg);
                 let parse_result = match handler.data_store() {
                     crate::conf::DataStore::Redis => {
@@ -194,6 +195,17 @@ async fn drive_dnode_parser(
                         crate::proto::memcache::memcache_parse_req(&mut msg, &decoded)
                     }
                 };
+                if matches!(dmsg_ty, DmsgType::ReqForward) {
+                    // A `ReqForward` is the wire signal that this
+                    // request was already routed by an upstream
+                    // dispatcher (e.g. a quorum coalescer issuing
+                    // a read-repair write back to a divergent
+                    // replica). The receiver must NOT re-fan it
+                    // out: tag the parsed request as
+                    // `LocalNodeOnly` so the cluster dispatcher
+                    // hands it straight to its local datastore.
+                    msg.set_routing(crate::msg::MsgRouting::LocalNodeOnly);
+                }
                 match parse_result {
                     MsgParseResult::Ok | MsgParseResult::Noop => {
                         let pool = conn.mbuf_pool().clone();
@@ -222,6 +234,7 @@ async fn drive_dnode_parser(
                                     req_id: rsp.id(),
                                     rsp,
                                     span: tracing::Span::current(),
+                                    source_peer_idx: None,
                                 };
                                 let _ = handler.response_tx().send(env).await;
                             }
