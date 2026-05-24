@@ -1068,6 +1068,7 @@ async fn run_one_backend_conn(
                                         req_id,
                                         rsp: msg,
                                         span: req_span,
+                                        source_peer_idx: None,
                                     }
                                 });
                                 let _ = responder.send(env).await;
@@ -1235,6 +1236,7 @@ async fn gossip_task(
                         responder: rsp_tx,
                         span: tracing::Span::current(),
                         ty: DmsgType::GossipSyn,
+                        target_peer_idx: None,
                     };
                     if let Err(e) = tx.try_send(req) {
                         tracing::trace!(
@@ -1279,6 +1281,7 @@ fn send_gossip_shutdown(
             responder: rsp_tx,
             span: tracing::Span::current(),
             ty: DmsgType::GossipShutdown,
+            target_peer_idx: None,
         };
         if let Err(e) = tx.try_send(req) {
             tracing::trace!(

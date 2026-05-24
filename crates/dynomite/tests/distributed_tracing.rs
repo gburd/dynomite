@@ -121,6 +121,7 @@ fn outbound_request_carries_span_field() {
         responder: tx,
         span: tracing::Span::none(),
         ty: dynomite::proto::dnode::DmsgType::Req,
+        target_peer_idx: None,
     };
     assert_eq!(req.req_id, 7);
     let _ = format!("{:?}", req.span);
@@ -132,6 +133,7 @@ fn outbound_envelope_carries_span_field() {
         req_id: 9,
         rsp: Msg::new(9, MsgType::RspRedisStatus, false),
         span: tracing::Span::none(),
+        source_peer_idx: None,
     };
     assert_eq!(env.req_id, 9);
     let _ = format!("{:?}", env.span);
