@@ -159,6 +159,14 @@ pub fn format_version_banner(version: &str) -> String {
 /// `\r\n`. The defaults shown reflect the reference engine's
 /// compile-time constants.
 ///
+/// A trailing `Dynomite (Rust) extensions:` block is appended after
+/// the reference lines, listing flags that this implementation
+/// accepts on top of the reference flag set (`-g, --gossip` and
+/// `--log-format=FMT`). The reference lines themselves are
+/// byte-identical to `dn_show_usage`, so tooling that scrapes the
+/// upstream banner continues to match; only the lines below the
+/// extensions header are new.
+///
 /// # Examples
 ///
 /// ```
@@ -166,6 +174,9 @@ pub fn format_version_banner(version: &str) -> String {
 /// assert!(s.starts_with("Usage: dynomite ["));
 /// assert!(s.contains("default: 5, min: 0, max: 11"));
 /// assert!(s.contains("conf/dynomite.yml"));
+/// assert!(s.contains("Dynomite (Rust) extensions:"));
+/// assert!(s.contains("--log-format=FMT"));
+/// assert!(s.contains("-g, --gossip"));
 /// ```
 #[must_use]
 pub fn format_usage() -> String {
@@ -190,6 +201,11 @@ pub fn format_usage() -> String {
          \x20 -c, --conf-file=S            : set configuration file (default: {DEFAULT_CONF_PATH})\r\n\
          \x20 -p, --pid-file=S             : set pid file (default: off)\r\n\
          \x20 -m, --mbuf-size=N            : set size of mbuf chunk in bytes (default: 0 bytes)\r\n\n",
+    );
+    out.push_str(
+        "Dynomite (Rust) extensions:\r\n\
+         \x20 -g, --gossip                 : force-enable gossip regardless of the YAML setting\r\n\
+         \x20     --log-format=FMT         : log format (default, rfc5424, rfc3164, json, ndjson)\n",
     );
     out
 }
@@ -266,5 +282,35 @@ mod tests {
     fn version_banner_format() {
         let s = format_version_banner("9.9.9");
         assert_eq!(s, "This is dynomite-9.9.9\r\n\n");
+    }
+
+    /// Confirms the help text keeps the reference banner intact AND
+    /// surfaces the implementation-specific flags. The reference
+    /// `Usage: dynomite [...]` line and the C-reproduced options
+    /// table must precede the `Dynomite (Rust) extensions:` header,
+    /// and the extensions header must in turn precede the listings
+    /// for `--log-format` and `--gossip`. F7 in
+    /// `docs/journal/2026-05-23-audit.md`.
+    #[test]
+    fn format_usage_includes_extensions_block() {
+        let s = format_usage();
+        assert!(s.starts_with("Usage: dynomite ["));
+        assert!(s.contains("-h, --help"));
+        assert!(s.contains("-v, --verbosity=N"));
+        assert!(s.contains("conf/dynomite.yml"));
+        let ext = s
+            .find("Dynomite (Rust) extensions:")
+            .expect("extensions header present");
+        let ref_block_end = s
+            .find("-m, --mbuf-size=N")
+            .expect("reference -m line present");
+        assert!(
+            ref_block_end < ext,
+            "extensions header must follow the reference options block"
+        );
+        let log_format = s.find("--log-format=FMT").expect("--log-format listed");
+        let gossip = s.find("-g, --gossip").expect("--gossip listed");
+        assert!(ext < log_format && ext < gossip);
+        assert!(s.is_ascii());
     }
 }
