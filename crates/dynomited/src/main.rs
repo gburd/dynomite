@@ -206,6 +206,14 @@ fn run_server(cli: &Cli) -> ExitCode {
         cfg.pool_mut().enable_gossip = Some(true);
     }
 
+    // CLI overrides for the optional Riak surface. The flags
+    // are only present when the binary was built with the
+    // `riak` Cargo feature; without the feature this whole
+    // block is compiled away and the YAML's `riak:` block (if
+    // any) is used verbatim.
+    #[cfg(feature = "riak")]
+    apply_riak_overrides(cli, &mut cfg);
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -254,4 +262,25 @@ fn resolve_log_format(cli: &Cli, cfg: &Config) -> Result<LogFormat, String> {
         return LogFormat::parse(s).map_err(|e| format!("log_format: {e}"));
     }
     Ok(LogFormat::Default)
+}
+
+#[cfg(feature = "riak")]
+fn apply_riak_overrides(cli: &Cli, cfg: &mut Config) {
+    let pool = cfg.pool_mut();
+    let any_override =
+        cli.riak_pbc_listen.is_some() || cli.riak_http_listen.is_some() || cli.riak_aae_enabled;
+    if !any_override {
+        return;
+    }
+    let mut block = pool.riak.clone().unwrap_or_default();
+    if let Some(addr) = cli.riak_pbc_listen.clone() {
+        block.pbc_listen = Some(addr);
+    }
+    if let Some(addr) = cli.riak_http_listen.clone() {
+        block.http_listen = Some(addr);
+    }
+    if cli.riak_aae_enabled {
+        block.aae_enabled = Some(true);
+    }
+    pool.riak = Some(block);
 }

@@ -369,6 +369,161 @@ pub struct ConfPool {
     /// consistency.
     #[serde(default)]
     pub default_bucket_type: Option<String>,
+
+    /// `riak:` - optional Riak-mode listener / AAE configuration.
+    ///
+    /// Consumed only when `dynomited` is built with the
+    /// `--features riak` Cargo feature: the binary then
+    /// instantiates a Protocol Buffers Client (PBC) listener,
+    /// an HTTP gateway, and (optionally) the active anti-entropy
+    /// scheduler against the supplied addresses. When the field
+    /// is absent (or every inner option is unset), the binary
+    /// behaves identically to a Redis / Memcache deployment.
+    /// The block is parsed unconditionally so YAML files
+    /// authored against the Riak-enabled binary still validate
+    /// under the default build.
+    #[serde(default)]
+    pub riak: Option<ConfRiak>,
+}
+
+/// Optional Riak-mode listener / AAE knobs.
+///
+/// Every field is optional. The PBC and HTTP listeners are
+/// independent: setting one without the other is supported.
+/// When `aae_enabled` is `true` the active anti-entropy
+/// scheduler is spawned; the cadence knobs default to the
+/// values shipped by `dyn_riak::aae::config`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::ConfRiak;
+/// let r = ConfRiak {
+///     pbc_listen: Some("127.0.0.1:8087".into()),
+///     http_listen: Some("127.0.0.1:8098".into()),
+///     aae_enabled: Some(false),
+///     aae_full_sweep_interval_seconds: None,
+///     aae_segment_interval_seconds: None,
+/// };
+/// assert!(r.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct ConfRiak {
+    /// Address the Riak Protocol Buffers Client listener binds
+    /// to (`host:port`). When unset, the PBC listener is not
+    /// started.
+    pub pbc_listen: Option<String>,
+    /// Address the Riak HTTP gateway listener binds to
+    /// (`host:port`). When unset, the HTTP gateway is not
+    /// started.
+    pub http_listen: Option<String>,
+    /// When `true`, the Riak active anti-entropy scheduler is
+    /// spawned alongside the listeners. Default: `false`.
+    pub aae_enabled: Option<bool>,
+    /// Override for the AAE full-sweep cadence, in seconds.
+    /// When unset, `dyn_riak::aae::config::DEFAULT_FULL_SWEEP_SECONDS`
+    /// (24h) is used.
+    pub aae_full_sweep_interval_seconds: Option<u64>,
+    /// Override for the AAE per-segment exchange cadence, in
+    /// seconds. When unset, `dyn_riak::aae::config::DEFAULT_SEGMENT_SECONDS`
+    /// (60s) is used.
+    pub aae_segment_interval_seconds: Option<u64>,
+}
+
+impl ConfRiak {
+    /// Validate the cross-field invariants of the Riak block.
+    ///
+    /// # Errors
+    /// Returns a [`ConfError::BadServer`] when an address fails
+    /// to parse as a `host:port` socket address, when an AAE
+    /// cadence is zero, or when `aae_segment_interval_seconds`
+    /// exceeds `aae_full_sweep_interval_seconds`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::ConfRiak;
+    /// let r = ConfRiak {
+    ///     pbc_listen: Some("not-a-socket-addr".into()),
+    ///     ..ConfRiak::default()
+    /// };
+    /// assert!(r.validate().is_err());
+    /// ```
+    pub fn validate(&self) -> Result<(), ConfError> {
+        if let Some(addr) = self.pbc_listen.as_deref() {
+            validate_riak_addr("pbc_listen", addr)?;
+        }
+        if let Some(addr) = self.http_listen.as_deref() {
+            validate_riak_addr("http_listen", addr)?;
+        }
+        if let Some(n) = self.aae_full_sweep_interval_seconds {
+            if n == 0 {
+                return Err(ConfError::BadServer {
+                    field: "aae_full_sweep_interval_seconds",
+                    value: n.to_string(),
+                    reason: "must be > 0".into(),
+                });
+            }
+        }
+        if let Some(n) = self.aae_segment_interval_seconds {
+            if n == 0 {
+                return Err(ConfError::BadServer {
+                    field: "aae_segment_interval_seconds",
+                    value: n.to_string(),
+                    reason: "must be > 0".into(),
+                });
+            }
+        }
+        if let (Some(seg), Some(full)) = (
+            self.aae_segment_interval_seconds,
+            self.aae_full_sweep_interval_seconds,
+        ) {
+            if seg > full {
+                return Err(ConfError::BadServer {
+                    field: "aae_segment_interval_seconds",
+                    value: seg.to_string(),
+                    reason: format!("must be <= aae_full_sweep_interval_seconds ({full})"),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_riak_addr(field: &'static str, value: &str) -> Result<(), ConfError> {
+    use std::net::ToSocketAddrs;
+    if value.is_empty() {
+        return Err(ConfError::BadServer {
+            field,
+            value: value.to_string(),
+            reason: "riak listen address must not be empty".into(),
+        });
+    }
+    // Accept anything that resolves; mirrors how the rest of
+    // the engine validates `listen:` strings (parse first,
+    // resolve as a fallback).
+    if value.parse::<std::net::SocketAddr>().is_ok() {
+        return Ok(());
+    }
+    match value.to_socket_addrs() {
+        Ok(mut iter) => {
+            if iter.next().is_some() {
+                Ok(())
+            } else {
+                Err(ConfError::BadServer {
+                    field,
+                    value: value.to_string(),
+                    reason: "resolved to no addresses".into(),
+                })
+            }
+        }
+        Err(e) => Err(ConfError::BadServer {
+            field,
+            value: value.to_string(),
+            reason: format!("could not resolve: {e}"),
+        }),
+    }
 }
 
 /// Routing-property bundle attached to a key bucket.
@@ -703,6 +858,9 @@ impl ConfPool {
 
         self.validate_bucket_types()?;
         self.validate_hinted_handoff()?;
+        if let Some(r) = &self.riak {
+            r.validate()?;
+        }
 
         match &self.servers {
             None => return Err(ConfError::MissingRequired("servers")),
@@ -1228,5 +1386,75 @@ hint_drain_interval_ms: 5000
         p.hint_drain_interval_ms = Some(0);
         p.apply_defaults();
         assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn riak_block_validates_when_unset() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak::default());
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn riak_block_validates_with_addresses() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            pbc_listen: Some("127.0.0.1:8087".into()),
+            http_listen: Some("127.0.0.1:8098".into()),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn riak_block_rejects_bad_pbc_addr() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            pbc_listen: Some(String::new()),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        assert!(matches!(p.validate("p"), Err(ConfError::BadServer { .. })));
+    }
+
+    #[test]
+    fn riak_block_rejects_segment_above_full_sweep() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            aae_segment_interval_seconds: Some(120),
+            aae_full_sweep_interval_seconds: Some(60),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        assert!(matches!(p.validate("p"), Err(ConfError::BadServer { .. })));
+    }
+
+    #[test]
+    fn riak_block_round_trips_through_yaml() {
+        let yaml = r"
+p:
+  listen: 127.0.0.1:1
+  dyn_listen: 127.0.0.1:2
+  tokens: '0'
+  servers:
+  - 127.0.0.1:3:1
+  data_store: 0
+  riak:
+    pbc_listen: 127.0.0.1:8087
+    http_listen: 127.0.0.1:8098
+    aae_enabled: true
+    aae_full_sweep_interval_seconds: 3600
+    aae_segment_interval_seconds: 30
+";
+        let cfg: std::collections::BTreeMap<String, ConfPool> = serde_yaml::from_str(yaml).unwrap();
+        let p = cfg.get("p").unwrap();
+        let r = p.riak.as_ref().unwrap();
+        assert_eq!(r.pbc_listen.as_deref(), Some("127.0.0.1:8087"));
+        assert_eq!(r.http_listen.as_deref(), Some("127.0.0.1:8098"));
+        assert_eq!(r.aae_enabled, Some(true));
+        assert_eq!(r.aae_full_sweep_interval_seconds, Some(3600));
+        assert_eq!(r.aae_segment_interval_seconds, Some(30));
     }
 }

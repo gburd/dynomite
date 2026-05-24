@@ -134,6 +134,25 @@ pub struct Cli {
     /// `rfc5424`, `rfc3164`, `json`, or `ndjson`.
     #[arg(long = "log-format", value_name = "FMT")]
     pub log_format: Option<String>,
+
+    /// Override the YAML `riak.pbc_listen` knob. Available only
+    /// when the binary is compiled with `--features riak`.
+    #[cfg(feature = "riak")]
+    #[arg(long = "riak-pbc-listen", value_name = "HOST:PORT")]
+    pub riak_pbc_listen: Option<String>,
+
+    /// Override the YAML `riak.http_listen` knob. Available only
+    /// when the binary is compiled with `--features riak`.
+    #[cfg(feature = "riak")]
+    #[arg(long = "riak-http-listen", value_name = "HOST:PORT")]
+    pub riak_http_listen: Option<String>,
+
+    /// Force-enable the Riak active anti-entropy scheduler
+    /// regardless of the YAML setting. Available only when the
+    /// binary is compiled with `--features riak`.
+    #[cfg(feature = "riak")]
+    #[arg(long = "riak-aae-enabled")]
+    pub riak_aae_enabled: bool,
 }
 
 /// The version banner the reference engine writes via
@@ -177,6 +196,9 @@ pub fn format_version_banner(version: &str) -> String {
 /// assert!(s.contains("Dynomite (Rust) extensions:"));
 /// assert!(s.contains("--log-format=FMT"));
 /// assert!(s.contains("-g, --gossip"));
+/// assert!(s.contains("--riak-pbc-listen"));
+/// assert!(s.contains("--riak-http-listen"));
+/// assert!(s.contains("--riak-aae-enabled"));
 /// ```
 #[must_use]
 pub fn format_usage() -> String {
@@ -205,7 +227,10 @@ pub fn format_usage() -> String {
     out.push_str(
         "Dynomite (Rust) extensions:\r\n\
          \x20 -g, --gossip                 : force-enable gossip regardless of the YAML setting\r\n\
-         \x20     --log-format=FMT         : log format (default, rfc5424, rfc3164, json, ndjson)\n",
+         \x20     --log-format=FMT         : log format (default, rfc5424, rfc3164, json, ndjson)\r\n\
+         \x20     --riak-pbc-listen=HOST:PORT : Riak PBC listener (requires --features riak)\r\n\
+         \x20     --riak-http-listen=HOST:PORT : Riak HTTP gateway (requires --features riak)\r\n\
+         \x20     --riak-aae-enabled       : enable Riak active anti-entropy (requires --features riak)\n",
     );
     out
 }
