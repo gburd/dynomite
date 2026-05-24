@@ -48,6 +48,18 @@ pub mod defaults {
     pub const DYN_CONNECTIONS: i64 = 100;
     /// Default `gos_interval:` (ms).
     pub const GOS_INTERVAL_MS: i64 = 30_000;
+    /// Default `enable_hinted_handoff:` value. The feature is
+    /// off by default until operators opt in.
+    pub const ENABLE_HINTED_HANDOFF: bool = false;
+    /// Default `hint_ttl_seconds:` (24h). Hints older than this
+    /// are dropped during expiry sweeps.
+    pub const HINT_TTL_SECONDS: u64 = 86_400;
+    /// Default `hint_store_max_bytes:` (64 MiB) cap on the
+    /// node-local in-memory hint store.
+    pub const HINT_STORE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+    /// Default `hint_drain_interval_ms:` between hint drainer
+    /// sweeps.
+    pub const HINT_DRAIN_INTERVAL_MS: u64 = 30_000;
     /// Default per-connection message rate.
     pub const CONN_MSG_RATE: u32 = 50_000;
     /// Default `stats_interval:` (ms).
@@ -284,6 +296,39 @@ pub struct ConfPool {
     pub remote_peer_connections: Option<u8>,
     /// `read_repairs_enabled:` - enable read-repair on quorum mismatch.
     pub read_repairs_enabled: Option<bool>,
+    /// `enable_hinted_handoff:` - when true, writes whose target
+    /// peer is in [`crate::cluster::peer::PeerState::Down`] (or
+    /// whose outbound channel is closed / full) are stored in a
+    /// node-local hint queue and counted toward the consistency
+    /// threshold; a background drainer ships the hints to the
+    /// peer once it returns to
+    /// [`crate::cluster::peer::PeerState::Normal`]. When false
+    /// (the default) the dispatcher behaviour is unchanged: a
+    /// Down or unreachable target is silently skipped and the
+    /// request fails with `DynomiteNoQuorumAchieved` if the
+    /// remaining targets cannot satisfy the consistency level.
+    #[serde(default)]
+    pub enable_hinted_handoff: Option<bool>,
+    /// `hint_ttl_seconds:` - per-hint expiry. Hints older than
+    /// this many seconds are dropped during periodic sweeps to
+    /// bound the in-memory store. Defaults to 86400 (24 hours).
+    /// Ignored when `enable_hinted_handoff` is false.
+    #[serde(default)]
+    pub hint_ttl_seconds: Option<u64>,
+    /// `hint_store_max_bytes:` - upper bound on the in-memory
+    /// hint store. Once the store reaches this many bytes,
+    /// further enqueues fail with
+    /// [`crate::cluster::hints::HintStoreError::OverCapacity`]
+    /// and the dispatcher falls back to its non-handoff error
+    /// path. Defaults to 64 MiB. Ignored when
+    /// `enable_hinted_handoff` is false.
+    #[serde(default)]
+    pub hint_store_max_bytes: Option<u64>,
+    /// `hint_drain_interval_ms:` - period of the background hint
+    /// drainer sweep. Defaults to 30000 ms (30 seconds). Ignored
+    /// when `enable_hinted_handoff` is false.
+    #[serde(default)]
+    pub hint_drain_interval_ms: Option<u64>,
     /// `log_format:` - selectable shape for tracing output.
     ///
     /// Accepted values are `default`, `rfc5424`, `rfc3164`, `json`,
@@ -570,6 +615,26 @@ impl ConfPool {
         if self.enable_gossip.is_none() {
             self.enable_gossip = Some(false);
         }
+        self.apply_hinted_handoff_defaults();
+    }
+
+    /// Fill in the hinted-handoff knobs. Factored out of
+    /// [`Self::apply_defaults`] to keep the parent method under
+    /// the project's per-function line budget while still
+    /// covering every hinted-handoff key with a default.
+    fn apply_hinted_handoff_defaults(&mut self) {
+        if self.enable_hinted_handoff.is_none() {
+            self.enable_hinted_handoff = Some(defaults::ENABLE_HINTED_HANDOFF);
+        }
+        if self.hint_ttl_seconds.is_none() {
+            self.hint_ttl_seconds = Some(defaults::HINT_TTL_SECONDS);
+        }
+        if self.hint_store_max_bytes.is_none() {
+            self.hint_store_max_bytes = Some(defaults::HINT_STORE_MAX_BYTES);
+        }
+        if self.hint_drain_interval_ms.is_none() {
+            self.hint_drain_interval_ms = Some(defaults::HINT_DRAIN_INTERVAL_MS);
+        }
     }
 
     /// Run the full validation pass against the (presumably finalized)
@@ -637,6 +702,7 @@ impl ConfPool {
         }
 
         self.validate_bucket_types()?;
+        self.validate_hinted_handoff()?;
 
         match &self.servers {
             None => return Err(ConfError::MissingRequired("servers")),
@@ -753,6 +819,43 @@ impl ConfPool {
                     field: "default_bucket_type",
                     value: name.clone(),
                     reason: "references an undefined bucket-type name".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_hinted_handoff(&self) -> Result<(), ConfError> {
+        if self.enable_hinted_handoff != Some(true) {
+            return Ok(());
+        }
+        if let Some(ttl) = self.hint_ttl_seconds {
+            if ttl == 0 {
+                return Err(ConfError::BadServer {
+                    field: "hint_ttl_seconds",
+                    value: ttl.to_string(),
+                    reason: "must be a positive number when enable_hinted_handoff is true"
+                        .to_string(),
+                });
+            }
+        }
+        if let Some(cap) = self.hint_store_max_bytes {
+            if cap == 0 {
+                return Err(ConfError::BadServer {
+                    field: "hint_store_max_bytes",
+                    value: cap.to_string(),
+                    reason: "must be a positive number when enable_hinted_handoff is true"
+                        .to_string(),
+                });
+            }
+        }
+        if let Some(period) = self.hint_drain_interval_ms {
+            if period == 0 {
+                return Err(ConfError::BadServer {
+                    field: "hint_drain_interval_ms",
+                    value: period.to_string(),
+                    reason: "must be a positive number when enable_hinted_handoff is true"
+                        .to_string(),
                 });
             }
         }
@@ -1038,5 +1141,92 @@ default_bucket_type: cold
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn hinted_handoff_default_off_with_canonical_constants() {
+        let mut p = pool();
+        p.apply_defaults();
+        assert_eq!(p.enable_hinted_handoff, Some(false));
+        assert_eq!(p.hint_ttl_seconds, Some(defaults::HINT_TTL_SECONDS));
+        assert_eq!(p.hint_store_max_bytes, Some(defaults::HINT_STORE_MAX_BYTES));
+        assert_eq!(
+            p.hint_drain_interval_ms,
+            Some(defaults::HINT_DRAIN_INTERVAL_MS)
+        );
+        assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn hinted_handoff_yaml_round_trip() {
+        let yaml = r"
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+enable_hinted_handoff: true
+hint_ttl_seconds: 7200
+hint_store_max_bytes: 8388608
+hint_drain_interval_ms: 5000
+";
+        let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.enable_hinted_handoff, Some(true));
+        assert_eq!(p.hint_ttl_seconds, Some(7200));
+        assert_eq!(p.hint_store_max_bytes, Some(8_388_608));
+        assert_eq!(p.hint_drain_interval_ms, Some(5_000));
+        let dumped = serde_yaml::to_string(&p).unwrap();
+        let p2: ConfPool = serde_yaml::from_str(&dumped).unwrap();
+        assert_eq!(p2.enable_hinted_handoff, p.enable_hinted_handoff);
+        assert_eq!(p2.hint_ttl_seconds, p.hint_ttl_seconds);
+        assert_eq!(p2.hint_store_max_bytes, p.hint_store_max_bytes);
+        assert_eq!(p2.hint_drain_interval_ms, p.hint_drain_interval_ms);
+    }
+
+    #[test]
+    fn hinted_handoff_zero_ttl_rejected_when_enabled() {
+        let mut p = pool();
+        p.enable_hinted_handoff = Some(true);
+        p.hint_ttl_seconds = Some(0);
+        p.apply_defaults();
+        // apply_defaults() does NOT overwrite Some(0) with the
+        // default; the validator should reject it.
+        let err = p.validate("p").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "hint_ttl_seconds",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn hinted_handoff_zero_max_bytes_rejected_when_enabled() {
+        let mut p = pool();
+        p.enable_hinted_handoff = Some(true);
+        p.hint_store_max_bytes = Some(0);
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "hint_store_max_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn hinted_handoff_zero_values_ignored_when_disabled() {
+        // With handoff off, the validator must NOT reject
+        // out-of-range values: operators may legitimately leave
+        // them at zero with handoff off.
+        let mut p = pool();
+        p.enable_hinted_handoff = Some(false);
+        p.hint_ttl_seconds = Some(0);
+        p.hint_store_max_bytes = Some(0);
+        p.hint_drain_interval_ms = Some(0);
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok());
     }
 }

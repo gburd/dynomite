@@ -164,6 +164,13 @@ pub struct ClusterDispatcher {
     /// dispatcher (and the pool with it) shares the same free
     /// list across every cluster handle.
     mbuf_pool: MbufPool,
+    /// Optional node-local hint store. When set AND the pool's
+    /// `enable_hinted_handoff` flag is true, write requests
+    /// targeted at peers in [`crate::cluster::peer::PeerState::Down`]
+    /// (or at peers whose outbound channel is closed / full) are
+    /// recorded as hints and counted toward the consistency
+    /// threshold, instead of being silently skipped.
+    hint_store: Option<Arc<crate::cluster::hints::HintStore>>,
 }
 
 impl ClusterDispatcher {
@@ -176,8 +183,6 @@ impl ClusterDispatcher {
     /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
     /// # use dynomite::cluster::peer::{Peer, PeerEndpoint};
     /// # use dynomite::hashkit::DynToken;
-    /// # use dynomite::conf::{DataStore, HashType};
-    /// # use dynomite::msg::ConsistencyLevel;
     /// # use std::sync::Arc;
     /// # let cfg = PoolConfig::default();
     /// # let local = Peer::new(
@@ -195,6 +200,7 @@ impl ClusterDispatcher {
             backend: None,
             peer_backends: std::collections::HashMap::new(),
             mbuf_pool: MbufPool::default(),
+            hint_store: None,
         }
     }
 
@@ -209,20 +215,9 @@ impl ClusterDispatcher {
     /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
     /// # use dynomite::cluster::peer::{Peer, PeerEndpoint};
     /// # use dynomite::hashkit::DynToken;
-    /// # use dynomite::conf::{DataStore, HashType};
-    /// # use dynomite::msg::ConsistencyLevel;
     /// # use dynomite::io::mbuf::MbufPool;
     /// # use std::sync::Arc;
-    /// # let cfg = PoolConfig {
-    /// #    name: "p".into(), dc: "d".into(), rack: "r".into(),
-    /// #    data_store: DataStore::Redis, hash: HashType::Murmur,
-    /// #    read_consistency: ConsistencyLevel::DcOne,
-    /// #    write_consistency: ConsistencyLevel::DcOne,
-    /// #    timeout_ms: 5_000, server_retry_timeout_ms: 30_000,
-    /// #    server_failure_limit: 2, auto_eject_hosts: false,
-    /// #    enable_gossip: false,
-    /// #    bucket_types: Vec::new(), default_bucket_type: None,
-    /// # };
+    /// # let cfg = PoolConfig::default();
     /// # let local = Peer::new(
     /// #    0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
     /// #    vec![DynToken::from_u32(0)], true, true, false,
@@ -297,6 +292,57 @@ impl ClusterDispatcher {
         &self.pool
     }
 
+    /// Attach a [`crate::cluster::hints::HintStore`].
+    ///
+    /// When set AND the pool's `enable_hinted_handoff` flag is
+    /// `true`, write requests targeted at peers in
+    /// [`crate::cluster::peer::PeerState::Down`] (or at peers
+    /// whose outbound channel is closed / full) are stored as
+    /// hints and counted toward the consistency threshold. The
+    /// background drainer task in `dynomited` is responsible
+    /// for shipping the hints back to the peer once it returns
+    /// to [`crate::cluster::peer::PeerState::Normal`]. Without
+    /// this builder call (or with `enable_hinted_handoff: false`)
+    /// the dispatcher behaviour is unchanged: a Down or
+    /// unreachable target is silently skipped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use dynomite::cluster::dispatch::ClusterDispatcher;
+    /// # use dynomite::cluster::hints::HintStore;
+    /// # use dynomite::cluster::peer::{Peer, PeerEndpoint};
+    /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// # use dynomite::hashkit::DynToken;
+    /// let cfg = PoolConfig { enable_hinted_handoff: true, ..PoolConfig::default() };
+    /// let local = Peer::new(
+    ///     0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
+    ///     vec![DynToken::from_u32(0)], true, true, false,
+    /// );
+    /// let pool = Arc::new(ServerPool::new(cfg, vec![local]));
+    /// let store = Arc::new(HintStore::new(64 * 1024 * 1024));
+    /// let _disp = ClusterDispatcher::new(pool).with_hint_store(store);
+    /// ```
+    #[must_use]
+    pub fn with_hint_store(mut self, store: Arc<crate::cluster::hints::HintStore>) -> Self {
+        self.hint_store = Some(store);
+        self
+    }
+
+    /// Borrow the wired hint store, if any.
+    #[must_use]
+    pub fn hint_store(&self) -> Option<&Arc<crate::cluster::hints::HintStore>> {
+        self.hint_store.as_ref()
+    }
+
+    /// True when both the hint store is wired AND the pool has
+    /// `enable_hinted_handoff: true`. Hot-path predicate.
+    #[must_use]
+    pub fn hinted_handoff_active(&self) -> bool {
+        self.hint_store.is_some() && self.pool.config().enable_hinted_handoff
+    }
+
     /// Compute the routing plan for `req` with the supplied key.
     ///
     /// `key` is the primary key of the request (the first key
@@ -336,7 +382,16 @@ impl ClusterDispatcher {
         };
         let n_val_cap = bucket_type.map_or(0, |bt| bt.n_val);
         let dcs = self.pool.datacenters().read();
-        let routable = collect_routable(&dcs, &peers, &token);
+        // When hinted handoff is active and the request is a
+        // write, peers in `Down` are kept in the routable set
+        // so the dispatcher can hint them at fan-out time. The
+        // hint counts toward the consistency threshold; the
+        // background drainer ships the hint once the peer
+        // returns to `Normal`. For reads (and for writes when
+        // handoff is off), Down peers are filtered out as
+        // before.
+        let include_down = self.hinted_handoff_active() && !is_read;
+        let routable = collect_routable(&dcs, &peers, &token, include_down);
         if routable.is_empty() {
             return DispatchPlan::NoTargets;
         }
@@ -378,13 +433,17 @@ fn collect_routable(
     dcs: &[crate::cluster::Datacenter],
     peers: &[crate::cluster::peer::Peer],
     token: &crate::hashkit::DynToken,
+    include_down: bool,
 ) -> Vec<(usize, usize, u32)> {
     let mut routable: Vec<(usize, usize, u32)> = Vec::new();
     for (dc_idx, dc) in dcs.iter().enumerate() {
         for (rack_idx, rack) in dc.racks().iter().enumerate() {
             if let Some(peer_idx) = vnode::dispatch(rack.continuums(), token) {
                 if let Some(peer) = peers.get(peer_idx as usize) {
-                    if peer.state().is_routable() {
+                    let state = peer.state();
+                    let accept = state.is_routable()
+                        || (include_down && matches!(state, crate::cluster::peer::PeerState::Down));
+                    if accept {
                         routable.push((dc_idx, rack_idx, peer_idx));
                     }
                 }
@@ -592,6 +651,17 @@ impl ClusterDispatcher {
     /// to the original `responder`. Divergent replicas are
     /// scheduled for read-repair writes via the same
     /// `peer_backends` channels.
+    ///
+    /// When [`hinted_handoff_active`](Self::hinted_handoff_active)
+    /// reports true and the request is a write, targets that
+    /// are currently in [`crate::cluster::peer::PeerState::Down`]
+    /// are recorded in the hint store instead of being sent.
+    /// A synthetic `+OK\r\n` reply is fed to the coalescer on
+    /// the hinted target's behalf so the consistency threshold
+    /// can be met by the surviving replicas plus the hint(s).
+    /// On `try_send` failure (channel closed or full) for a
+    /// non-Down peer, the dispatcher likewise falls back to
+    /// hinting before declaring the target lost.
     fn dispatch_replicas(
         &self,
         req: &Msg,
@@ -614,18 +684,35 @@ impl ClusterDispatcher {
         if bytes.is_empty() {
             return DispatchOutcome::Drop;
         }
+        // Snapshot the per-target current state so we do not
+        // re-acquire the peer-table lock inside the per-target
+        // loop. Local peers are always treated as Normal.
+        let peer_states = self.snapshot_peer_states(targets);
+        let is_read = matches!(req.ty(), MsgType::Unknown) || req.flags().is_read;
+        let is_write = !is_read;
+        let handoff_active = self.hinted_handoff_active() && is_write;
         // Single-target path: no coalescing needed; forward
         // directly to the original responder.
         if targets.len() == 1 {
-            return self.dispatch_replicas_direct(req, req_span, targets, &bytes, responder);
+            return self.dispatch_replicas_direct(
+                req,
+                req_span,
+                targets,
+                &bytes,
+                &responder,
+                &HandoffCtx {
+                    handoff_active,
+                    peer_states: &peer_states,
+                },
+            );
         }
         // Multi-target path: install the coalescer.
         let cfg = self.pool.config();
         let local_dc = cfg.dc.clone();
-        // Channel each replica's reply lands on; bounded to
-        // `targets.len() + 1` so even when every replica plus a
-        // late repair reply lands in the same scheduling tick
-        // the channel never blocks the reply.
+        // Channel each replica's reply lands on. Sized to
+        // `targets.len() + 1`: every target produces at most one
+        // envelope (real or hint-synthesised) and we leave a
+        // spare so a late repair reply never blocks the actor.
         let (intermediate_tx, intermediate_rx) =
             mpsc::channel::<OutboundEnvelope>(targets.len() + 1);
         // Build the tracker's target list and capture the
@@ -651,32 +738,23 @@ impl ClusterDispatcher {
         // Fan out: each per-target outbound feeds the coalescer
         // channel, NOT the client's responder.
         let mut sent = 0usize;
+        let mut hinted = 0usize;
         for target in targets {
-            if target.is_local {
-                if let Some(tx) = self.backend.as_ref() {
-                    let env = OutboundRequest {
-                        bytes: bytes.clone(),
-                        req_id: req.id(),
-                        responder: intermediate_tx.clone(),
-                        span: req_span.clone(),
-                        ty: crate::proto::dnode::DmsgType::Req,
-                        target_peer_idx: Some(target.peer_idx),
-                    };
-                    if tx.try_send(env).is_ok() {
+            let action = Self::choose_target_action(target, handoff_active, &peer_states);
+            match action {
+                TargetAction::Send => {
+                    if self.fanout_send(target, req, req_span, &bytes, &intermediate_tx) {
                         sent += 1;
+                    } else if handoff_active
+                        && self.hint_target(target, &bytes, req, req_span, &intermediate_tx)
+                    {
+                        hinted += 1;
                     }
                 }
-            } else if let Some(tx) = self.peer_backends.get(&target.peer_idx) {
-                let env = OutboundRequest {
-                    bytes: bytes.clone(),
-                    req_id: req.id(),
-                    responder: intermediate_tx.clone(),
-                    span: req_span.clone(),
-                    ty: crate::proto::dnode::DmsgType::Req,
-                    target_peer_idx: Some(target.peer_idx),
-                };
-                if tx.try_send(env).is_ok() {
-                    sent += 1;
+                TargetAction::Hint => {
+                    if self.hint_target(target, &bytes, req, req_span, &intermediate_tx) {
+                        hinted += 1;
+                    }
                 }
             }
         }
@@ -685,7 +763,7 @@ impl ClusterDispatcher {
         // sender has been dropped. (`OutboundRequest` owns one
         // sender each; once they finish they drop it.)
         drop(intermediate_tx);
-        if sent == 0 {
+        if sent + hinted == 0 {
             return DispatchOutcome::Error(self.no_quorum_error(req));
         }
         let req_id = req.id();
@@ -705,20 +783,159 @@ impl ClusterDispatcher {
         DispatchOutcome::Pending
     }
 
+    /// Capture the current `PeerState` for each target so the
+    /// per-target loop does not re-acquire the read lock on
+    /// every iteration. Local-node targets are reported as
+    /// `Normal` regardless of the on-disk peer entry.
+    fn snapshot_peer_states(
+        &self,
+        targets: &[ReplicaTarget],
+    ) -> std::collections::HashMap<u32, crate::cluster::peer::PeerState> {
+        use crate::cluster::peer::PeerState;
+        let peers = self.pool.peers().read();
+        let mut out = std::collections::HashMap::with_capacity(targets.len());
+        for t in targets {
+            let state = if t.is_local {
+                PeerState::Normal
+            } else {
+                peers
+                    .get(t.peer_idx as usize)
+                    .map_or(PeerState::Unknown, crate::cluster::peer::Peer::state)
+            };
+            out.insert(t.peer_idx, state);
+        }
+        out
+    }
+
+    fn choose_target_action(
+        target: &ReplicaTarget,
+        handoff_active: bool,
+        peer_states: &std::collections::HashMap<u32, crate::cluster::peer::PeerState>,
+    ) -> TargetAction {
+        use crate::cluster::peer::PeerState;
+        if !handoff_active {
+            return TargetAction::Send;
+        }
+        let state = peer_states
+            .get(&target.peer_idx)
+            .copied()
+            .unwrap_or(PeerState::Unknown);
+        match state {
+            PeerState::Down => TargetAction::Hint,
+            _ => TargetAction::Send,
+        }
+    }
+
+    /// Forward one target via its outbound channel. Returns
+    /// `true` on a successful `try_send`.
+    fn fanout_send(
+        &self,
+        target: &ReplicaTarget,
+        req: &Msg,
+        req_span: &tracing::Span,
+        bytes: &[u8],
+        intermediate_tx: &mpsc::Sender<OutboundEnvelope>,
+    ) -> bool {
+        let env = OutboundRequest {
+            bytes: bytes.to_vec(),
+            req_id: req.id(),
+            responder: intermediate_tx.clone(),
+            span: req_span.clone(),
+            ty: crate::proto::dnode::DmsgType::Req,
+            target_peer_idx: Some(target.peer_idx),
+        };
+        if target.is_local {
+            self.backend
+                .as_ref()
+                .is_some_and(|tx| tx.try_send(env).is_ok())
+        } else {
+            self.peer_backends
+                .get(&target.peer_idx)
+                .is_some_and(|tx| tx.try_send(env).is_ok())
+        }
+    }
+
+    /// Record `bytes` as a hint for `target`'s peer and feed the
+    /// coalescer a synthetic success reply. Returns `true` when
+    /// both the enqueue and the synth-push succeeded.
+    fn hint_target(
+        &self,
+        target: &ReplicaTarget,
+        bytes: &[u8],
+        req: &Msg,
+        req_span: &tracing::Span,
+        intermediate_tx: &mpsc::Sender<OutboundEnvelope>,
+    ) -> bool {
+        let Some(store) = self.hint_store.as_ref() else {
+            return false;
+        };
+        let cfg = self.pool.config();
+        let ttl = std::time::Duration::from_secs(cfg.hint_ttl_seconds.max(1));
+        match store.enqueue(target.peer_idx, bytes.to_vec(), ttl) {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::debug!(
+                    target: "dynomite::hints",
+                    peer_idx = target.peer_idx,
+                    error = %e,
+                    "hint enqueue failed"
+                );
+                return false;
+            }
+        }
+        let synth = synth_hint_reply(req, &self.mbuf_pool);
+        let env = OutboundEnvelope {
+            req_id: req.id(),
+            rsp: synth,
+            span: req_span.clone(),
+            source_peer_idx: Some(target.peer_idx),
+        };
+        if intermediate_tx.try_send(env).is_err() {
+            // The channel is sized for one envelope per target;
+            // an immediate full means the coalescer task has
+            // exited. Still report success so the hint sits in
+            // the store for the drainer.
+            tracing::debug!(
+                target: "dynomite::hints",
+                peer_idx = target.peer_idx,
+                "hint synth-reply could not be queued; coalescer absent"
+            );
+        }
+        tracing::debug!(
+            target: "dynomite::hints",
+            peer_idx = target.peer_idx,
+            bytes = bytes.len(),
+            "stored hint for down peer"
+        );
+        true
+    }
+
     fn dispatch_replicas_direct(
         &self,
         req: &Msg,
         req_span: &tracing::Span,
         targets: &[ReplicaTarget],
         bytes: &[u8],
-        responder: ServerSink,
+        responder: &ServerSink,
+        ctx: &HandoffCtx<'_>,
     ) -> DispatchOutcome {
         debug_assert_eq!(targets.len(), 1);
         let target = &targets[0];
+        // If the target is Down and handoff is active, hint it
+        // and feed the responder a synth `+OK\r\n` so the
+        // client sees the write as having succeeded.
+        if let TargetAction::Hint =
+            Self::choose_target_action(target, ctx.handoff_active, ctx.peer_states)
+        {
+            if self.hint_single_target_direct(target, bytes, req, req_span, responder) {
+                return DispatchOutcome::Pending;
+            }
+            return DispatchOutcome::Error(self.no_quorum_error(req));
+        }
         let env = OutboundRequest {
             bytes: bytes.to_vec(),
             req_id: req.id(),
-            responder,
+            responder: responder.clone(),
             span: req_span.clone(),
             ty: crate::proto::dnode::DmsgType::Req,
             target_peer_idx: Some(target.peer_idx),
@@ -733,10 +950,51 @@ impl ClusterDispatcher {
                 .is_some_and(|tx| tx.try_send(env).is_ok())
         };
         if sent {
-            DispatchOutcome::Pending
-        } else {
-            DispatchOutcome::Error(self.no_quorum_error(req))
+            return DispatchOutcome::Pending;
         }
+        if ctx.handoff_active
+            && self.hint_single_target_direct(target, bytes, req, req_span, responder)
+        {
+            return DispatchOutcome::Pending;
+        }
+        DispatchOutcome::Error(self.no_quorum_error(req))
+    }
+
+    /// Single-target hint path. Records the hint in the store
+    /// and pushes a `+OK\r\n` envelope onto the responder. The
+    /// client sees the write as having succeeded; the drainer
+    /// will replay the request to the peer when it returns.
+    fn hint_single_target_direct(
+        &self,
+        target: &ReplicaTarget,
+        bytes: &[u8],
+        req: &Msg,
+        req_span: &tracing::Span,
+        responder: &ServerSink,
+    ) -> bool {
+        let Some(store) = self.hint_store.as_ref() else {
+            return false;
+        };
+        let cfg = self.pool.config();
+        let ttl = std::time::Duration::from_secs(cfg.hint_ttl_seconds.max(1));
+        if let Err(e) = store.enqueue(target.peer_idx, bytes.to_vec(), ttl) {
+            tracing::debug!(
+                target: "dynomite::hints",
+                peer_idx = target.peer_idx,
+                error = %e,
+                "hint enqueue failed (single-target)"
+            );
+            return false;
+        }
+        let synth = synth_hint_reply(req, &self.mbuf_pool);
+        let env = OutboundEnvelope {
+            req_id: req.id(),
+            rsp: synth,
+            span: req_span.clone(),
+            source_peer_idx: Some(target.peer_idx),
+        };
+        let _ = responder.try_send(env);
+        true
     }
 
     fn no_quorum_error(&self, req: &Msg) -> Msg {
@@ -926,6 +1184,41 @@ fn decode_winner_for_repair(payload: &[u8]) -> Option<RepairAction> {
     Some(RepairAction::Write(payload[body_start..body_end].to_vec()))
 }
 
+/// Bundle of handoff state passed into
+/// [`ClusterDispatcher::dispatch_replicas_direct`]. Avoids a
+/// noisy parameter list while keeping the per-call decisions
+/// ("is handoff on?", "what state is each target in?") in one
+/// place.
+struct HandoffCtx<'a> {
+    handoff_active: bool,
+    peer_states: &'a std::collections::HashMap<u32, crate::cluster::peer::PeerState>,
+}
+
+/// Per-target dispatch action chosen by
+/// [`ClusterDispatcher::choose_target_action`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TargetAction {
+    /// Forward the request via the per-peer outbound channel.
+    Send,
+    /// Record a hint and feed the coalescer a synth success
+    /// reply.
+    Hint,
+}
+
+/// Synthetic reply pushed into the coalescer on behalf of a
+/// hinted target. Always a `+OK\r\n` Redis status reply: the
+/// dispatcher decouples the hint from the eventual peer reply
+/// (the drainer will fire-and-forget the hint when the peer
+/// returns), so the synth shape only needs to satisfy the
+/// coalescer for SET-style writes which is the dominant case
+/// for hinted handoff. Mismatched-shape writes (DEL with one
+/// hinted target) coalesce to the surviving real reply via the
+/// plurality / quorum branch and the divergence is harmless
+/// because read-repair only fires for `MsgType::ReqRedisGet`.
+fn synth_hint_reply(req: &Msg, pool: &MbufPool) -> Msg {
+    crate::msg::response::make_simple_redis(req, pool, b"+OK\r\n")
+}
+
 /// Action a read-repair task should take against a divergent
 /// replica.
 enum RepairAction {
@@ -1038,25 +1331,16 @@ fn schedule_read_repair(
 mod tests {
     use super::*;
     use crate::cluster::peer::{Peer, PeerEndpoint, PeerState};
-    use crate::conf::{DataStore, HashType};
+    use crate::conf::DataStore;
     use crate::hashkit::DynToken;
 
     fn cfg(read: ConsistencyLevel, write: ConsistencyLevel) -> crate::cluster::PoolConfig {
         crate::cluster::PoolConfig {
-            name: "p".into(),
-            dc: "dc1".into(),
-            rack: "rA".into(),
-            data_store: DataStore::Redis,
-            hash: HashType::Murmur,
             read_consistency: read,
             write_consistency: write,
-            timeout_ms: 5_000,
-            server_retry_timeout_ms: 30_000,
-            server_failure_limit: 2,
-            auto_eject_hosts: false,
-            enable_gossip: false,
-            bucket_types: Vec::new(),
-            default_bucket_type: None,
+            dc: "dc1".into(),
+            rack: "rA".into(),
+            ..crate::cluster::PoolConfig::default()
         }
     }
 

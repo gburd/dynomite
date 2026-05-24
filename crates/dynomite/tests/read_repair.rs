@@ -17,7 +17,6 @@ use std::time::Duration;
 use dynomite::cluster::dispatch::ClusterDispatcher;
 use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
-use dynomite::conf::{DataStore, HashType};
 use dynomite::hashkit::DynToken;
 use dynomite::msg::keypos::KeyPos;
 use dynomite::msg::{ConsistencyLevel, Msg, MsgType};
@@ -108,20 +107,11 @@ fn local_peer(idx: u32, rack: &str, tok: u32, is_local: bool) -> Peer {
 
 fn pool_three_replicas() -> Arc<ServerPool> {
     let cfg = PoolConfig {
-        name: "p".into(),
         dc: "dc1".into(),
         rack: "rA".into(),
-        data_store: DataStore::Redis,
-        hash: HashType::Murmur,
         read_consistency: ConsistencyLevel::DcQuorum,
         write_consistency: ConsistencyLevel::DcQuorum,
-        timeout_ms: 5_000,
-        server_retry_timeout_ms: 30_000,
-        server_failure_limit: 2,
-        auto_eject_hosts: false,
-        enable_gossip: false,
-        bucket_types: Vec::new(),
-        default_bucket_type: None,
+        ..PoolConfig::default()
     };
     let peers = vec![
         // Make peer 0 NON-local so the dispatcher does NOT
