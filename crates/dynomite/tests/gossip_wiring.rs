@@ -22,30 +22,18 @@ use std::time::{Duration, Instant};
 use dynomite::cluster::gossip::GossipHandler;
 use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
-use dynomite::conf::{DataStore, HashType};
 use dynomite::hashkit::DynToken;
 use dynomite::io::mbuf::MbufPool;
-use dynomite::msg::ConsistencyLevel;
 use dynomite::proto::dnode::{dmsg_write, DmsgType, DnodeParser, ParseStep};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn pool(local_pname: &str, remote_pname: &str) -> Arc<ServerPool> {
     let cfg = PoolConfig {
-        name: "p".into(),
         dc: "dc1".into(),
         rack: "r1".into(),
-        data_store: DataStore::Redis,
-        hash: HashType::Murmur,
-        read_consistency: ConsistencyLevel::DcOne,
-        write_consistency: ConsistencyLevel::DcOne,
-        timeout_ms: 5_000,
-        server_retry_timeout_ms: 30_000,
-        server_failure_limit: 2,
-        auto_eject_hosts: false,
         enable_gossip: true,
-        bucket_types: Vec::new(),
-        default_bucket_type: None,
+        ..PoolConfig::default()
     };
     let (lh, lp) = split_pname(local_pname);
     let (rh, rp) = split_pname(remote_pname);

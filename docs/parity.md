@@ -1067,6 +1067,67 @@ when it spans buffers.
 
 ## Deviations
 
+### D1: Hinted handoff at the proxy layer
+
+The C reference engine does NOT implement hinted handoff at
+the proxy layer. When a write targets a peer in the
+reference's `DOWN` state (auto-eject or gossip-derived) the
+request is silently skipped and the entropy / reconciliation
+path
+(`_/dynomite/src/entropy/dyn_entropy_*.c`) is the only
+recovery vehicle. Operators that lose a peer mid-workload
+therefore see write availability degrade until the peer
+returns and the periodic snapshot exchange catches it up.
+
+The Rust port adds hinted handoff as a feature-gated
+extension (off by default; enable via
+`enable_hinted_handoff: true` per pool). When enabled, the
+dispatcher records the on-the-wire request bytes plus the
+intended peer index in a node-local
+[`crate::cluster::hints::HintStore`] and counts the hint
+toward the consistency threshold; the
+[`crate::cluster::dispatch::ClusterDispatcher`] feeds the
+coalescer a synthetic `+OK\r\n` envelope on the hinted
+target's behalf so the surviving real replies plus the hint
+can satisfy `DC_QUORUM` /
+`DC_SAFE_QUORUM` / `DC_EACH_SAFE_QUORUM`. A periodic
+`hint_drainer_task` in `dynomited` ships the hints back to
+the peer once it returns to `PeerState::Normal` (gossip-
+driven) tagged as `DmsgType::ReqForward` so the receiving
+peer's `dnode_client_loop` rewrites the parsed request's
+routing tag to `LocalNodeOnly` (no recursive fan-out at the
+destination).
+
+The v1 store is RAM-only; an on-disk variant (one segment
+file per peer, replayed at startup) is sequenced under M7 of
+`docs/riak-compat-plan.md`. Synthesised hint replies are
+`+OK\r\n` regardless of request shape (correct for SET-style
+writes; for DEL / INCR the hinted target may register as
+"divergent" in the coalescer's accounting, but the hint is
+still stored and replayed and read-repair is not affected
+because it only fires for `MsgType::ReqRedisGet`).
+
+The behaviour is opt-in: with `enable_hinted_handoff: false`
+(the default) the dispatcher is byte-for-byte identical to
+the pre-Riak-D1 path. The conformance harness pins the
+feature-flag-off shape via
+`crates/dynomite/tests/hinted_handoff.rs::handoff_off_preserves_legacy_behaviour`.
+
+Pinned by:
+- `dynomite::cluster::hints::tests` (9 unit tests covering
+  enqueue/take/expire/over-capacity/mixed-peers).
+- `crates/dynomite/tests/hinted_handoff.rs` (4 in-process
+  three-replica integration tests).
+- `crates/dynomited/tests/conformance/multi_dc.rs::dc_quorum_hinted_handoff_enabled_cluster_smoke`
+  (through-TCP smoke that the cluster bootstraps and accepts
+  workload with handoff enabled).
+
+Tracked in `docs/riak-comparison.md` section D1 and
+`docs/riak-compat-plan.md` section M7 / M6. The journal
+entry at
+`docs/journal/2026-05-23-hinted-handoff.md` records the
+design decisions and the on-disk-variant deferral.
+
 ### D2: read repair v1 selects the winner by vote count, not by per-write timestamp
 
 The reference engine's read-repair surface reads timestamps
