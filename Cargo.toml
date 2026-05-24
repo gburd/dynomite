@@ -4,6 +4,7 @@ members = [
     "crates/dynomite",
     "crates/dynomited",
     "crates/dyn-hash-tool",
+    "crates/dyn-encoding",
 ]
 exclude = [
     "crates/fuzz",
@@ -58,6 +59,15 @@ nix = { version = "0.29", features = ["signal", "process", "fs", "user", "net", 
 socket2 = "0.5"
 httparse = "1.9"
 prometheus = "0.13"
+
+# Wire-format codecs (dyn-encoding crate). Pinned to track the
+# rest of the workspace; bumping requires a journal entry.
+# `ciborium` is preferred over `serde_cbor` because the latter
+# is unmaintained. `prost` is the actively-maintained protobuf
+# implementation; we avoid `prost-build` by hand-deriving
+# `prost::Message` on Rust structs.
+ciborium = "0.2"
+prost = "0.13"
 
 # Storage backend (Noxu DB) for the planned Riak-compatible API
 # and multi-engine storage substrate. Path deps for now; flip to
