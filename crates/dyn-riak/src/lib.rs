@@ -63,4 +63,5 @@ pub mod proto;
 pub mod server;
 
 pub use crate::error::RiakError;
+pub use crate::proto::http::serve_http;
 pub use crate::server::{handle_conn, serve_pbc};

@@ -29,6 +29,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
+http-body-util = "0.1"
+hyper = { version = "1.9", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 noxu-db = { workspace = true, optional = true }
 
 [dev-dependencies]
