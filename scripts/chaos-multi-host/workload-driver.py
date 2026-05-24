@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """Workload driver for the multi-host chaos test.
 
-Drives a Redis client against the local dynomited instance using
-every command class the dynomite parser covers: strings, hashes,
-sets, sorted sets, lists, scripting, scan, expire/TTL, multi-key,
-transactions. Runs continuously until SIGTERM, periodically
-recording per-class success/failure counters into a NDJSON log so
-the coordinator can summarise them after the run.
+Drives a Redis or memcache client against the local dynomited
+instance. The selected mode (``--mode redis`` or
+``--mode memcache``) determines:
+
+  * RESP-2 vs memcache ASCII protocol on the wire
+  * which set of command classes to fire
+  * which dynomited ``data_store`` setting the upstream config
+    must use (0 vs 1)
+
+In either mode the driver runs continuously until SIGTERM,
+periodically recording per-class success/failure counters into a
+NDJSON log so the coordinator can summarise them after the run.
 
 Designed to be run on each host in parallel; the coordinator
-launches one instance per host pointing at 127.0.0.1:<client_port>.
+launches one instance per host pointing at
+127.0.0.1:<client_port>.
 """
 
 from __future__ import annotations
@@ -340,6 +347,225 @@ WORKLOADS = [
 ]
 
 
+# --- memcache ASCII protocol client ---
+
+
+class MemcacheError(Exception):
+    """Server returned an ERROR / CLIENT_ERROR / SERVER_ERROR reply."""
+
+
+class MemcacheConn:
+    """A small memcache ASCII-protocol client.
+
+    Mirrors the loopback self-connection avoidance trick used by
+    ``RespConn``. The dynomite memcache parser is the system
+    under test; this hand-rolled client keeps full control over
+    the bytes that go on the wire.
+    """
+
+    def __init__(self, host: str, port: int, timeout: float = 5.0):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.sock: socket.socket | None = None
+        self.rbuf: bytes = b""
+
+    def connect(self) -> None:
+        for _ in range(5):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+                sock.bind(("127.0.0.1", 0))
+                sock.settimeout(self.timeout)
+                sock.connect((self.host, self.port))
+                local_port = sock.getsockname()[1]
+                if local_port == self.port:
+                    sock.close()
+                    continue
+                self.sock = sock
+                self.rbuf = b""
+                return
+            except OSError:
+                with suppress(Exception):
+                    sock.close()
+                raise
+        raise ConnectionError(
+            "could not establish a non-self-loop memcache connection"
+        )
+
+    def close(self) -> None:
+        if self.sock is not None:
+            with suppress(OSError):
+                self.sock.close()
+        self.sock = None
+        self.rbuf = b""
+
+    def _readline(self) -> bytes:
+        assert self.sock is not None
+        while b"\r\n" not in self.rbuf:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("peer closed mid-line")
+            self.rbuf += chunk
+        line, _, self.rbuf = self.rbuf.partition(b"\r\n")
+        return line
+
+    def _readn(self, n: int) -> bytes:
+        assert self.sock is not None
+        while len(self.rbuf) < n:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("peer closed mid-data")
+            self.rbuf += chunk
+        out, self.rbuf = self.rbuf[:n], self.rbuf[n:]
+        return out
+
+    def _send(self, payload: bytes) -> None:
+        if self.sock is None:
+            self.connect()
+        try:
+            self.sock.sendall(payload)
+        except (socket.timeout, ConnectionError, OSError):
+            self.close()
+            raise
+
+    def _read_storage_reply(self) -> bytes:
+        line = self._readline()
+        if line in (b"STORED", b"NOT_STORED", b"EXISTS", b"NOT_FOUND"):
+            return line
+        if line.startswith(b"CLIENT_ERROR") or line.startswith(b"SERVER_ERROR") \
+                or line == b"ERROR":
+            raise MemcacheError(line.decode("utf-8", "replace"))
+        # dynomite may surface its own error frames; treat anything
+        # else as protocol-level.
+        raise MemcacheError(
+            "unexpected storage reply: " + line.decode("utf-8", "replace"))
+
+    def _read_retrieval_reply(self) -> dict:
+        out = {}
+        while True:
+            line = self._readline()
+            if line == b"END":
+                return out
+            if line.startswith(b"VALUE "):
+                # VALUE <key> <flags> <bytes>[ <cas>]
+                parts = line.split(b" ")
+                if len(parts) < 4:
+                    raise MemcacheError(
+                        "malformed VALUE: " + line.decode("utf-8", "replace"))
+                key = parts[1].decode("utf-8", "replace")
+                nbytes = int(parts[3])
+                data = self._readn(nbytes)
+                self._readn(2)  # trailing CRLF
+                out[key] = data
+                continue
+            if line.startswith(b"CLIENT_ERROR") or line.startswith(b"SERVER_ERROR") \
+                    or line == b"ERROR":
+                raise MemcacheError(line.decode("utf-8", "replace"))
+            raise MemcacheError(
+                "unexpected retrieval reply: " + line.decode("utf-8", "replace"))
+
+    def _read_arith_reply(self) -> object:
+        line = self._readline()
+        if line == b"NOT_FOUND":
+            return None
+        if line.startswith(b"CLIENT_ERROR") or line.startswith(b"SERVER_ERROR") \
+                or line == b"ERROR":
+            raise MemcacheError(line.decode("utf-8", "replace"))
+        # numeric reply
+        try:
+            return int(line)
+        except ValueError:
+            raise MemcacheError(
+                "unexpected arith reply: " + line.decode("utf-8", "replace"))
+
+    def _read_delete_reply(self) -> bytes:
+        line = self._readline()
+        if line in (b"DELETED", b"NOT_FOUND"):
+            return line
+        if line.startswith(b"CLIENT_ERROR") or line.startswith(b"SERVER_ERROR") \
+                or line == b"ERROR":
+            raise MemcacheError(line.decode("utf-8", "replace"))
+        raise MemcacheError(
+            "unexpected delete reply: " + line.decode("utf-8", "replace"))
+
+    # ---- public surface ----
+
+    def store(self, op: str, key: str, value: bytes,
+              flags: int = 0, exptime: int = 0) -> bytes:
+        if isinstance(value, str):
+            value = value.encode()
+        head = f"{op} {key} {flags} {exptime} {len(value)}\r\n".encode()
+        self._send(head + value + b"\r\n")
+        return self._read_storage_reply()
+
+    def get(self, *keys: str) -> dict:
+        cmd = "get " + " ".join(keys) + "\r\n"
+        self._send(cmd.encode())
+        return self._read_retrieval_reply()
+
+    def gets(self, *keys: str) -> dict:
+        cmd = "gets " + " ".join(keys) + "\r\n"
+        self._send(cmd.encode())
+        return self._read_retrieval_reply()
+
+    def delete(self, key: str) -> bytes:
+        self._send(f"delete {key}\r\n".encode())
+        return self._read_delete_reply()
+
+    def incr(self, key: str, delta: int) -> object:
+        self._send(f"incr {key} {delta}\r\n".encode())
+        return self._read_arith_reply()
+
+    def decr(self, key: str, delta: int) -> object:
+        self._send(f"decr {key} {delta}\r\n".encode())
+        return self._read_arith_reply()
+
+
+def workload_memcache_set(c: MemcacheConn) -> str:
+    op = random.choice(["set", "add", "replace", "append", "prepend"])
+    k = randkey()
+    c.store(op, k, randval())
+    return op
+
+
+def workload_memcache_get(c: MemcacheConn) -> str:
+    op = random.choice(["get", "gets"])
+    if op == "get":
+        c.get(randkey())
+    else:
+        c.gets(randkey())
+    return op
+
+
+def workload_memcache_arith(c: MemcacheConn) -> str:
+    op = random.choice(["incr", "decr"])
+    k = randkey()
+    # Seed the counter so incr/decr have a chance of hitting a
+    # numeric value rather than always observing NOT_FOUND.
+    if random.random() < 0.3:
+        with suppress(MemcacheError, ConnectionError, socket.timeout, OSError):
+            c.store("set", k, str(random.randint(0, 1000)))
+    if op == "incr":
+        c.incr(k, random.randint(1, 100))
+    else:
+        c.decr(k, random.randint(1, 100))
+    return op
+
+
+def workload_memcache_delete(c: MemcacheConn) -> str:
+    c.delete(randkey())
+    return "delete"
+
+
+MEMCACHE_WORKLOADS = [
+    ("set", workload_memcache_set, 35),
+    ("get", workload_memcache_get, 35),
+    ("arith", workload_memcache_arith, 20),
+    ("delete", workload_memcache_delete, 10),
+]
+
+
 # --- driver loop ---
 
 
@@ -360,6 +586,9 @@ def main() -> int:
     p.add_argument("--qps", type=int, default=200)
     p.add_argument("--duration", type=int, default=7200,
                    help="seconds; 0 means until SIGTERM")
+    p.add_argument("--mode", default="redis",
+                   choices=("redis", "memcache", "riak"),
+                   help="protocol to drive; riak falls back to redis")
     args = p.parse_args()
 
     signal.signal(signal.SIGTERM, _stop)
@@ -376,19 +605,36 @@ def main() -> int:
     last_flush = time.monotonic()
     started = time.monotonic()
 
-    weights = [w for _, _, w in WORKLOADS]
+    effective_mode = args.mode
+    if args.mode == "riak":
+        print(
+            f"[{args.label}] WARNING: Riak mode requires the dyn-riak "
+            f"crate, not yet available; falling back to redis",
+            file=sys.stderr, flush=True,
+        )
+        effective_mode = "redis"
+
+    if effective_mode == "memcache":
+        workloads = MEMCACHE_WORKLOADS
+        conn = MemcacheConn(args.host, args.port)
+        net_errors = (MemcacheError, ConnectionError, socket.timeout, OSError)
+    else:
+        workloads = WORKLOADS
+        conn = RespConn(args.host, args.port)
+        net_errors = (RespError, ConnectionError, socket.timeout, OSError)
+
+    weights = [w for _, _, w in workloads]
     total_weight = sum(weights)
 
     sleep_per_op = 1.0 / args.qps if args.qps > 0 else 0.0
 
-    conn = RespConn(args.host, args.port)
     while _RUNNING:
         if args.duration and (time.monotonic() - started) >= args.duration:
             break
         roll = random.random() * total_weight
         acc = 0
-        chosen_class = WORKLOADS[-1]
-        for entry in WORKLOADS:
+        chosen_class = workloads[-1]
+        for entry in workloads:
             acc += entry[2]
             if roll < acc:
                 chosen_class = entry
@@ -397,11 +643,11 @@ def main() -> int:
         try:
             op = fn(conn)
             counts[(cls_name, op)] = counts.get((cls_name, op), 0) + 1
-        except (RespError, ConnectionError, socket.timeout, OSError) as exc:
+        except net_errors as exc:
             key = (cls_name, type(exc).__name__)
             failures[key] = failures.get(key, 0) + 1
             # Log a small sample of failures to stderr so the
-            # operator can correlate with dynomited / redis logs.
+            # operator can correlate with dynomited / backend logs.
             if failures[key] <= 5:
                 print(
                     f"[{args.label}] {cls_name} call failed: "
@@ -419,6 +665,7 @@ def main() -> int:
             row = {
                 "ts": time.time(),
                 "label": args.label,
+                "mode": effective_mode,
                 "elapsed": now - started,
                 "counts": {f"{c}/{o}": v for (c, o), v in counts.items()},
                 "failures": {f"{c}/{e}": v for (c, e), v in failures.items()},
@@ -432,6 +679,7 @@ def main() -> int:
     row = {
         "ts": time.time(),
         "label": args.label,
+        "mode": effective_mode,
         "elapsed": time.monotonic() - started,
         "counts": {f"{c}/{o}": v for (c, o), v in counts.items()},
         "failures": {f"{c}/{e}": v for (c, e), v in failures.items()},

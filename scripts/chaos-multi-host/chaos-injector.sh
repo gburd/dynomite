@@ -2,11 +2,11 @@
 #
 # Per-host chaos injector. Runs on each host in parallel with the
 # workload driver. Inflicts process-level damage on the local
-# dynomited and redis processes:
+# dynomited and datastore (redis-server or memcached) processes:
 #
 #   * SIGSTOP / SIGCONT pause for 5-15s every 60-180s ("gc pause")
 #   * SIGKILL + restart of dynomited every 8-15min
-#   * Periodic redis-server bounce every 20-30min
+#   * Periodic backend bounce every 20-30min
 #
 # Designed to be SIGTERM-able; on exit, leaves dynomited running
 # so the coordinator's teardown can collect its logs.
@@ -29,6 +29,10 @@ fi
 
 # shellcheck disable=SC1090
 . "$START_ARGS_FILE"
+
+# Honour the saved MODE; default to redis for back-compat with
+# pre-multi-mode start-args files.
+MODE="${MODE:-redis}"
 
 stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 event() {
@@ -74,7 +78,7 @@ redis_pid() {
 restart_dynomited() {
     event restart "{\"reason\":\"sigkill\"}"
     kill_stale_dynomited
-    bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
+    MODE="$MODE" bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
         "$DC_NAME" "$TOKENS" "$SEEDS" \
         "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" \
         >> "$LOGS/restart-$DC_NAME.log" 2>&1 \
@@ -167,7 +171,7 @@ while true; do
 
     if [ "$NOW" -ge "$NEXT_REDIS_BOUNCE" ]; then
         if id=$(redis_pid); then
-            event redis_bounce "{\"id\":\"$id\"}"
+            event redis_bounce "{\"id\":\"$id\",\"mode\":\"$MODE\"}"
             case "$id" in
                 container:*)
                     name="${id#container:}"
@@ -178,28 +182,45 @@ while true; do
                     fi
                     sleep 1
                     # Restart via start-host.sh's container path.
-                    bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
+                    MODE="$MODE" bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
                         "$DC_NAME" "$TOKENS" "$SEEDS" \
                         "$DATASTORE_PORT" "$DYN_LISTEN_PORT" \
                         "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" \
-                        >> "$LOGS/restart-redis-$DC_NAME.log" 2>&1 || true
+                        >> "$LOGS/restart-backend-$DC_NAME.log" 2>&1 || true
                     ;;
                 *)
                     kill -KILL "$id" 2>/dev/null || true
                     sleep 1
-                    REDIS=$(command -v redis-server || true)
-                    if [ -n "$REDIS" ]; then
-                        nohup "$REDIS" \
-                            --port "$DATASTORE_PORT" \
-                            --bind 127.0.0.1 \
-                            --daemonize no \
-                            --appendonly no \
-                            --save "" \
-                            --dir "$RUN" \
-                            --logfile "$LOGS/redis-$DC_NAME.log" \
-                            > /dev/null 2>&1 &
-                        echo $! > "$RUN/redis.pid"
-                    fi
+                    case "$MODE" in
+                        memcache)
+                            MEMCACHED=$(command -v memcached || true)
+                            if [ -n "$MEMCACHED" ]; then
+                                nohup "$MEMCACHED" \
+                                    -l 127.0.0.1 \
+                                    -p "$DATASTORE_PORT" \
+                                    -U 0 \
+                                    -m 64 \
+                                    -v \
+                                    > "$LOGS/memcached-$DC_NAME.log" 2>&1 &
+                                echo $! > "$RUN/redis.pid"
+                            fi
+                            ;;
+                        riak|redis|*)
+                            REDIS=$(command -v redis-server || true)
+                            if [ -n "$REDIS" ]; then
+                                nohup "$REDIS" \
+                                    --port "$DATASTORE_PORT" \
+                                    --bind 127.0.0.1 \
+                                    --daemonize no \
+                                    --appendonly no \
+                                    --save "" \
+                                    --dir "$RUN" \
+                                    --logfile "$LOGS/redis-$DC_NAME.log" \
+                                    > /dev/null 2>&1 &
+                                echo $! > "$RUN/redis.pid"
+                            fi
+                            ;;
+                    esac
                     ;;
             esac
         fi
