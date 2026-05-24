@@ -26,7 +26,7 @@ use crate::net::client::ClientHandler;
 use crate::net::conn::Conn;
 use crate::net::dispatcher::OutboundEnvelope;
 use crate::net::NetError;
-use crate::proto::dnode::{DnodeParser, ParseStep};
+use crate::proto::dnode::{DmsgType, DnodeParser, ParseStep};
 
 /// Type alias for the dnode client handler bundle.
 pub type DnodeClientHandler = ClientHandler;
@@ -152,6 +152,18 @@ async fn drive_dnode_parser(
                 accumulated.drain(0..total);
                 parser.reset();
 
+                // Gossip-class frames are control plane: feed the
+                // sender's identity into the gossip handler's
+                // failure detector and skip the datastore parse
+                // path. Without this fork the datastore parser
+                // sees an opaque ASCII pname (e.g. `127.0.0.1:8101`)
+                // and rejects it with a parse error, causing the
+                // dnode_client_loop to tear the connection down.
+                if is_gossip_ty(dmsg.ty) {
+                    handle_gossip_frame(handler, dmsg.ty, &payload);
+                    continue;
+                }
+
                 // Decrypt if the dnode header indicates the payload
                 // is encrypted and we have an AES key.
                 let decoded = if dmsg.is_encrypted() {
@@ -240,6 +252,54 @@ fn decrypt_dnode_payload(
 ) -> Result<Vec<u8>, NetError> {
     crate::crypto::Crypto::aes_decrypt(payload, key)
         .map_err(|_| NetError::Dnode("dnode payload decrypt failed".into()))
+}
+
+/// True for any dnode message type that belongs to the gossip
+/// control plane. The data plane (`Req`, `ReqForward`, `Res`,
+/// `CryptoHandshake`, `Unknown`, `Debug`, `ParseError`) returns
+/// `false`.
+fn is_gossip_ty(ty: DmsgType) -> bool {
+    matches!(
+        ty,
+        DmsgType::GossipSyn
+            | DmsgType::GossipSynReply
+            | DmsgType::GossipAck
+            | DmsgType::GossipDigestSyn
+            | DmsgType::GossipDigestAck
+            | DmsgType::GossipDigestAck2
+            | DmsgType::GossipShutdown
+    )
+}
+
+/// Process a gossip control-plane frame. The payload is the
+/// sender peer's `host:port` (ASCII). Heartbeat-class frames
+/// feed the failure detector; `GossipShutdown` immediately
+/// transitions the sender to [`crate::cluster::peer::PeerState::Down`].
+///
+/// Frames received before the run loop has attached a gossip
+/// handler are silently dropped; this matches the reference
+/// engine's behaviour of ignoring stray gossip while the
+/// failure detector is still being constructed.
+fn handle_gossip_frame(handler: &ClientHandler, ty: DmsgType, payload: &[u8]) {
+    let Some(gossip) = handler.gossip() else {
+        return;
+    };
+    let Ok(pname) = std::str::from_utf8(payload) else {
+        return;
+    };
+    let pname = pname.trim();
+    if pname.is_empty() {
+        return;
+    }
+    let now = std::time::Instant::now();
+    match ty {
+        DmsgType::GossipShutdown => {
+            gossip.mark_down_pname(pname);
+        }
+        _ => {
+            gossip.record_heartbeat_pname(pname, now);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -271,6 +271,7 @@ impl Dispatcher for ForwardingDispatcher {
             req_id: req.id(),
             responder,
             span: tracing::Span::current(),
+            ty: dynomite::proto::dnode::DmsgType::Req,
         };
         // try_send is fine here: the server channel is bounded
         // generously and the mock backend drains synchronously.
@@ -432,6 +433,7 @@ async fn dnode_peer_round_trip() {
             req_id: 99,
             responder: env_tx,
             span: tracing::Span::current(),
+            ty: dynomite::proto::dnode::DmsgType::Req,
         })
         .await
         .unwrap();

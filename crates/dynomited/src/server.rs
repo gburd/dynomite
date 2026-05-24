@@ -56,7 +56,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use dynomite::cluster::dispatch::ClusterDispatcher;
-use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
+use dynomite::cluster::peer::{Peer, PeerEndpoint};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
 use dynomite::conf::{ConfDynSeed, ConfListen, ConfPool, Config, EndpointKind};
 use dynomite::core::log::reopen_on_sighup;
@@ -136,6 +136,22 @@ pub struct Server {
     stats_listen_addr: Option<SocketAddr>,
     enable_gossip: bool,
     has_recon_keys: bool,
+    /// Shared gossip handler (peer-state authority + phi-accrual
+    /// failure detector). Built unconditionally so the
+    /// `dnode_proxy` factory always has somewhere to deliver
+    /// inbound gossip frames; the periodic gossip task is
+    /// spawned only when `enable_gossip` is set.
+    gossip_handler: Arc<dynomite::cluster::gossip::GossipHandler>,
+    /// Per-peer gossip TX channel: a clone of each peer's
+    /// `peer_supervisor` outbound channel, kept here so
+    /// `Server::run` can spawn a single gossip task that
+    /// fans out heartbeats / shutdowns without holding the
+    /// dispatcher's `peer_backends` map locked.
+    gossip_peer_txs: Vec<(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)>,
+    /// Local-node pname (`host:port` of the dyn_listen address)
+    /// used as the payload of every outbound gossip frame so
+    /// receiving peers know who sent it.
+    local_pname: String,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
 }
@@ -312,8 +328,15 @@ impl Server {
         // reconnect backoff. Failures are non-fatal at startup;
         // the supervisor reports them via `tracing::warn!` and
         // keeps trying.
+        //
+        // The supervisor no longer publishes peer-state
+        // transitions; the gossip handler owns `PeerState`
+        // authority. The supervisor only owns the TCP / dnode
+        // request-response channel for data-plane traffic.
         let mut dispatcher = ClusterDispatcher::new(server_pool.clone()).with_backend(backend_tx);
         let mut peer_handles: Vec<JoinHandle<Result<(), NetError>>> = Vec::new();
+        let mut gossip_peer_txs: Vec<(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)> =
+            Vec::new();
         let peer_channel_capacity = 256usize;
         for peer in server_pool.peers().read().iter() {
             if peer.is_local() {
@@ -322,6 +345,7 @@ impl Server {
             let peer_idx = peer.idx();
             let host = peer.endpoint().host().to_string();
             let port = peer.endpoint().port();
+            let peer_pname = peer.endpoint().pname();
             // Resolve once. We log and continue on failure - the
             // supervisor will then sit on the channel and silently
             // discard any forwarded requests until the operator
@@ -346,7 +370,8 @@ impl Server {
             };
             let (peer_tx, peer_rx) =
                 tokio::sync::mpsc::channel::<OutboundRequest>(peer_channel_capacity);
-            dispatcher = dispatcher.with_peer_backend(peer_idx, peer_tx);
+            dispatcher = dispatcher.with_peer_backend(peer_idx, peer_tx.clone());
+            gossip_peer_txs.push((peer_idx, peer_pname, peer_tx));
             let handle: JoinHandle<Result<(), NetError>> = {
                 use tracing::Instrument as _;
                 let span = tracing::info_span!(
@@ -354,12 +379,9 @@ impl Server {
                     peer_idx,
                     peer = %peer_addr,
                 );
-                let pool_for_supervisor = server_pool.clone();
                 tokio::spawn(
-                    async move {
-                        peer_supervisor(peer_addr, peer_idx, pool_for_supervisor, peer_rx).await
-                    }
-                    .instrument(span),
+                    async move { peer_supervisor(peer_addr, peer_idx, peer_rx).await }
+                        .instrument(span),
                 )
             };
             peer_handles.push(handle);
@@ -393,6 +415,26 @@ impl Server {
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+        // Build the gossip handler. The handler is the single
+        // mutator of `PeerState` once gossip is wired; it lives
+        // for the lifetime of the server so the dnode_proxy
+        // factory and the periodic gossip task share the same
+        // failure-detector view.
+        let gossip_interval_ms = u64::try_from(
+            conf_pool
+                .gos_interval
+                .unwrap_or(default_gossip_interval_ms_i64()),
+        )
+        .unwrap_or(dynomite::cluster::gossip::DEFAULT_GOSSIP_INTERVAL_MS);
+        let gossip_handler = Arc::new(
+            dynomite::cluster::gossip::GossipHandler::new(server_pool.clone())
+                .with_interval(Duration::from_millis(gossip_interval_ms)),
+        );
+        let local_pname = dyn_listen_addr.map_or_else(
+            || "127.0.0.1:0".to_string(),
+            |a| format!("{}:{}", a.ip(), a.port()),
+        );
+
         Ok(Self {
             pool_name,
             pool: server_pool,
@@ -407,6 +449,9 @@ impl Server {
             stats_listen_addr,
             enable_gossip: conf_pool.enable_gossip.unwrap_or(false),
             has_recon_keys: !conf_pool.recon_key_file.as_deref().unwrap_or("").is_empty(),
+            gossip_handler,
+            gossip_peer_txs,
+            local_pname,
             shutdown_tx,
             shutdown_rx,
         })
@@ -502,16 +547,13 @@ impl Server {
             stats_listen_addr,
             enable_gossip,
             has_recon_keys,
+            gossip_handler,
+            gossip_peer_txs,
+            local_pname,
             shutdown_tx,
             mut shutdown_rx,
         } = self;
 
-        if enable_gossip {
-            tracing::warn!(
-                pool = %pool_name,
-                "enable_gossip is set but the gossip run loop is not yet wired (deferred)"
-            );
-        }
         if has_recon_keys {
             tracing::warn!(
                 pool = %pool_name,
@@ -535,23 +577,53 @@ impl Server {
         let dnode_handle = dnode_proxy.map(|dnode| {
             let dispatcher = dispatcher.clone();
             let cancel = cancel_future(shutdown_rx.clone());
+            let gossip_for_factory = gossip_handler.clone();
             tokio::spawn(async move {
                 dnode
                     .run(cancel, move |tx| {
                         // The factory is invoked once per accepted
                         // peer; build a fresh `ClientHandler`
                         // bound to the cluster dispatcher and the
-                        // per-peer response channel.
+                        // per-peer response channel. The gossip
+                        // handler is attached so inbound
+                        // gossip-class dnode frames feed the
+                        // sender peer's failure detector instead
+                        // of being routed into the datastore
+                        // parser.
                         dynomite::net::ClientHandler::new(
                             dispatcher.clone(),
                             tx,
                             dynomite::conf::DataStore::Redis,
                         )
                         .with_read_timeout(Some(Duration::from_secs(60)))
+                        .with_gossip(gossip_for_factory.clone())
                     })
                     .await
             })
         });
+
+        // Spawn the gossip task. The task ticks at the configured
+        // interval and: (a) sends a `GossipSyn` on every per-peer
+        // outbound channel carrying the local-node pname so the
+        // remote can identify the sender, (b) re-evaluates phi
+        // for every non-local peer and toggles `PeerState`
+        // between `Normal` and `Down`. The task always spawns,
+        // even when `enable_gossip` is false in the YAML, because
+        // the supervisor no longer publishes peer-state on its
+        // own; without the periodic evaluation no peer would
+        // ever leave the initial `Down` state.
+        let gossip_cancel = cancel_future(shutdown_rx.clone());
+        let gossip_task_handle: JoinHandle<()> = {
+            let handler = gossip_handler.clone();
+            let pname = local_pname.clone();
+            let txs = gossip_peer_txs.clone();
+            tokio::spawn(async move {
+                gossip_task(handler, pname, txs, gossip_cancel).await;
+            })
+        };
+        if enable_gossip {
+            tracing::info!(pool = %pool_name, "gossip task spawned");
+        }
 
         let stats_handle: Option<JoinHandle<io::Result<()>>> = stats.map(|s| {
             let mut cancel_rx = shutdown_rx.clone();
@@ -578,6 +650,11 @@ impl Server {
         // see the cancel and the join handles drain.
         let _ = shutdown_tx.send(true);
 
+        // Send GossipShutdown to every peer so they can
+        // transition us to Down promptly without waiting for the
+        // phi threshold to climb.
+        send_gossip_shutdown(&local_pname, &gossip_peer_txs);
+
         // The backend driver listens to its request-channel sender;
         // dropping the dispatcher (which holds the only sender)
         // when the proxy and dnode listeners exit will close the
@@ -591,6 +668,12 @@ impl Server {
             h.abort();
             let _ = h.await;
         }
+        gossip_task_handle.abort();
+        let _ = gossip_task_handle.await;
+        // Now that the gossip task is gone, drop the explicit
+        // gossip channel handles so reference counts settle.
+        drop(gossip_peer_txs);
+        drop(gossip_handler);
 
         let proxy_outcome = await_listener("proxy", proxy_handle).await;
         let dnode_outcome = if let Some(h) = dnode_handle {
@@ -1021,6 +1104,14 @@ async fn run_one_backend_conn(
 /// the underlying TCP / dnode driver returns an error. Owns the
 /// receiver half of the dispatcher's per-peer outbound channel
 /// and exits when that channel is closed (the dispatcher dropped).
+///
+/// The supervisor does NOT publish [`PeerState`] transitions:
+/// once gossip is wired the peer-state field is owned by
+/// [`dynomite::cluster::gossip::GossipHandler`] and driven by
+/// the phi-accrual failure detector. The supervisor only owns
+/// the TCP / dnode framing for data-plane traffic; treating the
+/// link state as the peer-state signal would force every remote
+/// peer to flap whenever the connection bounced.
 #[tracing::instrument(
     name = "peer_supervisor",
     skip_all,
@@ -1029,7 +1120,6 @@ async fn run_one_backend_conn(
 async fn peer_supervisor(
     addr: SocketAddr,
     peer_idx: u32,
-    pool: Arc<ServerPool>,
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
 ) -> Result<(), NetError> {
     let mut backoff_ms: u64 = 100;
@@ -1060,15 +1150,11 @@ async fn peer_supervisor(
             }
         };
         let _ = stream.set_nodelay(true);
-        // Mark the peer as routable while this TCP link is up.
-        // Without a gossip runtime the peer's authoritative state
-        // is unknown; the supervisor's view of the link is the
-        // only reliable signal we have. The dispatcher consults
-        // `PeerState::is_routable()` when planning replicas, so
-        // failing to publish this transition keeps every remote
-        // peer permanently `Down` and forces every cross-node
-        // route into a `NoTargets` plan.
-        set_peer_state(&pool, peer_idx, PeerState::Normal);
+        tracing::debug!(
+            peer = %addr,
+            peer_idx,
+            "peer TCP link up; gossip drives PeerState authoritatively"
+        );
         let conn = Conn::new(
             Box::new(TcpTransport::new(stream, ConnRole::DnodePeerServer)),
             ConnRole::DnodePeerServer,
@@ -1083,7 +1169,6 @@ async fn peer_supervisor(
             tokio::sync::mpsc::channel::<OutboundRequest>(1).1,
         );
         let driver_res = driver.run_with(&mut rx).await;
-        set_peer_state(&pool, peer_idx, PeerState::Down);
         if let Err(e) = driver_res {
             tracing::warn!(
                 peer = %addr,
@@ -1097,20 +1182,110 @@ async fn peer_supervisor(
     }
 }
 
-fn set_peer_state(pool: &Arc<ServerPool>, peer_idx: u32, state: PeerState) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let mut peers = pool.peers().write();
-    if let Some(p) = peers.iter_mut().find(|p| p.idx() == peer_idx) {
-        if p.state() != state {
-            tracing::debug!(
+fn default_gossip_interval_ms_i64() -> i64 {
+    i64::try_from(dynomite::cluster::gossip::DEFAULT_GOSSIP_INTERVAL_MS).unwrap_or(1_000)
+}
+
+/// Single periodic gossip task per pool.
+///
+/// Ticks at the handler's configured interval and: (1) sends a
+/// `GossipSyn` to every wired peer with the local-node pname as
+/// the payload, (2) re-evaluates phi for every non-local peer
+/// and toggles `PeerState`. The task fires the first heartbeat
+/// immediately rather than waiting a full interval so the
+/// receiver records a heartbeat as soon as the TCP link is up.
+async fn gossip_task(
+    handler: Arc<dynomite::cluster::gossip::GossipHandler>,
+    local_pname: String,
+    peer_txs: Vec<(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)>,
+    cancel: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+) {
+    use dynomite::proto::dnode::DmsgType;
+    if peer_txs.is_empty() {
+        // No remote peers; just block until cancelled so the
+        // join handle behaves consistently with multi-peer
+        // pools.
+        let () = cancel.await;
+        return;
+    }
+    let mut cancel = cancel;
+    let mut next_msg_id: u64 = 1;
+    let interval = handler.interval();
+    // Fire once immediately, then on a fixed cadence.
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            biased;
+            () = &mut cancel => return,
+            _ = ticker.tick() => {
+                let now = std::time::Instant::now();
+                for (peer_idx, _peer_pname, tx) in &peer_txs {
+                    let payload = local_pname.as_bytes().to_vec();
+                    let msg_id = next_msg_id;
+                    next_msg_id = next_msg_id.wrapping_add(1).max(1);
+                    // Disposable responder: gossip frames are
+                    // fire-and-forget, the matching response is
+                    // never produced.
+                    let (rsp_tx, _rsp_rx) =
+                        tokio::sync::mpsc::channel::<dynomite::net::dispatcher::OutboundEnvelope>(1);
+                    let req = OutboundRequest {
+                        bytes: payload,
+                        req_id: msg_id,
+                        responder: rsp_tx,
+                        span: tracing::Span::current(),
+                        ty: DmsgType::GossipSyn,
+                    };
+                    if let Err(e) = tx.try_send(req) {
+                        tracing::trace!(
+                            peer_idx,
+                            error = %e,
+                            "gossip_syn channel push failed"
+                        );
+                    }
+                }
+                let transitions = handler.evaluate(now);
+                for (idx, state) in transitions {
+                    tracing::info!(
+                        peer_idx = idx,
+                        ?state,
+                        "gossip transitioned peer state"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Best-effort `GossipShutdown` broadcast on graceful exit.
+///
+/// Each peer receives a single fire-and-forget control frame so
+/// it can mark us [`PeerState::Down`] immediately rather than
+/// waiting for phi to cross the threshold. Failures (closed
+/// channel, full queue) are silent on purpose: we are already
+/// shutting down and the receiving side will detect us via
+/// gossip silence within `~threshold * gossip_interval`.
+fn send_gossip_shutdown(
+    local_pname: &str,
+    peer_txs: &[(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)],
+) {
+    use dynomite::proto::dnode::DmsgType;
+    for (peer_idx, _, tx) in peer_txs {
+        let (rsp_tx, _rsp_rx) =
+            tokio::sync::mpsc::channel::<dynomite::net::dispatcher::OutboundEnvelope>(1);
+        let req = OutboundRequest {
+            bytes: local_pname.as_bytes().to_vec(),
+            req_id: 0,
+            responder: rsp_tx,
+            span: tracing::Span::current(),
+            ty: DmsgType::GossipShutdown,
+        };
+        if let Err(e) = tx.try_send(req) {
+            tracing::trace!(
                 peer_idx,
-                from = ?p.state(),
-                to = ?state,
-                "peer state transition",
+                error = %e,
+                "gossip_shutdown channel push failed"
             );
-            p.set_state(state, now);
         }
     }
 }
