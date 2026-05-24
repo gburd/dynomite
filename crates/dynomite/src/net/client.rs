@@ -63,6 +63,7 @@ pub struct ClientHandler {
     data_store: DataStore,
     next_msg_id: u64,
     read_timeout: Option<Duration>,
+    gossip: Option<Arc<crate::cluster::gossip::GossipHandler>>,
 }
 
 impl ClientHandler {
@@ -90,6 +91,7 @@ impl ClientHandler {
             data_store,
             next_msg_id: 1,
             read_timeout: None,
+            gossip: None,
         }
     }
 
@@ -98,6 +100,22 @@ impl ClientHandler {
     pub fn with_read_timeout(mut self, t: Option<Duration>) -> Self {
         self.read_timeout = t;
         self
+    }
+
+    /// Attach a gossip handler. Inbound peer connections served
+    /// through this handler dispatch gossip-class dnode frames
+    /// into the supplied handler instead of the datastore parser.
+    /// Data-plane connections (CLIENT role) leave it `None`.
+    #[must_use]
+    pub fn with_gossip(mut self, gossip: Arc<crate::cluster::gossip::GossipHandler>) -> Self {
+        self.gossip = Some(gossip);
+        self
+    }
+
+    /// Borrow the attached gossip handler, if any.
+    #[must_use]
+    pub fn gossip(&self) -> Option<&Arc<crate::cluster::gossip::GossipHandler>> {
+        self.gossip.as_ref()
     }
 
     /// Datastore the handler parses.

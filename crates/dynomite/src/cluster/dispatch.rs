@@ -464,6 +464,7 @@ impl Dispatcher for ClusterDispatcher {
                         req_id: req.id(),
                         responder,
                         span: req_span.clone(),
+                        ty: crate::proto::dnode::DmsgType::Req,
                     };
                     if tx.try_send(env).is_err() {
                         // Backend channel full or closed: surface
@@ -509,6 +510,7 @@ impl Dispatcher for ClusterDispatcher {
                                 req_id: req.id(),
                                 responder: responder.clone(),
                                 span: req_span.clone(),
+                                ty: crate::proto::dnode::DmsgType::Req,
                             };
                             if tx.try_send(env).is_ok() {
                                 sent += 1;
@@ -520,6 +522,7 @@ impl Dispatcher for ClusterDispatcher {
                             req_id: req.id(),
                             responder: responder.clone(),
                             span: req_span.clone(),
+                            ty: crate::proto::dnode::DmsgType::Req,
                         };
                         if tx.try_send(env).is_ok() {
                             sent += 1;

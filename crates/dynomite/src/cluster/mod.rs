@@ -52,7 +52,7 @@ pub mod vnode;
 pub use self::datacenter::{Continuum, Datacenter, Rack};
 pub use self::dispatch::{ClusterDispatcher, DispatchPlan, ReplicaTarget};
 pub use self::gossip::{
-    parse_seed_node, GossipConfig, GossipNode, GossipState, GossipStep, SeedRecord,
+    parse_seed_node, GossipConfig, GossipHandler, GossipNode, GossipState, GossipStep, SeedRecord,
 };
 pub use self::peer::{Peer, PeerEndpoint, PeerState};
 pub use self::pool::{PoolConfig, ServerPool};
