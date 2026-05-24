@@ -46,6 +46,16 @@
             perl
             pkg-config
 
+            # Build deps for the Netflix dynomite C reference
+            # (informational submodule under _/dynomite/, built
+            # on demand via scripts/build_cref.sh for the
+            # Stage 14 differential rig).
+            autoconf
+            automake
+            libtool
+            openssl
+            openssl.dev
+
             # Networking + failure-injection tooling
             iproute2
             iputils
