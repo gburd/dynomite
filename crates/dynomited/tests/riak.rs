@@ -229,3 +229,130 @@ async fn riak_aae_enabled_does_not_block_shutdown() {
         .expect("join");
     assert!(res.is_ok(), "run returned: {res:?}");
 }
+
+/// Helper: write a Riak PBC frame onto `sock`.
+#[cfg(test)]
+async fn pbc_send(sock: &mut TcpStream, code: u8, body: &[u8]) {
+    let total = u32::try_from(body.len() + 1).unwrap();
+    sock.write_all(&total.to_be_bytes()).await.unwrap();
+    sock.write_all(&[code]).await.unwrap();
+    sock.write_all(body).await.unwrap();
+}
+
+/// Helper: read a Riak PBC frame from `sock`, returning
+/// `(message_code, body_bytes)`.
+#[cfg(test)]
+async fn pbc_recv(sock: &mut TcpStream) -> (u8, Vec<u8>) {
+    let mut len = [0u8; 4];
+    sock.read_exact(&mut len).await.unwrap();
+    let total = u32::from_be_bytes(len) as usize;
+    let mut payload = vec![0u8; total];
+    sock.read_exact(&mut payload).await.unwrap();
+    (payload[0], payload[1..].to_vec())
+}
+
+/// `data_store: noxu` happy-path: open a Noxu environment in a
+/// tempdir, drive an `RpbPutReq` carrying two index entries via
+/// the Riak PBC listener, and assert that an `RpbIndexReq`
+/// equality query returns the stored key. The configured
+/// backend supervisor is the in-process Noxu supervisor; the
+/// PBC listener shares the same Noxu environment, so the put
+/// and the query travel through the same backing store.
+#[tokio::test(flavor = "multi_thread")]
+async fn riak_pbc_2i_against_noxu_round_trip() {
+    use prost::Message as _;
+
+    // Tests run inside the `dynomited` lib's test harness, which
+    // does not boot through `main()`; flip the noxu-supported
+    // toggle by hand so the configuration validator accepts
+    // `data_store: noxu`. The flag is process-wide; setting it
+    // is idempotent.
+    dynomite::conf::set_noxu_supported(true);
+
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let ports = pick_distinct_ports(4);
+    let yaml_text = format!(
+        "p:\n  listen: 127.0.0.1:{listen}\n  dyn_listen: 127.0.0.1:{dyn_listen}\n  stats_listen: 127.0.0.1:{stats}\n  tokens: '101134286'\n  data_store: noxu\n  noxu_path: {noxu}\n  servers:\n  - 127.0.0.1:6379:1\n  riak:\n    pbc_listen: 127.0.0.1:{pbc}\n",
+        listen = ports[0],
+        dyn_listen = ports[1],
+        stats = ports[2],
+        pbc = ports[3],
+        noxu = dir.path().display(),
+    );
+    let cfg = Config::parse_str(&yaml_text).unwrap();
+    let server = Server::build(cfg).await.expect("build");
+    let pbc_addr = server.riak_pbc_addr().expect("pbc bound");
+    let handle = server.shutdown_handle();
+    let supervisor = tokio::spawn(async move { server.run().await });
+
+    // Wait for the listener.
+    let mut sock = None;
+    for _ in 0..40 {
+        if let Ok(s) = TcpStream::connect(pbc_addr).await {
+            sock = Some(s);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let mut sock = sock.expect("connect to riak pbc");
+    sock.set_nodelay(true).ok();
+
+    // Put alice with age_int=42 and city_bin=seattle.
+    let put = dyn_riak::proto::pb::RpbPutReq {
+        bucket: b"users".to_vec(),
+        key: Some(b"alice".to_vec()),
+        value: b"profile".to_vec(),
+        indexes: vec![
+            dyn_riak::proto::pb::RpbPair {
+                key: b"age_int".to_vec(),
+                value: Some(b"42".to_vec()),
+            },
+            dyn_riak::proto::pb::RpbPair {
+                key: b"city_bin".to_vec(),
+                value: Some(b"seattle".to_vec()),
+            },
+        ],
+        ..dyn_riak::proto::pb::RpbPutReq::default()
+    };
+    pbc_send(&mut sock, 11, &put.encode_to_vec()).await;
+    let (code, _) = pbc_recv(&mut sock).await;
+    assert_eq!(code, 12, "expected RpbPutResp");
+
+    // Equality query on age_int=42 returns alice.
+    let idx_eq = dyn_riak::proto::pb::RpbIndexReq {
+        bucket: b"users".to_vec(),
+        index: b"age_int".to_vec(),
+        qtype: dyn_riak::proto::pb::INDEX_QUERY_TYPE_EQ,
+        key: Some(b"42".to_vec()),
+        ..dyn_riak::proto::pb::RpbIndexReq::default()
+    };
+    pbc_send(&mut sock, 25, &idx_eq.encode_to_vec()).await;
+    let (code, body) = pbc_recv(&mut sock).await;
+    assert_eq!(code, 26, "expected RpbIndexResp");
+    let resp = dyn_riak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
+    assert_eq!(resp.done, Some(true));
+    assert_eq!(resp.keys, vec![b"alice".to_vec()]);
+
+    // Range query on age_int [10, 50] also returns alice.
+    let idx_rg = dyn_riak::proto::pb::RpbIndexReq {
+        bucket: b"users".to_vec(),
+        index: b"age_int".to_vec(),
+        qtype: dyn_riak::proto::pb::INDEX_QUERY_TYPE_RANGE,
+        range_min: Some(b"10".to_vec()),
+        range_max: Some(b"50".to_vec()),
+        ..dyn_riak::proto::pb::RpbIndexReq::default()
+    };
+    pbc_send(&mut sock, 25, &idx_rg.encode_to_vec()).await;
+    let (code, body) = pbc_recv(&mut sock).await;
+    assert_eq!(code, 26);
+    let resp = dyn_riak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
+    assert_eq!(resp.keys, vec![b"alice".to_vec()]);
+
+    drop(sock);
+    handle.shutdown();
+    let res = tokio::time::timeout(Duration::from_secs(5), supervisor)
+        .await
+        .expect("supervisor stuck")
+        .expect("join");
+    assert!(res.is_ok(), "run returned: {res:?}");
+}

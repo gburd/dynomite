@@ -48,6 +48,7 @@ string_enum_serde!(HashType);
 /// use dynomite::conf::DataStore;
 /// assert_eq!(DataStore::from_int(0).unwrap(), DataStore::Redis);
 /// assert_eq!(DataStore::Redis.as_int(), 0);
+/// assert_eq!(DataStore::from_name("noxu").unwrap(), DataStore::Noxu);
 /// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum DataStore {
@@ -55,6 +56,11 @@ pub enum DataStore {
     Redis,
     /// Memcached ASCII datastore. Encoded as `1` in YAML.
     Memcache,
+    /// In-process Noxu DB datastore (Riak-shaped). Encoded as
+    /// `2` in YAML, or as the string `noxu`. Selecting this
+    /// variant requires `dynomited` to be built with
+    /// `--features riak` and a sibling `noxu_path:` knob.
+    Noxu,
 }
 
 impl DataStore {
@@ -65,13 +71,40 @@ impl DataStore {
     /// ```
     /// use dynomite::conf::DataStore;
     /// assert_eq!(DataStore::from_int(1).unwrap(), DataStore::Memcache);
+    /// assert_eq!(DataStore::from_int(2).unwrap(), DataStore::Noxu);
     /// assert!(DataStore::from_int(7).is_err());
     /// ```
     pub fn from_int(v: i64) -> Result<Self, ConfError> {
         match v {
             0 => Ok(DataStore::Redis),
             1 => Ok(DataStore::Memcache),
+            2 => Ok(DataStore::Noxu),
             n => Err(ConfError::BadDataStore(n)),
+        }
+    }
+
+    /// Parse the textual form of a `data_store:` value, as
+    /// accepted in YAML alongside the integer form.
+    ///
+    /// Comparison is case-insensitive against `redis`,
+    /// `memcache`, `memcached`, and `noxu`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::DataStore;
+    /// assert_eq!(DataStore::from_name("REDIS").unwrap(), DataStore::Redis);
+    /// assert!(DataStore::from_name("sql").is_err());
+    /// ```
+    pub fn from_name(s: &str) -> Result<Self, ConfError> {
+        if s.eq_ignore_ascii_case("redis") {
+            Ok(DataStore::Redis)
+        } else if s.eq_ignore_ascii_case("memcache") || s.eq_ignore_ascii_case("memcached") {
+            Ok(DataStore::Memcache)
+        } else if s.eq_ignore_ascii_case("noxu") {
+            Ok(DataStore::Noxu)
+        } else {
+            Err(ConfError::BadDataStore(-1))
         }
     }
 
@@ -82,11 +115,29 @@ impl DataStore {
     /// ```
     /// use dynomite::conf::DataStore;
     /// assert_eq!(DataStore::Memcache.as_int(), 1);
+    /// assert_eq!(DataStore::Noxu.as_int(), 2);
     /// ```
     pub fn as_int(self) -> i64 {
         match self {
             DataStore::Redis => 0,
             DataStore::Memcache => 1,
+            DataStore::Noxu => 2,
+        }
+    }
+
+    /// Return the canonical lower-case textual name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::DataStore;
+    /// assert_eq!(DataStore::Noxu.as_name(), "noxu");
+    /// ```
+    pub fn as_name(self) -> &'static str {
+        match self {
+            DataStore::Redis => "redis",
+            DataStore::Memcache => "memcache",
+            DataStore::Noxu => "noxu",
         }
     }
 }
@@ -351,10 +402,15 @@ mod tests {
     fn data_store_round_trip() {
         assert_eq!(DataStore::from_int(0).unwrap(), DataStore::Redis);
         assert_eq!(DataStore::from_int(1).unwrap(), DataStore::Memcache);
+        assert_eq!(DataStore::from_int(2).unwrap(), DataStore::Noxu);
         assert!(matches!(
-            DataStore::from_int(2),
-            Err(ConfError::BadDataStore(2))
+            DataStore::from_int(7),
+            Err(ConfError::BadDataStore(7))
         ));
+        assert_eq!(DataStore::from_name("noxu").unwrap(), DataStore::Noxu);
+        assert_eq!(DataStore::from_name("REDIS").unwrap(), DataStore::Redis);
+        assert!(DataStore::from_name("sql").is_err());
+        assert_eq!(DataStore::Noxu.as_name(), "noxu");
     }
 
     #[test]

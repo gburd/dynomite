@@ -120,3 +120,101 @@ scheduler; once the exchange protocol lands, only the body of
 the scheduler tick has to change.
 
 [`PeerChannelRepairSink`]: ../api/dynomited/riak/struct.PeerChannelRepairSink.html
+
+## Noxu as the backing datastore
+
+The Riak protocol surface speaks to a `Datastore` implementation;
+operators select which one via the pool's `data_store:` knob.
+With `--features riak`, `dynomited` accepts a third value
+alongside the historical `redis` (`0`) and `memcache` (`1`):
+
+```yaml
+dyn_o_mite:
+  listen: 127.0.0.1:8102
+  dyn_listen: 127.0.0.1:8101
+  tokens: '0'
+  data_store: noxu          # or '2', mirroring the integer form
+  noxu_path: /var/lib/dynomite/noxu
+  servers:
+  - 127.0.0.1:6379:1        # placeholder, ignored under noxu
+  riak:
+    pbc_listen: 127.0.0.1:8087
+    http_listen: 127.0.0.1:8098
+```
+
+When `data_store: noxu` is set:
+
+* The Redis-fronting proxy still parses RESP requests on
+  `listen:`. Each `GET` / `SET` / `DEL` / `PING` is delivered to
+  an in-process supervisor that reads / writes against the Noxu
+  environment at `noxu_path:`.
+* The Riak PBC and HTTP listeners (when configured) bind to the
+  same Noxu environment, so a key written via RESP is visible via
+  Riak's `RpbGetReq`, and a 2i index entry written via
+  `RpbPutReq` is visible to subsequent `RpbIndexReq` queries.
+* The `servers:` list is preserved for schema compatibility but
+  is not contacted; the placeholder `127.0.0.1:6379:1` is
+  conventional.
+
+If `dynomited` is built without `--features riak`, selecting
+`data_store: noxu` is rejected at configuration validation time
+with `noxu data_store requires dynomited built with --features
+riak`.
+
+## Secondary indexes (2i)
+
+The Noxu-backed `Datastore` implements the Riak 2i extension
+trait methods used by the PBC `RpbIndexReq` handler. Two query
+types are supported:
+
+* **Equality** (`qtype: 0`): scan keys whose index value
+  matches exactly.
+* **Range** (`qtype: 1`): scan keys whose index value falls
+  inside `[range_min, range_max]` (inclusive bounds).
+
+Index entries are attached to an object at put time. The
+`RpbPutReq.indexes` field carries one `RpbPair` per entry where
+`pair.key` names the index (suffixed with `_int` for integer
+indexes, `_bin` for binary indexes) and `pair.value` carries the
+value bytes.
+
+Example (Python, using `riak` PBC client):
+
+```python
+client = riak.RiakClient(host='127.0.0.1', pb_port=8087)
+b = client.bucket('users')
+o = b.new('alice', data='profile')
+o.add_index('age_int', '42')
+o.add_index('city_bin', 'seattle')
+o.store()
+
+# Equality query:
+hits = b.get_index('age_int', '42').results
+# Range query:
+hits = b.get_index('age_int', '10', '50').results
+```
+
+Storage layout (deviation from upstream Riak's
+`2i_partition_table` schema): index entries are stored as plain
+records inside the same Noxu environment as the primary KV
+data, under three reserved prefixes:
+
+* Primary: `K\\0{bucket}\\0{key}` -> value
+* Forward 2i: `I\\0{bucket}\\0{name}\\0<u32-be vlen>{value}{key}`
+  -> empty
+* Reverse 2i: `R\\0{bucket}\\0{key}` -> length-prefixed
+  `(name, value)` list, used to clean stale forward entries on
+  delete / overwrite.
+
+The fixed-width length prefix on the value keeps prefix scans
+unambiguous when value bytes contain the structural separator;
+see `docs/journal/2026-05-24-noxu-firstclass-and-2i.md` for the
+schema rationale.
+
+## Streaming response and follow-ups
+
+The current `RpbIndexResp` handler emits a single response frame
+with `done = Some(true)`. Streaming (one frame per chunk plus a
+body-less terminator) is scoped as a follow-up. The `$key`
+reserved internal index for primary-key range queries is also
+deferred.

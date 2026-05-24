@@ -85,6 +85,7 @@ impl From<DataStore> for Protocol {
         match d {
             DataStore::Redis => Protocol::Redis,
             DataStore::Memcache => Protocol::Memcache,
+            DataStore::Noxu => Protocol::Custom,
         }
     }
 }
@@ -146,6 +147,82 @@ pub trait Datastore: Send + Sync {
     /// single-item stream carrying [`DatastoreError::Unsupported`].
     fn list_keys_stream(&self, _bucket: &[u8]) -> DatastoreByteStream {
         Box::pin(unsupported_byte_stream())
+    }
+
+    /// Read the object stored under `(bucket, key)` against the
+    /// Riak K/V layer.
+    ///
+    /// Returns `Ok(None)` when no object exists. The default
+    /// implementation reports the operation as unsupported so
+    /// existing `Datastore` impls that do not speak Riak
+    /// continue to compile against the new trait surface; the
+    /// PBC server treats the error as a routing failure and
+    /// emits an `RpbErrorResp`.
+    fn riak_get<'a>(
+        &'a self,
+        _bucket: &'a [u8],
+        _key: &'a [u8],
+    ) -> BoxFuture<'a, Result<Option<Vec<u8>>, DatastoreError>> {
+        Box::pin(async move { Err(DatastoreError::Unsupported(MsgType::Unknown)) })
+    }
+
+    /// Store `value` under `(bucket, key)`. `indexes` carries
+    /// `(index_name, encoded_value)` pairs to associate with the
+    /// object on the 2i layer.
+    ///
+    /// Default: unsupported, see [`Datastore::riak_get`].
+    fn riak_put<'a>(
+        &'a self,
+        _bucket: &'a [u8],
+        _key: &'a [u8],
+        _value: &'a [u8],
+        _indexes: &'a [(Vec<u8>, Vec<u8>)],
+    ) -> BoxFuture<'a, Result<(), DatastoreError>> {
+        Box::pin(async move { Err(DatastoreError::Unsupported(MsgType::Unknown)) })
+    }
+
+    /// Delete the object stored under `(bucket, key)`. Returns
+    /// `true` when an object was removed, `false` when none
+    /// existed.
+    ///
+    /// Default: unsupported, see [`Datastore::riak_get`].
+    fn riak_delete<'a>(
+        &'a self,
+        _bucket: &'a [u8],
+        _key: &'a [u8],
+    ) -> BoxFuture<'a, Result<bool, DatastoreError>> {
+        Box::pin(async move { Err(DatastoreError::Unsupported(MsgType::Unknown)) })
+    }
+
+    /// Equality query against the 2i layer.
+    ///
+    /// Returns the object keys whose `index_name` value equals
+    /// `value`, ordered by the underlying storage's natural key
+    /// order (typically lexicographic).
+    ///
+    /// Default: unsupported, see [`Datastore::riak_get`].
+    fn riak_index_eq<'a>(
+        &'a self,
+        _bucket: &'a [u8],
+        _index_name: &'a [u8],
+        _value: &'a [u8],
+    ) -> BoxFuture<'a, Result<Vec<Vec<u8>>, DatastoreError>> {
+        Box::pin(async move { Err(DatastoreError::Unsupported(MsgType::Unknown)) })
+    }
+
+    /// Range query against the 2i layer. `min` and `max` are
+    /// inclusive bounds in the same encoding the index uses
+    /// internally.
+    ///
+    /// Default: unsupported, see [`Datastore::riak_get`].
+    fn riak_index_range<'a>(
+        &'a self,
+        _bucket: &'a [u8],
+        _index_name: &'a [u8],
+        _min: &'a [u8],
+        _max: &'a [u8],
+    ) -> BoxFuture<'a, Result<Vec<Vec<u8>>, DatastoreError>> {
+        Box::pin(async move { Err(DatastoreError::Unsupported(MsgType::Unknown)) })
     }
 }
 

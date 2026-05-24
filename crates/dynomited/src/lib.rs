@@ -16,6 +16,8 @@
 pub mod asciilogo;
 pub mod cli;
 pub mod daemonize;
+#[cfg(feature = "riak")]
+pub mod noxu_backend;
 pub mod observability;
 pub mod pidfile;
 #[cfg(feature = "riak")]

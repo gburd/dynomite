@@ -319,6 +319,20 @@ pub struct RpbPutReq {
     /// Bucket type.
     #[prost(bytes = "vec", optional, tag = "16")]
     pub r#type: Option<Vec<u8>>,
+    /// Secondary-index entries to associate with this object.
+    /// Each [`RpbPair`] carries `(name, value)` where `name`
+    /// ends in `_int` (integer index) or `_bin` (binary index).
+    ///
+    /// In Riak's published schema this field lives nested inside
+    /// an `RpbContent` message at tag 4. The v0.0.1 slice models
+    /// the put body as a flat `value: bytes` (see
+    /// `docs/parity.md`); to keep the 2i path usable the index
+    /// list is exposed at a top-level tag here. The follow-up
+    /// slice that replaces `value` with `content: RpbContent`
+    /// will remove this field and forward to
+    /// `RpbContent.indexes` instead.
+    #[prost(message, repeated, tag = "100")]
+    pub indexes: Vec<RpbPair>,
 }
 
 impl WireValue for RpbPutReq {
@@ -929,6 +943,7 @@ mod tests {
             sloppy_quorum: None,
             n_val: Some(3),
             r#type: None,
+            indexes: Vec::new(),
         };
         let bytes = req.encode_to_vec();
         let back = RpbPutReq::decode(bytes.as_slice()).expect("decode");
