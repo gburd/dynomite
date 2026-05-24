@@ -44,6 +44,16 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 thiserror = "1.0"
 anyhow = "1.0"
+# Stream trait + utilities for the streaming-list path on the
+# Datastore embed hook. `futures-core` carries the `Stream` trait
+# referenced by the Datastore trait signature; `futures-util`
+# provides `unfold`, `StreamExt::next`, and the
+# `MapErr`/`BoxBody` glue used by the dyn-riak HTTP and PBC
+# transports. Both crates are already pulled in transitively;
+# making the dependency explicit lets the streaming list paths
+# import them without relying on transitive resolution.
+futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5"
 crossbeam-queue = "0.3"
 parking_lot = "0.12"

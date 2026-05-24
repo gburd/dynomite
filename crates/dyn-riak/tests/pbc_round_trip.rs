@@ -31,8 +31,8 @@ use dyn_riak::error::RiakError;
 use dyn_riak::proto::pb::{
     read_frame, write_frame, Frame, MessageCode, RpbBucketProps, RpbDelReq, RpbErrorResp,
     RpbGetBucketReq, RpbGetBucketResp, RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq,
-    RpbListBucketsReq, RpbListKeysReq, RpbPutReq, RpbPutResp, RpbServerInfoReq, RpbSetBucketReq,
-    RpbSetBucketResp, INDEX_QUERY_TYPE_EQ,
+    RpbListBucketsReq, RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp, RpbPutReq, RpbPutResp,
+    RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, INDEX_QUERY_TYPE_EQ,
 };
 use dyn_riak::serve_pbc;
 use dynomite::embed::{Datastore, MemoryDatastore};
@@ -102,14 +102,53 @@ async fn pbc_new_ops_round_trip() {
     exchange_server_info(&mut h.reader, &mut h.writer).await;
     exchange_get_bucket(&mut h.reader, &mut h.writer).await;
     exchange_set_bucket(&mut h.reader, &mut h.writer).await;
-    exchange_list_buckets_unsupported(&mut h.reader, &mut h.writer).await;
-    exchange_list_keys_unsupported(&mut h.reader, &mut h.writer).await;
+    exchange_list_buckets_empty(&mut h.reader, &mut h.writer).await;
+    exchange_list_keys_empty(&mut h.reader, &mut h.writer).await;
     exchange_index_unsupported(&mut h.reader, &mut h.writer).await;
 
     // None of the new ops route through the substrate dispatch
     // path: server-info and bucket-props get/set reply directly,
-    // and the unsupported ops short-circuit with an error frame.
+    // list-buckets / list-keys stream from MemoryDatastore's
+    // listing index without going through `dispatch`, and the
+    // unsupported 2i op short-circuits with an error frame.
     assert_eq!(h.ds.dispatch_count(), 0);
+
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn pbc_list_keys_streams_multiple_frames() {
+    // 1000 keys -> 4 chunked frames (3 full of 256 + 1 partial of
+    // 232) + 1 empty done=true terminator = 5 frames total.
+    let mut h = Harness::start().await;
+
+    for i in 0..1000u16 {
+        h.ds.insert(b"users", format!("k{i:04}").as_bytes());
+    }
+
+    let req = RpbListKeysReq {
+        bucket: b"users".to_vec(),
+        ..RpbListKeysReq::default()
+    };
+    write_req(&mut h.writer, MessageCode::ListKeysReq, req.encode_to_vec()).await;
+
+    let mut frames = Vec::new();
+    loop {
+        let f = read_frame(&mut h.reader).await.expect("read list frame");
+        assert_eq!(f.code, MessageCode::ListKeysResp.as_u8());
+        let resp = RpbListKeysResp::decode(f.body.as_slice()).expect("decode list-keys");
+        let done = resp.done == Some(true);
+        frames.push(resp);
+        if done {
+            break;
+        }
+    }
+    assert_eq!(frames.len(), 5, "expected 4 chunks plus a terminator");
+    let total_keys: usize = frames.iter().map(|f| f.keys.len()).sum();
+    assert_eq!(total_keys, 1000);
+    let last = frames.last().expect("final frame");
+    assert!(last.keys.is_empty());
+    assert_eq!(last.done, Some(true));
 
     h.shutdown().await;
 }
@@ -220,23 +259,27 @@ async fn exchange_set_bucket(r: &mut Reader, w: &mut Writer) {
     let _ = RpbSetBucketResp::decode(resp.body.as_slice()).expect("decode set-bucket");
 }
 
-async fn exchange_list_buckets_unsupported(r: &mut Reader, w: &mut Writer) {
+async fn exchange_list_buckets_empty(r: &mut Reader, w: &mut Writer) {
+    // MemoryDatastore with no inserts streams a single done=true
+    // empty frame.
     let req = RpbListBucketsReq::default();
     write_req(w, MessageCode::ListBucketsReq, req.encode_to_vec()).await;
-    let resp = read_resp(r, MessageCode::ErrorResp).await;
-    let err = RpbErrorResp::decode(resp.body.as_slice()).expect("decode err");
-    assert!(!err.errmsg.is_empty());
+    let resp = read_resp(r, MessageCode::ListBucketsResp).await;
+    let parsed = RpbListBucketsResp::decode(resp.body.as_slice()).expect("decode list-buckets");
+    assert_eq!(parsed.done, Some(true));
+    assert!(parsed.buckets.is_empty());
 }
 
-async fn exchange_list_keys_unsupported(r: &mut Reader, w: &mut Writer) {
+async fn exchange_list_keys_empty(r: &mut Reader, w: &mut Writer) {
     let req = RpbListKeysReq {
         bucket: b"users".to_vec(),
         ..RpbListKeysReq::default()
     };
     write_req(w, MessageCode::ListKeysReq, req.encode_to_vec()).await;
-    let resp = read_resp(r, MessageCode::ErrorResp).await;
-    let err = RpbErrorResp::decode(resp.body.as_slice()).expect("decode err");
-    assert!(!err.errmsg.is_empty());
+    let resp = read_resp(r, MessageCode::ListKeysResp).await;
+    let parsed = RpbListKeysResp::decode(resp.body.as_slice()).expect("decode list-keys");
+    assert_eq!(parsed.done, Some(true));
+    assert!(parsed.keys.is_empty());
 }
 
 async fn exchange_index_unsupported(r: &mut Reader, w: &mut Writer) {

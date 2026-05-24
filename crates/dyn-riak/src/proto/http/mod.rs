@@ -39,8 +39,9 @@
 //! the PBC server uses. The substrate's accounting ticks per
 //! request; the Riak-aware K/V trait that turns a `dispatch` into a
 //! real fetch / store / delete lands in a follow-up slice. List-keys
-//! and list-buckets always return `501 Not Implemented` for the
-//! in-process datastore until the streaming list path lands.
+//! and list-buckets stream their response body chunk-by-chunk via
+//! [`dynomite::embed::Datastore::list_buckets_stream`] and
+//! [`dynomite::embed::Datastore::list_keys_stream`].
 
 use std::sync::Arc;
 

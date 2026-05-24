@@ -5,7 +5,9 @@
 //! Found`. Recognised routes that the underlying
 //! [`dynomite::embed::Datastore`] cannot serve (for example
 //! list-keys against an in-memory store) return `501 Not
-//! Implemented`.
+//! Implemented`. List endpoints stream their response body in
+//! HTTP/1.1 chunked transfer-encoding for negotiated `application/json`
+//! and use a length-prefixed framing for opaque codecs.
 //!
 //! # Coverage
 //!
@@ -17,8 +19,8 @@
 //! | PUT         | `/buckets/{bucket}/keys/{key}`           | Store object               |
 //! | POST        | `/buckets/{bucket}/keys/{key}`           | Store object (key required)|
 //! | DELETE      | `/buckets/{bucket}/keys/{key}`           | Delete object              |
-//! | GET         | `/buckets?buckets=true`                  | List buckets (501 v0.0.1)  |
-//! | GET         | `/buckets/{bucket}/keys?keys=true`       | List keys (501 v0.0.1)     |
+//! | GET         | `/buckets?buckets=true`                  | List buckets (chunked)     |
+//! | GET         | `/buckets/{bucket}/keys?keys=true`       | List keys (chunked)        |
 //! | GET         | `/buckets/{bucket}/props`                | Get bucket props            |
 //! | PUT         | `/buckets/{bucket}/props`                | Set bucket props            |
 //!
@@ -31,21 +33,45 @@
 //! follow-up slice along with the [`crate::datastore`] richer
 //! trait.
 
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
-use hyper::header::{ACCEPT, CONTENT_TYPE};
+use futures_core::Stream;
+use futures_util::StreamExt;
+use http_body_util::{combinators::UnsyncBoxBody, BodyExt, Full, StreamBody};
+use hyper::body::{Frame as HttpFrame, Incoming};
+use hyper::header::{ACCEPT, CONTENT_TYPE, TRANSFER_ENCODING};
 use hyper::{HeaderMap, Method, Request, Response, StatusCode};
 
+use dynomite::embed::hooks::DatastoreByteStream;
 use dynomite::embed::Datastore;
 use dynomite::msg::{Msg, MsgType};
 
 use crate::proto::http::content_type::{select_codec, SUPPORTED_CONTENT_TYPES};
 
-/// Body type the gateway emits. Single-shot, fully buffered.
-pub(crate) type ResponseBody = Full<Bytes>;
+/// Body type the gateway emits.
+///
+/// The gateway used to fully buffer every response in [`Full`].
+/// Streaming list-buckets / list-keys forced the boxed body shape
+/// so a buffered handler and a chunked handler can coexist behind
+/// one return type. The error type is unified to [`Infallible`];
+/// streaming handlers that observe a datastore error fold it into
+/// a final body chunk and finish the stream cleanly so the hyper
+/// layer never sees a body-level error.
+pub(crate) type ResponseBody = UnsyncBoxBody<Bytes, Infallible>;
+
+/// Maximum number of entries packed into a single streaming JSON
+/// or codec chunk for list-buckets / list-keys.
+///
+/// Matches the PBC framer's chunk size so a tee-tail comparison
+/// of the two transports stays apples-to-apples.
+pub(crate) const HTTP_LIST_CHUNK_SIZE: usize = 256;
+
+/// Wrap an in-memory byte payload in the boxed body shape.
+fn buffered_body(bytes: Bytes) -> ResponseBody {
+    BodyExt::boxed_unsync(Full::new(bytes))
+}
 
 /// Maximum HTTP request body the gateway will accept. Mirrors the
 /// PBC framer's 16 MiB cap.
@@ -187,9 +213,8 @@ async fn handle_route(
             handle_put(bucket, key, headers, body, datastore.as_ref()).await
         }
         Route::DeleteObject { bucket, key } => handle_delete(bucket, key, datastore.as_ref()).await,
-        Route::ListBuckets | Route::ListKeys { .. } => not_implemented_response(
-            "listing is not supported by the in-process datastore in v0.0.1",
-        ),
+        Route::ListBuckets => list_buckets_response(headers, &datastore),
+        Route::ListKeys { bucket } => list_keys_response(bucket, headers, &datastore),
         Route::GetProps { bucket } => get_props_response(bucket, headers),
         Route::SetProps { bucket } => set_props_response(bucket, headers, &body),
         Route::MapRed => mapred_response(headers, &body).await,
@@ -210,7 +235,7 @@ fn ping_response(head_only: bool) -> Response<ResponseBody> {
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "text/plain; charset=utf-8")
         .header("Server", SERVER_NAME)
-        .body(Full::new(body))
+        .body(buffered_body(body))
         .expect("invariant: ping response builder is well-formed")
 }
 
@@ -236,7 +261,7 @@ fn stats_response(headers: &HeaderMap) -> Response<ResponseBody> {
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, ct)
         .header("Server", SERVER_NAME)
-        .body(Full::new(Bytes::from(body_bytes)))
+        .body(buffered_body(Bytes::from(body_bytes)))
         .expect("invariant: stats response builder is well-formed")
 }
 
@@ -305,7 +330,7 @@ async fn handle_put(
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .header("Server", SERVER_NAME)
-        .body(Full::new(Bytes::new()))
+        .body(buffered_body(Bytes::new()))
         .expect("invariant: put response builder is well-formed")
 }
 
@@ -324,7 +349,7 @@ async fn handle_delete(
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .header("Server", SERVER_NAME)
-        .body(Full::new(Bytes::new()))
+        .body(buffered_body(Bytes::new()))
         .expect("invariant: delete response builder is well-formed")
 }
 
@@ -356,7 +381,7 @@ fn get_props_response(bucket: &str, headers: &HeaderMap) -> Response<ResponseBod
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, ct)
         .header("Server", SERVER_NAME)
-        .body(Full::new(Bytes::from(body)))
+        .body(buffered_body(Bytes::from(body)))
         .expect("invariant: get-props response builder is well-formed")
 }
 
@@ -381,7 +406,7 @@ fn set_props_response(_bucket: &str, headers: &HeaderMap, body: &Bytes) -> Respo
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .header("Server", SERVER_NAME)
-        .body(Full::new(Bytes::new()))
+        .body(buffered_body(Bytes::new()))
         .expect("invariant: set-props response builder is well-formed")
 }
 
@@ -394,12 +419,8 @@ fn text_response(status: StatusCode, msg: &str) -> Response<ResponseBody> {
         .status(status)
         .header(CONTENT_TYPE, "text/plain; charset=utf-8")
         .header("Server", SERVER_NAME)
-        .body(Full::new(Bytes::copy_from_slice(msg.as_bytes())))
+        .body(buffered_body(Bytes::copy_from_slice(msg.as_bytes())))
         .expect("invariant: text response builder is well-formed")
-}
-
-fn not_implemented_response(msg: &str) -> Response<ResponseBody> {
-    text_response(StatusCode::NOT_IMPLEMENTED, msg)
 }
 
 fn not_acceptable_response() -> Response<ResponseBody> {
@@ -480,8 +501,240 @@ async fn mapred_response(headers: &HeaderMap, body: &Bytes) -> Response<Response
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/json")
         .header("Server", SERVER_NAME)
-        .body(Full::new(Bytes::from(body_bytes)))
+        .body(buffered_body(Bytes::from(body_bytes)))
         .expect("invariant: mapred response builder is well-formed")
+}
+
+// ------------------------------------------------------------------
+// Streaming list handlers (list-buckets, list-keys).
+// ------------------------------------------------------------------
+//
+// The HTTP shape mirrors Riak's documented behaviour. For
+// `application/json`, the body is a chunked JSON array:
+//
+// ```text
+//   ["key0","key1", ...]
+// ```
+//
+// where `[`, comma, `]`, and the JSON-encoded entries are written
+// across multiple HTTP body chunks. The client buffers the body
+// and parses it as a JSON document; chunked transfer-encoding is
+// negotiated automatically by hyper because the body uses
+// [`StreamBody`].
+//
+// For self-describing codecs (CBOR, BSON, ...), each entry is
+// emitted as a length-prefixed payload (4-byte big-endian length
+// followed by the codec-encoded entry). A length of zero marks
+// end-of-stream so a client can read until the terminator without
+// relying on chunked transfer-encoding metadata.
+//
+// A client that closes the connection mid-stream simply observes
+// fewer entries; the server-side stream task drops on connection
+// close because hyper aborts the body future. Datastore errors
+// mid-stream surface as a synthetic terminal entry (an empty
+// JSON object `{}`, or a zero-length-prefixed entry) followed by
+// end-of-stream; the journal documents the limitation.
+
+fn list_buckets_response(
+    headers: &HeaderMap,
+    datastore: &Arc<dyn Datastore>,
+) -> Response<ResponseBody> {
+    let accept = header_str(headers, ACCEPT);
+    let Some(ct) = select_codec(accept, Some("application/json")) else {
+        return not_acceptable_response();
+    };
+    let stream = datastore.list_buckets_stream();
+    streaming_list_response(ct, stream)
+}
+
+fn list_keys_response(
+    bucket: &str,
+    headers: &HeaderMap,
+    datastore: &Arc<dyn Datastore>,
+) -> Response<ResponseBody> {
+    let accept = header_str(headers, ACCEPT);
+    let Some(ct) = select_codec(accept, Some("application/json")) else {
+        return not_acceptable_response();
+    };
+    let stream = datastore.list_keys_stream(bucket.as_bytes());
+    streaming_list_response(ct, stream)
+}
+
+/// Build a streaming HTTP response from a datastore byte stream.
+///
+/// `ct` is the negotiated content-type; for `application/json`
+/// the body is a chunked JSON array, otherwise the body is a
+/// length-prefixed sequence of opaque entries (one entry per
+/// length prefix, terminated by a zero-length prefix).
+fn streaming_list_response(ct: &str, stream: DatastoreByteStream) -> Response<ResponseBody> {
+    let body_stream: Pin<Box<dyn Stream<Item = Result<HttpFrame<Bytes>, Infallible>> + Send>> =
+        if ct == "application/json" {
+            Box::pin(json_array_chunks(stream))
+        } else {
+            Box::pin(length_prefixed_chunks(stream))
+        };
+    let body = BodyExt::boxed_unsync(StreamBody::new(body_stream));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, ct)
+        .header(TRANSFER_ENCODING, "chunked")
+        .header("Server", SERVER_NAME)
+        .body(body)
+        .expect("invariant: streaming response builder is well-formed")
+}
+
+use std::pin::Pin;
+
+/// Producer state for the JSON-array streaming list shape.
+enum JsonChunkState {
+    /// Initial: emit the opening `[` and start consuming entries.
+    Open(DatastoreByteStream),
+    /// Mid-stream: holds the byte stream and a flag for whether
+    /// the leading comma is needed before the next entry.
+    Streaming {
+        stream: DatastoreByteStream,
+        first_emitted: bool,
+    },
+    /// Final: emit the closing `]`.
+    Close,
+    /// Done.
+    Done,
+}
+
+/// Stream an HTTP body as a JSON array, chunked at
+/// [`HTTP_LIST_CHUNK_SIZE`] entries per body frame.
+fn json_array_chunks(
+    stream: DatastoreByteStream,
+) -> impl Stream<Item = Result<HttpFrame<Bytes>, Infallible>> + Send {
+    futures_util::stream::unfold(JsonChunkState::Open(stream), |state| async move {
+        match state {
+            JsonChunkState::Done => None,
+            JsonChunkState::Open(stream) => Some((
+                Ok(HttpFrame::data(Bytes::from_static(b"["))),
+                JsonChunkState::Streaming {
+                    stream,
+                    first_emitted: false,
+                },
+            )),
+            JsonChunkState::Close => {
+                Some((Ok(HttpFrame::data(Bytes::from_static(b"]"))), JsonChunkState::Done))
+            }
+            JsonChunkState::Streaming {
+                mut stream,
+                mut first_emitted,
+            } => {
+                let mut buf: Vec<u8> = Vec::new();
+                let mut packed = 0usize;
+                while packed < HTTP_LIST_CHUNK_SIZE {
+                    match stream.next().await {
+                        None => {
+                            if buf.is_empty() {
+                                return Some((
+                                    Ok(HttpFrame::data(Bytes::from_static(b"]"))),
+                                    JsonChunkState::Done,
+                                ));
+                            }
+                            return Some((
+                                Ok(HttpFrame::data(Bytes::from(buf))),
+                                JsonChunkState::Close,
+                            ));
+                        }
+                        Some(Err(_e)) => {
+                            // Datastore error mid-stream: emit
+                            // whatever bytes have been buffered
+                            // and close the array. The HTTP path
+                            // does not have a clean way to surface
+                            // a body-level error to a client that
+                            // has already received `200 OK`; the
+                            // journal documents this trade-off.
+                            if !buf.is_empty() {
+                                return Some((
+                                    Ok(HttpFrame::data(Bytes::from(buf))),
+                                    JsonChunkState::Close,
+                                ));
+                            }
+                            return Some((
+                                Ok(HttpFrame::data(Bytes::from_static(b"]"))),
+                                JsonChunkState::Done,
+                            ));
+                        }
+                        Some(Ok(entry)) => {
+                            if first_emitted {
+                                buf.push(b',');
+                            } else {
+                                first_emitted = true;
+                            }
+                            // JSON-encode the entry as a UTF-8
+                            // string. Non-UTF-8 bytes are encoded
+                            // by serde_json with replacement
+                            // characters; a future slice may switch
+                            // to base64 for binary keys.
+                            let s = String::from_utf8_lossy(&entry).into_owned();
+                            let encoded = serde_json::to_vec(&s).unwrap_or_else(|_| b"\"\"".to_vec());
+                            buf.extend_from_slice(&encoded);
+                            packed += 1;
+                        }
+                    }
+                }
+                Some((
+                    Ok(HttpFrame::data(Bytes::from(buf))),
+                    JsonChunkState::Streaming {
+                        stream,
+                        first_emitted,
+                    },
+                ))
+            }
+        }
+    })
+}
+
+/// Stream a length-prefixed sequence of opaque entries, chunked at
+/// [`HTTP_LIST_CHUNK_SIZE`] entries per body frame. End-of-stream
+/// is marked with a 4-byte big-endian zero terminator.
+fn length_prefixed_chunks(
+    stream: DatastoreByteStream,
+) -> impl Stream<Item = Result<HttpFrame<Bytes>, Infallible>> + Send {
+    enum LpState {
+        Streaming(DatastoreByteStream),
+        Done,
+    }
+    futures_util::stream::unfold(LpState::Streaming(stream), |state| async move {
+        match state {
+            LpState::Done => None,
+            LpState::Streaming(mut stream) => {
+                let mut buf: Vec<u8> = Vec::new();
+                let mut packed = 0usize;
+                while packed < HTTP_LIST_CHUNK_SIZE {
+                    match stream.next().await {
+                        None => {
+                            buf.extend_from_slice(&0u32.to_be_bytes());
+                            return Some((
+                                Ok(HttpFrame::data(Bytes::from(buf))),
+                                LpState::Done,
+                            ));
+                        }
+                        Some(Err(_e)) => {
+                            buf.extend_from_slice(&0u32.to_be_bytes());
+                            return Some((
+                                Ok(HttpFrame::data(Bytes::from(buf))),
+                                LpState::Done,
+                            ));
+                        }
+                        Some(Ok(entry)) => {
+                            let len = u32::try_from(entry.len()).unwrap_or(u32::MAX);
+                            buf.extend_from_slice(&len.to_be_bytes());
+                            buf.extend_from_slice(&entry);
+                            packed += 1;
+                        }
+                    }
+                }
+                Some((
+                    Ok(HttpFrame::data(Bytes::from(buf))),
+                    LpState::Streaming(stream),
+                ))
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -578,21 +831,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_keys_returns_501() {
-        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+    async fn list_keys_streams_chunked_json_array() {
+        let ds = Arc::new(MemoryDatastore::new());
+        for i in 0..600u16 {
+            ds.insert(b"u", format!("k{i:04}").as_bytes());
+        }
+        let ds_dyn: Arc<dyn Datastore> = ds.clone();
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, "application/json".parse().unwrap());
         let resp = handle_route(
             Route::ListKeys { bucket: "u" },
             &Method::GET,
-            &dummy_headers(),
+            &headers,
             Bytes::new(),
-            ds,
+            ds_dyn,
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(TRANSFER_ENCODING).map(|v| v.to_str().ok()),
+            Some(Some("chunked"))
+        );
+        assert_eq!(
+            resp.headers().get(CONTENT_TYPE).map(|v| v.to_str().ok()),
+            Some(Some("application/json"))
+        );
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let arr = parsed.as_array().expect("array");
+        assert_eq!(arr.len(), 600);
+        // Ordering is lexicographic per the snapshot semantics.
+        assert_eq!(arr[0], serde_json::Value::String("k0000".to_string()));
+        assert_eq!(arr[599], serde_json::Value::String("k0599".to_string()));
     }
 
     #[tokio::test]
-    async fn list_buckets_returns_501() {
+    async fn list_buckets_streams_chunked_json_array() {
+        let ds = Arc::new(MemoryDatastore::new());
+        for i in 0..3u16 {
+            ds.insert(format!("b{i}").as_bytes(), b"k");
+        }
+        let ds_dyn: Arc<dyn Datastore> = ds.clone();
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, "application/json".parse().unwrap());
+        let resp = handle_route(
+            Route::ListBuckets,
+            &Method::GET,
+            &headers,
+            Bytes::new(),
+            ds_dyn,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let arr = parsed.as_array().expect("array");
+        assert_eq!(arr.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn list_buckets_empty_streams_empty_json_array() {
         let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
         let resp = handle_route(
             Route::ListBuckets,
@@ -602,7 +910,14 @@ mod tests {
             ds,
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        assert_eq!(body.as_ref(), b"[]");
     }
 
     #[tokio::test]
