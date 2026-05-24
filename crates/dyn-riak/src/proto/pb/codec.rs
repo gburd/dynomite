@@ -12,7 +12,10 @@
 use dyn_encoding::{CodecRegistry, ProtobufCodec};
 
 use crate::proto::pb::messages::{
-    RpbDelReq, RpbErrorResp, RpbGetReq, RpbGetResp, RpbPingReq, RpbPingResp, RpbPutReq, RpbPutResp,
+    RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp, RpbGetReq, RpbGetResp,
+    RpbGetServerInfoResp, RpbIndexReq, RpbIndexResp, RpbListBucketsReq, RpbListBucketsResp,
+    RpbListKeysReq, RpbListKeysResp, RpbPingReq, RpbPingResp, RpbPutReq, RpbPutResp,
+    RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
 };
 
 /// Content-type the Riak PBC transport uses unconditionally.
@@ -57,7 +60,19 @@ pub fn codec_registry() -> PbCodecBundle {
         .register::<RpbGetResp>()
         .register::<RpbPutReq>()
         .register::<RpbPutResp>()
-        .register::<RpbDelReq>();
+        .register::<RpbDelReq>()
+        .register::<RpbServerInfoReq>()
+        .register::<RpbGetServerInfoResp>()
+        .register::<RpbListBucketsReq>()
+        .register::<RpbListBucketsResp>()
+        .register::<RpbListKeysReq>()
+        .register::<RpbListKeysResp>()
+        .register::<RpbGetBucketReq>()
+        .register::<RpbGetBucketResp>()
+        .register::<RpbSetBucketReq>()
+        .register::<RpbSetBucketResp>()
+        .register::<RpbIndexReq>()
+        .register::<RpbIndexResp>();
 
     let mut registry = CodecRegistry::new();
     registry.register(codec);

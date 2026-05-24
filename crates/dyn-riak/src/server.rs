@@ -34,6 +34,20 @@
 //!   (no echoed body, no server-assigned key).
 //! * `RpbDelReq` -- same shape; reply is the body-less
 //!   `RpbDelResp` frame.
+//! * `RpbServerInfoReq` -- replied with the crate name and version
+//!   directly; no datastore interaction.
+//! * `RpbGetBucketReq` -- replied with a default [`RpbBucketProps`]
+//!   carrying conservative defaults (`n_val = 3`, `allow_mult =
+//!   false`). Per-bucket persistence is deferred to the follow-up
+//!   slice that wires bucket-property storage into the substrate.
+//! * `RpbSetBucketReq` -- accepted and acknowledged with an empty
+//!   `RpbSetBucketResp`. The supplied properties are not yet
+//!   persisted; same follow-up as above.
+//! * `RpbListBucketsReq`, `RpbListKeysReq`, `RpbIndexReq` --
+//!   replied with [`RpbErrorResp`] carrying a `"not implemented for
+//!   this datastore"` message. The follow-up slice that lands the
+//!   richer K/V trait wires these against the `NoxuDatastore`
+//!   storage engine.
 
 use std::sync::Arc;
 
@@ -47,8 +61,10 @@ use dynomite::msg::{Msg, MsgType};
 use crate::error::RiakError;
 use crate::proto::pb::framer::{read_frame, write_frame, Frame};
 use crate::proto::pb::messages::{
-    MessageCode, RpbDelReq, RpbErrorResp, RpbGetReq, RpbGetResp, RpbPingReq, RpbPingResp,
-    RpbPutReq, RpbPutResp,
+    MessageCode, RpbBucketProps, RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp,
+    RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbListBucketsReq, RpbListKeysReq,
+    RpbPingReq, RpbPingResp, RpbPutReq, RpbPutResp, RpbServerInfoReq, RpbSetBucketReq,
+    RpbSetBucketResp,
 };
 
 /// Run the PBC accept loop on `listener`.
@@ -132,53 +148,37 @@ where
 async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame, RiakError> {
     let code = MessageCode::from_u8(frame.code).map_err(RiakError::UnknownMessageCode)?;
     match code {
-        MessageCode::PingReq => {
-            // Body must decode (it is empty in conforming clients)
-            // but we permit padding-tolerant clients by ignoring
-            // unknown trailing bytes; `prost` already does this.
-            let _ = RpbPingReq::decode(frame.body.as_slice())?;
-            let resp = RpbPingResp::default();
-            Ok(Frame::new(
-                MessageCode::PingResp.as_u8(),
-                resp.encode_to_vec(),
-            ))
-        }
-        MessageCode::GetReq => {
-            let _req = RpbGetReq::decode(frame.body.as_slice())?;
-            // Trampoline through the substrate so dispatch counts
-            // tick. The K/V semantics will move to a richer trait
-            // in the follow-up slice.
-            let routing = Msg::new(0, MsgType::Unknown, true);
-            datastore.dispatch(routing).await?;
-            let resp = RpbGetResp::default();
-            Ok(Frame::new(
-                MessageCode::GetResp.as_u8(),
-                resp.encode_to_vec(),
-            ))
-        }
-        MessageCode::PutReq => {
-            let _req = RpbPutReq::decode(frame.body.as_slice())?;
-            let routing = Msg::new(0, MsgType::Unknown, true);
-            datastore.dispatch(routing).await?;
-            let resp = RpbPutResp::default();
-            Ok(Frame::new(
-                MessageCode::PutResp.as_u8(),
-                resp.encode_to_vec(),
-            ))
-        }
-        MessageCode::DelReq => {
-            let _req = RpbDelReq::decode(frame.body.as_slice())?;
-            let routing = Msg::new(0, MsgType::Unknown, true);
-            datastore.dispatch(routing).await?;
-            // RpbDelResp is body-less.
-            Ok(Frame::new(MessageCode::DelResp.as_u8(), Vec::new()))
-        }
+        MessageCode::PingReq => handle_ping(&frame.body),
+        MessageCode::ServerInfoReq => handle_server_info(&frame.body),
+        MessageCode::GetReq => handle_get(&frame.body, datastore).await,
+        MessageCode::PutReq => handle_put(&frame.body, datastore).await,
+        MessageCode::DelReq => handle_del(&frame.body, datastore).await,
+        MessageCode::GetBucketReq => handle_get_bucket(&frame.body),
+        MessageCode::SetBucketReq => handle_set_bucket(&frame.body),
+        MessageCode::ListBucketsReq => handle_unsupported::<RpbListBucketsReq>(
+            &frame.body,
+            "list-buckets not implemented for this datastore",
+        ),
+        MessageCode::ListKeysReq => handle_unsupported::<RpbListKeysReq>(
+            &frame.body,
+            "list-keys not implemented for this datastore",
+        ),
+        MessageCode::IndexReq => handle_unsupported::<RpbIndexReq>(
+            &frame.body,
+            "secondary-index queries not implemented for this datastore",
+        ),
         // Response codes are illegal inbound.
         MessageCode::ErrorResp
         | MessageCode::PingResp
+        | MessageCode::GetServerInfoResp
         | MessageCode::GetResp
         | MessageCode::PutResp
-        | MessageCode::DelResp => {
+        | MessageCode::DelResp
+        | MessageCode::ListBucketsResp
+        | MessageCode::ListKeysResp
+        | MessageCode::GetBucketResp
+        | MessageCode::SetBucketResp
+        | MessageCode::IndexResp => {
             let body = RpbErrorResp {
                 errmsg: format!("unsupported inbound message code: {}", frame.code).into_bytes(),
                 errcode: 0,
@@ -187,6 +187,112 @@ async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame
             Ok(Frame::new(MessageCode::ErrorResp.as_u8(), body))
         }
     }
+}
+
+fn handle_ping(body: &[u8]) -> Result<Frame, RiakError> {
+    // Body must decode (it is empty in conforming clients) but we
+    // permit padding-tolerant clients by ignoring unknown trailing
+    // bytes; `prost` already does this.
+    let _ = RpbPingReq::decode(body)?;
+    let resp = RpbPingResp::default();
+    Ok(Frame::new(
+        MessageCode::PingResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+fn handle_server_info(body: &[u8]) -> Result<Frame, RiakError> {
+    let _ = RpbServerInfoReq::decode(body)?;
+    let resp = RpbGetServerInfoResp {
+        node: Some(b"dyn-riak".to_vec()),
+        server_version: Some(format!("dyn-riak {}", env!("CARGO_PKG_VERSION")).into_bytes()),
+    };
+    Ok(Frame::new(
+        MessageCode::GetServerInfoResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+async fn handle_get(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+    let _req = RpbGetReq::decode(body)?;
+    // Trampoline through the substrate so dispatch counts tick.
+    // The K/V semantics will move to a richer trait in the
+    // follow-up slice.
+    let routing = Msg::new(0, MsgType::Unknown, true);
+    datastore.dispatch(routing).await?;
+    let resp = RpbGetResp::default();
+    Ok(Frame::new(
+        MessageCode::GetResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+async fn handle_put(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+    let _req = RpbPutReq::decode(body)?;
+    let routing = Msg::new(0, MsgType::Unknown, true);
+    datastore.dispatch(routing).await?;
+    let resp = RpbPutResp::default();
+    Ok(Frame::new(
+        MessageCode::PutResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+async fn handle_del(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+    let _req = RpbDelReq::decode(body)?;
+    let routing = Msg::new(0, MsgType::Unknown, true);
+    datastore.dispatch(routing).await?;
+    // RpbDelResp is body-less.
+    Ok(Frame::new(MessageCode::DelResp.as_u8(), Vec::new()))
+}
+
+fn handle_get_bucket(body: &[u8]) -> Result<Frame, RiakError> {
+    let _req = RpbGetBucketReq::decode(body)?;
+    // Until per-bucket persistence lands, the server reports
+    // conservative cluster defaults. These match Riak's
+    // out-of-the-box defaults for the `default` bucket type.
+    let resp = RpbGetBucketResp {
+        props: Some(RpbBucketProps {
+            n_val: Some(3),
+            allow_mult: Some(false),
+            last_write_wins: Some(false),
+            ..RpbBucketProps::default()
+        }),
+    };
+    Ok(Frame::new(
+        MessageCode::GetBucketResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+fn handle_set_bucket(body: &[u8]) -> Result<Frame, RiakError> {
+    let _req = RpbSetBucketReq::decode(body)?;
+    // The supplied properties are not yet persisted; the response
+    // is an empty acknowledgement so a conforming client treats
+    // the call as successful.
+    let resp = RpbSetBucketResp::default();
+    Ok(Frame::new(
+        MessageCode::SetBucketResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+/// Decode `body` as `T` (so a malformed inbound frame surfaces a
+/// `Decode` error instead of being silently rejected) and emit an
+/// `RpbErrorResp` carrying `message`.
+fn handle_unsupported<T>(body: &[u8], message: &str) -> Result<Frame, RiakError>
+where
+    T: prost::Message + Default,
+{
+    let _ = T::decode(body)?;
+    let resp = RpbErrorResp {
+        errmsg: message.as_bytes().to_vec(),
+        errcode: 1,
+    };
+    Ok(Frame::new(
+        MessageCode::ErrorResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
 }
 
 #[cfg(test)]
@@ -221,10 +327,11 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_code_surfaces_error_to_caller() {
-        let frame = Frame::new(7, Vec::new());
+        // Code 99 is unused.
+        let frame = Frame::new(99, Vec::new());
         let ds = MemoryDatastore::new();
         let err = process_frame(&frame, &ds).await.expect_err("unknown");
-        assert!(matches!(err, RiakError::UnknownMessageCode(7)));
+        assert!(matches!(err, RiakError::UnknownMessageCode(99)));
     }
 
     #[tokio::test]

@@ -40,3 +40,12 @@ pub use crate::proto::pb::messages::{
     MessageCode, RpbDelReq, RpbErrorResp, RpbGetReq, RpbGetResp, RpbPingReq, RpbPingResp,
     RpbPutReq, RpbPutResp,
 };
+
+// New message types added by the v0.0.2 PBC ops slice. Re-exported
+// below the existing block so parallel branches do not conflict.
+pub use crate::proto::pb::messages::{
+    RpbBucketProps, RpbGetBucketReq, RpbGetBucketResp, RpbGetServerInfoResp, RpbIndexReq,
+    RpbIndexResp, RpbListBucketsReq, RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp, RpbPair,
+    RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, INDEX_QUERY_TYPE_EQ,
+    INDEX_QUERY_TYPE_RANGE,
+};
