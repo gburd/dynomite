@@ -39,6 +39,8 @@ futures-util = { workspace = true }
 http-body-util = "0.1"
 hyper = { version = "1.9", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
 noxu-db = { workspace = true, optional = true }
 wasmtime = { workspace = true, optional = true }
 ciborium = { workspace = true, optional = true }
@@ -47,3 +49,7 @@ ciborium = { workspace = true, optional = true }
 tokio = { workspace = true }
 tempfile = { workspace = true }
 hegeltest = { workspace = true }
+rcgen = { workspace = true }
+hyper-rustls = { workspace = true }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }

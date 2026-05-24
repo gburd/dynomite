@@ -49,6 +49,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 
 use dynomite::embed::Datastore;
 
@@ -102,6 +103,46 @@ pub async fn serve_http(
             });
             if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
                 tracing::warn!(%peer, error = %e, "riak http connection ended with error");
+            }
+        });
+    }
+}
+
+/// Run the HTTP accept loop on `listener`, terminating TLS via
+/// `acceptor` for every accepted connection. Per-connection
+/// handshake failures are logged at `tracing::warn!` and
+/// otherwise swallowed.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+pub async fn serve_http_tls(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    acceptor: TlsAcceptor,
+) -> Result<(), RiakError> {
+    loop {
+        let (sock, peer) = listener.accept().await?;
+        let datastore = Arc::clone(&datastore);
+        let acc = acceptor.clone();
+        tokio::spawn(async move {
+            let tls = match acc.accept(sock).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(%peer, error = %e, "riak http tls handshake failed");
+                    return;
+                }
+            };
+            let io = TokioIo::new(tls);
+            let svc = service_fn(move |req| {
+                let ds = Arc::clone(&datastore);
+                async move {
+                    let resp = routes::dispatch(req, ds).await;
+                    Ok::<_, std::convert::Infallible>(resp)
+                }
+            });
+            if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
+                tracing::warn!(%peer, error = %e, "riak http tls connection ended with error");
             }
         });
     }

@@ -40,6 +40,14 @@ socket2 = { workspace = true }
 httparse = { workspace = true }
 prometheus = { workspace = true }
 
+# TLS for the peer plane (DNODE inbound + outbound). Always on:
+# behaviour is unchanged when the operator does not configure a
+# cert / key, so the cost is a single rustls dep.
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+webpki-roots = { workspace = true }
+
 # Storage-substrate path dep declared so the resolver exercises
 # the Noxu DB version graph today, before any Riak-protocol code
 # lands. Gated behind the disabled-by-default `riak-storage`

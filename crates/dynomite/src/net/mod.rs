@@ -54,6 +54,7 @@ pub mod listener;
 pub mod pool;
 pub mod proxy;
 pub mod server;
+pub mod tls;
 
 #[cfg(feature = "quic")]
 pub mod quic;
@@ -75,6 +76,10 @@ pub use self::listener::{bind_dual_stack, BindOptions};
 pub use self::pool::{ConnFactory, ConnHandle as PoolHandle, ConnPool, ConnPoolConfig};
 pub use self::proxy::Proxy;
 pub use self::server::ServerConn;
+pub use self::tls::{
+    acceptor_from, connector_from, load_client_config, load_server_config, server_name_owned,
+    TlsClientTransport, TlsError, TlsServerTransport,
+};
 
 /// Top-level error type returned by net::* operations.
 #[derive(Debug, Error)]
@@ -102,6 +107,15 @@ pub enum NetError {
     /// Connection closed while operation was in flight.
     #[error("connection closed")]
     Closed,
+    /// TLS-handshake or load-time error.
+    #[error("tls error: {0}")]
+    Tls(String),
+}
+
+impl From<crate::net::tls::TlsError> for NetError {
+    fn from(value: crate::net::tls::TlsError) -> Self {
+        NetError::Tls(value.to_string())
+    }
 }
 
 impl From<crate::proto::dnode::DnodeError> for NetError {

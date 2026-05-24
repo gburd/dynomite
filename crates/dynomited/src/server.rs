@@ -365,6 +365,13 @@ impl Server {
         let mut gossip_peer_txs: Vec<(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)> =
             Vec::new();
         let peer_channel_capacity = 256usize;
+        // Resolve peer-plane TLS knobs once at startup. When
+        // both `peer_tls_cert` and `peer_tls_key` are set we build
+        // a `TlsAcceptor` for the inbound listener and a
+        // `TlsConnector` for outbound peer dials; when both are
+        // unset every peer link runs in plaintext, matching the
+        // behaviour before this slice.
+        let peer_tls = build_peer_tls_runtime(&conf_pool)?;
         for peer in server_pool.peers().read().iter() {
             if peer.is_local() {
                 continue;
@@ -398,7 +405,9 @@ impl Server {
             let (peer_tx, peer_rx) =
                 tokio::sync::mpsc::channel::<OutboundRequest>(peer_channel_capacity);
             dispatcher = dispatcher.with_peer_backend(peer_idx, peer_tx.clone());
-            gossip_peer_txs.push((peer_idx, peer_pname, peer_tx));
+            gossip_peer_txs.push((peer_idx, peer_pname.clone(), peer_tx));
+            let peer_tls_for_supervisor = peer_tls.clone();
+            let peer_host_for_supervisor = host.clone();
             let handle: JoinHandle<Result<(), NetError>> = {
                 use tracing::Instrument as _;
                 let span = tracing::info_span!(
@@ -407,8 +416,17 @@ impl Server {
                     peer = %peer_addr,
                 );
                 tokio::spawn(
-                    async move { peer_supervisor(peer_addr, peer_idx, peer_rx).await }
-                        .instrument(span),
+                    async move {
+                        peer_supervisor(
+                            peer_addr,
+                            peer_idx,
+                            peer_rx,
+                            peer_tls_for_supervisor,
+                            peer_host_for_supervisor,
+                        )
+                        .await
+                    }
+                    .instrument(span),
                 )
             };
             peer_handles.push(handle);
@@ -425,8 +443,23 @@ impl Server {
             .map_err(ServerError::Net)?
             .with_data_store(pool_config.data_store);
 
+        // Resolve peer-plane TLS knobs once at startup. When
+        // both `peer_tls_cert` and `peer_tls_key` are set we build
+        // a `TlsAcceptor` for the inbound listener and a
+        // `TlsConnector` for outbound peer dials; when both are
+        // unset every peer link runs in plaintext, matching the
+        // behaviour before this slice.
+        // (peer_tls is computed earlier so the supervisor spawn
+        // loop can borrow it; we re-attach to the listener here.)
+
         let dnode_proxy = match dyn_listen_addr {
-            Some(addr) => Some(DnodeProxy::bind(addr).map_err(ServerError::Net)?),
+            Some(addr) => {
+                let mut p = DnodeProxy::bind(addr).map_err(ServerError::Net)?;
+                if let Some(rt) = peer_tls.as_ref() {
+                    p = p.with_tls(rt.acceptor.clone());
+                }
+                Some(p)
+            }
             None => None,
         };
 
@@ -1255,6 +1288,8 @@ async fn peer_supervisor(
     addr: SocketAddr,
     peer_idx: u32,
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
+    tls: Option<PeerTlsRuntime>,
+    host: String,
 ) -> Result<(), NetError> {
     let mut backoff_ms: u64 = 100;
     let backoff_max_ms: u64 = 5_000;
@@ -1289,10 +1324,43 @@ async fn peer_supervisor(
             peer_idx,
             "peer TCP link up; gossip drives PeerState authoritatively"
         );
-        let conn = Conn::new(
-            Box::new(TcpTransport::new(stream, ConnRole::DnodePeerServer)),
-            ConnRole::DnodePeerServer,
-        );
+        // Wrap with TLS when configured. On handshake failure we
+        // log and re-enter the reconnect loop with backoff so a
+        // mis-trusted CA does not saturate the CPU.
+        let transport: Box<dyn dynomite::io::reactor::Transport> = if let Some(rt) = tls.as_ref() {
+            let server_name = match dynomite::net::tls::server_name_owned(host.as_str()) {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::warn!(
+                        peer = %addr,
+                        error = %e,
+                        "peer TLS server-name parse failed; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                    continue;
+                }
+            };
+            match rt.connector.connect(server_name, stream).await {
+                Ok(tls_stream) => Box::new(dynomite::net::tls::TlsClientTransport::new(
+                    tls_stream,
+                    ConnRole::DnodePeerServer,
+                )),
+                Err(e) => {
+                    tracing::warn!(
+                        peer = %addr,
+                        error = %e,
+                        "peer TLS handshake failed; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                    continue;
+                }
+            }
+        } else {
+            Box::new(TcpTransport::new(stream, ConnRole::DnodePeerServer))
+        };
+        let conn = Conn::new(transport, ConnRole::DnodePeerServer);
         // Build a fresh DnodeServerConn each iteration. The
         // borrowed-receiver `run_with` keeps `rx` owned by us so
         // we can reconnect without losing pending requests.
@@ -1313,6 +1381,62 @@ async fn peer_supervisor(
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Bundle of TLS handles shared across the dnode listener and
+/// every outbound peer supervisor.
+///
+/// The struct is `Clone`-cheap (each field is an `Arc` under the
+/// hood) so the `Server::build` closure can hand a fresh copy to
+/// every spawned task without a global mutex.
+#[derive(Clone)]
+struct PeerTlsRuntime {
+    acceptor: tokio_rustls::TlsAcceptor,
+    connector: tokio_rustls::TlsConnector,
+}
+
+/// Resolve the peer-plane TLS knobs into a `PeerTlsRuntime`.
+///
+/// Returns `Ok(None)` when neither cert nor key is set; returns
+/// `Ok(Some(_))` when both are set; returns an error when the
+/// PEM material fails to load. Mismatched `(cert, key)` is
+/// already rejected by [`dynomite::conf::ConfPool::validate`],
+/// but we keep the defensive branch so direct callers (tests)
+/// also see a clear error.
+fn build_peer_tls_runtime(conf_pool: &ConfPool) -> Result<Option<PeerTlsRuntime>, ServerError> {
+    match (
+        conf_pool.peer_tls_cert.as_deref(),
+        conf_pool.peer_tls_key.as_deref(),
+    ) {
+        (None, None) => Ok(None),
+        (Some(cert), Some(key)) => {
+            let ca = conf_pool.peer_tls_ca.as_deref();
+            let server_cfg =
+                dynomite::net::tls::load_server_config(cert, key, ca).map_err(|e| {
+                    ServerError::BadConfig {
+                        field: "peer_tls_cert",
+                        reason: e.to_string(),
+                    }
+                })?;
+            let client_cfg =
+                dynomite::net::tls::load_client_config(ca).map_err(|e| ServerError::BadConfig {
+                    field: "peer_tls_ca",
+                    reason: e.to_string(),
+                })?;
+            Ok(Some(PeerTlsRuntime {
+                acceptor: dynomite::net::tls::acceptor_from(server_cfg),
+                connector: dynomite::net::tls::connector_from(client_cfg),
+            }))
+        }
+        (Some(_), None) => Err(ServerError::BadConfig {
+            field: "peer_tls_key",
+            reason: "peer_tls_cert is set but peer_tls_key is not".into(),
+        }),
+        (None, Some(_)) => Err(ServerError::BadConfig {
+            field: "peer_tls_cert",
+            reason: "peer_tls_key is set but peer_tls_cert is not".into(),
+        }),
     }
 }
 
