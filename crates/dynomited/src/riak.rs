@@ -34,7 +34,7 @@ use dynomite::net::server::OutboundRequest;
 use dyn_riak::aae::config::{ConfAae, DEFAULT_FULL_SWEEP_SECONDS, DEFAULT_SEGMENT_SECONDS};
 use dyn_riak::aae::repair::{RepairSink, RepairTask};
 use dyn_riak::aae::scheduler::{Scheduler, SweepPlan, SystemClock};
-use dyn_riak::{serve_http, serve_pbc};
+use dyn_riak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls};
 
 /// Errors produced while binding the Riak listeners.
 #[derive(Debug, thiserror::Error)]
@@ -81,6 +81,12 @@ pub struct RiakHandles {
     /// Materialised AAE configuration. `None` when the YAML did
     /// not enable AAE.
     pub aae: Option<ConfAae>,
+    /// Optional TLS acceptor; when `Some`, both the PBC and HTTP
+    /// listeners terminate TLS for every accepted connection.
+    /// Computed by [`build_handles`] from
+    /// [`ConfRiak::tls_cert`] / [`ConfRiak::tls_key`] /
+    /// [`ConfRiak::tls_ca`].
+    pub tls: Option<tokio_rustls::TlsAcceptor>,
 }
 
 /// Eagerly bind the Riak listeners described by `riak`.
@@ -149,7 +155,41 @@ pub async fn build_handles(
         http_addr,
         datastore,
         aae,
+        tls: build_riak_tls_acceptor(riak)?,
     }))
+}
+
+/// Build the optional `TlsAcceptor` for the Riak listeners from
+/// the YAML knobs. Returns `Ok(None)` when neither cert nor key
+/// is set; returns an error when the PEM material fails to load
+/// or the (cert, key) pair is mismatched.
+fn build_riak_tls_acceptor(
+    riak: &ConfRiak,
+) -> Result<Option<tokio_rustls::TlsAcceptor>, RiakWireError> {
+    match (riak.tls_cert.as_deref(), riak.tls_key.as_deref()) {
+        (None, None) => Ok(None),
+        (Some(cert), Some(key)) => {
+            let server_cfg =
+                dynomite::net::tls::load_server_config(cert, key, riak.tls_ca.as_deref()).map_err(
+                    |e| RiakWireError::BadAddr {
+                        field: "tls_cert",
+                        value: cert.display().to_string(),
+                        reason: e.to_string(),
+                    },
+                )?;
+            Ok(Some(dynomite::net::tls::acceptor_from(server_cfg)))
+        }
+        (Some(_), None) => Err(RiakWireError::BadAddr {
+            field: "tls_key",
+            value: String::new(),
+            reason: "tls_cert is set but tls_key is not".into(),
+        }),
+        (None, Some(_)) => Err(RiakWireError::BadAddr {
+            field: "tls_cert",
+            value: String::new(),
+            reason: "tls_key is set but tls_cert is not".into(),
+        }),
+    }
 }
 
 /// Spawn the Riak listener tasks.
@@ -170,9 +210,17 @@ pub fn spawn_listeners(
     let pbc = handles.pbc_listener.take().map(|listener| {
         let ds = Arc::clone(&handles.datastore);
         let mut cancel = cancel_rx.clone();
+        let tls = handles.tls.clone();
         tokio::spawn(async move {
+            let serve = async {
+                if let Some(acc) = tls {
+                    serve_pbc_tls(listener, ds, acc).await
+                } else {
+                    serve_pbc(listener, ds).await
+                }
+            };
             tokio::select! {
-                res = serve_pbc(listener, ds) => {
+                res = serve => {
                     if let Err(e) = res {
                         tracing::warn!(error = %e, "riak pbc listener exited with error");
                     }
@@ -184,9 +232,17 @@ pub fn spawn_listeners(
     let http = handles.http_listener.take().map(|listener| {
         let ds = Arc::clone(&handles.datastore);
         let mut cancel = cancel_rx.clone();
+        let tls = handles.tls.clone();
         tokio::spawn(async move {
+            let serve = async {
+                if let Some(acc) = tls {
+                    serve_http_tls(listener, ds, acc).await
+                } else {
+                    serve_http(listener, ds).await
+                }
+            };
             tokio::select! {
-                res = serve_http(listener, ds) => {
+                res = serve => {
                     if let Err(e) = res {
                         tracing::warn!(error = %e, "riak http gateway exited with error");
                     }
@@ -381,6 +437,46 @@ mod tests {
         assert!(h.pbc_addr.is_some());
         assert!(h.http_addr.is_none());
         assert!(h.aae.is_none());
+        assert!(h.tls.is_none(), "plaintext default keeps TLS unset");
+    }
+
+    #[tokio::test]
+    async fn build_handles_loads_tls_when_cert_pair_set() {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, cert.cert.pem()).unwrap();
+        std::fs::write(&key_path, cert.key_pair.serialize_pem()).unwrap();
+        let cfg = ConfRiak {
+            pbc_listen: Some("127.0.0.1:0".into()),
+            tls_cert: Some(cert_path),
+            tls_key: Some(key_path),
+            ..ConfRiak::default()
+        };
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let h = build_handles(&cfg, ds).await.unwrap().unwrap();
+        assert!(h.tls.is_some(), "loader must produce a TlsAcceptor");
+    }
+
+    #[tokio::test]
+    async fn build_handles_rejects_tls_cert_without_key() {
+        let cfg = ConfRiak {
+            pbc_listen: Some("127.0.0.1:0".into()),
+            tls_cert: Some(std::path::PathBuf::from("/no/such/cert")),
+            ..ConfRiak::default()
+        };
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let Err(err) = build_handles(&cfg, ds).await else {
+            panic!("expected mismatched cert/key to fail");
+        };
+        assert!(matches!(
+            err,
+            RiakWireError::BadAddr {
+                field: "tls_key",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
