@@ -60,6 +60,7 @@ use dynomite::msg::{Msg, MsgType};
 
 use crate::error::RiakError;
 use crate::proto::pb::framer::{read_frame, write_frame, Frame};
+use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 use crate::proto::pb::messages::{
     MessageCode, RpbBucketProps, RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp,
     RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbListBucketsReq, RpbListKeysReq,
@@ -167,6 +168,7 @@ async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame
             &frame.body,
             "secondary-index queries not implemented for this datastore",
         ),
+        MessageCode::MapRedReq => handle_mapred(&frame.body).await,
         // Response codes are illegal inbound.
         MessageCode::ErrorResp
         | MessageCode::PingResp
@@ -178,7 +180,8 @@ async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame
         | MessageCode::ListKeysResp
         | MessageCode::GetBucketResp
         | MessageCode::SetBucketResp
-        | MessageCode::IndexResp => {
+        | MessageCode::IndexResp
+        | MessageCode::MapRedResp => {
             let body = RpbErrorResp {
                 errmsg: format!("unsupported inbound message code: {}", frame.code).into_bytes(),
                 errcode: 0,
@@ -275,6 +278,74 @@ fn handle_set_bucket(body: &[u8]) -> Result<Frame, RiakError> {
         MessageCode::SetBucketResp.as_u8(),
         resp.encode_to_vec(),
     ))
+}
+
+/// Run a MapReduce job submitted via PBC.
+///
+/// The single-response variant: the executor runs the entire job to
+/// completion and the server emits one [`RpbMapRedResp`] carrying
+/// the captured outputs as JSON, with `done = true`. Streaming
+/// (one frame per phase plus a body-less terminator) is documented
+/// in the journal as deferred.
+async fn handle_mapred(body: &[u8]) -> Result<Frame, RiakError> {
+    use std::sync::Arc;
+
+    use crate::mapreduce::{builtins::default_registry, run_job, MapReduceJob};
+
+    let req = RpbMapRedReq::decode(body)?;
+    if req.content_type != b"application/json" {
+        let resp = RpbErrorResp {
+            errmsg: format!(
+                "unsupported MapReduce content-type: {}",
+                String::from_utf8_lossy(&req.content_type)
+            )
+            .into_bytes(),
+            errcode: 1,
+        };
+        return Ok(Frame::new(
+            MessageCode::ErrorResp.as_u8(),
+            resp.encode_to_vec(),
+        ));
+    }
+    let job: MapReduceJob = match serde_json::from_slice(&req.request) {
+        Ok(j) => j,
+        Err(e) => {
+            let resp = RpbErrorResp {
+                errmsg: format!("MapReduce job decode: {e}").into_bytes(),
+                errcode: 1,
+            };
+            return Ok(Frame::new(
+                MessageCode::ErrorResp.as_u8(),
+                resp.encode_to_vec(),
+            ));
+        }
+    };
+
+    let registry = Arc::new(default_registry());
+    match run_job(job, registry).await {
+        Ok(outputs) => {
+            let body = serde_json::to_vec(&outputs).unwrap_or_else(|_| b"[]".to_vec());
+            let resp = RpbMapRedResp {
+                phase: Some(0),
+                response: Some(body),
+                done: Some(true),
+            };
+            Ok(Frame::new(
+                MessageCode::MapRedResp.as_u8(),
+                resp.encode_to_vec(),
+            ))
+        }
+        Err(e) => {
+            let resp = RpbErrorResp {
+                errmsg: format!("MapReduce execution: {e}").into_bytes(),
+                errcode: 1,
+            };
+            Ok(Frame::new(
+                MessageCode::ErrorResp.as_u8(),
+                resp.encode_to_vec(),
+            ))
+        }
+    }
 }
 
 /// Decode `body` as `T` (so a malformed inbound frame surfaces a

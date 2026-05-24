@@ -68,3 +68,7 @@ pub use crate::server::{handle_conn, serve_pbc};
 
 pub mod aae;
 pub mod datatypes;
+
+// MapReduce framework added by the v0.0.3 slice. The module owns
+// its own public surface; see `crate::mapreduce` for entry points.
+pub mod mapreduce;

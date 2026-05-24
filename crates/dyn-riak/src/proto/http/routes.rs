@@ -106,6 +106,9 @@ enum Route<'a> {
     GetProps { bucket: &'a str },
     /// `PUT /buckets/{bucket}/props`
     SetProps { bucket: &'a str },
+    /// `POST /mapred` -- submit a MapReduce job. Added by the
+    /// v0.0.3 MapReduce slice.
+    MapRed,
 }
 
 impl<'a> Route<'a> {
@@ -128,6 +131,7 @@ impl<'a> Route<'a> {
             }
             ("GET", ["buckets", b, "props"]) => Some(Self::GetProps { bucket: b }),
             ("PUT", ["buckets", b, "props"]) => Some(Self::SetProps { bucket: b }),
+            ("POST", ["mapred"]) => Some(Self::MapRed),
             _ => None,
         }
     }
@@ -188,6 +192,7 @@ async fn handle_route(
         ),
         Route::GetProps { bucket } => get_props_response(bucket, headers),
         Route::SetProps { bucket } => set_props_response(bucket, headers, &body),
+        Route::MapRed => mapred_response(headers, &body).await,
     }
 }
 
@@ -418,6 +423,65 @@ fn header_str(headers: &HeaderMap, name: hyper::header::HeaderName) -> &str {
 /// back to a default only when the header was truly missing.
 fn header_str_opt(headers: &HeaderMap, name: hyper::header::HeaderName) -> Option<&str> {
     headers.get(name).and_then(|v| v.to_str().ok())
+}
+
+// ------------------------------------------------------------------
+// MapReduce route handler. Added by the v0.0.3 MapReduce slice.
+// ------------------------------------------------------------------
+
+use crate::mapreduce::{builtins::default_registry, run_job, MapReduceJob};
+
+/// Run a MapReduce job submitted via `POST /mapred`.
+///
+/// The body must carry the JSON job description. The response is a
+/// JSON array of `{phase, value}` objects (one per captured
+/// output) with `Content-Type: application/json`. Streaming
+/// (chunked frames per phase) is documented as deferred in
+/// `docs/journal/2026-05-24-dyn-riak-mapreduce.md`; the v0.0.3
+/// slice emits one buffered response.
+async fn mapred_response(headers: &HeaderMap, body: &Bytes) -> Response<ResponseBody> {
+    let req_ct = header_str_opt(headers, CONTENT_TYPE);
+    let ct = req_ct.unwrap_or("application/json");
+    if super::content_type::canonicalize(ct) != Some("application/json") {
+        return text_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "MapReduce requires Content-Type: application/json",
+        );
+    }
+    let job: MapReduceJob = match serde_json::from_slice(body) {
+        Ok(j) => j,
+        Err(e) => {
+            return text_response(
+                StatusCode::BAD_REQUEST,
+                &format!("MapReduce job decode: {e}"),
+            );
+        }
+    };
+    let registry = std::sync::Arc::new(default_registry());
+    let outputs = match run_job(job, registry).await {
+        Ok(o) => o,
+        Err(e) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("MapReduce execution: {e}"),
+            );
+        }
+    };
+    let body_bytes = match serde_json::to_vec(&outputs) {
+        Ok(b) => b,
+        Err(e) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("MapReduce response encode: {e}"),
+            );
+        }
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .header("Server", SERVER_NAME)
+        .body(Full::new(Bytes::from(body_bytes)))
+        .expect("invariant: mapred response builder is well-formed")
 }
 
 #[cfg(test)]
@@ -728,5 +792,87 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(parsed["props"]["n_val"], 3);
         assert_eq!(parsed["props"]["name"], "u");
+    }
+
+    #[test]
+    fn route_parses_mapred() {
+        let r = Route::parse(&Method::POST, "/mapred", None).expect("mapred");
+        assert_eq!(r, Route::MapRed);
+    }
+
+    #[test]
+    fn route_get_mapred_misses() {
+        // Riak's /mapred is POST-only; GET should fall through.
+        assert!(Route::parse(&Method::GET, "/mapred", None).is_none());
+    }
+
+    #[tokio::test]
+    async fn mapred_runs_simple_job() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        let body = br#"{
+            "inputs": [
+                {"bucket":"b","key":"k1","value":1},
+                {"bucket":"b","key":"k2","value":2},
+                {"bucket":"b","key":"k3","value":3}
+            ],
+            "query": [
+                {"map":    {"name":"map_object_value"}},
+                {"reduce": {"name":"reduce_sum", "keep": true}}
+            ]
+        }"#;
+        let resp = handle_route(
+            Route::MapRed,
+            &Method::POST,
+            &headers,
+            Bytes::copy_from_slice(body),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let arr = parsed.as_array().expect("array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["phase"], 1);
+        assert_eq!(arr[0]["value"], serde_json::json!(6));
+    }
+
+    #[tokio::test]
+    async fn mapred_unsupported_content_type_returns_415() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/xml".parse().unwrap());
+        let resp = handle_route(
+            Route::MapRed,
+            &Method::POST,
+            &headers,
+            Bytes::from_static(b"<doc/>"),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn mapred_malformed_job_returns_400() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        let resp = handle_route(
+            Route::MapRed,
+            &Method::POST,
+            &headers,
+            Bytes::from_static(b"not json"),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
