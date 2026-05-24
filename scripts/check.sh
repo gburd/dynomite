@@ -9,7 +9,7 @@ cd "$ROOT"
 echo "==> rustfmt"
 # Restrict to our crates so the lamdb path-deps pulled in by the
 # `riak-storage` feature do not leak into the format check.
-cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -- --check
+cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyn-riak -p dyn-admin -- --check
 
 echo "==> clippy"
 cargo clippy --workspace --all-targets --all-features -- -D warnings
