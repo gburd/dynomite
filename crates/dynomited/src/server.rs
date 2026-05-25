@@ -35,12 +35,15 @@
 //!   surprised by the silence.
 //! * The entropy receiver / sender. Stage 11 ships
 //!   [`dynomite::entropy::EntropyReceiver`] and
-//!   [`dynomite::entropy::EntropySender`] as standalone tasks, but
-//!   the YAML configuration does not yet expose the listen / peer
-//!   addresses they need. Wiring them here without that surface
-//!   would force operators to edit code, so the run loop logs a
-//!   warning when `recon_key_file` is configured and otherwise
-//!   stays silent.
+//!   [`dynomite::entropy::EntropySender`] as standalone tasks;
+//!   the run loop spawns the periodic reconciliation driver
+//!   ([`dynomite::entropy::driver::EntropyDriver`]) when
+//!   `recon_key_file:` is set in the YAML pool config and the
+//!   on-disk key + IV files load successfully. The cadence
+//!   defaults to five minutes (configurable via
+//!   `recon_interval_seconds:`). When the directive is unset or
+//!   the files cannot be read, the run loop emits a single
+//!   warning and otherwise stays silent.
 //! * Config reload on `SIGHUP`. The brief defers it to the embed
 //!   API in Stage 13.
 
@@ -136,7 +139,16 @@ pub struct Server {
     dyn_listen_addr: Option<SocketAddr>,
     stats_listen_addr: Option<SocketAddr>,
     enable_gossip: bool,
-    has_recon_keys: bool,
+    /// Optional entropy driver. `Some` when the pool's
+    /// `recon_key_file:` is set and the on-disk key + IV files
+    /// load successfully at startup. The driver is moved into
+    /// the run loop, where it is spawned as a tokio task and
+    /// reaped on shutdown.
+    entropy_driver: Option<dynomite::entropy::driver::EntropyDriver>,
+    /// Path of the recon key file the entropy driver loaded
+    /// from, kept around so the run loop can log the source on
+    /// startup. `None` when no driver was built.
+    entropy_key_path: Option<std::path::PathBuf>,
     /// Optional Riak listener bundle. `Some` exactly when the
     /// pool's `riak:` block configures a PBC or HTTP address.
     /// Owned here so [`Server::run`] can spawn the listeners
@@ -575,6 +587,9 @@ impl Server {
             None => None,
         };
 
+        let (entropy_driver, entropy_key_path) =
+            build_entropy_driver(&conf_pool, &server_pool, &pool_name);
+
         Ok(Self {
             pool_name,
             pool: server_pool,
@@ -588,7 +603,8 @@ impl Server {
             dyn_listen_addr,
             stats_listen_addr,
             enable_gossip: conf_pool.enable_gossip.unwrap_or(false),
-            has_recon_keys: !conf_pool.recon_key_file.as_deref().unwrap_or("").is_empty(),
+            entropy_driver,
+            entropy_key_path,
             #[cfg(feature = "riak")]
             riak_handles,
             gossip_handler,
@@ -629,6 +645,25 @@ impl Server {
     #[must_use]
     pub fn stats_listen_addr(&self) -> Option<SocketAddr> {
         self.stats_listen_addr
+    }
+
+    /// `true` when the entropy reconciliation driver was built
+    /// at construction time and will be spawned by
+    /// [`Server::run`]. `false` when `recon_key_file:` is
+    /// unset, the file does not exist on disk, or the AES
+    /// material could not be parsed.
+    #[must_use]
+    pub fn entropy_enabled(&self) -> bool {
+        self.entropy_driver.is_some()
+    }
+
+    /// Cadence the entropy driver will tick at, when one was
+    /// built. `None` when [`Self::entropy_enabled`] is `false`.
+    #[must_use]
+    pub fn entropy_cadence(&self) -> Option<Duration> {
+        self.entropy_driver
+            .as_ref()
+            .map(dynomite::entropy::driver::EntropyDriver::cadence)
     }
 
     /// Address the optional Riak PBC listener bound to.
@@ -706,7 +741,8 @@ impl Server {
             dyn_listen_addr,
             stats_listen_addr,
             enable_gossip,
-            has_recon_keys,
+            entropy_driver,
+            entropy_key_path,
             #[cfg(feature = "riak")]
             mut riak_handles,
             gossip_handler,
@@ -718,12 +754,25 @@ impl Server {
             mut shutdown_rx,
         } = self;
 
-        if has_recon_keys {
-            tracing::warn!(
-                pool = %pool_name,
-                "recon_key_file is set but the entropy run loop is not yet wired (deferred)"
-            );
-        }
+        let entropy_handle: Option<JoinHandle<()>> = match entropy_driver {
+            Some(driver) => {
+                let cadence = driver.cadence();
+                let key_path_disp = entropy_key_path
+                    .as_deref()
+                    .map_or_else(|| "<unknown>".to_string(), |p| p.display().to_string());
+                tracing::info!(
+                    pool = %pool_name,
+                    key_file = %key_path_disp,
+                    cadence_seconds = cadence.as_secs(),
+                    "entropy reconciliation task started"
+                );
+                let cancel_rx = shutdown_rx.clone();
+                Some(tokio::spawn(async move {
+                    driver.run_until_shutdown(cancel_rx).await;
+                }))
+            }
+            None => None,
+        };
 
         tracing::info!(
             pool = %pool_name,
@@ -888,6 +937,13 @@ impl Server {
         gossip_task_handle.abort();
         let _ = gossip_task_handle.await;
         if let Some(h) = hint_drainer_handle {
+            h.abort();
+            let _ = h.await;
+        }
+        // Drain the entropy run loop. The driver observes the
+        // shutdown flag at the next per-peer boundary; aborting
+        // here is belt-and-braces against a stuck transport.
+        if let Some(h) = entropy_handle {
             h.abort();
             let _ = h.await;
         }
@@ -1507,6 +1563,78 @@ fn build_peer_tls_runtime(conf_pool: &ConfPool) -> Result<Option<PeerTlsRuntime>
 
 fn default_gossip_interval_ms_i64() -> i64 {
     i64::try_from(dynomite::cluster::gossip::DEFAULT_GOSSIP_INTERVAL_MS).unwrap_or(1_000)
+}
+
+/// Construct the entropy reconciliation driver when the pool's
+/// `recon_key_file:` resolves to a readable file.
+///
+/// Returns `(None, None)` when the directive is unset, points
+/// at an empty string, or the on-disk key / IV files cannot be
+/// loaded. In every skip path a tracing event explains why,
+/// matching the brief's "behavior is unchanged" contract for
+/// pools that do not opt into entropy reconciliation.
+fn build_entropy_driver(
+    conf_pool: &ConfPool,
+    server_pool: &Arc<ServerPool>,
+    pool_name: &str,
+) -> (
+    Option<dynomite::entropy::driver::EntropyDriver>,
+    Option<std::path::PathBuf>,
+) {
+    let key_path = match conf_pool.recon_key_file.as_deref() {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => return (None, None),
+    };
+    let iv_path = match conf_pool.recon_iv_file.as_deref() {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => {
+            tracing::warn!(
+                pool = %pool_name,
+                "recon_key_file is set but recon_iv_file is not; entropy task disabled"
+            );
+            return (None, None);
+        }
+    };
+    if !key_path.exists() || !iv_path.exists() {
+        tracing::warn!(
+            pool = %pool_name,
+            key_file = %key_path.display(),
+            iv_file = %iv_path.display(),
+            "recon key / iv file is missing on disk; entropy task disabled"
+        );
+        return (None, None);
+    }
+    let material = match dynomite::entropy::util::load_material(&key_path, &iv_path) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(
+                pool = %pool_name,
+                error = %e,
+                key_file = %key_path.display(),
+                iv_file = %iv_path.display(),
+                "failed to load recon key/iv material; entropy task disabled"
+            );
+            return (None, None);
+        }
+    };
+    let cadence_secs = conf_pool
+        .recon_interval_seconds
+        .filter(|s| *s > 0)
+        .unwrap_or_else(|| dynomite::entropy::driver::DEFAULT_RECON_INTERVAL.as_secs());
+    let cadence = Duration::from_secs(cadence_secs);
+    // The default snapshot source is empty: a future stage
+    // wires the embedded data store's snapshot here. The
+    // periodic header exchange still verifies peer
+    // reachability and surfaces the per-cycle counters at INFO.
+    let source: dynomite::entropy::BoxedSnapshotSource =
+        std::sync::Arc::new(dynomite::entropy::send::StaticSnapshot::new(Vec::new()));
+    let driver = dynomite::entropy::driver::EntropyDriver::new(
+        material,
+        source,
+        server_pool.peers_arc(),
+        cadence,
+    );
+    (Some(driver), Some(key_path))
 }
 
 /// Single periodic gossip task per pool.
