@@ -15,6 +15,13 @@
 //! cases and PBC round-trip checks for the new `DtFetchReq/Resp`
 //! and `DtUpdateReq/Resp` messages.
 
+// `Vclock` and `VclockOrder` are `#[deprecated]` in favour of
+// `DvvSet` / `DvvOrder` (see `docs/journal/2026-05-25-dvv-default.md`).
+// This integration test is the kept-for-archaeology coverage
+// for the legacy clock; the allowance is recorded in
+// `docs/journal/allowances.md`.
+#![allow(deprecated)]
+
 use prost::Message as _;
 
 use dyn_riak::datatypes::{
