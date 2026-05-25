@@ -217,7 +217,7 @@ async fn handle_route(
         Route::ListKeys { bucket } => list_keys_response(bucket, headers, &datastore),
         Route::GetProps { bucket } => get_props_response(bucket, headers),
         Route::SetProps { bucket } => set_props_response(bucket, headers, &body),
-        Route::MapRed => mapred_response(headers, &body).await,
+        Route::MapRed => mapred_response(headers, &body),
     }
 }
 
@@ -450,17 +450,27 @@ fn header_str_opt(headers: &HeaderMap, name: hyper::header::HeaderName) -> Optio
 // MapReduce route handler. Added by the v0.0.3 MapReduce slice.
 // ------------------------------------------------------------------
 
-use crate::mapreduce::{builtins::default_registry, run_job, MapReduceJob};
+use crate::mapreduce::{
+    builtins::default_registry, run_job_streaming, MapReduceJob, MrError, PhaseBatch,
+};
+use tokio::sync::mpsc;
 
 /// Run a MapReduce job submitted via `POST /mapred`.
 ///
-/// The body must carry the JSON job description. The response is a
-/// JSON array of `{phase, value}` objects (one per captured
-/// output) with `Content-Type: application/json`. Streaming
-/// (chunked frames per phase) is documented as deferred in
-/// `docs/journal/2026-05-24-dyn-riak-mapreduce.md`; the v0.0.3
-/// slice emits one buffered response.
-async fn mapred_response(headers: &HeaderMap, body: &Bytes) -> Response<ResponseBody> {
+/// The body must carry the JSON job description. The response is
+/// chunked-encoded `multipart/mixed`: one body part per kept phase
+/// (Riak's documented HTTP MapReduce shape). Each part carries
+/// `Content-Type: application/json` and a body of the form
+/// `[{"phase": N, "data": [...]}]`. A phase failure mid-stream is
+/// surfaced as a final part with `Content-Type: text/plain` and
+/// the error message; the closing delimiter is then written and
+/// the body ends. Boundary strings are unique per request.
+///
+/// The function is synchronous: the executor runs on its own
+/// tokio task and the HTTP body stream pulls per-phase batches
+/// off the executor's mpsc receiver. Returning the response is
+/// a constant-time operation.
+fn mapred_response(headers: &HeaderMap, body: &Bytes) -> Response<ResponseBody> {
     let req_ct = header_str_opt(headers, CONTENT_TYPE);
     let ct = req_ct.unwrap_or("application/json");
     if super::content_type::canonicalize(ct) != Some("application/json") {
@@ -479,30 +489,123 @@ async fn mapred_response(headers: &HeaderMap, body: &Bytes) -> Response<Response
         }
     };
     let registry = std::sync::Arc::new(default_registry());
-    let outputs = match run_job(job, registry).await {
-        Ok(o) => o,
-        Err(e) => {
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("MapReduce execution: {e}"),
-            );
-        }
-    };
-    let body_bytes = match serde_json::to_vec(&outputs) {
-        Ok(b) => b,
-        Err(e) => {
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("MapReduce response encode: {e}"),
-            );
-        }
-    };
+    let rx = run_job_streaming(job, registry);
+    let boundary = mapred_boundary();
+    let body_stream = mapred_multipart_body(rx, boundary.clone());
+    let body_stream: Pin<Box<dyn Stream<Item = Result<HttpFrame<Bytes>, Infallible>> + Send>> =
+        Box::pin(body_stream);
+    let body = BodyExt::boxed_unsync(StreamBody::new(body_stream));
+    let ct_value = format!("multipart/mixed; boundary={boundary}");
     Response::builder()
         .status(StatusCode::OK)
-        .header(CONTENT_TYPE, "application/json")
+        .header(CONTENT_TYPE, ct_value)
+        .header(TRANSFER_ENCODING, "chunked")
         .header("Server", SERVER_NAME)
-        .body(buffered_body(Bytes::from(body_bytes)))
+        .body(body)
         .expect("invariant: mapred response builder is well-formed")
+}
+
+/// Generate a per-request multipart boundary string.
+///
+/// The string is ASCII-safe (alphanumerics + `-`) and combines a
+/// monotonically-increasing process counter with the current
+/// system time in nanoseconds. Both are encoded as fixed-width
+/// hex so the output length is constant. Collision probability is
+/// far below the threshold required for a multipart boundary; the
+/// boundary only needs to not appear inside the JSON / text body
+/// of the parts.
+fn mapred_boundary() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_nanos() & u128::from(u64::MAX)).unwrap_or(0))
+        .unwrap_or(0);
+    format!("dyn-riak-mr-{nanos:016x}-{n:016x}")
+}
+
+/// State machine driving the multipart/mixed streaming body.
+enum MapRedMultipartState {
+    /// Initial: nothing emitted yet; consume the next batch from
+    /// the executor.
+    Streaming {
+        rx: mpsc::Receiver<Result<PhaseBatch, MrError>>,
+        boundary: String,
+    },
+    /// All batches drained or a fatal error was emitted; emit the
+    /// closing `--{boundary}--` delimiter.
+    Close { boundary: String },
+    /// Body terminated.
+    Done,
+}
+
+/// Chunk size used by [`mapred_multipart_body`] for the boundary;
+/// each phase batch and the closing delimiter is one body chunk so
+/// hyper transmits one HTTP chunk per part.
+fn mapred_multipart_body(
+    rx: mpsc::Receiver<Result<PhaseBatch, MrError>>,
+    boundary: String,
+) -> impl Stream<Item = Result<HttpFrame<Bytes>, Infallible>> + Send {
+    futures_util::stream::unfold(
+        MapRedMultipartState::Streaming { rx, boundary },
+        |state| async move {
+            match state {
+                MapRedMultipartState::Done => None,
+                MapRedMultipartState::Close { boundary } => {
+                    let chunk = format!("--{boundary}--\r\n");
+                    Some((
+                        Ok(HttpFrame::data(Bytes::from(chunk))),
+                        MapRedMultipartState::Done,
+                    ))
+                }
+                MapRedMultipartState::Streaming { mut rx, boundary } => match rx.recv().await {
+                    None => {
+                        let chunk = format!("--{boundary}--\r\n");
+                        Some((
+                            Ok(HttpFrame::data(Bytes::from(chunk))),
+                            MapRedMultipartState::Done,
+                        ))
+                    }
+                    Some(Ok(batch)) => {
+                        let body = mapred_phase_part_body(&batch);
+                        let chunk = format!(
+                            "--{boundary}\r\nContent-Type: application/json\r\n\r\n{body}\r\n"
+                        );
+                        Some((
+                            Ok(HttpFrame::data(Bytes::from(chunk))),
+                            MapRedMultipartState::Streaming { rx, boundary },
+                        ))
+                    }
+                    Some(Err(e)) => {
+                        let msg = format!("MapReduce execution: {e}");
+                        let chunk =
+                            format!("--{boundary}\r\nContent-Type: text/plain\r\n\r\n{msg}\r\n");
+                        Some((
+                            Ok(HttpFrame::data(Bytes::from(chunk))),
+                            MapRedMultipartState::Close { boundary },
+                        ))
+                    }
+                },
+            }
+        },
+    )
+}
+
+/// Encode one phase batch as the JSON body of a multipart part.
+///
+/// The shape is the Riak-documented `[{"phase": N, "data": [...]}]`:
+/// a one-element JSON array containing an object with the phase
+/// index and the captured values. JSON encoding of an in-memory
+/// `Vec<Value>` cannot fail; the fallback string keeps the helper
+/// total without panicking on the impossible branch.
+fn mapred_phase_part_body(batch: &PhaseBatch) -> String {
+    let payload = serde_json::json!([{
+        "phase": batch.phase,
+        "data": batch.data,
+    }]);
+    serde_json::to_string(&payload).unwrap_or_else(|_| String::from("[]"))
 }
 
 // ------------------------------------------------------------------
@@ -1144,17 +1247,206 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("content-type")
+            .to_str()
+            .expect("ascii")
+            .to_string();
+        assert!(
+            ct.starts_with("multipart/mixed; boundary="),
+            "content-type was: {ct}"
+        );
+        let boundary = ct
+            .strip_prefix("multipart/mixed; boundary=")
+            .expect("boundary")
+            .to_string();
         let body = resp
             .into_body()
             .collect()
             .await
             .expect("collect")
             .to_bytes();
-        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let parts = parse_multipart_parts(&body, &boundary);
+        assert_eq!(parts.len(), 1, "one kept (reduce) phase produces one part");
+        assert_eq!(parts[0].content_type.as_deref(), Some("application/json"));
+        let parsed: serde_json::Value = serde_json::from_slice(&parts[0].body).expect("json");
         let arr = parsed.as_array().expect("array");
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["phase"], 1);
-        assert_eq!(arr[0]["value"], serde_json::json!(6));
+        assert_eq!(arr[0]["data"], serde_json::json!([6]));
+    }
+
+    /// One parsed multipart body part: its declared content-type and
+    /// the raw bytes of its body.
+    struct MultipartPart {
+        content_type: Option<String>,
+        body: Vec<u8>,
+    }
+
+    /// Minimal multipart/mixed body parser used by the unit and
+    /// integration tests in this module. Walks the body splitting
+    /// on `--boundary` lines, parses the per-part headers, and
+    /// stops on the closing `--boundary--` delimiter.
+    fn parse_multipart_parts(body: &[u8], boundary: &str) -> Vec<MultipartPart> {
+        let dash_boundary = format!("--{boundary}");
+        let close_delim = format!("--{boundary}--");
+        let text = std::str::from_utf8(body).expect("ascii body");
+        let mut parts = Vec::new();
+        let mut cursor = text;
+        // Find first dash-boundary.
+        if let Some(idx) = cursor.find(&dash_boundary) {
+            cursor = &cursor[idx + dash_boundary.len()..];
+        } else {
+            return parts;
+        }
+        loop {
+            // Closing delimiter starts with `--` after the boundary.
+            if cursor.starts_with("--") {
+                break;
+            }
+            // Skip CRLF after dash-boundary.
+            cursor = cursor.trim_start_matches("\r\n");
+            // Find header / body separator.
+            let Some(sep_idx) = cursor.find("\r\n\r\n") else {
+                break;
+            };
+            let head_str = &cursor[..sep_idx];
+            cursor = &cursor[sep_idx + 4..];
+            // Find the next dash-boundary.
+            let Some(next_idx) = cursor.find(&dash_boundary) else {
+                break;
+            };
+            let body_str = &cursor[..next_idx];
+            // Trim trailing CRLF that belongs to the delimiter.
+            let body_str = body_str.strip_suffix("\r\n").unwrap_or(body_str);
+            let mut content_type = None;
+            for line in head_str.split("\r\n") {
+                if let Some(v) = line.strip_prefix("Content-Type:") {
+                    content_type = Some(v.trim().to_string());
+                }
+            }
+            parts.push(MultipartPart {
+                content_type,
+                body: body_str.as_bytes().to_vec(),
+            });
+            cursor = &cursor[next_idx + dash_boundary.len()..];
+            if cursor.starts_with("--") {
+                break;
+            }
+        }
+        // Defensive: ensure the body ended with the close delimiter.
+        let _ = close_delim;
+        parts
+    }
+
+    #[tokio::test]
+    async fn mapred_streams_multiple_kept_phases() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        let body = br#"{
+            "inputs": [
+                {"bucket":"b","key":"k1","value":1},
+                {"bucket":"b","key":"k2","value":2}
+            ],
+            "query": [
+                {"map":    {"name":"map_object_value", "keep": true}},
+                {"reduce": {"name":"reduce_sum",       "keep": true}}
+            ]
+        }"#;
+        let resp = handle_route(
+            Route::MapRed,
+            &Method::POST,
+            &headers,
+            Bytes::copy_from_slice(body),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("ct")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let boundary = ct
+            .strip_prefix("multipart/mixed; boundary=")
+            .expect("boundary")
+            .to_string();
+        let bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        let parts = parse_multipart_parts(&bytes, &boundary);
+        assert_eq!(parts.len(), 2);
+        let p0: serde_json::Value = serde_json::from_slice(&parts[0].body).expect("json0");
+        let p1: serde_json::Value = serde_json::from_slice(&parts[1].body).expect("json1");
+        assert_eq!(p0[0]["phase"], 0);
+        assert_eq!(p0[0]["data"].as_array().expect("arr").len(), 2);
+        assert_eq!(p1[0]["phase"], 1);
+        assert_eq!(p1[0]["data"], serde_json::json!([3]));
+        // Body must end with the closing delimiter.
+        let tail = &bytes[bytes.len().saturating_sub(boundary.len() + 6)..];
+        let tail_str = std::str::from_utf8(tail).expect("ascii tail");
+        assert!(
+            tail_str.contains(&format!("--{boundary}--\r\n")),
+            "tail was: {tail_str:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mapred_phase_failure_emits_text_part_and_closing_delimiter() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        // The map references a function that does not exist; the
+        // executor short-circuits and the streaming body must end
+        // with a text/plain error part plus the closing delimiter.
+        let body = br#"{
+            "inputs": [{"bucket":"b","key":"k","value":1}],
+            "query": [{"map": {"name": "no_such_function", "keep": true}}]
+        }"#;
+        let resp = handle_route(
+            Route::MapRed,
+            &Method::POST,
+            &headers,
+            Bytes::copy_from_slice(body),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("ct")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let boundary = ct
+            .strip_prefix("multipart/mixed; boundary=")
+            .expect("boundary")
+            .to_string();
+        let bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        let parts = parse_multipart_parts(&bytes, &boundary);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].content_type.as_deref(), Some("text/plain"));
+        let msg = std::str::from_utf8(&parts[0].body).expect("ascii");
+        assert!(
+            msg.contains("MapReduce execution") && msg.contains("no_such_function"),
+            "error msg was: {msg:?}"
+        );
+        let tail = std::str::from_utf8(&bytes).expect("ascii");
+        assert!(tail.contains(&format!("--{boundary}--\r\n")));
     }
 
     #[tokio::test]

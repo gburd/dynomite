@@ -85,11 +85,7 @@ async fn index_eq(
     let frame = Frame::new(MessageCode::IndexReq.as_u8(), req.encode_to_vec());
     let (mut r, mut w) = tokio::io::split(stream);
     write_frame(&mut w, &frame).await.expect("send index");
-    let resp = read_frame(&mut r).await.expect("recv index");
-    assert_eq!(resp.code, MessageCode::IndexResp.as_u8());
-    let body = RpbIndexResp::decode(resp.body.as_slice()).expect("decode index resp");
-    assert_eq!(body.done, Some(true));
-    body.keys
+    drain_index_stream(&mut r).await
 }
 
 async fn index_range(
@@ -110,11 +106,27 @@ async fn index_range(
     let frame = Frame::new(MessageCode::IndexReq.as_u8(), req.encode_to_vec());
     let (mut r, mut w) = tokio::io::split(stream);
     write_frame(&mut w, &frame).await.expect("send index");
-    let resp = read_frame(&mut r).await.expect("recv index");
-    assert_eq!(resp.code, MessageCode::IndexResp.as_u8());
-    let body = RpbIndexResp::decode(resp.body.as_slice()).expect("decode index resp");
-    assert_eq!(body.done, Some(true));
-    body.keys
+    drain_index_stream(&mut r).await
+}
+
+/// Read [`RpbIndexResp`] frames from `r` until one carries
+/// `done = Some(true)`, concatenating the keys field across
+/// chunks. The terminator carries no keys.
+async fn drain_index_stream<R>(r: &mut R) -> Vec<Vec<u8>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut out = Vec::new();
+    loop {
+        let resp = read_frame(r).await.expect("recv index");
+        assert_eq!(resp.code, MessageCode::IndexResp.as_u8());
+        let body = RpbIndexResp::decode(resp.body.as_slice()).expect("decode index resp");
+        out.extend(body.keys);
+        if body.done == Some(true) {
+            break;
+        }
+    }
+    out
 }
 
 #[tokio::test]
