@@ -7,12 +7,19 @@
 # instance, both writing logs into /scratch/dynomite-chaos.
 #
 # Environment knobs:
-#   MODE=redis   (default) - run redis-server, data_store=0
-#   MODE=memcache         - run memcached, data_store=1
-#   MODE=riak             - placeholder; logs a warning and
-#                           falls back to redis. Until the
-#                           dyn-riak crate is available, the
-#                           binary cannot speak to Riak.
+#   MODE=redis    (default) - run redis-server, data_store=0
+#   MODE=memcache           - run memcached, data_store=1
+#   MODE=riak               - run redis-server (used as the
+#                             dispatcher's backing store, even
+#                             though the workload driver dials
+#                             dyn-riak's PBC listener) AND
+#                             configure dynomited's riak.pbc_listen
+#                             so the workload driver can drive
+#                             Riak PBC traffic. Requires a
+#                             dynomited binary built with
+#                             --features riak; aborts with a
+#                             clear error if the binary does not
+#                             expose the --riak-pbc-listen flag.
 #   ROOT=/scratch/dynomite-chaos (default install root)
 
 set -euo pipefail
@@ -24,22 +31,32 @@ DATASTORE_PORT="${4:-17100}"
 DYN_LISTEN_PORT="${5:-18101}"
 CLIENT_LISTEN_PORT="${6:-18102}"
 STATS_LISTEN_PORT="${7:-22222}"
+RIAK_PBC_PORT="${8:-21800}"
 MODE="${MODE:-redis}"
 
 case "$MODE" in
     redis)
         EFFECTIVE_MODE=redis
         DATA_STORE_VAL=0
+        ENABLE_RIAK_PBC=0
         ;;
     memcache)
         EFFECTIVE_MODE=memcache
         DATA_STORE_VAL=1
+        ENABLE_RIAK_PBC=0
         ;;
     riak)
-        echo "==> WARNING: Riak mode requires the dyn-riak crate," \
-             "not yet available; falling back to redis" >&2
+        # The Riak PBC listener inside dynomited speaks to the
+        # in-process MemoryDatastore by default (no noxu_path
+        # required), so we do NOT need a separate Riak server.
+        # We still bring up redis as the dispatcher's data_store
+        # so the engine's Redis-front pipeline is healthy and
+        # the chaos injector's redis-bounce step has something
+        # to bounce; the workload driver will only hit
+        # 127.0.0.1:$RIAK_PBC_PORT.
         EFFECTIVE_MODE=redis
         DATA_STORE_VAL=0
+        ENABLE_RIAK_PBC=1
         ;;
     *)
         echo "unknown MODE=$MODE (expected redis|memcache|riak)" >&2
@@ -62,6 +79,21 @@ elif [ -n "${DYNOMITED:-}" ] && [ -x "$DYNOMITED" ]; then
 else
     echo "no dynomited binary found in $ROOT/build/release or $ROOT/src/target/release" >&2
     exit 1
+fi
+
+# When MODE=riak, verify the binary was built with the `riak`
+# feature. The CLI only registers --riak-pbc-listen behind
+# `#[cfg(feature = "riak")]`, so a `--help` probe is the
+# cheapest reliable check.
+if [ "$ENABLE_RIAK_PBC" = "1" ]; then
+    if ! "$DYNOMITED" --help 2>&1 | grep -q -- '--riak-pbc-listen'; then
+        echo "==> ERROR: MODE=riak requires a dynomited built with" \
+             "--features riak" >&2
+        echo "           binary at $DYNOMITED does not expose" \
+             "--riak-pbc-listen; rebuild with" >&2
+        echo "           'cargo build --release -p dynomited --features riak'" >&2
+        exit 1
+    fi
 fi
 
 # Resolve the backend binary based on EFFECTIVE_MODE. Redis and
@@ -195,6 +227,17 @@ dyn_o_mite:
   dyn_seeds:
 $SEEDS
 EOF
+
+# Append the riak block when MODE=riak. The block is a YAML
+# sibling of dyn_o_mite (under the same top-level pool key)
+# read by the binary's --features riak code path. The driver
+# will dial 127.0.0.1:$RIAK_PBC_PORT.
+if [ "$ENABLE_RIAK_PBC" = "1" ]; then
+    cat >> "$CONF" <<EOF
+  riak:
+    pbc_listen: 0.0.0.0:$RIAK_PBC_PORT
+EOF
+fi
 
 # Start dynomited.
 echo "==> starting dynomited (DC=$DC_NAME, tokens=$TOKENS)"

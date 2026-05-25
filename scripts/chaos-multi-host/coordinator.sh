@@ -45,6 +45,10 @@ DATASTORE_PORT=17100
 DYN_LISTEN_PORT=18101
 CLIENT_LISTEN_PORT=18102
 STATS_LISTEN_PORT=22222
+RIAK_PBC_PORT=21800
+
+MODE="${MODE:-redis}"
+export MODE
 
 # Per-DC distinct tokens (pass-2). Distinct token slices on the
 # ring force keys to hash into a specific DC, exercising outbound
@@ -129,12 +133,14 @@ start_host() {
 $seeds_str
 EOF
     "${runner[@]}" "cat > /scratch/dynomite-chaos/run/start-args" <<EOF
+MODE='$MODE'
 TOKENS='$tokens'
 SEEDS=\$(cat /scratch/dynomite-chaos/run/seeds.yml)
 DATASTORE_PORT=$DATASTORE_PORT
 DYN_LISTEN_PORT=$DYN_LISTEN_PORT
 CLIENT_LISTEN_PORT=$CLIENT_LISTEN_PORT
 STATS_LISTEN_PORT=$STATS_LISTEN_PORT
+RIAK_PBC_PORT=$RIAK_PBC_PORT
 EOF
     # FreeBSD's /bin/sh is a different shell than bash; pick
     # bash explicitly for the start-host script.
@@ -142,9 +148,9 @@ EOF
     case "$label" in
         dc-nuc) bash_path=/usr/local/bin/bash ;;
     esac
-    "${runner[@]}" "$bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/start-host.sh \
+    "${runner[@]}" "MODE='$MODE' $bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/start-host.sh \
         $label '$tokens' '$seeds_str' \
-        $DATASTORE_PORT $DYN_LISTEN_PORT $CLIENT_LISTEN_PORT $STATS_LISTEN_PORT" \
+        $DATASTORE_PORT $DYN_LISTEN_PORT $CLIENT_LISTEN_PORT $STATS_LISTEN_PORT $RIAK_PBC_PORT" \
         >> "$LOCAL_LOGS/$label-start.log" 2>&1
     log "  $label dynomited up"
 }
@@ -163,16 +169,18 @@ start_floki() {
 $SEEDS_STR
 EOF
     cat > /scratch/dynomite-chaos/run/start-args <<EOF
+MODE='$MODE'
 TOKENS='$TOKENS_FLOKI'
 SEEDS=\$(cat /scratch/dynomite-chaos/run/seeds.yml)
 DATASTORE_PORT=$DATASTORE_PORT
 DYN_LISTEN_PORT=$DYN_LISTEN_PORT
 CLIENT_LISTEN_PORT=$CLIENT_LISTEN_PORT
 STATS_LISTEN_PORT=$STATS_LISTEN_PORT
+RIAK_PBC_PORT=$RIAK_PBC_PORT
 EOF
     bash "$REPO/scripts/chaos-multi-host/start-host.sh" \
         dc-floki "$TOKENS_FLOKI" "$SEEDS_STR" \
-        "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" \
+        "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" "$RIAK_PBC_PORT" \
         >> "$LOCAL_LOGS/dc-floki-start.log" 2>&1
     log "  dc-floki dynomited up"
 }
@@ -183,9 +191,20 @@ start_workload() {
     local label="$1"; shift
     local bash_path="$1"; shift
     local runner=("$@")
-    log "starting workload-driver on $label"
+    log "starting workload-driver on $label (mode=$MODE)"
+    # In riak mode the driver dials the PBC listener instead of
+    # the engine's client_listen, so swap the --port wiring for
+    # --riak-pbc-port. The redis/memcache modes keep using
+    # --port $CLIENT_LISTEN_PORT.
+    local mode_flags
+    if [ "$MODE" = "riak" ]; then
+        mode_flags="--mode riak --riak-pbc-port $RIAK_PBC_PORT"
+    else
+        mode_flags="--mode $MODE"
+    fi
     "${runner[@]}" "nohup python3 /scratch/dynomite-chaos/src/scripts/chaos-multi-host/workload-driver.py \
         --host 127.0.0.1 --port $CLIENT_LISTEN_PORT \
+        $mode_flags \
         --label $label \
         --out /scratch/dynomite-chaos/logs/workload-$label.ndjson \
         --duration $DURATION \
