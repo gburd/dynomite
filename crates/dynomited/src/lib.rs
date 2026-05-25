@@ -20,6 +20,7 @@ pub mod daemonize;
 pub mod noxu_backend;
 pub mod observability;
 pub mod pidfile;
+pub mod reload;
 #[cfg(feature = "riak")]
 pub mod riak;
 pub mod server;
