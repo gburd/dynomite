@@ -234,9 +234,14 @@ fn run_server(cli: &Cli) -> ExitCode {
         }
     };
 
+    // Capture the YAML configuration path so the run loop can
+    // re-read it on `SIGHUP` for the configuration-reload
+    // pipeline.
+    let conf_path = cli.conf_file.clone();
+
     let exit = runtime.block_on(async move {
         let server = match Server::build(cfg).await {
-            Ok(s) => s,
+            Ok(s) => s.with_conf_path(conf_path),
             Err(e) => {
                 tracing::error!(error = %e, "server build failed");
                 return ExitCode::from(1);

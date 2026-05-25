@@ -49,6 +49,7 @@
 
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,9 +68,11 @@ use dynomite::core::log::reopen_on_sighup;
 use dynomite::hashkit::DynToken;
 use dynomite::io::reactor::{ConnRole, TcpTransport};
 use dynomite::net::server::OutboundRequest;
+use dynomite::net::tls::SharedTlsProfiles;
 use dynomite::net::{Conn, DnodeProxy, DnodeServerConn, NetError, Proxy};
 use dynomite::stats::{Snapshot, StatsServer};
 
+use crate::reload::{reload_from_path, ReloadableSnapshot, ReloadableState};
 use crate::signals::{SignalEvent, SignalSet};
 
 /// Errors produced while building or running a [`Server`].
@@ -179,6 +182,31 @@ pub struct Server {
     /// Period of the hint drainer sweep when `hint_store` is
     /// set. Mirrors the `hint_drain_interval_ms:` YAML key.
     hint_drain_interval: Duration,
+    /// Snapshot of the YAML pool block this server was built
+    /// from. Used as the diff baseline by the SIGHUP reload
+    /// pipeline so it can classify which fields changed and
+    /// which are non-reloadable.
+    original_conf_pool: ConfPool,
+    /// Path of the YAML configuration file this server was
+    /// built from. Re-read on `SIGHUP` to drive the
+    /// configuration-reload pipeline. `None` keeps the
+    /// historical behaviour where `SIGHUP` only reopens the
+    /// log file (used by tests that build a [`Server`] from an
+    /// in-memory [`Config`]).
+    conf_path: Option<PathBuf>,
+    /// Shared, reloadable view of "value, not structure" pool
+    /// knobs. Updated by the SIGHUP reload pipeline; consumed
+    /// by hot loops that need to see the latest values without
+    /// a restart.
+    reloadable: ReloadableState,
+    /// Shared TLS profile cell. The dnode listener and every
+    /// peer supervisor read this on every handshake / reconnect
+    /// so a SIGHUP-driven cert rotation lands without rebinding
+    /// sockets. `Some` when at least one peer-plane TLS profile
+    /// is configured at startup; `None` when the peer plane is
+    /// plaintext (in which case the cell stays empty and the
+    /// reload pipeline has nothing to swap).
+    tls_profiles: Option<SharedTlsProfiles>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
 }
@@ -591,6 +619,9 @@ impl Server {
         let (entropy_driver, entropy_key_path) =
             build_entropy_driver(&conf_pool, &server_pool, &pool_name);
 
+        let reloadable = ReloadableState::new(ReloadableSnapshot::from_pool(&conf_pool));
+        let tls_profiles = peer_tls.as_ref().map(|rt| rt.profiles.clone());
+
         Ok(Self {
             pool_name,
             pool: server_pool,
@@ -613,9 +644,47 @@ impl Server {
             local_pname,
             hint_store,
             hint_drain_interval: Duration::from_millis(pool_config.hint_drain_interval_ms.max(1)),
+            original_conf_pool: conf_pool,
+            conf_path: None,
+            reloadable,
+            tls_profiles,
             shutdown_tx,
             shutdown_rx,
         })
+    }
+
+    /// Attach the original YAML configuration file path so the
+    /// run loop's `SIGHUP` arm can re-parse and reload it. When
+    /// unset (the default), `SIGHUP` reopens the log file but
+    /// does not attempt a configuration reload, matching the
+    /// pre-reload behaviour used by tests that build a
+    /// [`Server`] from an in-memory [`Config`].
+    #[must_use]
+    pub fn with_conf_path(mut self, path: PathBuf) -> Self {
+        self.conf_path = Some(path);
+        self
+    }
+
+    /// Cheap clonable handle to the runtime's reloadable
+    /// configuration cell. Consumers (the dispatcher, the
+    /// gossip task, the entropy driver) re-read the cell on
+    /// every cycle so a `SIGHUP`-driven update lands without a
+    /// restart.
+    #[must_use]
+    pub fn reloadable(&self) -> ReloadableState {
+        self.reloadable.clone()
+    }
+
+    /// Cheap clonable handle to the runtime's shared TLS
+    /// profile cell. `None` when the peer plane is plaintext;
+    /// `Some(_)` when at least one TLS profile is configured at
+    /// startup. The dnode listener and every peer supervisor
+    /// read this on every handshake / reconnect so a SIGHUP
+    /// reload of the cert / key / CA bundle takes effect on the
+    /// next new connection.
+    #[must_use]
+    pub fn tls_profiles(&self) -> Option<SharedTlsProfiles> {
+        self.tls_profiles.clone()
     }
 
     /// Borrow the pool.
@@ -751,6 +820,10 @@ impl Server {
             local_pname,
             hint_store,
             hint_drain_interval,
+            original_conf_pool,
+            conf_path,
+            reloadable,
+            tls_profiles,
             shutdown_tx,
             mut shutdown_rx,
         } = self;
@@ -903,6 +976,12 @@ impl Server {
         };
 
         let mut signals = SignalSet::install().map_err(ServerError::Signals)?;
+        let reload_ctx = ReloadContext {
+            conf_path: conf_path.as_deref(),
+            original_pool: &original_conf_pool,
+            reloadable: &reloadable,
+            tls_profiles: tls_profiles.as_ref(),
+        };
         let supervise_result = supervise(
             &shutdown_tx,
             &mut shutdown_rx,
@@ -910,6 +989,7 @@ impl Server {
             &proxy_handle,
             dnode_handle.as_ref(),
             stats_handle.as_ref(),
+            &reload_ctx,
         )
         .await;
 
@@ -1008,6 +1088,24 @@ async fn wait_for_flag(rx: &mut watch::Receiver<bool>) {
     }
 }
 
+/// Bundle of references the run loop's `SIGHUP` arm needs to
+/// drive a configuration reload. Built once on entry to
+/// [`Server::run`] and passed to [`supervise`] by reference so
+/// nothing inside the supervise loop has to clone.
+struct ReloadContext<'a> {
+    /// YAML configuration path captured at startup. `None`
+    /// disables the reload pipeline; `SIGHUP` then only reopens
+    /// the log file.
+    conf_path: Option<&'a std::path::Path>,
+    /// Pool snapshot taken at startup; the diff baseline.
+    original_pool: &'a ConfPool,
+    /// Shared reloadable-state cell to write into.
+    reloadable: &'a ReloadableState,
+    /// Shared TLS profile cell. `None` when the peer plane is
+    /// plaintext at startup.
+    tls_profiles: Option<&'a SharedTlsProfiles>,
+}
+
 async fn supervise(
     shutdown_tx: &watch::Sender<bool>,
     shutdown_rx: &mut watch::Receiver<bool>,
@@ -1015,6 +1113,7 @@ async fn supervise(
     proxy: &JoinHandle<Result<(), NetError>>,
     dnode: Option<&JoinHandle<Result<(), NetError>>>,
     stats: Option<&JoinHandle<io::Result<()>>>,
+    reload: &ReloadContext<'_>,
 ) -> Result<(), ServerError> {
     loop {
         tokio::select! {
@@ -1032,11 +1131,15 @@ async fn supervise(
                         return Ok(());
                     }
                     Some(SignalEvent::Hangup) => {
+                        // Reopen the log file FIRST so the
+                        // reload's INFO line lands in the new
+                        // file (the brief's contract).
                         if let Err(e) = reopen_on_sighup() {
                             tracing::warn!(error = %e, "log reopen failed");
                         } else {
                             tracing::info!("log reopened on SIGHUP");
                         }
+                        handle_sighup_reload(reload);
                     }
                     None => {
                         tracing::warn!("signal stream closed; treating as shutdown");
@@ -1069,6 +1172,50 @@ async fn supervise(
                     reason: "listener returned before shutdown".into(),
                 });
             }
+        }
+    }
+}
+
+/// Run the SIGHUP-driven configuration reload pipeline.
+///
+/// Failures are non-fatal: a malformed reload leaves the live
+/// configuration intact and surfaces a `tracing::error!` line so
+/// the operator can fix the YAML and re-send `SIGHUP`.
+fn handle_sighup_reload(reload: &ReloadContext<'_>) {
+    let Some(path) = reload.conf_path else {
+        tracing::debug!("SIGHUP: no conf_path captured at startup; skipping config reload");
+        return;
+    };
+    // The TLS swap path requires a live `SharedTlsProfiles` cell
+    // even when the peer plane started plaintext: in that case
+    // the cell is empty and the reload may populate it. Build
+    // an empty fallback cell when none was wired so the reload
+    // pipeline always sees a target to write into; the result
+    // is dropped immediately afterwards.
+    let local_fallback;
+    let tls = if let Some(t) = reload.tls_profiles {
+        t
+    } else {
+        local_fallback = SharedTlsProfiles::default();
+        &local_fallback
+    };
+    match reload_from_path(path, reload.original_pool, reload.reloadable, tls) {
+        Ok(outcome) => {
+            tracing::info!(
+                reloaded = ?outcome.reloaded,
+                non_reloadable = ?outcome.non_reloadable,
+                tls_swapped = outcome.tls_swapped,
+                "config reloaded; {} reloadable fields updated, {} non-reloadable fields ignored",
+                outcome.reloaded.len(),
+                outcome.non_reloadable.len(),
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                path = %path.display(),
+                "config reload failed; keeping previous configuration",
+            );
         }
     }
 }
@@ -1413,16 +1560,15 @@ async fn peer_supervisor(
     tls: Option<PeerTlsRuntime>,
     peer_dc: String,
 ) -> Result<(), NetError> {
-    // Resolve the per-peer client-side TLS handles once. When the
-    // profile map carries no entry for `peer_dc` and no default
-    // is set, the supervisor falls back to plaintext for this
-    // peer (matching the brief's "if neither is set, the
-    // connection is plaintext" contract).
-    let peer_tls_connector: Option<tokio_rustls::TlsConnector> = tls.as_ref().and_then(|rt| {
-        rt.profiles
-            .client_config_for_dc(peer_dc.as_str())
-            .map(dynomite::net::tls::connector_from)
-    });
+    // Resolve the per-peer client-side TLS handles dynamically:
+    // the supervisor re-reads `tls.profiles` on every reconnect
+    // attempt so a SIGHUP-driven cert rotation lands on the
+    // next dial without restarting the supervisor. When the
+    // shared profile map carries no entry for `peer_dc` and no
+    // default is set, the supervisor falls back to plaintext
+    // for this peer (matching the brief's "if neither is set,
+    // the connection is plaintext" contract).
+    let peer_tls_profiles = tls.as_ref().map(|rt| rt.profiles.clone());
     let sni_hostname = dynomite::net::tls::dc_sni_hostname(peer_dc.as_str());
     let mut backoff_ms: u64 = 100;
     let backoff_max_ms: u64 = 5_000;
@@ -1460,11 +1606,15 @@ async fn peer_supervisor(
         // Wrap with TLS when configured. On handshake failure we
         // log and re-enter the reconnect loop with backoff so a
         // mis-trusted CA does not saturate the CPU. The connector
-        // is selected once at supervisor start from the per-peer
-        // DC profile (or the default profile, or `None` for
-        // plaintext).
+        // is rebuilt from the shared TLS profile map on every
+        // reconnect attempt so a SIGHUP-driven cert rotation
+        // lands on the next dial.
+        let connector = peer_tls_profiles.as_ref().and_then(|p| {
+            p.client_config_for_dc(peer_dc.as_str())
+                .map(dynomite::net::tls::connector_from)
+        });
         let transport: Box<dyn dynomite::io::reactor::Transport> = if let Some(connector) =
-            peer_tls_connector.as_ref()
+            connector.as_ref()
         {
             let server_name = match dynomite::net::tls::server_name_owned(sni_hostname.as_str()) {
                 Ok(n) => n,
@@ -1529,14 +1679,15 @@ async fn peer_supervisor(
 /// hood) so the `Server::build` closure can hand a fresh copy to
 /// every spawned task without a global mutex.
 ///
-/// `acceptor` is the SNI-routed listener acceptor; the
-/// underlying [`TlsProfileMap`] retains the per-DC client
-/// configs so the per-peer supervisor can resolve a connector
-/// matching the target peer's DC.
+/// `acceptor` is the SNI-routed listener acceptor whose
+/// resolver reads the [`SharedTlsProfiles`] cell on every
+/// handshake; `profiles` is that same cell, used by the
+/// per-peer outbound supervisors to pick a TLS connector
+/// matching the target peer's DC at reconnect time.
 #[derive(Clone)]
 struct PeerTlsRuntime {
     acceptor: tokio_rustls::TlsAcceptor,
-    profiles: dynomite::net::tls::TlsProfileMap,
+    profiles: dynomite::net::tls::SharedTlsProfiles,
 }
 
 /// Resolve the peer-plane TLS knobs into a `PeerTlsRuntime`.
@@ -1622,7 +1773,8 @@ fn build_peer_tls_runtime(conf_pool: &ConfPool) -> Result<Option<PeerTlsRuntime>
             reason: e.to_string(),
         }
     })?;
-    let acceptor = profiles
+    let shared = dynomite::net::tls::SharedTlsProfiles::from_map(profiles);
+    let acceptor = shared
         .build_sni_acceptor()
         .map_err(|e| ServerError::BadConfig {
             field: "peer_tls_profiles",
@@ -1632,7 +1784,10 @@ fn build_peer_tls_runtime(conf_pool: &ConfPool) -> Result<Option<PeerTlsRuntime>
             field: "peer_tls_profiles",
             reason: "profile map built but produced no acceptor (internal invariant)".into(),
         })?;
-    Ok(Some(PeerTlsRuntime { acceptor, profiles }))
+    Ok(Some(PeerTlsRuntime {
+        acceptor,
+        profiles: shared,
+    }))
 }
 
 fn default_gossip_interval_ms_i64() -> i64 {
