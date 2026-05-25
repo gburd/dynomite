@@ -1,0 +1,108 @@
+name: slow-tests
+
+# Codeberg / Forgejo Actions mirror of
+# `.github/workflows/slow-tests.yml`. AGENTS.md Section 14b
+# mandates the two workflows stay aligned.
+#
+# Forgejo Actions accept the GitHub `schedule:` syntax with
+# the same five-field cron expression. Pure-JavaScript
+# actions (`actions/checkout`, `actions/upload-artifact`,
+# `actions/github-script`, `dtolnay/rust-toolchain`,
+# `taiki-e/install-action`, `Swatinem/rust-cache`) are
+# consumed unchanged.
+#
+# On failure we file a tracking issue against the Forgejo
+# repo via `actions/github-script`, which targets the
+# Forgejo API (binary-compatible with the GitHub REST shape
+# Forgejo emulates).
+
+on:
+  schedule:
+    # Mondays at 06:00 UTC.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  slow-tests:
+    name: ignored tests (weekly)
+    runs-on: docker
+    container:
+      image: node:20-bookworm
+    steps:
+      - name: install build prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              build-essential pkg-config libssl-dev curl ca-certificates \
+              redis-server
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: install nextest
+        uses: taiki-e/install-action@nextest
+      - name: nextest (workspace, ignored only)
+        id: nextest_workspace
+        run: |
+          mkdir -p target/slow-tests
+          cargo nextest run --workspace --run-ignored only \
+            2>&1 | tee target/slow-tests/workspace.log
+      - name: nextest (dynomited observability, ignored only)
+        id: nextest_observability
+        run: |
+          cargo nextest run -p dynomited --features integration \
+            --test observability --run-ignored only \
+            2>&1 | tee target/slow-tests/observability.log
+      - name: upload slow-tests logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slow-tests-logs
+          path: target/slow-tests/
+          if-no-files-found: warn
+      - name: file tracking issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const dir = 'target/slow-tests';
+            let body = '';
+            try {
+              for (const f of fs.readdirSync(dir)) {
+                const p = path.join(dir, f);
+                const text = fs.readFileSync(p, 'utf8');
+                const failing = text
+                  .split('\n')
+                  .filter(line => /\bFAIL\b|^failures:|^FAILED/.test(line));
+                body += `\n### ${f}\n\nFailing markers:\n\n`;
+                body += '```\n';
+                body += failing.slice(0, 50).join('\n') || '(no FAIL markers parsed; see artifact)';
+                body += '\n```\n';
+              }
+            } catch (e) {
+              body += `\n(unable to read logs: ${e.message})\n`;
+            }
+            const today = new Date().toISOString().slice(0, 10);
+            const title = `slow-tests failure on ${today}`;
+            const issueBody = [
+              `The weekly slow-tests workflow failed.`,
+              ``,
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              `Commit: ${context.sha}`,
+              ``,
+              body,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: issueBody,
+              labels: ['slow-tests', 'ci'],
+            });
