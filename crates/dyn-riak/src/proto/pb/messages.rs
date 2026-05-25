@@ -585,6 +585,13 @@ impl WireValue for RpbListKeysResp {
 /// and skipped on decode by `prost`. All scalar and `bytes` fields
 /// keep their published tags so a conforming client and server
 /// agree on every wire byte for the fields that are modelled.
+///
+/// Tags 30 and 31 are Dynomite-specific extensions that carry the
+/// numeric `chash_keyfun` and `replication_strategy` selectors.
+/// They occupy fresh tag slots (above the canonical Riak schema
+/// surface) so a conforming Riak client that does not know about
+/// them simply skips the bytes; a Dynomite client honours them
+/// per-bucket-type.
 #[derive(Clone, Eq, PartialEq, Message)]
 pub struct RpbBucketProps {
     /// Replication factor.
@@ -662,7 +669,49 @@ pub struct RpbBucketProps {
     /// HyperLogLog precision parameter (CRDT HLL only).
     #[prost(uint32, optional, tag = "29")]
     pub hll_precision: Option<u32>,
+    /// Hash-key function selector. Carries the canonical Riak
+    /// pre-hash strategy: `0 = STD` (hash bucket+key), `1 =
+    /// BUCKETONLY` (hash bucket only so every key in the bucket
+    /// lands on the same partition), `99 = CUSTOM` (user-defined,
+    /// reserved -- not implemented in this slice).
+    ///
+    /// Riak's published schema models the same field as a
+    /// `RpbModFun` message at tag 9. Dynomite carries the choice
+    /// as a numeric enum at tag 30 to keep the wire shape
+    /// roundtrip-able without modelling the (mod, fun) tuple.
+    /// See [`crate::datatypes::keyfun::KeyFun`] for the in-memory
+    /// type.
+    #[prost(uint32, optional, tag = "30")]
+    pub chash_keyfun: Option<u32>,
+    /// Replication strategy selector. `0 = TOPOLOGY` (Dynomite's
+    /// classic per-DC, per-rack quorum fan-out), `1 = SUCCESSORS`
+    /// (Riak-style walk-N-successors).
+    ///
+    /// See [`crate::replication::ReplicationStrategy`] for the
+    /// in-memory type. The default is mode-aware: non-Riak
+    /// pools always run `TOPOLOGY`; Riak-mode pools default to
+    /// `SUCCESSORS` for newly created bucket-types.
+    #[prost(uint32, optional, tag = "31")]
+    pub replication_strategy: Option<u32>,
 }
+
+/// `chash_keyfun = STD`: hash `<bucket>/<key>` (default).
+pub const CHASH_KEYFUN_STD: u32 = 0;
+/// `chash_keyfun = BUCKETONLY`: hash `<bucket>` only so every
+/// key in the bucket maps to the same partition.
+pub const CHASH_KEYFUN_BUCKETONLY: u32 = 1;
+/// `chash_keyfun = CUSTOM`: reserved for a future user-defined
+/// hash function. Decoded but not yet honoured by the dispatch
+/// path.
+pub const CHASH_KEYFUN_CUSTOM: u32 = 99;
+
+/// `replication_strategy = TOPOLOGY`: Dynomite's per-DC, per-
+/// rack quorum fan-out (default outside Riak mode).
+pub const REPLICATION_STRATEGY_TOPOLOGY: u32 = 0;
+/// `replication_strategy = SUCCESSORS`: walk-N-successors on
+/// the token ring (Riak-style; default for new Riak-mode bucket
+/// types).
+pub const REPLICATION_STRATEGY_SUCCESSORS: u32 = 1;
 
 impl WireValue for RpbBucketProps {
     fn wire_type_id() -> WireTypeId {
@@ -1156,6 +1205,52 @@ mod tests {
         assert!(bytes.is_empty(), "set-bucket response body must be empty");
         let back = RpbSetBucketResp::decode(bytes.as_slice()).expect("decode resp");
         assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn bucket_props_chash_keyfun_round_trips() {
+        let props = RpbBucketProps {
+            n_val: Some(3),
+            chash_keyfun: Some(CHASH_KEYFUN_BUCKETONLY),
+            ..RpbBucketProps::default()
+        };
+        let bytes = props.encode_to_vec();
+        let back = RpbBucketProps::decode(bytes.as_slice()).expect("decode props");
+        assert_eq!(back.chash_keyfun, Some(CHASH_KEYFUN_BUCKETONLY));
+        assert_eq!(back.n_val, Some(3));
+        assert_eq!(back, props);
+    }
+
+    #[test]
+    fn bucket_props_replication_strategy_round_trips() {
+        let props = RpbBucketProps {
+            replication_strategy: Some(REPLICATION_STRATEGY_SUCCESSORS),
+            n_val: Some(3),
+            ..RpbBucketProps::default()
+        };
+        let bytes = props.encode_to_vec();
+        let back = RpbBucketProps::decode(bytes.as_slice()).expect("decode props");
+        assert_eq!(
+            back.replication_strategy,
+            Some(REPLICATION_STRATEGY_SUCCESSORS)
+        );
+        assert_eq!(back, props);
+    }
+
+    #[test]
+    fn bucket_props_default_omits_new_selectors() {
+        // Pre-existing tests must continue to round-trip when the
+        // `chash_keyfun` and `replication_strategy` fields are
+        // left unset; the encoder must not emit bytes for them.
+        let props = RpbBucketProps {
+            n_val: Some(3),
+            ..RpbBucketProps::default()
+        };
+        assert_eq!(props.chash_keyfun, None);
+        assert_eq!(props.replication_strategy, None);
+        let bytes = props.encode_to_vec();
+        let back = RpbBucketProps::decode(bytes.as_slice()).expect("decode props");
+        assert_eq!(back, props);
     }
 
     #[test]
