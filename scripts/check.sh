@@ -136,4 +136,6 @@ echo "==> coverage gate (Stage 15)"
 # once Stage 16 lands.
 "$ROOT/scripts/coverage_gate.sh" || true
 
+echo "==> note: slow-tests are in scripts/slow_tests.sh; run weekly via slow-tests.yml workflow"
+
 echo "OK"
