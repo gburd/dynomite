@@ -28,9 +28,10 @@ from pathlib import Path
 def aggregate_workload(path: Path):
     counts = collections.Counter()
     fails = collections.Counter()
+    retries = collections.Counter()
     snapshots = []
     if not path.exists():
-        return counts, fails, snapshots
+        return counts, fails, retries, snapshots
     with path.open() as f:
         for line in f:
             line = line.strip()
@@ -44,8 +45,10 @@ def aggregate_workload(path: Path):
                 counts[k] += v
             for k, v in d.get("failures", {}).items():
                 fails[k] += v
+            for k, v in d.get("retries", {}).items():
+                retries[k] += v
             snapshots.append(d)
-    return counts, fails, snapshots
+    return counts, fails, retries, snapshots
 
 
 def aggregate_chaos_events(path: Path):
@@ -141,32 +144,34 @@ def main():
 
     # 2. Workload throughput per DC
     lines.append(section_header("Workload throughput per DC"))
-    lines.append("| DC | total ok | total fail | EVAL ok | PING ok | classes covered |")
-    lines.append("|---|---|---|---|---|---|")
-    grand_ok = grand_fail = 0
+    lines.append("| DC | total ok | total fail | total retries | EVAL ok | PING ok | classes covered |")
+    lines.append("|---|---|---|---|---|---|---|")
+    grand_ok = grand_fail = grand_retry = 0
     per_dc_data = {}
     for label in sorted(host_dirs):
         wl = host_dirs[label] / f"workload-{label}.ndjson"
-        counts, fails, snaps = aggregate_workload(wl)
-        per_dc_data[label] = (counts, fails, snaps)
+        counts, fails, retries, snaps = aggregate_workload(wl)
+        per_dc_data[label] = (counts, fails, retries, snaps)
         total_ok = sum(counts.values())
         total_fail = sum(fails.values())
+        total_retry = sum(retries.values())
         grand_ok += total_ok
         grand_fail += total_fail
+        grand_retry += total_retry
         eval_ok = counts.get("scripting/EVAL", 0)
         ping_ok = counts.get("scripting/PING", 0)
         classes = sorted(by_class(counts).keys())
         lines.append(
-            f"| {label} | {total_ok} | {total_fail} | {eval_ok} | {ping_ok} | "
+            f"| {label} | {total_ok} | {total_fail} | {total_retry} | {eval_ok} | {ping_ok} | "
             f"{len(classes)} ({', '.join(classes)}) |"
         )
-    lines.append(f"| **total** | **{grand_ok}** | **{grand_fail}** | | | |")
+    lines.append(f"| **total** | **{grand_ok}** | **{grand_fail}** | **{grand_retry}** | | | |")
     lines.append("")
 
     # 2a. Per-class breakdown
     lines.append(section_header("Workload class breakdown", 3))
     for label in sorted(host_dirs):
-        counts, fails, _ = per_dc_data[label]
+        counts, fails, _, _ = per_dc_data[label]
         lines.append(f"\n**{label}**:")
         bc = by_class(counts).most_common()
         for cls, n in bc:
@@ -177,7 +182,7 @@ def main():
     lines.append(section_header("Failure summary"))
     any_fail = False
     for label in sorted(host_dirs):
-        _, fails, _ = per_dc_data[label]
+        _, fails, _, _ = per_dc_data[label]
         if fails:
             any_fail = True
             lines.append(f"\n**{label}**:")
@@ -185,6 +190,28 @@ def main():
                 lines.append(f"  - `{k}`: {v}")
     if not any_fail:
         lines.append("**No client-visible failures across all DCs.**")
+
+    # 3a. Retry summary
+    #
+    # Retries are recoverable errors that the workload driver
+    # absorbed before counting the request as a failure. A high
+    # retry count with a low failure count is healthy (the
+    # cluster wobbled but recovered); a high retry count *and*
+    # a high failure count points at a class genuinely beyond
+    # its budget. See docs/operations/chaos.md for the wider
+    # discussion.
+    lines.append(section_header("Retry summary"))
+    any_retry = False
+    for label in sorted(host_dirs):
+        _, _, retries, _ = per_dc_data[label]
+        if retries:
+            any_retry = True
+            lines.append(f"\n**{label}**:")
+            for k, v in retries.most_common():
+                lines.append(f"  - `{k}`: {v}")
+    if not any_retry:
+        lines.append("**No retries fired across all DCs (either everything "
+                     "succeeded first try, or `--retry-on=` was empty).**")
 
     # 4. Chaos events
     lines.append(section_header("Chaos events fired"))
@@ -245,7 +272,7 @@ def main():
     lines.append("| DC | windows | ops/win mean | ops/win min | ops/win max | fail/win mean |")
     lines.append("|---|---|---|---|---|---|")
     for label in sorted(host_dirs):
-        _, _, snaps = per_dc_data[label]
+        _, _, _, snaps = per_dc_data[label]
         if not snaps:
             continue
         per_win_ok = [sum(s.get("counts", {}).values()) for s in snaps]
