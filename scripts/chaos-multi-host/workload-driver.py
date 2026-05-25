@@ -1,22 +1,34 @@
 #!/usr/bin/env python3
 """Workload driver for the multi-host chaos test.
 
-Drives a Redis or memcache client against the local dynomited
-instance. The selected mode (``--mode redis`` or
-``--mode memcache``) determines:
+Drives a Redis, memcache, or Riak PBC client against the local
+dynomited instance. The selected mode determines:
 
-  * RESP-2 vs memcache ASCII protocol on the wire
-  * which set of command classes to fire
-  * which dynomited ``data_store`` setting the upstream config
-    must use (0 vs 1)
+  * ``--mode redis``    -- RESP-2 over TCP, ``data_store: 0``
+  * ``--mode memcache`` -- memcache ASCII over TCP, ``data_store: 1``
+  * ``--mode riak``     -- Riak PBC over TCP at the engine's
+                           ``riak.pbc_listen`` address; the
+                           upstream ``data_store`` is irrelevant
+                           because the request flows through
+                           dyn-riak's MemoryDatastore (or whatever
+                           Datastore the binary was wired with)
+                           rather than the Redis/memcache
+                           dispatcher.
 
-In either mode the driver runs continuously until SIGTERM,
+In every mode the driver runs continuously until SIGTERM,
 periodically recording per-class success/failure counters into a
 NDJSON log so the coordinator can summarise them after the run.
 
 Designed to be run on each host in parallel; the coordinator
 launches one instance per host pointing at
-127.0.0.1:<client_port>.
+127.0.0.1:<client_port> (or 127.0.0.1:<riak_pbc_port> in Riak
+mode).
+
+The Riak PBC encoder is hand-rolled on top of the stdlib
+``struct`` module so the driver has no third-party Python
+dependencies. Only the four operations Ping / Get / Put / Del are
+supported; that is enough to drive load against dyn-riak and
+exercise the framer, codec, and dispatcher under chaos.
 """
 
 from __future__ import annotations
@@ -28,8 +40,10 @@ import random
 import signal
 import socket
 import string
+import struct
 import sys
 import time
+import unittest
 from contextlib import suppress
 from pathlib import Path
 
@@ -566,6 +580,313 @@ MEMCACHE_WORKLOADS = [
 ]
 
 
+# --- Riak PBC client ---
+#
+# The Riak Protocol Buffers Client (PBC) wire shape is:
+#   * 4-byte big-endian length (covers the message-code byte plus
+#     the protobuf body)
+#   * 1-byte message code
+#   * N bytes of protobuf body
+#
+# Each protobuf field is preceded by a varint tag where
+#   tag = (field_number << 3) | wire_type
+# wire_type 0 is varint (uint32, bool); wire_type 2 is
+# length-delimited (bytes, string, embedded message). For the
+# four operations the driver supports, only wire types 0 and 2
+# are needed.
+#
+# Field tags below match the dyn-riak crate's
+# ``proto::pb::messages`` schema:
+#   RpbGetReq:   bucket=1, key=2          (both bytes)
+#   RpbPutReq:   bucket=1, key=2, value=4 (all bytes)
+#                The dyn-riak v0 surface flattens the canonical
+#                Riak ``RpbContent.value`` (nested at upstream
+#                tag 3) to a top-level ``value`` at tag 4. That
+#                is the wire shape the server decodes; matching
+#                it keeps the driver compatible with the
+#                MemoryDatastore the binary spins up by default.
+#   RpbDelReq:   bucket=1, key=2          (both bytes)
+#   RpbErrorResp: errmsg=1 (bytes), errcode=2 (varint)
+
+RIAK_CODE_ERROR_RESP = 0
+RIAK_CODE_PING_REQ = 1
+RIAK_CODE_PING_RESP = 2
+RIAK_CODE_GET_REQ = 9
+RIAK_CODE_GET_RESP = 10
+RIAK_CODE_PUT_REQ = 11
+RIAK_CODE_PUT_RESP = 12
+RIAK_CODE_DEL_REQ = 13
+RIAK_CODE_DEL_RESP = 14
+
+_PB_WIRE_VARINT = 0
+_PB_WIRE_LENGTH_DELIMITED = 2
+
+
+def _pb_encode_varint(n: int) -> bytes:
+    """Encode a non-negative integer as a protobuf varint."""
+    if n < 0:
+        raise ValueError("varint must be non-negative")
+    out = bytearray()
+    while n > 0x7F:
+        out.append((n & 0x7F) | 0x80)
+        n >>= 7
+    out.append(n & 0x7F)
+    return bytes(out)
+
+
+def _pb_decode_varint(buf: bytes, pos: int) -> tuple[int, int]:
+    """Decode one varint from ``buf[pos:]``; return (value, new_pos)."""
+    n = 0
+    shift = 0
+    start = pos
+    while True:
+        if pos >= len(buf):
+            raise ValueError("truncated varint at offset %d" % start)
+        b = buf[pos]
+        pos += 1
+        n |= (b & 0x7F) << shift
+        if b < 0x80:
+            return n, pos
+        shift += 7
+        if shift > 63:
+            raise ValueError("varint too long at offset %d" % start)
+
+
+def _pb_encode_tag(field: int, wire_type: int) -> bytes:
+    return _pb_encode_varint((field << 3) | wire_type)
+
+
+def _pb_encode_bytes_field(field: int, val: bytes) -> bytes:
+    if isinstance(val, str):
+        val = val.encode()
+    return (
+        _pb_encode_tag(field, _PB_WIRE_LENGTH_DELIMITED)
+        + _pb_encode_varint(len(val))
+        + val
+    )
+
+
+def encode_rpb_ping_req() -> bytes:
+    """RpbPingReq has an empty body."""
+    return b""
+
+
+def encode_rpb_get_req(bucket: bytes, key: bytes) -> bytes:
+    return _pb_encode_bytes_field(1, bucket) + _pb_encode_bytes_field(2, key)
+
+
+def encode_rpb_put_req(bucket: bytes, key: bytes, value: bytes) -> bytes:
+    # Field tags: bucket=1, key=2, value=4. See the module
+    # comment above for the v0-surface rationale.
+    return (
+        _pb_encode_bytes_field(1, bucket)
+        + _pb_encode_bytes_field(2, key)
+        + _pb_encode_bytes_field(4, value)
+    )
+
+
+def encode_rpb_del_req(bucket: bytes, key: bytes) -> bytes:
+    return _pb_encode_bytes_field(1, bucket) + _pb_encode_bytes_field(2, key)
+
+
+def decode_rpb_error_resp(body: bytes) -> tuple[bytes, int]:
+    """Decode an RpbErrorResp body into ``(errmsg, errcode)``.
+
+    Tags not in {1, 2} are skipped; this lets the decoder tolerate
+    future schema additions without raising.
+    """
+    errmsg = b""
+    errcode = 0
+    pos = 0
+    while pos < len(body):
+        tag, pos = _pb_decode_varint(body, pos)
+        field = tag >> 3
+        wire = tag & 0x07
+        if wire == _PB_WIRE_LENGTH_DELIMITED:
+            ln, pos = _pb_decode_varint(body, pos)
+            chunk = body[pos:pos + ln]
+            if len(chunk) != ln:
+                raise ValueError("truncated bytes field")
+            pos += ln
+            if field == 1:
+                errmsg = chunk
+        elif wire == _PB_WIRE_VARINT:
+            val, pos = _pb_decode_varint(body, pos)
+            if field == 2:
+                errcode = val
+        else:
+            raise ValueError("unsupported wire type %d" % wire)
+    return errmsg, errcode
+
+
+class RiakPbcError(Exception):
+    """Server returned an RpbErrorResp (code 0)."""
+
+
+class RiakPbcConn:
+    """A minimal Riak PBC client.
+
+    Frames a single (code, body) pair on demand and reads back
+    one frame. Mirrors the loopback self-connection avoidance
+    trick used by the other clients.
+    """
+
+    def __init__(self, host: str, port: int, timeout: float = 5.0):
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.sock: socket.socket | None = None
+        self.rbuf: bytes = b""
+
+    def connect(self) -> None:
+        for _ in range(5):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+                sock.bind(("127.0.0.1", 0))
+                sock.settimeout(self.timeout)
+                sock.connect((self.host, self.port))
+                local_port = sock.getsockname()[1]
+                if local_port == self.port:
+                    sock.close()
+                    continue
+                self.sock = sock
+                self.rbuf = b""
+                return
+            except OSError:
+                with suppress(Exception):
+                    sock.close()
+                raise
+        raise ConnectionError(
+            "could not establish a non-self-loop riak PBC connection"
+        )
+
+    def close(self) -> None:
+        if self.sock is not None:
+            with suppress(OSError):
+                self.sock.close()
+        self.sock = None
+        self.rbuf = b""
+
+    def _readn(self, n: int) -> bytes:
+        assert self.sock is not None
+        while len(self.rbuf) < n:
+            chunk = self.sock.recv(8192)
+            if not chunk:
+                raise ConnectionError("peer closed mid-frame")
+            self.rbuf += chunk
+        out, self.rbuf = self.rbuf[:n], self.rbuf[n:]
+        return out
+
+    def call(self, code: int, body: bytes) -> tuple[int, bytes]:
+        """Send one PBC request frame and return the response.
+
+        Returns ``(reply_code, reply_body)``. Raises
+        :class:`RiakPbcError` if the server returns an
+        RpbErrorResp (code 0).
+        """
+        if self.sock is None:
+            self.connect()
+        # Length covers the code byte + body bytes.
+        frame = struct.pack(">I", 1 + len(body)) + bytes([code]) + body
+        try:
+            self.sock.sendall(frame)
+            length = struct.unpack(">I", self._readn(4))[0]
+            if length < 1:
+                raise ConnectionError("riak PBC announced zero-length frame")
+            head = self._readn(1)
+            reply_code = head[0]
+            reply_body = self._readn(length - 1) if length > 1 else b""
+        except (socket.timeout, ConnectionError, OSError):
+            self.close()
+            raise
+        if reply_code == RIAK_CODE_ERROR_RESP:
+            errmsg, errcode = decode_rpb_error_resp(reply_body)
+            raise RiakPbcError(
+                "riak error %d: %s" % (errcode, errmsg.decode("utf-8", "replace"))
+            )
+        return reply_code, reply_body
+
+
+RIAK_BUCKET = b"chaos"
+
+
+def riak_randkey() -> bytes:
+    return (
+        "k" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    ).encode()
+
+
+def riak_randval() -> bytes:
+    return (
+        "".join(random.choices(string.ascii_letters + string.digits, k=32))
+    ).encode()
+
+
+# Track recently-put keys so the Get workload has a >0 hit rate
+# without requiring cross-call coordination. Bounded to keep
+# memory flat on long soak runs.
+_RIAK_RECENT_KEYS: list[bytes] = []
+_RIAK_RECENT_CAP = 1024
+
+
+def _remember_key(k: bytes) -> None:
+    _RIAK_RECENT_KEYS.append(k)
+    if len(_RIAK_RECENT_KEYS) > _RIAK_RECENT_CAP:
+        # Drop the oldest quarter to amortise the trim cost.
+        del _RIAK_RECENT_KEYS[: _RIAK_RECENT_CAP // 4]
+
+
+def workload_riak_ping(c: RiakPbcConn) -> str:
+    code, _ = c.call(RIAK_CODE_PING_REQ, encode_rpb_ping_req())
+    if code != RIAK_CODE_PING_RESP:
+        raise RiakPbcError("unexpected ping reply code %d" % code)
+    return "Ping"
+
+
+def workload_riak_put(c: RiakPbcConn) -> str:
+    k = riak_randkey()
+    v = riak_randval()
+    code, _ = c.call(RIAK_CODE_PUT_REQ, encode_rpb_put_req(RIAK_BUCKET, k, v))
+    if code != RIAK_CODE_PUT_RESP:
+        raise RiakPbcError("unexpected put reply code %d" % code)
+    _remember_key(k)
+    return "Put"
+
+
+def workload_riak_get(c: RiakPbcConn) -> str:
+    # 50/50 split between a key we recently put and a fresh
+    # random key, so the workload exercises both hit and miss
+    # paths through the Datastore.
+    if _RIAK_RECENT_KEYS and random.random() < 0.5:
+        k = random.choice(_RIAK_RECENT_KEYS)
+    else:
+        k = riak_randkey()
+    code, _ = c.call(RIAK_CODE_GET_REQ, encode_rpb_get_req(RIAK_BUCKET, k))
+    if code != RIAK_CODE_GET_RESP:
+        raise RiakPbcError("unexpected get reply code %d" % code)
+    return "Get"
+
+
+def workload_riak_del(c: RiakPbcConn) -> str:
+    if _RIAK_RECENT_KEYS and random.random() < 0.5:
+        k = random.choice(_RIAK_RECENT_KEYS)
+    else:
+        k = riak_randkey()
+    code, _ = c.call(RIAK_CODE_DEL_REQ, encode_rpb_del_req(RIAK_BUCKET, k))
+    if code != RIAK_CODE_DEL_RESP:
+        raise RiakPbcError("unexpected del reply code %d" % code)
+    return "Del"
+
+
+RIAK_WORKLOADS = [
+    ("riak", workload_riak_ping, 30),
+    ("riak", workload_riak_put, 30),
+    ("riak", workload_riak_get, 30),
+    ("riak", workload_riak_del, 10),
+]
+
+
 # --- driver loop ---
 
 
@@ -588,7 +909,10 @@ def main() -> int:
                    help="seconds; 0 means until SIGTERM")
     p.add_argument("--mode", default="redis",
                    choices=("redis", "memcache", "riak"),
-                   help="protocol to drive; riak falls back to redis")
+                   help="protocol to drive")
+    p.add_argument("--riak-pbc-port", type=int, default=21800,
+                   help="Riak PBC listener port (only used when "
+                        "--mode riak); defaults to 21800")
     args = p.parse_args()
 
     signal.signal(signal.SIGTERM, _stop)
@@ -606,18 +930,18 @@ def main() -> int:
     started = time.monotonic()
 
     effective_mode = args.mode
-    if args.mode == "riak":
-        print(
-            f"[{args.label}] WARNING: Riak mode requires the dyn-riak "
-            f"crate, not yet available; falling back to redis",
-            file=sys.stderr, flush=True,
-        )
-        effective_mode = "redis"
 
     if effective_mode == "memcache":
         workloads = MEMCACHE_WORKLOADS
         conn = MemcacheConn(args.host, args.port)
         net_errors = (MemcacheError, ConnectionError, socket.timeout, OSError)
+    elif effective_mode == "riak":
+        workloads = RIAK_WORKLOADS
+        # Riak PBC binds to its own port (riak.pbc_listen),
+        # not the engine's client_listen, so we ignore --port
+        # and dial --riak-pbc-port instead.
+        conn = RiakPbcConn(args.host, args.riak_pbc_port)
+        net_errors = (RiakPbcError, ConnectionError, socket.timeout, OSError)
     else:
         workloads = WORKLOADS
         conn = RespConn(args.host, args.port)
@@ -690,5 +1014,102 @@ def main() -> int:
     return 0
 
 
+# --- unit tests ---
+#
+# Run with ``python3 workload-driver.py --self-test``. The chaos
+# coordinator never invokes this path; CI does, before promoting
+# a build to a chaos host.
+
+
+class _RiakPbcEncodingTests(unittest.TestCase):
+    def test_varint_round_trip(self) -> None:
+        for n in [0, 1, 127, 128, 255, 256, 16383, 16384, 1 << 20, 1 << 32]:
+            buf = _pb_encode_varint(n)
+            decoded, pos = _pb_decode_varint(buf, 0)
+            self.assertEqual(decoded, n)
+            self.assertEqual(pos, len(buf))
+
+    def test_ping_req_is_empty(self) -> None:
+        body = encode_rpb_ping_req()
+        self.assertEqual(body, b"")
+        # Frame layout for ping: length=1 (just the code), code=1.
+        # We assemble the frame the way RiakPbcConn.call would.
+        frame = struct.pack(">I", 1 + len(body)) + bytes([RIAK_CODE_PING_REQ]) + body
+        self.assertEqual(frame, b"\x00\x00\x00\x01\x01")
+
+    def test_put_req_wire_bytes(self) -> None:
+        # bucket=foo (3 bytes), key=bar (3 bytes), value=baz (3 bytes)
+        # at field tags 1, 2, 4 respectively. Each field is
+        # tag-byte (single-byte varint for these field numbers)
+        # then length-byte then the bytes.
+        #   field 1 bytes: tag=0x0a, len=0x03, b"foo"
+        #   field 2 bytes: tag=0x12, len=0x03, b"bar"
+        #   field 4 bytes: tag=0x22, len=0x03, b"baz"
+        body = encode_rpb_put_req(b"foo", b"bar", b"baz")
+        expected = (
+            b"\x0a\x03foo"
+            b"\x12\x03bar"
+            b"\x22\x03baz"
+        )
+        self.assertEqual(body, expected)
+
+    def test_get_req_wire_bytes(self) -> None:
+        body = encode_rpb_get_req(b"chaos", b"k01234567")
+        expected = (
+            b"\x0a\x05chaos"
+            b"\x12\x09k01234567"
+        )
+        self.assertEqual(body, expected)
+
+    def test_del_req_wire_bytes(self) -> None:
+        body = encode_rpb_del_req(b"chaos", b"k01234567")
+        expected = (
+            b"\x0a\x05chaos"
+            b"\x12\x09k01234567"
+        )
+        self.assertEqual(body, expected)
+
+    def test_error_resp_round_trips(self) -> None:
+        # Build an RpbErrorResp(errmsg="boom", errcode=42) by hand
+        # and confirm decode_rpb_error_resp recovers both fields.
+        errmsg = b"boom"
+        errcode = 42
+        body = (
+            _pb_encode_bytes_field(1, errmsg)
+            + _pb_encode_tag(2, _PB_WIRE_VARINT)
+            + _pb_encode_varint(errcode)
+        )
+        got_msg, got_code = decode_rpb_error_resp(body)
+        self.assertEqual(got_msg, errmsg)
+        self.assertEqual(got_code, errcode)
+
+    def test_error_resp_skips_unknown_fields(self) -> None:
+        # An RpbErrorResp that also carries a hypothetical field 3
+        # varint should still decode the known fields.
+        body = (
+            _pb_encode_bytes_field(1, b"oops")
+            + _pb_encode_tag(3, _PB_WIRE_VARINT)
+            + _pb_encode_varint(99)
+            + _pb_encode_tag(2, _PB_WIRE_VARINT)
+            + _pb_encode_varint(7)
+        )
+        got_msg, got_code = decode_rpb_error_resp(body)
+        self.assertEqual(got_msg, b"oops")
+        self.assertEqual(got_code, 7)
+
+    def test_long_value_uses_multi_byte_length(self) -> None:
+        # A 200-byte value forces the length varint to use two
+        # bytes (200 = 0xc8 = 0b11001000 -> 0xc8 0x01).
+        big = b"x" * 200
+        body = encode_rpb_put_req(b"b", b"k", big)
+        # field 4 tag=0x22, len varint = 0xc8 0x01, then 200 bytes
+        idx = body.index(b"\x22\xc8\x01")
+        self.assertEqual(body[idx + 3:idx + 3 + 200], big)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    if "--self-test" in sys.argv:
+        sys.argv.remove("--self-test")
+        unittest.main(argv=sys.argv, verbosity=2)
+    else:
+        sys.exit(main())
