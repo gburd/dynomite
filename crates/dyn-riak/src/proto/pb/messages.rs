@@ -85,6 +85,31 @@ pub enum MessageCode {
     MapRedReq = 23,
     /// `RpbMapRedResp` -- 24. MapReduce response slice.
     MapRedResp = 24,
+    /// `DynRpbListPeersReq` -- 200. Dynomite admin extension:
+    /// request the gossip peer table.
+    DynListPeersReq = 200,
+    /// `DynRpbListPeersResp` -- 201.
+    DynListPeersResp = 201,
+    /// `DynRpbClusterJoinReq` -- 202. Dynomite admin extension:
+    /// stage a peer-join.
+    DynClusterJoinReq = 202,
+    /// `DynRpbClusterJoinResp` -- 203.
+    DynClusterJoinResp = 203,
+    /// `DynRpbClusterLeaveReq` -- 204. Dynomite admin extension:
+    /// stage a peer-leave.
+    DynClusterLeaveReq = 204,
+    /// `DynRpbClusterLeaveResp` -- 205.
+    DynClusterLeaveResp = 205,
+    /// `DynRpbClusterPlanReq` -- 206. Dynomite admin extension:
+    /// fetch staged-but-uncommitted changes.
+    DynClusterPlanReq = 206,
+    /// `DynRpbClusterPlanResp` -- 207.
+    DynClusterPlanResp = 207,
+    /// `DynRpbClusterCommitReq` -- 208. Dynomite admin extension:
+    /// commit every staged change.
+    DynClusterCommitReq = 208,
+    /// `DynRpbClusterCommitResp` -- 209.
+    DynClusterCommitResp = 209,
 }
 
 impl MessageCode {
@@ -114,6 +139,16 @@ impl MessageCode {
             26 => Self::IndexResp,
             23 => Self::MapRedReq,
             24 => Self::MapRedResp,
+            200 => Self::DynListPeersReq,
+            201 => Self::DynListPeersResp,
+            202 => Self::DynClusterJoinReq,
+            203 => Self::DynClusterJoinResp,
+            204 => Self::DynClusterLeaveReq,
+            205 => Self::DynClusterLeaveResp,
+            206 => Self::DynClusterPlanReq,
+            207 => Self::DynClusterPlanResp,
+            208 => Self::DynClusterCommitReq,
+            209 => Self::DynClusterCommitResp,
             other => return Err(other),
         })
     }
@@ -1180,5 +1215,392 @@ mod tests {
         let back = RpbIndexReq::decode(bytes.as_slice()).expect("decode");
         assert_eq!(back, req);
         assert_eq!(back.qtype, 0);
+    }
+}
+
+// ---- Dynomite cluster admin extension --------------------------------------
+//
+// The Dynomite admin RPCs use message codes in the 200-209 range
+// to avoid colliding with any Riak code reserved for future use.
+// Each request / response pair is hand-rolled `prost::Message` with
+// stable field tags so a `dyn-admin` client and a `dyn-riak` server
+// agree byte-for-byte on every wire field.
+
+/// `DynRpbPeerInfo` -- one peer's view as returned by
+/// [`DynRpbListPeersResp`] and embedded in [`DynRpbStagedChange`].
+///
+/// The token list is rendered as decimal-string bytes so the
+/// admin client can echo it back unchanged in the human and JSON
+/// renderings without round-tripping through `u32`.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbPeerInfo {
+    /// Peer index (zero is the local node by convention).
+    #[prost(uint32, tag = "1")]
+    pub idx: u32,
+    /// Datacenter name.
+    #[prost(bytes = "vec", tag = "2")]
+    pub dc: Vec<u8>,
+    /// Rack name.
+    #[prost(bytes = "vec", tag = "3")]
+    pub rack: Vec<u8>,
+    /// Hostname or IP.
+    #[prost(bytes = "vec", tag = "4")]
+    pub host: Vec<u8>,
+    /// TCP port.
+    #[prost(uint32, tag = "5")]
+    pub port: u32,
+    /// Token list, each entry rendered as decimal-string bytes
+    /// (matches what the engine emits in seed-list blobs).
+    #[prost(bytes = "vec", repeated, tag = "6")]
+    pub tokens: Vec<Vec<u8>>,
+    /// Lifecycle state name (`UNKNOWN`, `JOINING`, `NORMAL`,
+    /// `STANDBY`, `DOWN`, `RESET`, `LEAVING`).
+    #[prost(bytes = "vec", tag = "7")]
+    pub state: Vec<u8>,
+    /// True for the local peer.
+    #[prost(bool, tag = "8")]
+    pub is_local: bool,
+    /// True when the peer expects an encrypted dnode link.
+    /// Optional: defaults to false.
+    #[prost(bool, optional, tag = "9")]
+    pub is_secure: Option<bool>,
+}
+
+impl WireValue for DynRpbPeerInfo {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbPeerInfo")
+    }
+}
+
+/// `DynRpbStagedChange` -- one entry in the
+/// [`DynRpbClusterPlanResp`] list and the body of every
+/// [`DynRpbClusterJoinResp`] / [`DynRpbClusterLeaveResp`].
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbStagedChange {
+    /// Direction of the change. `1` = Add, `2` = Remove. Other
+    /// values are reserved.
+    #[prost(uint32, tag = "1")]
+    pub kind: u32,
+    /// Peer index targeted by a Remove change.
+    #[prost(uint32, optional, tag = "2")]
+    pub peer_idx: Option<u32>,
+    /// Peer description carried by an Add change.
+    #[prost(message, optional, tag = "3")]
+    pub peer: Option<DynRpbPeerInfo>,
+}
+
+impl WireValue for DynRpbStagedChange {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbStagedChange")
+    }
+}
+
+/// `DynRpbStagedChange::kind` value for an Add change.
+pub const DYN_STAGED_CHANGE_ADD: u32 = 1;
+/// `DynRpbStagedChange::kind` value for a Remove change.
+pub const DYN_STAGED_CHANGE_REMOVE: u32 = 2;
+
+/// `DynRpbListPeersReq` -- empty request body. Sent under
+/// message code 200.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbListPeersReq {}
+
+impl WireValue for DynRpbListPeersReq {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbListPeersReq")
+    }
+}
+
+/// `DynRpbListPeersResp` -- response carrying every peer the
+/// gossip layer has seen.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbListPeersResp {
+    /// Peer entries.
+    #[prost(message, repeated, tag = "1")]
+    pub peers: Vec<DynRpbPeerInfo>,
+}
+
+impl WireValue for DynRpbListPeersResp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbListPeersResp")
+    }
+}
+
+/// `DynRpbClusterJoinReq` -- stage a peer-join.
+///
+/// The `target` field is a `host:port` string the server parses
+/// as a [`std::net::SocketAddr`] before staging the change.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbClusterJoinReq {
+    /// `host:port` of the peer to join.
+    #[prost(bytes = "vec", tag = "1")]
+    pub target: Vec<u8>,
+}
+
+impl WireValue for DynRpbClusterJoinReq {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbClusterJoinReq")
+    }
+}
+
+/// `DynRpbClusterJoinResp` -- response carrying the staged
+/// [`DynRpbStagedChange`].
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbClusterJoinResp {
+    /// The staged change.
+    #[prost(message, optional, tag = "1")]
+    pub change: Option<DynRpbStagedChange>,
+}
+
+impl WireValue for DynRpbClusterJoinResp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbClusterJoinResp")
+    }
+}
+
+/// `DynRpbClusterLeaveReq` -- stage a peer-leave.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbClusterLeaveReq {
+    /// Peer index to remove.
+    #[prost(uint32, tag = "1")]
+    pub peer_idx: u32,
+}
+
+impl WireValue for DynRpbClusterLeaveReq {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbClusterLeaveReq")
+    }
+}
+
+/// `DynRpbClusterLeaveResp` -- response carrying the staged
+/// [`DynRpbStagedChange`].
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbClusterLeaveResp {
+    /// The staged change.
+    #[prost(message, optional, tag = "1")]
+    pub change: Option<DynRpbStagedChange>,
+}
+
+impl WireValue for DynRpbClusterLeaveResp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbClusterLeaveResp")
+    }
+}
+
+/// `DynRpbClusterPlanReq` -- empty request body. Sent under
+/// message code 206.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbClusterPlanReq {}
+
+impl WireValue for DynRpbClusterPlanReq {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbClusterPlanReq")
+    }
+}
+
+/// `DynRpbClusterPlanResp` -- staged-but-uncommitted change list.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbClusterPlanResp {
+    /// Pending staged changes, in order of staging.
+    #[prost(message, repeated, tag = "1")]
+    pub changes: Vec<DynRpbStagedChange>,
+}
+
+impl WireValue for DynRpbClusterPlanResp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbClusterPlanResp")
+    }
+}
+
+/// `DynRpbClusterCommitReq` -- empty request body. Sent under
+/// message code 208.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbClusterCommitReq {}
+
+impl WireValue for DynRpbClusterCommitReq {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbClusterCommitReq")
+    }
+}
+
+/// `DynRpbClusterCommitResp` -- response carrying the number of
+/// changes that were applied.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbClusterCommitResp {
+    /// Count of changes that were applied.
+    #[prost(uint32, tag = "1")]
+    pub applied: u32,
+}
+
+impl WireValue for DynRpbClusterCommitResp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbClusterCommitResp")
+    }
+}
+
+#[cfg(test)]
+mod admin_tests {
+    use super::*;
+
+    #[test]
+    fn admin_message_codes_round_trip() {
+        for code in [
+            MessageCode::DynListPeersReq,
+            MessageCode::DynListPeersResp,
+            MessageCode::DynClusterJoinReq,
+            MessageCode::DynClusterJoinResp,
+            MessageCode::DynClusterLeaveReq,
+            MessageCode::DynClusterLeaveResp,
+            MessageCode::DynClusterPlanReq,
+            MessageCode::DynClusterPlanResp,
+            MessageCode::DynClusterCommitReq,
+            MessageCode::DynClusterCommitResp,
+        ] {
+            let byte = code.as_u8();
+            assert_eq!(MessageCode::from_u8(byte).expect("known"), code);
+        }
+    }
+
+    #[test]
+    fn list_peers_req_is_empty() {
+        let req = DynRpbListPeersReq::default();
+        assert!(req.encode_to_vec().is_empty());
+    }
+
+    #[test]
+    fn peer_info_round_trips() {
+        let info = DynRpbPeerInfo {
+            idx: 1,
+            dc: b"dc1".to_vec(),
+            rack: b"r1".to_vec(),
+            host: b"127.0.0.1".to_vec(),
+            port: 8101,
+            tokens: vec![b"42".to_vec(), b"7777".to_vec()],
+            state: b"NORMAL".to_vec(),
+            is_local: false,
+            is_secure: Some(true),
+        };
+        let bytes = info.encode_to_vec();
+        let back = DynRpbPeerInfo::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, info);
+    }
+
+    #[test]
+    fn list_peers_resp_round_trips() {
+        let resp = DynRpbListPeersResp {
+            peers: vec![
+                DynRpbPeerInfo {
+                    idx: 0,
+                    dc: b"dc1".to_vec(),
+                    rack: b"r1".to_vec(),
+                    host: b"10.0.0.1".to_vec(),
+                    port: 8101,
+                    tokens: vec![b"0".to_vec()],
+                    state: b"NORMAL".to_vec(),
+                    is_local: true,
+                    is_secure: None,
+                },
+                DynRpbPeerInfo {
+                    idx: 1,
+                    dc: b"dc1".to_vec(),
+                    rack: b"r1".to_vec(),
+                    host: b"10.0.0.2".to_vec(),
+                    port: 8101,
+                    tokens: vec![b"2147483648".to_vec()],
+                    state: b"DOWN".to_vec(),
+                    is_local: false,
+                    is_secure: None,
+                },
+            ],
+        };
+        let bytes = resp.encode_to_vec();
+        let back = DynRpbListPeersResp::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn join_req_resp_round_trips() {
+        let req = DynRpbClusterJoinReq {
+            target: b"127.0.0.1:8103".to_vec(),
+        };
+        let back = DynRpbClusterJoinReq::decode(req.encode_to_vec().as_slice()).expect("decode");
+        assert_eq!(back, req);
+        let resp = DynRpbClusterJoinResp {
+            change: Some(DynRpbStagedChange {
+                kind: DYN_STAGED_CHANGE_ADD,
+                peer_idx: None,
+                peer: Some(DynRpbPeerInfo {
+                    idx: 0,
+                    dc: b"dc1".to_vec(),
+                    rack: b"r1".to_vec(),
+                    host: b"127.0.0.1".to_vec(),
+                    port: 8103,
+                    tokens: vec![b"123".to_vec()],
+                    state: b"".to_vec(),
+                    is_local: false,
+                    is_secure: Some(false),
+                }),
+            }),
+        };
+        let back = DynRpbClusterJoinResp::decode(resp.encode_to_vec().as_slice()).expect("decode");
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn leave_req_resp_round_trips() {
+        let req = DynRpbClusterLeaveReq { peer_idx: 5 };
+        let back = DynRpbClusterLeaveReq::decode(req.encode_to_vec().as_slice()).expect("decode");
+        assert_eq!(back, req);
+        let resp = DynRpbClusterLeaveResp {
+            change: Some(DynRpbStagedChange {
+                kind: DYN_STAGED_CHANGE_REMOVE,
+                peer_idx: Some(5),
+                peer: None,
+            }),
+        };
+        let back = DynRpbClusterLeaveResp::decode(resp.encode_to_vec().as_slice()).expect("decode");
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn plan_round_trips() {
+        let req = DynRpbClusterPlanReq::default();
+        assert!(req.encode_to_vec().is_empty());
+        let resp = DynRpbClusterPlanResp {
+            changes: vec![
+                DynRpbStagedChange {
+                    kind: DYN_STAGED_CHANGE_ADD,
+                    peer_idx: None,
+                    peer: Some(DynRpbPeerInfo {
+                        idx: 0,
+                        dc: b"d".to_vec(),
+                        rack: b"r".to_vec(),
+                        host: b"h".to_vec(),
+                        port: 1,
+                        tokens: vec![b"1".to_vec()],
+                        state: b"".to_vec(),
+                        is_local: false,
+                        is_secure: None,
+                    }),
+                },
+                DynRpbStagedChange {
+                    kind: DYN_STAGED_CHANGE_REMOVE,
+                    peer_idx: Some(2),
+                    peer: None,
+                },
+            ],
+        };
+        let back = DynRpbClusterPlanResp::decode(resp.encode_to_vec().as_slice()).expect("decode");
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn commit_round_trips() {
+        let req = DynRpbClusterCommitReq::default();
+        assert!(req.encode_to_vec().is_empty());
+        let resp = DynRpbClusterCommitResp { applied: 7 };
+        let back =
+            DynRpbClusterCommitResp::decode(resp.encode_to_vec().as_slice()).expect("decode");
+        assert_eq!(back, resp);
     }
 }

@@ -9,24 +9,30 @@ shipped by `dyn-riak` (PBC) and `dynomite` (the `/stats` and
 `/metrics` HTTP endpoints). It does not run a daemon and does not
 hold any state of its own.
 
-## Subcommands (v0)
+## Subcommands
 
 ```text
 dyn-admin <COMMAND>
 
 Commands:
-  status         Print node identity (PBC) plus a stats summary (HTTP)
-  ring-status    Print the ring/topology view
-  stats          Pretty-print key metrics from /stats
-  metrics        Print the Prometheus text endpoint verbatim
-  ping           Send a PBC ping and report RTT
-  cluster-list   List cluster peers reachable through the seed
+  status           Print node identity (PBC) plus a stats summary (HTTP)
+  ring-status      Print the ring/topology view
+  stats            Pretty-print key metrics from /stats
+  metrics          Print the Prometheus text endpoint verbatim
+  ping             Send a PBC ping and report RTT
+  cluster-list     List cluster peers reachable through the seed
+  cluster-join     Stage a peer-join
+  cluster-leave    Stage a peer-leave
+  cluster-plan     Show staged-but-uncommitted cluster changes
+  cluster-commit   Commit every staged cluster change
 ```
 
 Every subcommand accepts `--node <host:port>` (PBC by default,
 HTTP for `stats` and `metrics`) and, where it makes sense,
-`--json` for machine output. The defaults match the `dynomited`
-binary shipped in this workspace:
+`--json` for machine output. The `cluster-list` subcommand uses
+`--seed` instead of `--node` to make the seed-discovery semantics
+explicit. The defaults match the `dynomited` binary shipped in
+this workspace:
 
 * PBC: `127.0.0.1:8087`
 * Stats / metrics: `127.0.0.1:22222`
@@ -58,22 +64,50 @@ $ dyn-admin stats --json | jq '.dyn_o_mite.client_eof'
 $ dyn-admin metrics > /tmp/scrape.prom
 ```
 
-## Deferred subcommands
+## Cluster mutation flow
 
-The following `riak-admin` mutating commands are documented in
-`docs/riak-compat-plan.md` Section 5 but intentionally absent in
-v0; the substrate does not yet expose the gossip-state mutations
-they require:
+The four cluster-mutation commands follow Riak's standard
+stage-then-commit ritual:
 
-* `cluster-join`
-* `cluster-leave`
-* `cluster-plan`
-* `cluster-commit`
+```sh
+$ dyn-admin cluster-join 10.0.0.5:8101
+Staged cluster-join via 127.0.0.1:8087
+  target: 10.0.0.5:8101
+  kind: add
+  peer:
+    host: 10.0.0.5
+    port: 8101
+    dc: dc1
+    rack: r1
+    tokens: 3829148213
 
-Invoking any of these names is rejected by clap as an unknown
-subcommand. Once the substrate ships the underlying admin-only
-DNODE message family, each is added as a fresh `clap` variant.
-See `docs/journal/2026-05-24-dyn-admin-v0.md` for the full plan.
+Run `dyn-admin cluster-commit` to apply.
+
+$ dyn-admin cluster-plan
+Pending staged changes on 127.0.0.1:8087
+
+  [0]
+    kind: add
+    peer:
+      host: 10.0.0.5
+      ...
+
+1 change(s) staged.
+
+$ dyn-admin cluster-commit
+Committed 1 staged change(s) on 127.0.0.1:8087
+```
+
+`cluster-leave <peer-idx>` stages a removal the same way; the
+operator runs `cluster-commit` to apply both adds and removes
+atomically under the gossip mutex. The commit fans the change
+out via the existing gossip protocol so the rest of the cluster
+converges on the new ring.
+
+When the substrate is run with `dynomite::cluster::NoopClusterAdmin`
+(the default for embeddings that do not opt in) every mutation
+is rejected at the server with `cluster admin RPC not configured
+on this node`.
 
 ## Architecture
 
