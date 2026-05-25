@@ -77,12 +77,38 @@ impl EntropySender {
     /// Forwards anything from key loading, source acquisition,
     /// dialing, or transport.
     pub async fn push(cfg: EntropyConfig, source: BoxedSnapshotSource) -> EntropyResult<usize> {
+        Self::push_with_material(cfg, source, None).await
+    }
+
+    /// Perform one snapshot push using a pre-loaded
+    /// [`EntropyMaterial`].
+    ///
+    /// When `override_material` is `None` and `cfg.encrypt` is
+    /// set, key + IV bytes are loaded from `cfg.key_file` /
+    /// `cfg.iv_file` (the historical behaviour). When
+    /// `override_material` is `Some(_)`, the supplied material is
+    /// used verbatim and the on-disk paths are not touched. The
+    /// override is consumed by the [`crate::entropy::driver::EntropyDriver`]
+    /// run loop, which loads the AES material once at startup
+    /// and drives many cycles from the same handle.
+    ///
+    /// # Errors
+    /// Forwards anything from key loading (when no override is
+    /// supplied), source acquisition, dialing, or transport.
+    pub async fn push_with_material(
+        cfg: EntropyConfig,
+        source: BoxedSnapshotSource,
+        override_material: Option<EntropyMaterial>,
+    ) -> EntropyResult<usize> {
         cfg.validate()?;
         let material = if cfg.encrypt {
-            Some(crate::entropy::util::load_material(
-                &cfg.key_file,
-                &cfg.iv_file,
-            )?)
+            match override_material {
+                Some(m) => Some(m),
+                None => Some(crate::entropy::util::load_material(
+                    &cfg.key_file,
+                    &cfg.iv_file,
+                )?),
+            }
         } else {
             None
         };

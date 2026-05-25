@@ -572,6 +572,11 @@ next to its only consumer.
 | (new) | `dynomite::entropy::receive::RedisReplaySink` | default snapshot sink: writes the decrypted blob to a fresh Redis TCP connection. |
 | (new) | `dynomite::entropy::NegotiationHeader` / `SnapshotHeader` | typed wire-frame helpers for the negotiation and per-snapshot headers. |
 | (new) | `dynomite::entropy::EntropyError` | typed error union for the entropy module (I/O, config, key material, protocol, crypto, source, sink). |
+| (new) | `dynomite::entropy::driver::EntropyDriver` | periodic reconciliation driver: walks `ServerPool::peers()` at the configured cadence and pushes a snapshot to each non-local peer. Spawned by `dynomited::server::Server::run` when `recon_key_file:` resolves to a readable AES key + IV pair. |
+| (new) | `dynomite::entropy::driver::reconcile_with_peer` | one-shot helper that performs a single reconcile cycle against a `PeerEndpoint`. Used by the driver and by tests that drive the cycle deterministically. |
+| (new) | `dynomite::entropy::driver::ReconCycle` | per-cycle counters (peers_attempted, peers_exchanged, ranges_diverged, ranges_repaired) emitted at INFO level on every tick. |
+| (new) | `dynomite::conf::ConfPool::recon_interval_seconds` | YAML knob for the entropy run-loop cadence (default 300s, ignored when the entropy task is not enabled). |
+| (new) | `dynomite::entropy::send::EntropySender::push_with_material` | inner variant of `push` that accepts an already-loaded `EntropyMaterial` so the driver can load the key once at startup and reuse it across many cycles. |
 
 ## src/dyn_server.{c,h} (Stage 10)
 
