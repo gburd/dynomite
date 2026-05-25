@@ -356,3 +356,122 @@ async fn riak_pbc_2i_against_noxu_round_trip() {
         .expect("join");
     assert!(res.is_ok(), "run returned: {res:?}");
 }
+
+/// Integration test for the `riak.wasm_modules:` YAML block.
+///
+/// Drives the full happy path:
+///   1. Write a tiny identity WAT module to disk under a
+///      `tempfile::tempdir()`.
+///   2. Build a `ConfRiak` referencing the file by `id` /
+///      `path`. Validate it (catches the new uniqueness +
+///      file-exists checks).
+///   3. Call [`dynomited::riak::build_wasm_store_from_config`]
+///      which is the same loader the server's startup wiring
+///      goes through. Confirm the resulting store contains the
+///      expected `id`.
+///   4. Pass the store through to the MapReduce executor and
+///      submit a `Phase::WasmModule { module_id }` job; assert
+///      that the executor accepts the phase (no
+///      `WasmModuleNotFound`, no `WasmNotImplemented`) and the
+///      identity module round-trips its inputs.
+#[cfg(feature = "wasm")]
+#[tokio::test]
+async fn riak_wasm_modules_yaml_loads_and_executor_accepts_phase() {
+    use std::sync::Arc;
+
+    use dyn_riak::mapreduce::{
+        builtins::default_registry, run_job_with_wasm, Inputs, KeyDatum, MapReduceJob, Phase,
+        WasmHook,
+    };
+    use dynomite::conf::{ConfRiak, ConfRiakWasmModule};
+
+    /// Identity module: copies the inbound CBOR-encoded
+    /// `Vec<Value>` straight back to the host.
+    const IDENTITY_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (global $heap_top (mut i32) (i32.const 1024))
+          (func $alloc_inner (param $len i32) (result i32)
+            (local $ptr i32)
+            (local.set $ptr (global.get $heap_top))
+            (global.set $heap_top
+              (i32.add (global.get $heap_top) (local.get $len)))
+            (local.get $ptr))
+          (func (export "phase_alloc") (param $len i32) (result i32)
+            (call $alloc_inner (local.get $len)))
+          (func (export "phase_apply")
+            (param $in_ptr i32) (param $in_len i32)
+            (param $out_ptr_ptr i32) (param $out_len_ptr i32)
+            (result i32)
+            (local $out_buf i32)
+            (local.set $out_buf (call $alloc_inner (local.get $in_len)))
+            (memory.copy
+              (local.get $out_buf)
+              (local.get $in_ptr)
+              (local.get $in_len))
+            (i32.store (local.get $out_ptr_ptr) (local.get $out_buf))
+            (i32.store (local.get $out_len_ptr) (local.get $in_len))
+            (i32.const 0)))
+    "#;
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let path = tmp.path().join("identity.wat");
+    std::fs::write(&path, IDENTITY_WAT).expect("write wat");
+
+    let cfg = ConfRiak {
+        wasm_modules: Some(vec![ConfRiakWasmModule {
+            id: "identity".into(),
+            path: path.clone(),
+        }]),
+        ..ConfRiak::default()
+    };
+    cfg.validate().expect("validate ok");
+
+    let store = dynomited::riak::build_wasm_store_from_config(&cfg)
+        .expect("build store")
+        .expect("store is Some when wasm_modules has entries");
+    assert!(store.contains("identity"));
+    assert_eq!(store.count(), 1);
+
+    let hook: Arc<dyn WasmHook> = store.clone();
+    let job = MapReduceJob {
+        inputs: Inputs::KeyData(vec![
+            KeyDatum::with_value("b", "k1", serde_json::json!(10)),
+            KeyDatum::with_value("b", "k2", serde_json::json!(20)),
+        ]),
+        phases: vec![Phase::WasmModule {
+            module_id: "identity".into(),
+            fn_name: "apply".into(),
+            arg: None,
+            keep: true,
+        }],
+        timeout_ms: None,
+    };
+    let registry = Arc::new(default_registry());
+    let outputs = run_job_with_wasm(job, registry, Some(hook))
+        .await
+        .expect("executor accepts Phase::WasmModule");
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].value["bucket"], "b");
+    assert_eq!(outputs[0].value["value"], serde_json::json!(10));
+}
+
+/// Negative-path integration test: the validator must catch
+/// non-existent paths before the loader runs, so the operator
+/// gets a clear error at config time rather than a vague
+/// I/O failure at startup.
+#[cfg(feature = "wasm")]
+#[tokio::test]
+async fn riak_wasm_modules_validate_rejects_missing_path() {
+    use dynomite::conf::{ConfRiak, ConfRiakWasmModule};
+    let cfg = ConfRiak {
+        wasm_modules: Some(vec![ConfRiakWasmModule {
+            id: "missing".into(),
+            path: std::path::PathBuf::from("/no/such/path/at/all.wasm"),
+        }]),
+        ..ConfRiak::default()
+    };
+    let err = cfg.validate().expect_err("missing path must reject");
+    let msg = err.to_string();
+    assert!(msg.contains("wasm_modules.path"), "unexpected error: {msg}");
+}
