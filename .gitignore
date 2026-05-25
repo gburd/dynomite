@@ -6,6 +6,8 @@
 *.swp
 *.bak
 *.orig
+*.pyc
+__pycache__/
 .aider*
 .pi/
 .history
