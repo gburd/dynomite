@@ -462,7 +462,9 @@ impl WireValue for DtFetchReq {
 pub struct DtFetchResp {
     /// Opaque conflict-resolution context. Clients echo this
     /// back on the next `DtUpdateReq` so the server can compute
-    /// a correct OR-Set tombstone or map-field disable.
+    /// a correct OR-Set tombstone or map-field disable. In
+    /// Riak mode the bytes are a [`DvvSet`-encoded](crate::datatypes::DvvSet)
+    /// causality clock; clients treat the value as opaque.
     #[prost(bytes = "vec", optional, tag = "1")]
     pub context: Option<Vec<u8>>,
     /// Datatype id; one of [`DATA_TYPE_COUNTER`],
@@ -963,5 +965,78 @@ mod tests {
         let bytes = resp.encode_to_vec();
         let back = DtUpdateResp::decode(bytes.as_slice()).expect("decode");
         assert_eq!(back, resp);
+    }
+
+    // ---- DvvSet context-blob round trips ----------------------------
+    //
+    // The Riak `context` byte string is opaque to clients (clients
+    // round-trip whatever the server sends back). The dyn-riak
+    // Riak-mode default is `DvvSet`-encoded context blobs. The
+    // tests below exercise the encode -> protobuf -> decode -> compare
+    // path on both `DtFetchResp.context` and `DtUpdateReq.context` so
+    // a regression in either direction is caught at this seam.
+
+    #[test]
+    fn dvvset_round_trips_through_dt_fetch_resp_context() {
+        use crate::datatypes::{ActorId, DvvSet};
+        let mut clock = DvvSet::new();
+        clock.update(&ActorId::new("dc1", "alpha"));
+        clock.update(&ActorId::new("dc1", "alpha"));
+        clock.update(&ActorId::new("dc2", "beta"));
+        let ctx = clock.encode();
+        let resp = DtFetchResp {
+            context: Some(ctx.clone()),
+            r#type: DATA_TYPE_COUNTER,
+            value: Some(DtValue {
+                counter_value: Some(7),
+                ..DtValue::default()
+            }),
+        };
+        let bytes = resp.encode_to_vec();
+        let back = DtFetchResp::decode(bytes.as_slice()).expect("decode");
+        let echoed = back.context.expect("context present");
+        assert_eq!(echoed, ctx);
+        let recovered = DvvSet::decode(&echoed).expect("DvvSet decode");
+        assert_eq!(recovered, clock);
+    }
+
+    #[test]
+    fn dvvset_round_trips_through_dt_update_req_context() {
+        use crate::datatypes::{ActorId, DvvSet};
+        let mut clock = DvvSet::new();
+        clock.update(&ActorId::new("dc1", "writer"));
+        let ctx = clock.encode();
+        let req = DtUpdateReq {
+            bucket: b"b".to_vec(),
+            key: Some(b"k".to_vec()),
+            r#type: b"counters".to_vec(),
+            context: Some(ctx.clone()),
+            op: Some(DtOp {
+                counter_op: Some(CounterOp { increment: Some(1) }),
+                ..DtOp::default()
+            }),
+            ..DtUpdateReq::default()
+        };
+        let bytes = req.encode_to_vec();
+        let back = DtUpdateReq::decode(bytes.as_slice()).expect("decode");
+        let echoed = back.context.expect("context present");
+        let recovered = DvvSet::decode(&echoed).expect("DvvSet decode");
+        assert_eq!(recovered, clock);
+    }
+
+    #[test]
+    fn empty_dvvset_context_blob_round_trips() {
+        use crate::datatypes::DvvSet;
+        let ctx = DvvSet::new().encode();
+        let resp = DtFetchResp {
+            context: Some(ctx.clone()),
+            r#type: DATA_TYPE_SET,
+            value: None,
+        };
+        let bytes = resp.encode_to_vec();
+        let back = DtFetchResp::decode(bytes.as_slice()).expect("decode");
+        let echoed = back.context.expect("context present");
+        let recovered = DvvSet::decode(&echoed).expect("DvvSet decode");
+        assert!(recovered.is_empty());
     }
 }

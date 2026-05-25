@@ -10,20 +10,21 @@
 //! production wiring trampolines [`RepairTask`]s through that
 //! same map.
 //!
-//! # Vclock comparison
+//! # Causality comparison
 //!
-//! The merkle tree treats vclocks as opaque bytes (see
-//! [`crate::aae::tictac::KeyEntry`]). The repair scheduler's
-//! winner-selection policy is therefore pluggable via the
-//! [`VClockOrder`] trait. The default impl
+//! The merkle tree treats causality contexts as opaque bytes
+//! (see [`crate::aae::tictac::KeyEntry`]). The repair
+//! scheduler's winner-selection policy is therefore pluggable
+//! via the [`VClockOrder`] trait. The default impl
 //! ([`LexicographicOrder`]) treats the longer or
 //! lexicographically-greater byte slice as the winner; a
-//! production wiring should swap in a real Riak vector-clock
-//! comparator (`vclock:descends/2`).
+//! production wiring should swap in a real causality comparator
+//! (the [`crate::datatypes::DvvSet`] DVV form is the project
+//! default and supersedes the legacy `Vclock`).
 //!
 //! # Edge cases
 //!
-//! * A divergence whose only entry has an unparseable vclock
+//! * A divergence whose only entry has an unparseable context
 //!   surfaces an [`Outcome::AmbiguousVClock`] event; the
 //!   scheduler does NOT silently drop it.
 //! * A peer whose outbound channel is closed surfaces an
@@ -37,7 +38,7 @@ use tokio::sync::mpsc;
 
 use crate::aae::exchange::Divergence;
 use crate::aae::tictac::KeyEntry;
-use crate::datatypes::vclock::{Vclock, VclockOrder};
+use crate::datatypes::dvv::{DvvOrder, DvvSet};
 
 /// Direction marker for a repair: which side carries the winner
 /// vclock.
@@ -64,15 +65,15 @@ pub enum RepairDirection {
 /// ```
 /// use bytes::Bytes;
 /// use dyn_riak::aae::repair::{RepairOutcome, RepairTask};
-/// use dyn_riak::datatypes::{ActorId, Vclock};
+/// use dyn_riak::datatypes::{ActorId, DvvSet};
 ///
 /// // Build two clocks where `a` strictly dominates `b`.
 /// let actor = ActorId::new("dc1", "peer");
-/// let mut a = Vclock::new();
-/// a.increment(&actor);
-/// a.increment(&actor);
-/// let mut b = Vclock::new();
-/// b.increment(&actor);
+/// let mut a = DvvSet::new();
+/// a.update(&actor);
+/// a.update(&actor);
+/// let mut b = DvvSet::new();
+/// b.update(&actor);
 ///
 /// let replicas = vec![
 ///     (Bytes::from_static(b"v_a"), a),
@@ -90,37 +91,37 @@ pub enum RepairOutcome {
     Winner {
         /// The winning value bytes.
         value: Bytes,
-        /// The winner's vector clock.
-        vclock: Vclock,
+        /// The winner's causality clock.
+        dvv: DvvSet,
     },
     /// Two or more replicas hold concurrent (or equal) clocks
     /// after every dominated entry has been removed; the
     /// caller decides whether to store siblings, log a
     /// warning, or fall back to a tiebreaker.
-    Siblings(Vec<(Bytes, Vclock)>),
+    Siblings(Vec<(Bytes, DvvSet)>),
 }
 
 impl RepairOutcome {
-    /// Resolve the outcome to a single `(value, vclock)` pair,
+    /// Resolve the outcome to a single `(value, dvv)` pair,
     /// emitting a `tracing::warn!` event when the outcome is
     /// [`RepairOutcome::Siblings`]. The fallback selection rule
     /// is the lexicographically-largest sibling value, with
-    /// ties broken by the encoded vclock bytes; this matches
+    /// ties broken by the encoded clock bytes; this matches
     /// the v1 "siblings as deferred follow-up" plan called out
     /// on the brief.
     ///
     /// `key` is reported alongside the warning so operators can
     /// correlate sibling events with specific Riak objects.
     #[must_use]
-    pub fn resolve_with_warn(self, key: &[u8]) -> (Bytes, Vclock) {
+    pub fn resolve_with_warn(self, key: &[u8]) -> (Bytes, DvvSet) {
         match self {
-            Self::Winner { value, vclock } => (value, vclock),
+            Self::Winner { value, dvv } => (value, dvv),
             Self::Siblings(siblings) => {
                 tracing::warn!(
                     target: "dyn_riak::aae::repair",
                     key = %String::from_utf8_lossy(key),
                     siblings = siblings.len(),
-                    "sibling-aware merge: concurrent vclocks; falling back to lex-largest value"
+                    "sibling-aware merge: concurrent clocks; falling back to lex-largest value"
                 );
                 siblings
                     .into_iter()
@@ -152,13 +153,13 @@ pub struct RepairTask {
 impl RepairTask {
     /// Cross-replica winner selection.
     ///
-    /// Given the `(value, vclock)` pair fetched from each of
+    /// Given the `(value, dvv)` pair fetched from each of
     /// the `N` replicas of one key, return [`RepairOutcome::Winner`]
     /// when exactly one entry survives the dominance filter
     /// and [`RepairOutcome::Siblings`] otherwise. An entry is
-    /// dominated when at least one other entry's vector clock
-    /// strictly succeeds it under [`Vclock::compare`]. Entries
-    /// whose clocks are pairwise [`VclockOrder::Equal`] are
+    /// dominated when at least one other entry's clock
+    /// strictly succeeds it under [`DvvSet::compare`]. Entries
+    /// whose clocks are pairwise [`DvvOrder::Equal`] are
     /// deduplicated by their encoded clock bytes so identical
     /// state across replicas does not surface as siblings.
     ///
@@ -169,7 +170,7 @@ impl RepairTask {
     /// expected to filter out that degenerate case before
     /// calling.
     #[must_use]
-    pub fn evaluate(replicas: &[(Bytes, Vclock)]) -> RepairOutcome {
+    pub fn evaluate(replicas: &[(Bytes, DvvSet)]) -> RepairOutcome {
         let n = replicas.len();
         let mut keep = vec![true; n];
         for i in 0..n {
@@ -181,12 +182,12 @@ impl RepairTask {
                     continue;
                 }
                 match replicas[i].1.compare(&replicas[j].1) {
-                    VclockOrder::Less => {
+                    DvvOrder::Less => {
                         // i is strictly dominated by j; drop i.
                         keep[i] = false;
                         break;
                     }
-                    VclockOrder::Equal if i > j => {
+                    DvvOrder::Equal if i > j => {
                         // Deduplicate identical clocks: keep
                         // the lower index, drop the higher.
                         keep[i] = false;
@@ -196,7 +197,7 @@ impl RepairTask {
                 }
             }
         }
-        let surviving: Vec<(Bytes, Vclock)> = replicas
+        let surviving: Vec<(Bytes, DvvSet)> = replicas
             .iter()
             .zip(keep.iter())
             .filter_map(|((v, c), &k)| {
@@ -208,8 +209,8 @@ impl RepairTask {
             })
             .collect();
         if surviving.len() == 1 {
-            let (value, vclock) = surviving.into_iter().next().expect("len == 1");
-            RepairOutcome::Winner { value, vclock }
+            let (value, dvv) = surviving.into_iter().next().expect("len == 1");
+            RepairOutcome::Winner { value, dvv }
         } else {
             RepairOutcome::Siblings(surviving)
         }
@@ -433,10 +434,10 @@ mod tests {
         ActorId::new("dc1", peer)
     }
 
-    fn vc(actor: &ActorId, ticks: u64) -> Vclock {
-        let mut v = Vclock::new();
+    fn vc(actor: &ActorId, ticks: u64) -> DvvSet {
+        let mut v = DvvSet::new();
         for _ in 0..ticks {
-            v.increment(actor);
+            v.update(actor);
         }
         v
     }
@@ -556,9 +557,9 @@ mod tests {
             (Bytes::from_static(b"v_c"), c),
         ];
         match RepairTask::evaluate(&replicas) {
-            RepairOutcome::Winner { value, vclock } => {
+            RepairOutcome::Winner { value, dvv } => {
                 assert_eq!(value, Bytes::from_static(b"v_a"));
-                assert_eq!(vclock, a);
+                assert_eq!(dvv, a);
             }
             RepairOutcome::Siblings(s) => panic!("expected Winner, got Siblings({})", s.len()),
         }
@@ -592,9 +593,9 @@ mod tests {
         // Siblings([A, C]).
         let p1 = aid("p1");
         let p2 = aid("p2");
-        let mut a = Vclock::new();
-        a.increment(&p1);
-        a.increment(&p1);
+        let mut a = DvvSet::new();
+        a.update(&p1);
+        a.update(&p1);
         let b = vc(&p1, 1);
         let c = vc(&p2, 1);
         let replicas = vec![
@@ -626,9 +627,9 @@ mod tests {
             (Bytes::from_static(b"v_a_dup"), a.clone()),
         ];
         match RepairTask::evaluate(&replicas) {
-            RepairOutcome::Winner { value, vclock } => {
+            RepairOutcome::Winner { value, dvv } => {
                 assert_eq!(value, Bytes::from_static(b"v_a"));
-                assert_eq!(vclock, a);
+                assert_eq!(dvv, a);
             }
             RepairOutcome::Siblings(s) => {
                 panic!("expected Winner after dedupe, got Siblings({})", s.len())
@@ -655,10 +656,10 @@ mod tests {
         let v = vc(&actor, 5);
         let outcome = RepairOutcome::Winner {
             value: Bytes::from_static(b"only"),
-            vclock: v.clone(),
+            dvv: v.clone(),
         };
-        let (value, vclock) = outcome.resolve_with_warn(b"k");
+        let (value, dvv) = outcome.resolve_with_warn(b"k");
         assert_eq!(value, Bytes::from_static(b"only"));
-        assert_eq!(vclock, v);
+        assert_eq!(dvv, v);
     }
 }
