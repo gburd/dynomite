@@ -73,6 +73,7 @@
 //! drop(cfg);
 //! ```
 
+pub mod driver;
 pub mod receive;
 pub mod send;
 pub mod util;

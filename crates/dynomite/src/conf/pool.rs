@@ -91,6 +91,10 @@ pub mod defaults {
     pub const RECON_KEY_FILE: &str = "conf/recon_key.pem";
     /// Default reconciliation IV file path.
     pub const RECON_IV_FILE: &str = "conf/recon_iv.pem";
+    /// Default cadence (in seconds) of the entropy reconciliation
+    /// run loop. Mirrors the brief's five-minute default; ignored
+    /// when the entropy task is not enabled.
+    pub const RECON_INTERVAL_SECONDS: u64 = 300;
     /// Smallest valid `mbuf_size:`.
     pub const MBUF_MIN_SIZE: i64 = 512;
     /// Largest valid `mbuf_size:`.
@@ -283,6 +287,16 @@ pub struct ConfPool {
     pub recon_key_file: Option<String>,
     /// `recon_iv_file:` - reconciliation IV path.
     pub recon_iv_file: Option<String>,
+    /// `recon_interval_seconds:` - period (in seconds) of the
+    /// background entropy reconciliation cycle.
+    ///
+    /// Ignored when [`Self::recon_key_file`] is unset or when the
+    /// configured key file cannot be opened at startup. When the
+    /// entropy task is enabled the default cadence is 300 seconds
+    /// (five minutes); operators can override it via this YAML
+    /// directive.
+    #[serde(default)]
+    pub recon_interval_seconds: Option<u64>,
     /// `datacenter:` - this node's datacenter.
     pub datacenter: Option<String>,
     /// `env:` - cloud environment marker.
@@ -854,6 +868,9 @@ impl ConfPool {
         }
         if self.recon_iv_file.is_none() {
             self.recon_iv_file = Some(defaults::RECON_IV_FILE.to_string());
+        }
+        if self.recon_interval_seconds.is_none() {
+            self.recon_interval_seconds = Some(defaults::RECON_INTERVAL_SECONDS);
         }
         if self.datastore_connections.is_none() {
             self.datastore_connections = Some(defaults::DATASTORE_CONNECTIONS);
