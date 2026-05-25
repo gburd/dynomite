@@ -1294,7 +1294,9 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let frames = collect_frames(stream).await;
         assert_eq!(frames.len(), 5, "4 chunks plus a terminator");
         let mut total = 0usize;
@@ -1342,7 +1344,9 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let mut stream = process_frame(&frame, &ds).await.expect("ok");
+        let mut stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let first = stream.next().await.expect("first").expect("frame");
         assert_eq!(first.code, MessageCode::IndexResp.as_u8());
         let parsed = RpbIndexResp::decode(first.body.as_slice()).expect("decode");
@@ -1364,7 +1368,9 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let frames = collect_frames(stream).await;
         assert_eq!(frames.len(), 1);
         let resp = RpbIndexResp::decode(frames[0].body.as_slice()).expect("decode");
@@ -1394,7 +1400,9 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let frames = collect_frames(stream).await;
         let mut total = 0usize;
         for f in &frames {
@@ -1443,7 +1451,9 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let frames = collect_frames(stream).await;
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].code, MessageCode::ErrorResp.as_u8());

@@ -327,11 +327,21 @@ async fn riak_pbc_2i_against_noxu_round_trip() {
         ..dyn_riak::proto::pb::RpbIndexReq::default()
     };
     pbc_send(&mut sock, 25, &idx_eq.encode_to_vec()).await;
-    let (code, body) = pbc_recv(&mut sock).await;
-    assert_eq!(code, 26, "expected RpbIndexResp");
-    let resp = dyn_riak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
-    assert_eq!(resp.done, Some(true));
-    assert_eq!(resp.keys, vec![b"alice".to_vec()]);
+    // Drain frames until we see done=true; with the streaming
+    // RpbIndexResp shape (commit dyn-riak/streaming-mr-2i),
+    // small result sets may arrive as one chunk frame plus a
+    // terminator frame with the done flag set.
+    let mut all_keys: Vec<Vec<u8>> = Vec::new();
+    loop {
+        let (code, body) = pbc_recv(&mut sock).await;
+        assert_eq!(code, 26, "expected RpbIndexResp");
+        let resp = dyn_riak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
+        all_keys.extend(resp.keys);
+        if resp.done == Some(true) {
+            break;
+        }
+    }
+    assert_eq!(all_keys, vec![b"alice".to_vec()]);
 
     // Range query on age_int [10, 50] also returns alice.
     let idx_rg = dyn_riak::proto::pb::RpbIndexReq {
@@ -343,10 +353,17 @@ async fn riak_pbc_2i_against_noxu_round_trip() {
         ..dyn_riak::proto::pb::RpbIndexReq::default()
     };
     pbc_send(&mut sock, 25, &idx_rg.encode_to_vec()).await;
-    let (code, body) = pbc_recv(&mut sock).await;
-    assert_eq!(code, 26);
-    let resp = dyn_riak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
-    assert_eq!(resp.keys, vec![b"alice".to_vec()]);
+    let mut all_keys: Vec<Vec<u8>> = Vec::new();
+    loop {
+        let (code, body) = pbc_recv(&mut sock).await;
+        assert_eq!(code, 26);
+        let resp = dyn_riak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
+        all_keys.extend(resp.keys);
+        if resp.done == Some(true) {
+            break;
+        }
+    }
+    assert_eq!(all_keys, vec![b"alice".to_vec()]);
 
     drop(sock);
     handle.shutdown();
