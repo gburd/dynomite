@@ -184,8 +184,9 @@ async fn mapred_via_http() {
     let mut buf = Vec::new();
     sock.read_to_end(&mut buf).await.expect("read");
 
-    // Naive HTTP parse: split on the first \r\n\r\n; the body is
-    // the remainder.
+    // Naive HTTP parse: split on the first \r\n\r\n; the head
+    // carries the status line and headers, the rest is the
+    // chunked-encoded body.
     let needle = b"\r\n\r\n";
     let idx = buf
         .windows(needle.len())
@@ -193,14 +194,148 @@ async fn mapred_via_http() {
         .expect("body separator");
     let head = std::str::from_utf8(&buf[..idx]).expect("ascii head");
     assert!(head.starts_with("HTTP/1.1 200"), "head was: {head}");
-    let body = &buf[idx + needle.len()..];
-    let parsed: serde_json::Value = serde_json::from_slice(body).expect("json");
+    let mut boundary: Option<String> = None;
+    for line in head.split("\r\n") {
+        let lower = line.to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("content-type:") {
+            let v = v.trim();
+            if let Some(b) = v.strip_prefix("multipart/mixed; boundary=") {
+                boundary = Some(b.to_string());
+            } else if let Some(b) = v.strip_prefix("multipart/mixed;boundary=") {
+                boundary = Some(b.to_string());
+            }
+        }
+    }
+    let boundary = boundary.unwrap_or_else(|| panic!("multipart boundary; head was: {head:?}"));
+
+    // The body is chunked-transfer-encoded. Decode chunks before
+    // parsing the multipart payload.
+    let body_bytes = &buf[idx + needle.len()..];
+    let decoded = decode_chunked(body_bytes);
+    let decoded_str = std::str::from_utf8(&decoded).expect("ascii body");
+    assert!(
+        decoded_str.contains(&format!("--{boundary}--\r\n")),
+        "body must end with closing delimiter; got: {decoded_str:?}"
+    );
+    // Parse out the one part body.
+    let dash = format!("--{boundary}");
+    let parts: Vec<&str> = decoded_str.split(&dash[..]).collect();
+    // First chunk before the first boundary is empty; last
+    // chunk is the closing `--\r\n`. Real parts are in between.
+    let mid: Vec<&str> = parts
+        .iter()
+        .filter(|s| !s.trim().is_empty() && !s.starts_with("--"))
+        .copied()
+        .collect();
+    assert_eq!(mid.len(), 1, "reduce_sort with keep=true emits one part");
+    let raw = mid[0];
+    // Skip leading CRLF and the headers up to the blank line.
+    let raw = raw.trim_start_matches("\r\n");
+    let sep = raw.find("\r\n\r\n").expect("hdr/body sep");
+    let part_body = raw[sep + 4..].trim_end_matches("\r\n").as_bytes();
+    let parsed: serde_json::Value = serde_json::from_slice(part_body).expect("json part");
     let arr = parsed.as_array().expect("array");
-    // reduce_sort emits three sorted outputs, all from phase 1.
-    assert_eq!(arr.len(), 3);
+    assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["phase"], 1);
-    assert_eq!(arr[0]["value"], serde_json::json!(7));
-    assert_eq!(arr[2]["value"], serde_json::json!(9));
+    let data = arr[0]["data"].as_array().expect("data array");
+    assert_eq!(data.len(), 3);
+    assert_eq!(data[0], serde_json::json!(7));
+    assert_eq!(data[2], serde_json::json!(9));
+
+    server.abort();
+    let _ = server.await;
+}
+
+/// Decode an HTTP/1.1 chunked-transfer-encoded body into the
+/// concatenation of its data chunks. Stops at the first zero-size
+/// chunk. Trailers (if any) are ignored.
+fn decode_chunked(input: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < input.len() {
+        // Find the size line terminator.
+        let Some(rel) = input[cursor..].windows(2).position(|w| w == b"\r\n") else {
+            break;
+        };
+        let size_line = &input[cursor..cursor + rel];
+        cursor += rel + 2;
+        // Strip optional chunk extensions after a `;`.
+        let size_str = std::str::from_utf8(size_line).expect("ascii size");
+        let size_str = size_str.split(';').next().unwrap_or(size_str).trim();
+        let size = usize::from_str_radix(size_str, 16).expect("hex size");
+        if size == 0 {
+            break;
+        }
+        if cursor + size > input.len() {
+            break;
+        }
+        out.extend_from_slice(&input[cursor..cursor + size]);
+        cursor += size;
+        // Trailing CRLF after data.
+        if cursor + 2 <= input.len() {
+            cursor += 2;
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn mapred_via_http_phase_failure_emits_text_part() {
+    // A failing phase: the JSON job names a function that does
+    // not exist in the registry; the executor short-circuits and
+    // the streaming body must end with a `text/plain` part
+    // carrying the error message, plus the closing delimiter.
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+    let server = tokio::spawn(serve_http(listener, ds));
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let body = br#"{
+        "inputs": [{"bucket":"b","key":"k","value":1}],
+        "query": [{"map": {"name": "no_such_function", "keep": true}}]
+    }"#;
+    let request = format!(
+        "POST /mapred HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let mut sock = TcpStream::connect(addr).await.expect("connect");
+    sock.write_all(request.as_bytes()).await.expect("head");
+    sock.write_all(body).await.expect("body");
+    sock.flush().await.expect("flush");
+    let mut buf = Vec::new();
+    sock.read_to_end(&mut buf).await.expect("read");
+
+    let needle = b"\r\n\r\n";
+    let idx = buf
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .expect("sep");
+    let head = std::str::from_utf8(&buf[..idx]).expect("head");
+    assert!(head.starts_with("HTTP/1.1 200"));
+    let boundary = head
+        .split("\r\n")
+        .find_map(|l| {
+            let lower = l.to_ascii_lowercase();
+            lower
+                .strip_prefix("content-type:")
+                .map(|v| v.trim().to_string())
+        })
+        .and_then(|v| {
+            v.strip_prefix("multipart/mixed; boundary=")
+                .or_else(|| v.strip_prefix("multipart/mixed;boundary="))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| panic!("boundary; head was: {head:?}"));
+    let body_bytes = &buf[idx + needle.len()..];
+    let decoded = decode_chunked(body_bytes);
+    let decoded_str = std::str::from_utf8(&decoded).expect("ascii");
+    assert!(decoded_str.contains("Content-Type: text/plain"));
+    assert!(
+        decoded_str.contains("no_such_function"),
+        "error message must mention the offending function: {decoded_str:?}"
+    );
+    assert!(decoded_str.contains(&format!("--{boundary}--\r\n")));
 
     server.abort();
     let _ = server.await;

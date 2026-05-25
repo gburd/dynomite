@@ -146,6 +146,26 @@ pub struct PhaseOutput {
     pub value: Value,
 }
 
+/// Captured outputs of a single phase, emitted as one batch by the
+/// streaming executor entry points.
+///
+/// The buffered [`run_job`] flattens these into a `Vec<PhaseOutput>`
+/// after the whole pipeline has run; the streaming entry points
+/// [`run_job_streaming`] / [`run_job_streaming_with_wasm`] yield one
+/// [`PhaseBatch`] per phase as soon as that phase finishes, so the
+/// HTTP / PBC writers can frame the wire output incrementally.
+///
+/// Empty batches (a phase that captured no outputs) are not emitted.
+/// The receiver therefore observes at most one batch per phase, in
+/// ascending phase order.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PhaseBatch {
+    /// Zero-based phase index.
+    pub phase: u32,
+    /// JSON values captured for this phase, in emission order.
+    pub data: Vec<Value>,
+}
+
 /// Run a MapReduce job to completion.
 ///
 /// Returns the captured outputs of every phase that has `keep:
@@ -161,6 +181,113 @@ pub async fn run_job(
     registry: Arc<PhaseRegistry>,
 ) -> Result<Vec<PhaseOutput>, MrError> {
     run_job_with_wasm(job, registry, None).await
+}
+
+/// Run a MapReduce job, streaming captured per-phase outputs back
+/// to the caller as a [`tokio::sync::mpsc::Receiver`].
+///
+/// One [`PhaseBatch`] is sent per phase that has `keep: true` (the
+/// final phase always keeps unconditionally). Empty batches are
+/// suppressed. On the first phase failure the receiver observes
+/// `Some(Err(MrError))` followed by channel close; callers should
+/// stop reading once they see the error.
+///
+/// The buffered [`run_job`] is implemented in terms of this entry
+/// point in spirit only: the buffered path is kept on its own
+/// implementation so existing callers continue to see the same
+/// allocation pattern. The streaming path is what powers the HTTP
+/// `/mapred` multipart writer.
+#[must_use]
+pub fn run_job_streaming(
+    job: MapReduceJob,
+    registry: Arc<PhaseRegistry>,
+) -> mpsc::Receiver<Result<PhaseBatch, MrError>> {
+    run_job_streaming_with_wasm(job, registry, None)
+}
+
+/// Streaming variant of [`run_job_with_wasm`]. See
+/// [`run_job_streaming`] for the wire shape.
+#[must_use]
+pub fn run_job_streaming_with_wasm(
+    job: MapReduceJob,
+    registry: Arc<PhaseRegistry>,
+    wasm: Option<Arc<dyn WasmHook>>,
+) -> mpsc::Receiver<Result<PhaseBatch, MrError>> {
+    // Channel size 4 matches the inbound / outbound channels in
+    // `run_phase`: the consumer (HTTP body writer / PBC frame
+    // writer) is expected to drain at line speed, but a small
+    // buffer absorbs scheduling jitter without making the
+    // executor block on the consumer.
+    let (tx, rx) = mpsc::channel::<Result<PhaseBatch, MrError>>(4);
+    tokio::spawn(async move {
+        let result = stream_job_inner(job, registry, wasm, tx.clone()).await;
+        if let Err(e) = result {
+            // The error path is always reported through the
+            // receiver; ignoring the send result is fine because
+            // the only reason it can fail is the consumer dropping
+            // the receiver, which means it does not care anymore.
+            let _ = tx.send(Err(e)).await;
+        }
+    });
+    rx
+}
+
+/// Streaming pipeline driver. Runs phases in order, sending one
+/// [`PhaseBatch`] per kept phase down `tx`. On phase failure,
+/// returns `Err(MrError)`; the caller publishes that error to the
+/// receiver.
+async fn stream_job_inner(
+    job: MapReduceJob,
+    registry: Arc<PhaseRegistry>,
+    wasm: Option<Arc<dyn WasmHook>>,
+    tx: mpsc::Sender<Result<PhaseBatch, MrError>>,
+) -> Result<(), MrError> {
+    let items = job
+        .inputs
+        .items()
+        .ok_or(MrError::UnsupportedInputs("bucket scan"))?;
+    let initial: Vec<Value> = items.into_iter().map(|kd| kd.to_value()).collect();
+    materialised_initial_inputs_must_be_iterable(&initial);
+
+    if job.phases.is_empty() {
+        // Identity job: the inputs themselves are the phase-0 batch.
+        if !initial.is_empty() {
+            let batch = PhaseBatch {
+                phase: 0,
+                data: initial,
+            };
+            // A receiver gone away just means the consumer is no
+            // longer interested; we drop the batch silently and
+            // exit cleanly.
+            let _ = tx.send(Ok(batch)).await;
+        }
+        return Ok(());
+    }
+
+    let n_phases = job.phases.len();
+    let mut current: Vec<Value> = initial;
+
+    for (idx, phase) in job.phases.iter().enumerate() {
+        let phase_idx = u32::try_from(idx)
+            .map_err(|_| MrError::Pipeline("phase index exceeds u32 range".into()))?;
+        let is_last = idx + 1 == n_phases;
+        let outputs = run_phase(phase_idx, phase, current, &registry, wasm.as_ref()).await?;
+
+        if (phase.keep() || is_last) && !outputs.is_empty() {
+            let batch = PhaseBatch {
+                phase: phase_idx,
+                data: outputs.clone(),
+            };
+            if tx.send(Ok(batch)).await.is_err() {
+                // Consumer dropped; stop the pipeline. This is not
+                // an error from the executor's perspective.
+                return Ok(());
+            }
+        }
+        current = outputs;
+    }
+
+    Ok(())
 }
 
 /// Run a MapReduce job with an optional Wasm-phase hook.
@@ -627,5 +754,109 @@ mod tests {
         assert!(out[0].value["value"].is_null());
         assert_eq!(out[0].value["bucket"], "b");
         assert_eq!(out[0].value["key"], "k1");
+    }
+
+    // ---- streaming entry point -------------------------------------
+
+    async fn drain_stream(
+        mut rx: mpsc::Receiver<Result<PhaseBatch, MrError>>,
+    ) -> Vec<Result<PhaseBatch, MrError>> {
+        let mut out = Vec::new();
+        while let Some(item) = rx.recv().await {
+            out.push(item);
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn streaming_emits_one_batch_per_kept_phase() {
+        let job = MapReduceJob {
+            inputs: Inputs::KeyData(vec![
+                KeyDatum::with_value("b", "k1", serde_json::json!(1)),
+                KeyDatum::with_value("b", "k2", serde_json::json!(2)),
+                KeyDatum::with_value("b", "k3", serde_json::json!(3)),
+            ]),
+            phases: vec![
+                Phase::Map {
+                    fn_name: "map_object_value".into(),
+                    arg: None,
+                    keep: true,
+                },
+                Phase::Reduce {
+                    fn_name: "reduce_sum".into(),
+                    arg: None,
+                    keep: true,
+                },
+            ],
+            timeout_ms: None,
+        };
+        let rx = run_job_streaming(job, registry());
+        let items = drain_stream(rx).await;
+        assert_eq!(items.len(), 2, "two kept phases yield two batches");
+        let b0 = items[0].as_ref().expect("phase 0 ok");
+        assert_eq!(b0.phase, 0);
+        assert_eq!(b0.data.len(), 3);
+        let b1 = items[1].as_ref().expect("phase 1 ok");
+        assert_eq!(b1.phase, 1);
+        assert_eq!(b1.data, vec![serde_json::json!(6)]);
+    }
+
+    #[tokio::test]
+    async fn streaming_skips_non_keep_intermediate_phases() {
+        let job = MapReduceJob {
+            inputs: Inputs::KeyData(vec![KeyDatum::with_value("b", "k", serde_json::json!(2))]),
+            phases: vec![
+                Phase::Map {
+                    fn_name: "map_object_value".into(),
+                    arg: None,
+                    keep: false,
+                },
+                Phase::Reduce {
+                    fn_name: "reduce_sum".into(),
+                    arg: None,
+                    keep: true,
+                },
+            ],
+            timeout_ms: None,
+        };
+        let rx = run_job_streaming(job, registry());
+        let items = drain_stream(rx).await;
+        assert_eq!(items.len(), 1, "only the kept reduce emits a batch");
+        let b = items[0].as_ref().expect("ok");
+        assert_eq!(b.phase, 1);
+    }
+
+    #[tokio::test]
+    async fn streaming_surfaces_phase_error_as_terminal_item() {
+        let job = MapReduceJob {
+            inputs: Inputs::KeyData(vec![KeyDatum::pair("b", "k")]),
+            phases: vec![Phase::Map {
+                fn_name: "no_such_function".into(),
+                arg: None,
+                keep: true,
+            }],
+            timeout_ms: None,
+        };
+        let rx = run_job_streaming(job, registry());
+        let items = drain_stream(rx).await;
+        assert_eq!(items.len(), 1);
+        let err = items[0].as_ref().expect_err("unknown function");
+        assert!(matches!(err, MrError::UnknownFunction { kind: "map", .. }));
+    }
+
+    #[tokio::test]
+    async fn streaming_empty_phase_list_emits_initial_inputs() {
+        let job = MapReduceJob {
+            inputs: Inputs::KeyData(vec![KeyDatum::with_value("b", "k", serde_json::json!(42))]),
+            phases: vec![],
+            timeout_ms: None,
+        };
+        let rx = run_job_streaming(job, registry());
+        let items = drain_stream(rx).await;
+        assert_eq!(items.len(), 1);
+        let b = items[0].as_ref().expect("ok");
+        assert_eq!(b.phase, 0);
+        assert_eq!(b.data.len(), 1);
+        assert_eq!(b.data[0]["value"], serde_json::json!(42));
     }
 }
