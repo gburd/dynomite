@@ -58,6 +58,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
+use parking_lot::RwLock;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::server::{ClientHello, ResolvesServerCert, WebPkiClientVerifier};
 use rustls::sign::CertifiedKey;
@@ -529,6 +530,142 @@ impl ResolvesServerCert for DcSniResolver {
             }
         }
         self.default.clone()
+    }
+}
+
+/// SNI resolver that reads its certified-key map from a shared
+/// [`SharedTlsProfiles`]. Every handshake re-borrows the inner
+/// [`TlsProfileMap`] via the read lock, so a SIGHUP-driven
+/// [`SharedTlsProfiles::replace`] takes effect on the next
+/// inbound connection without rebuilding the [`TlsAcceptor`].
+#[derive(Debug)]
+struct ReloadingDcSniResolver {
+    profiles: Arc<RwLock<TlsProfileMap>>,
+}
+
+impl ResolvesServerCert for ReloadingDcSniResolver {
+    fn resolve(&self, hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        let profiles = self.profiles.read();
+        if let Some(name) = hello.server_name() {
+            if let Some(dc) = dc_from_sni_label(name) {
+                if let Some(ck) = profiles.per_dc_certified.get(dc) {
+                    return Some(ck.clone());
+                }
+            }
+        }
+        profiles.default_certified.clone()
+    }
+}
+
+/// Reloadable wrapper around [`TlsProfileMap`].
+///
+/// Holds an [`Arc<parking_lot::RwLock<TlsProfileMap>>`] so the
+/// inbound listener (via [`Self::build_sni_acceptor`]) and every
+/// outbound peer supervisor can pick up cert / key / CA changes
+/// without rebinding sockets or rebuilding their
+/// [`tokio_rustls::TlsAcceptor`]. The resolver returned by
+/// [`Self::build_sni_acceptor`] reads the inner map on every
+/// handshake.
+///
+/// `Clone` is `Arc`-cheap.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeMap;
+/// use dynomite::net::tls::{SharedTlsProfiles, TlsProfileMap};
+/// let map = TlsProfileMap::build(None, BTreeMap::new()).unwrap();
+/// let shared = SharedTlsProfiles::from_map(map);
+/// assert!(shared.is_empty());
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct SharedTlsProfiles {
+    inner: Arc<RwLock<TlsProfileMap>>,
+}
+
+impl SharedTlsProfiles {
+    /// Wrap an existing [`TlsProfileMap`] in a shared cell.
+    #[must_use]
+    pub fn from_map(map: TlsProfileMap) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(map)),
+        }
+    }
+
+    /// Atomically replace the inner profile map.
+    ///
+    /// Subsequent handshakes (and outbound dials that consult
+    /// [`Self::client_config_for_dc`]) observe the new material;
+    /// already-negotiated TLS sessions are not affected.
+    pub fn replace(&self, map: TlsProfileMap) {
+        *self.inner.write() = map;
+    }
+
+    /// True when the wrapped map is empty (peer plane plaintext).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.read().is_empty()
+    }
+
+    /// Per-DC client config, with the legacy default as fallback.
+    /// Reads the inner map at call time.
+    #[must_use]
+    pub fn client_config_for_dc(&self, dc: &str) -> Option<Arc<ClientConfig>> {
+        self.inner.read().client_config_for_dc(dc)
+    }
+
+    /// True when at least one wrapped profile pins a CA bundle.
+    #[must_use]
+    pub fn requires_client_auth(&self) -> bool {
+        self.inner.read().requires_client_auth()
+    }
+
+    /// Names of the DCs with explicit per-DC entries (sorted).
+    #[must_use]
+    pub fn dc_names(&self) -> Vec<String> {
+        self.inner.read().dc_names()
+    }
+
+    /// Build a SIGHUP-aware [`tokio_rustls::TlsAcceptor`].
+    ///
+    /// The acceptor's underlying [`ServerConfig`] holds a
+    /// resolver that re-reads the wrapped
+    /// [`Arc<parking_lot::RwLock<TlsProfileMap>>`] on every
+    /// handshake, so [`Self::replace`] takes effect on the next
+    /// inbound connection without rebinding the listener.
+    ///
+    /// Returns `None` when the inner map is empty (caller stays
+    /// plaintext).
+    ///
+    /// # Errors
+    /// Returns [`TlsError::Rustls`] when rustls rejects the
+    /// assembled root store or the verifier (e.g. a CA cert
+    /// the loader missed).
+    pub fn build_sni_acceptor(&self) -> Result<Option<TlsAcceptor>, TlsError> {
+        if self.is_empty() {
+            return Ok(None);
+        }
+        ensure_provider_installed();
+        let resolver = ReloadingDcSniResolver {
+            profiles: self.inner.clone(),
+        };
+        let has_any_client_ca = self.inner.read().has_any_client_ca;
+        let builder = ServerConfig::builder();
+        let cfg = if has_any_client_ca {
+            let mut roots = RootCertStore::empty();
+            self.inner.read().populate_combined_ca_roots(&mut roots)?;
+            let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
+                .build()
+                .map_err(|e| TlsError::Rustls(format!("client verifier: {e}")))?;
+            builder
+                .with_client_cert_verifier(verifier)
+                .with_cert_resolver(Arc::new(resolver))
+        } else {
+            builder
+                .with_no_client_auth()
+                .with_cert_resolver(Arc::new(resolver))
+        };
+        Ok(Some(TlsAcceptor::from(Arc::new(cfg))))
     }
 }
 

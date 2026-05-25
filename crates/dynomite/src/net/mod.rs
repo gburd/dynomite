@@ -78,7 +78,7 @@ pub use self::proxy::Proxy;
 pub use self::server::ServerConn;
 pub use self::tls::{
     acceptor_from, connector_from, load_client_config, load_server_config, server_name_owned,
-    TlsClientTransport, TlsError, TlsServerTransport,
+    SharedTlsProfiles, TlsClientTransport, TlsError, TlsServerTransport,
 };
 
 /// Top-level error type returned by net::* operations.
