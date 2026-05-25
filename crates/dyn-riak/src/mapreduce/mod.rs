@@ -80,6 +80,12 @@ pub use crate::mapreduce::job::{Inputs, KeyDatum, MapReduceJob};
 pub use crate::mapreduce::phase::Phase;
 pub use crate::mapreduce::registry::{MapFn, PhaseRegistry, ReduceFn};
 
+// Streaming MapReduce entry points (per-phase output batches),
+// added by the streaming HTTP `/mapred` slice. The buffered
+// `run_job` entry stays unchanged for callers (PBC `RpbMapRedResp`)
+// that still emit a single response.
+pub use crate::mapreduce::executor::{run_job_streaming, run_job_streaming_with_wasm, PhaseBatch};
+
 #[cfg(feature = "wasm")]
 pub use crate::mapreduce::wasm::{
     load_modules_from_config, WasmLimits, WasmModuleStore, WasmStoreError,

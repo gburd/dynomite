@@ -31,8 +31,9 @@ use dyn_riak::error::RiakError;
 use dyn_riak::proto::pb::{
     read_frame, write_frame, Frame, MessageCode, RpbBucketProps, RpbDelReq, RpbErrorResp,
     RpbGetBucketReq, RpbGetBucketResp, RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq,
-    RpbListBucketsReq, RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp, RpbPutReq, RpbPutResp,
-    RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, INDEX_QUERY_TYPE_EQ,
+    RpbIndexResp, RpbListBucketsReq, RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp,
+    RpbPutReq, RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
+    INDEX_QUERY_TYPE_EQ,
 };
 use dyn_riak::serve_pbc;
 use dynomite::embed::{Datastore, MemoryDatastore};
@@ -151,6 +152,160 @@ async fn pbc_list_keys_streams_multiple_frames() {
     assert_eq!(last.done, Some(true));
 
     h.shutdown().await;
+}
+
+#[tokio::test]
+async fn pbc_index_streams_chunks_against_scripted_datastore() {
+    // Wire path: drive `RpbIndexReq` against a NoxuDatastore-style
+    // mock whose `riak_index_eq` returns 1000 keys. The stream
+    // must arrive as 4 key-bearing chunks plus one body-less
+    // terminator (mirrors the list-keys chunking precedent).
+    use dynomite::embed::hooks::{BoxFuture, DatastoreError, Protocol};
+    use dynomite::msg::{Msg, MsgType};
+
+    struct ScriptedIndex {
+        keys: Vec<Vec<u8>>,
+    }
+    impl Datastore for ScriptedIndex {
+        fn protocol(&self) -> Protocol {
+            Protocol::Custom
+        }
+        fn dispatch(&self, req: Msg) -> BoxFuture<'_, Result<Msg, DatastoreError>> {
+            Box::pin(async move {
+                let mut rsp = Msg::new(req.id(), MsgType::Unknown, false);
+                rsp.set_parent_id(req.id());
+                Ok(rsp)
+            })
+        }
+        fn riak_index_eq<'a>(
+            &'a self,
+            _bucket: &'a [u8],
+            _index_name: &'a [u8],
+            _value: &'a [u8],
+        ) -> BoxFuture<'a, Result<Vec<Vec<u8>>, DatastoreError>> {
+            let keys = self.keys.clone();
+            Box::pin(async move { Ok(keys) })
+        }
+    }
+
+    let mut keys = Vec::new();
+    for i in 0..1000u16 {
+        keys.push(format!("k{i:04}").as_bytes().to_vec());
+    }
+    let ds: Arc<dyn Datastore> = Arc::new(ScriptedIndex { keys });
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(serve_pbc(listener, ds));
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let stream = TcpStream::connect(addr).await.expect("connect");
+    let (mut r, mut w) = tokio::io::split(stream);
+
+    let req = RpbIndexReq {
+        bucket: b"users".to_vec(),
+        index: b"age_int".to_vec(),
+        qtype: INDEX_QUERY_TYPE_EQ,
+        key: Some(b"42".to_vec()),
+        ..RpbIndexReq::default()
+    };
+    write_frame(
+        &mut w,
+        &Frame::new(MessageCode::IndexReq.as_u8(), req.encode_to_vec()),
+    )
+    .await
+    .expect("write");
+
+    let mut frames = Vec::new();
+    loop {
+        let f = read_frame(&mut r).await.expect("frame");
+        assert_eq!(f.code, MessageCode::IndexResp.as_u8());
+        let resp = RpbIndexResp::decode(f.body.as_slice()).expect("decode");
+        let done = resp.done == Some(true);
+        frames.push(resp);
+        if done {
+            break;
+        }
+    }
+    assert_eq!(frames.len(), 5, "4 chunks plus a terminator");
+    let total_keys: usize = frames.iter().map(|f| f.keys.len()).sum();
+    assert_eq!(total_keys, 1000);
+    let last = frames.last().expect("last");
+    assert!(last.keys.is_empty());
+    assert_eq!(last.done, Some(true));
+
+    drop(r);
+    drop(w);
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn pbc_index_first_frame_decodes_for_old_clients() {
+    // Backwards compat: a client that ignores the `done` flag and
+    // reads exactly one frame still observes a usable first chunk.
+    use dynomite::embed::hooks::{BoxFuture, DatastoreError, Protocol};
+    use dynomite::msg::{Msg, MsgType};
+
+    struct ScriptedIndex {
+        keys: Vec<Vec<u8>>,
+    }
+    impl Datastore for ScriptedIndex {
+        fn protocol(&self) -> Protocol {
+            Protocol::Custom
+        }
+        fn dispatch(&self, req: Msg) -> BoxFuture<'_, Result<Msg, DatastoreError>> {
+            Box::pin(async move {
+                let mut rsp = Msg::new(req.id(), MsgType::Unknown, false);
+                rsp.set_parent_id(req.id());
+                Ok(rsp)
+            })
+        }
+        fn riak_index_eq<'a>(
+            &'a self,
+            _bucket: &'a [u8],
+            _index_name: &'a [u8],
+            _value: &'a [u8],
+        ) -> BoxFuture<'a, Result<Vec<Vec<u8>>, DatastoreError>> {
+            let keys = self.keys.clone();
+            Box::pin(async move { Ok(keys) })
+        }
+    }
+
+    let mut keys = Vec::new();
+    for i in 0..600u16 {
+        keys.push(format!("k{i:04}").as_bytes().to_vec());
+    }
+    let ds: Arc<dyn Datastore> = Arc::new(ScriptedIndex { keys });
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(serve_pbc(listener, ds));
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let stream = TcpStream::connect(addr).await.expect("connect");
+    let (mut r, mut w) = tokio::io::split(stream);
+    let req = RpbIndexReq {
+        bucket: b"users".to_vec(),
+        index: b"x".to_vec(),
+        qtype: INDEX_QUERY_TYPE_EQ,
+        key: Some(b"v".to_vec()),
+        ..RpbIndexReq::default()
+    };
+    write_frame(
+        &mut w,
+        &Frame::new(MessageCode::IndexReq.as_u8(), req.encode_to_vec()),
+    )
+    .await
+    .expect("write");
+    let f = read_frame(&mut r).await.expect("frame");
+    assert_eq!(f.code, MessageCode::IndexResp.as_u8());
+    let parsed = RpbIndexResp::decode(f.body.as_slice()).expect("decode");
+    assert_eq!(parsed.keys.len(), 256);
+    assert_eq!(parsed.done, Some(false));
+
+    drop(r);
+    drop(w);
+    server.abort();
+    let _ = server.await;
 }
 
 async fn write_req(w: &mut Writer, code: MessageCode, body: Vec<u8>) {
