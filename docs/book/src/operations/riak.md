@@ -218,3 +218,17 @@ with `done = Some(true)`. Streaming (one frame per chunk plus a
 body-less terminator) is scoped as a follow-up. The `$key`
 reserved internal index for primary-key range queries is also
 deferred.
+
+## Default distribution
+
+`--features riak` builds default the pool's `distribution:` to
+`random_slicing` whenever a Riak listener is configured
+(`riak.pbc_listen` or `riak.http_listen`). The choice mirrors
+classic Riak behaviour: Riak-shaped deployments inherit a
+gap-free partition table by default, so a 3-of-4 host topology
+cannot silently leave a quarter of the ring unowned.
+
+Operators who want the legacy `vnode` behaviour can still set
+`distribution: vnode` explicitly in the YAML; the override is
+respected. See [Distribution modes](./distribution.md) for the
+full reference and migration playbook.

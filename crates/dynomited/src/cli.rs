@@ -135,6 +135,17 @@ pub struct Cli {
     #[arg(long = "log-format", value_name = "FMT")]
     pub log_format: Option<String>,
 
+    /// Run the dispatcher with a shadow distribution alongside
+    /// the configured one. When set, every routing decision is
+    /// computed under both the configured `distribution:` (the
+    /// live route) and the shadow distribution; disagreements
+    /// are counted on the
+    /// `distribution_shadow_disagreement_total` metric. Useful
+    /// for validating a migration before flipping the live
+    /// distribution. Accepted values: `vnode`, `random_slicing`.
+    #[arg(long = "distribution-shadow", value_name = "MODE")]
+    pub distribution_shadow: Option<String>,
+
     /// Override the YAML `riak.pbc_listen` knob. Available only
     /// when the binary is compiled with `--features riak`.
     #[cfg(feature = "riak")]
@@ -195,6 +206,7 @@ pub fn format_version_banner(version: &str) -> String {
 /// assert!(s.contains("conf/dynomite.yml"));
 /// assert!(s.contains("Dynomite (Rust) extensions:"));
 /// assert!(s.contains("--log-format=FMT"));
+/// assert!(s.contains("--distribution-shadow=MODE"));
 /// assert!(s.contains("-g, --gossip"));
 /// assert!(s.contains("--riak-pbc-listen"));
 /// assert!(s.contains("--riak-http-listen"));
@@ -228,6 +240,7 @@ pub fn format_usage() -> String {
         "Dynomite (Rust) extensions:\r\n\
          \x20 -g, --gossip                 : force-enable gossip regardless of the YAML setting\r\n\
          \x20     --log-format=FMT         : log format (default, rfc5424, rfc3164, json, ndjson)\r\n\
+         \x20     --distribution-shadow=MODE : shadow distribution (vnode, random_slicing)\r\n\
          \x20     --riak-pbc-listen=HOST:PORT : Riak PBC listener (requires --features riak)\r\n\
          \x20     --riak-http-listen=HOST:PORT : Riak HTTP gateway (requires --features riak)\r\n\
          \x20     --riak-aae-enabled       : enable Riak active anti-entropy (requires --features riak)\n",

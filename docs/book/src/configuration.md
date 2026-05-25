@@ -183,3 +183,67 @@ and `--riak-aae-enabled`. They are visible in
 `dynomited --help` only when the binary was built with
 `--features riak`. See [Riak mode](./operations/riak.md) for
 operator-facing details.
+
+## Distribution modes
+
+The pool's `distribution:` directive selects the algorithm that
+maps a hashed key to one of the rack's peers. Two modes are
+first-class and supported indefinitely:
+
+| `distribution:` | Behaviour |
+|---|---|
+| `vnode` | Per-rack continuum keyed by per-peer `tokens:` lists. The historical default. |
+| `random_slicing` | Small, gap-free `(name, size)` partition table over the 64-bit hash space. New in this slice. |
+
+`random_slicing` is the recommended mode for new deployments
+that do not need byte-identical compatibility with an existing
+operator-managed token plan. The technique is described in
+detail in `docs/design/random-slicing-integration.md`; the
+operator-facing pitch is "you cannot accidentally configure a
+hole in the ring", which is the failure mode that bit chaos
+pass-3 (3-of-4 hosts running with a 4-host token plan, 25% of
+the ring orphaned).
+
+The legacy aliases `ketama`, `modula`, and `random` are accepted
+for backward compatibility with the C reference's vocabulary.
+They emit a `tracing::warn!` line at config-load time and
+collapse to `vnode` at runtime.
+
+### Default per binary build
+
+* **Default builds** keep `vnode` as the default. Existing YAML
+  files validate and run unchanged.
+* **`--features riak` builds** that configure a Riak listener
+  (`riak.pbc_listen` or `riak.http_listen`) flip the default to
+  `random_slicing`. Riak-shaped deployments inherit Riak's
+  full-coverage partition invariant by default. Operators can
+  still set `distribution: vnode` explicitly to override.
+
+### Migration: shadow mode
+
+A `--distribution-shadow=<vnode|random_slicing>` CLI flag (and
+the matching `distribution_shadow:` YAML key) lets an operator
+run both modes simultaneously: routing follows the live
+`distribution:`, but the dispatcher also computes the would-be
+peer for the shadow mode and bumps the
+`distribution_shadow_disagreement_total` Prometheus counter when
+they disagree. Use this to validate a migration before flipping
+the YAML.
+
+The `dyn-admin distribution-dump --node <host:stats-port>`
+subcommand pretty-prints the configured live and shadow modes
+plus the cumulative disagreement counter, so an operator can
+verify each node's view from one place.
+
+```yaml
+dyn_o_mite:
+  listen: 127.0.0.1:8102
+  dyn_listen: 127.0.0.1:8101
+  tokens: '101134286'
+  servers:
+  - 127.0.0.1:6379:1
+  data_store: 0
+  distribution: random_slicing       # gap-free partition table
+  distribution_shadow: vnode         # validate the new mode
+                                     # against the old one
+```

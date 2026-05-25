@@ -21,6 +21,7 @@
   - [Distributed tracing and OTLP logs](./operations/tracing.md)
   - [Riak mode](./operations/riak.md)
   - [Admin CLI (dyn-admin)](./operations/admin.md)
+  - [Distribution modes](./operations/distribution.md)
   - [Release process](./operations/release.md)
 - [Embedding API](./embedding/index.md)
   - [Server lifecycle](./embedding/server.md)
