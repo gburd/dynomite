@@ -9,6 +9,7 @@ pub mod cluster_join;
 pub mod cluster_leave;
 pub mod cluster_list;
 pub mod cluster_plan;
+pub mod distribution_dump;
 pub mod metrics;
 pub mod ping;
 pub mod ring;

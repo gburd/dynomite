@@ -1177,7 +1177,6 @@ entry at
 design decisions and the on-disk-variant deferral.
 
 ### D2: read repair v1 selects the winner by vote count, not by per-write timestamp
-
 The reference engine's read-repair surface reads timestamps
 emitted via the Lua-rewrite path
 (`redis_rewrite_query_with_timestamp_md`,
@@ -1240,6 +1239,58 @@ the extra block.
 Pinned by `dynomite::entropy::send::tests::encrypt_chunk_round_trips_with_pkcs7`
 and the integration test
 `crates/dynomite/tests/stage_11_entropy.rs::encrypted_roundtrip_with_bundled_fixtures`.
+
+### D3: Random-slicing distribution mode
+
+The C reference engine ships only the `vnode` distribution
+algorithm (per-rack continuum keyed by per-peer `tokens:`
+lists). The Rust port adds a second mode,
+[`Distribution::RandomSlicing`](crate::conf::Distribution),
+that builds a small `(name, size)` partition table over the
+64-bit hash space (`crate::hashkit::random_slicing`). The two
+modes coexist; `vnode` remains the default for non-Riak builds
+and neither mode is deprecated. `--features riak` builds that
+configure a Riak listener flip the default to
+`random_slicing` so Riak-shaped deployments inherit Riak's
+full-coverage partition invariant.
+
+The random-slicing slice table is built once per
+`ServerPool::rebuild_ring` call and includes every peer in the
+rack regardless of `PeerState`. Down peers are masked by the
+dispatcher's existing `is_routable()` filter on top of the
+slice lookup; this matches the `vnode` path's contract
+(structural ring is membership-driven, runtime state-Down peer
+filtration is dispatch-driven) and avoids a new slice-rebuild
+on every gossip transition. Reslicing happens at config-load
+and SIGHUP-reload time only.
+
+The legacy `ketama` / `modula` / `random` distribution names
+accepted by the C reference's YAML are still parsed, but they
+emit a `tracing::warn!` line at config-load time and resolve to
+`vnode` at runtime (the Rust port never implemented the
+C-reference semantics for those names). The shadow-mode knob
+(`distribution_shadow:`) lets operators run both algorithms
+simultaneously to validate a migration before flipping the
+live distribution.
+
+The random-slicing path uses a new `HashType::Murmur3X64_64`
+hash variant (the canonical 64-bit MurmurHash3 finalisation,
+backed by `murmur3_x64_64` in the hashkit) plus a companion
+`hash64(...)` dispatcher so existing 32-bit algorithms can
+feed a 64-bit ring without losing their on-disk hash codec
+ordering.
+
+Pinned by:
+- `dynomite::hashkit::random_slicing::tests` (unit coverage of
+  the builders, the lookup, and the rejection paths).
+- `crates/dynomite/tests/random_slicing.rs` (10k-key end-to-
+  end uniformity check, Down-peer pass-3 narrative, shadow
+  counter integration).
+- `crates/dynomite/tests/random_slicing_property.rs`
+  (hegeltest invariants: full coverage, deterministic
+  claimant, rebalance moves O(1/N) keys, ascending bounds).
+- `crates/dynomite/benches/random_slicing.rs` (criterion
+  comparison against the vnode dispatcher).
 
 ### Stage 11: entropy chunks are length-prefixed instead of fixed `cipher_size`
 

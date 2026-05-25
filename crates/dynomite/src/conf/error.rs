@@ -100,6 +100,11 @@ pub enum ConfError {
     #[error("conf: directive 'hash' is not a valid hash function, got '{0}'")]
     BadHash(String),
 
+    /// `distribution` value is not a recognized distribution
+    /// algorithm name.
+    #[error("conf: directive 'distribution' is not a valid distribution, got '{0}'")]
+    BadDistribution(String),
+
     /// A numeric directive is out of its allowed range.
     #[error("conf: directive '{field}' value {value} is out of range: {reason}")]
     OutOfRange {

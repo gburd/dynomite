@@ -110,6 +110,10 @@ name = "hashkit"
 harness = false
 
 [[bench]]
+name = "random_slicing"
+harness = false
+
+[[bench]]
 name = "tokens"
 harness = false
 
