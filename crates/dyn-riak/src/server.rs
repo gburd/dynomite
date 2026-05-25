@@ -59,6 +59,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
+use dynomite::cluster::admin_rpc::{
+    ClusterAdmin, ClusterChange, ClusterChangeKind, ClusterError, NoopClusterAdmin, PeerSnapshot,
+};
 use dynomite::embed::hooks::{DatastoreByteStream, DatastoreError};
 use dynomite::embed::Datastore;
 use dynomite::msg::{Msg, MsgType};
@@ -67,11 +70,14 @@ use crate::error::RiakError;
 use crate::proto::pb::framer::{read_frame, write_frame, Frame};
 use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 use crate::proto::pb::messages::{
-    MessageCode, RpbBucketProps, RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp,
-    RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbIndexResp, RpbListBucketsReq,
+    DynRpbClusterCommitReq, DynRpbClusterCommitResp, DynRpbClusterJoinReq, DynRpbClusterJoinResp,
+    DynRpbClusterLeaveReq, DynRpbClusterLeaveResp, DynRpbClusterPlanReq, DynRpbClusterPlanResp,
+    DynRpbListPeersReq, DynRpbListPeersResp, DynRpbPeerInfo, DynRpbStagedChange, MessageCode,
+    RpbBucketProps, RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp, RpbGetReq,
+    RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbIndexResp, RpbListBucketsReq,
     RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp, RpbPingReq, RpbPingResp, RpbPutReq,
-    RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, INDEX_QUERY_TYPE_EQ,
-    INDEX_QUERY_TYPE_RANGE,
+    RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, DYN_STAGED_CHANGE_ADD,
+    DYN_STAGED_CHANGE_REMOVE, INDEX_QUERY_TYPE_EQ, INDEX_QUERY_TYPE_RANGE,
 };
 
 /// Maximum number of bucket / key entries packed into a single
@@ -121,7 +127,29 @@ pub async fn serve_pbc(
     listener: TcpListener,
     datastore: Arc<dyn Datastore>,
 ) -> Result<(), RiakError> {
-    serve_pbc_inner(listener, datastore, None).await
+    let admin: Arc<dyn ClusterAdmin> = Arc::new(NoopClusterAdmin);
+    serve_pbc_inner(listener, datastore, admin, None).await
+}
+
+/// Run the PBC accept loop on `listener` with a custom
+/// [`ClusterAdmin`] handle wired into the dispatch path.
+///
+/// Use this when the embedding wants the admin RPCs
+/// (`DynRpbListPeersReq`, `DynRpbClusterJoinReq`,
+/// `DynRpbClusterLeaveReq`, `DynRpbClusterPlanReq`,
+/// `DynRpbClusterCommitReq`) to drive a real
+/// [`dynomite::cluster::PoolClusterAdmin`] instead of the
+/// always-empty [`NoopClusterAdmin`].
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+pub async fn serve_pbc_with_admin(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+) -> Result<(), RiakError> {
+    serve_pbc_inner(listener, datastore, admin, None).await
 }
 
 /// Run the PBC accept loop on `listener`, terminating TLS for
@@ -156,24 +184,42 @@ pub async fn serve_pbc_tls(
     datastore: Arc<dyn Datastore>,
     acceptor: TlsAcceptor,
 ) -> Result<(), RiakError> {
-    serve_pbc_inner(listener, datastore, Some(acceptor)).await
+    let admin: Arc<dyn ClusterAdmin> = Arc::new(NoopClusterAdmin);
+    serve_pbc_inner(listener, datastore, admin, Some(acceptor)).await
+}
+
+/// As [`serve_pbc_with_admin`], terminating TLS for every
+/// accepted connection through `acceptor`.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+pub async fn serve_pbc_tls_with_admin(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+    acceptor: TlsAcceptor,
+) -> Result<(), RiakError> {
+    serve_pbc_inner(listener, datastore, admin, Some(acceptor)).await
 }
 
 async fn serve_pbc_inner(
     listener: TcpListener,
     datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
     acceptor: Option<TlsAcceptor>,
 ) -> Result<(), RiakError> {
     loop {
         let (sock, peer) = listener.accept().await?;
         let datastore = Arc::clone(&datastore);
+        let admin = Arc::clone(&admin);
         match acceptor.as_ref() {
             Some(acc) => {
                 let acc = acc.clone();
                 tokio::spawn(async move {
                     match acc.accept(sock).await {
                         Ok(tls) => {
-                            if let Err(e) = handle_conn(tls, datastore).await {
+                            if let Err(e) = handle_conn_with_admin(tls, datastore, admin).await {
                                 tracing::warn!(
                                     %peer,
                                     error = %e,
@@ -191,7 +237,7 @@ async fn serve_pbc_inner(
             }
             None => {
                 tokio::spawn(async move {
-                    if let Err(e) = handle_conn(sock, datastore).await {
+                    if let Err(e) = handle_conn_with_admin(sock, datastore, admin).await {
                         tracing::warn!(%peer, error = %e, "riak pbc connection ended with error");
                     }
                 });
@@ -217,21 +263,35 @@ pub async fn handle_conn<S>(stream: S, datastore: Arc<dyn Datastore>) -> Result<
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let admin: Arc<dyn ClusterAdmin> = Arc::new(NoopClusterAdmin);
+    handle_conn_with_admin(stream, datastore, admin).await
+}
+
+/// As [`handle_conn`], with an explicit [`ClusterAdmin`] handle
+/// wired into the admin RPC dispatch path.
+///
+/// # Errors
+///
+/// Returns the first wire-level or datastore error encountered.
+pub async fn handle_conn_with_admin<S>(
+    stream: S,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+) -> Result<(), RiakError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let (mut reader, mut writer) = tokio::io::split(stream);
     loop {
         let frame = match read_frame(&mut reader).await {
             Ok(f) => f,
             Err(RiakError::UnexpectedEof { .. }) => {
-                // Peer closed at (or near) a frame boundary. We do
-                // not distinguish a clean close from a mid-frame
-                // close: in either case the right thing for a PBC
-                // listener is to drop the connection silently.
                 return Ok(());
             }
             Err(other) => return Err(other),
         };
 
-        let mut response = process_frame(&frame, datastore.as_ref()).await?;
+        let mut response = process_frame(&frame, datastore.as_ref(), admin.as_ref()).await?;
         while let Some(item) = response.next().await {
             let f = item?;
             write_frame(&mut writer, &f).await?;
@@ -243,7 +303,11 @@ where
 /// call. Returns a stream of one or more frames; list-buckets and
 /// list-keys produce multi-frame streams chunked at
 /// [`LIST_CHUNK_SIZE`].
-async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<FrameStream, RiakError> {
+async fn process_frame(
+    frame: &Frame,
+    datastore: &dyn Datastore,
+    admin: &dyn ClusterAdmin,
+) -> Result<FrameStream, RiakError> {
     let code = MessageCode::from_u8(frame.code).map_err(RiakError::UnknownMessageCode)?;
     let stream: FrameStream = match code {
         MessageCode::PingReq => single_frame(handle_ping(&frame.body)?),
@@ -257,6 +321,13 @@ async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame
         MessageCode::ListKeysReq => handle_list_keys(&frame.body, datastore)?,
         MessageCode::IndexReq => single_frame(handle_index(&frame.body, datastore).await?),
         MessageCode::MapRedReq => single_frame(handle_mapred(&frame.body).await?),
+        MessageCode::DynListPeersReq => single_frame(handle_list_peers(&frame.body, admin)?),
+        MessageCode::DynClusterJoinReq => single_frame(handle_cluster_join(&frame.body, admin)?),
+        MessageCode::DynClusterLeaveReq => single_frame(handle_cluster_leave(&frame.body, admin)?),
+        MessageCode::DynClusterPlanReq => single_frame(handle_cluster_plan(&frame.body, admin)?),
+        MessageCode::DynClusterCommitReq => {
+            single_frame(handle_cluster_commit(&frame.body, admin)?)
+        }
         // Response codes are illegal inbound.
         MessageCode::ErrorResp
         | MessageCode::PingResp
@@ -269,7 +340,12 @@ async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame
         | MessageCode::GetBucketResp
         | MessageCode::SetBucketResp
         | MessageCode::IndexResp
-        | MessageCode::MapRedResp => {
+        | MessageCode::MapRedResp
+        | MessageCode::DynListPeersResp
+        | MessageCode::DynClusterJoinResp
+        | MessageCode::DynClusterLeaveResp
+        | MessageCode::DynClusterPlanResp
+        | MessageCode::DynClusterCommitResp => {
             let body = RpbErrorResp {
                 errmsg: format!("unsupported inbound message code: {}", frame.code).into_bytes(),
                 errcode: 0,
@@ -718,6 +794,142 @@ fn keys_to_frames(s: DatastoreByteStream) -> impl Stream<Item = Result<Frame, Ri
     )
 }
 
+// ------------------------------------------------------------------
+// Cluster admin handlers.
+// ------------------------------------------------------------------
+
+fn handle_list_peers(body: &[u8], admin: &dyn ClusterAdmin) -> Result<Frame, RiakError> {
+    let _ = DynRpbListPeersReq::decode(body)?;
+    let snaps = admin.list_peers();
+    let resp = DynRpbListPeersResp {
+        peers: snaps.iter().map(snapshot_to_pb).collect(),
+    };
+    Ok(Frame::new(
+        MessageCode::DynListPeersResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+fn handle_cluster_join(body: &[u8], admin: &dyn ClusterAdmin) -> Result<Frame, RiakError> {
+    let req = DynRpbClusterJoinReq::decode(body)?;
+    let Ok(target_str) = std::str::from_utf8(&req.target) else {
+        return Ok(error_frame("cluster-join: target is not UTF-8".into()));
+    };
+    let target = match target_str.parse::<std::net::SocketAddr>() {
+        Ok(t) => t,
+        Err(e) => {
+            return Ok(error_frame(format!(
+                "cluster-join: invalid target '{target_str}': {e}"
+            )));
+        }
+    };
+    match admin.cluster_join(target) {
+        Ok(plan) => {
+            let resp = DynRpbClusterJoinResp {
+                change: Some(change_to_pb(&plan.change)),
+            };
+            Ok(Frame::new(
+                MessageCode::DynClusterJoinResp.as_u8(),
+                resp.encode_to_vec(),
+            ))
+        }
+        Err(e) => Ok(error_frame(format_cluster_error("cluster-join", &e))),
+    }
+}
+
+fn handle_cluster_leave(body: &[u8], admin: &dyn ClusterAdmin) -> Result<Frame, RiakError> {
+    let req = DynRpbClusterLeaveReq::decode(body)?;
+    match admin.cluster_leave(req.peer_idx) {
+        Ok(plan) => {
+            let resp = DynRpbClusterLeaveResp {
+                change: Some(change_to_pb(&plan.change)),
+            };
+            Ok(Frame::new(
+                MessageCode::DynClusterLeaveResp.as_u8(),
+                resp.encode_to_vec(),
+            ))
+        }
+        Err(e) => Ok(error_frame(format_cluster_error("cluster-leave", &e))),
+    }
+}
+
+fn handle_cluster_plan(body: &[u8], admin: &dyn ClusterAdmin) -> Result<Frame, RiakError> {
+    let _ = DynRpbClusterPlanReq::decode(body)?;
+    let pending = admin.cluster_plan_pending();
+    let resp = DynRpbClusterPlanResp {
+        changes: pending.iter().map(change_to_pb).collect(),
+    };
+    Ok(Frame::new(
+        MessageCode::DynClusterPlanResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+fn handle_cluster_commit(body: &[u8], admin: &dyn ClusterAdmin) -> Result<Frame, RiakError> {
+    let _ = DynRpbClusterCommitReq::decode(body)?;
+    let staged = admin.cluster_plan_pending();
+    let applied = u32::try_from(staged.len()).unwrap_or(u32::MAX);
+    match admin.cluster_commit() {
+        Ok(()) => {
+            let resp = DynRpbClusterCommitResp { applied };
+            Ok(Frame::new(
+                MessageCode::DynClusterCommitResp.as_u8(),
+                resp.encode_to_vec(),
+            ))
+        }
+        Err(e) => Ok(error_frame(format_cluster_error("cluster-commit", &e))),
+    }
+}
+
+fn snapshot_to_pb(snap: &PeerSnapshot) -> DynRpbPeerInfo {
+    DynRpbPeerInfo {
+        idx: snap.idx,
+        dc: snap.dc.as_bytes().to_vec(),
+        rack: snap.rack.as_bytes().to_vec(),
+        host: snap.host.as_bytes().to_vec(),
+        port: u32::from(snap.port),
+        tokens: snap
+            .tokens
+            .iter()
+            .map(|t| t.to_string().into_bytes())
+            .collect(),
+        state: snap.state.name().as_bytes().to_vec(),
+        is_local: snap.is_local,
+        is_secure: None,
+    }
+}
+
+fn change_to_pb(change: &ClusterChange) -> DynRpbStagedChange {
+    let kind = match change.kind {
+        ClusterChangeKind::Add => DYN_STAGED_CHANGE_ADD,
+        ClusterChangeKind::Remove => DYN_STAGED_CHANGE_REMOVE,
+    };
+    let peer = change.peer.as_ref().map(|spec| DynRpbPeerInfo {
+        idx: 0,
+        dc: spec.dc.as_bytes().to_vec(),
+        rack: spec.rack.as_bytes().to_vec(),
+        host: spec.host.as_bytes().to_vec(),
+        port: u32::from(spec.port),
+        tokens: spec
+            .tokens
+            .iter()
+            .map(|t| t.to_string().into_bytes())
+            .collect(),
+        state: Vec::new(),
+        is_local: false,
+        is_secure: Some(spec.is_secure),
+    });
+    DynRpbStagedChange {
+        kind,
+        peer_idx: change.peer_idx,
+        peer,
+    }
+}
+
+fn format_cluster_error(op: &str, err: &ClusterError) -> String {
+    format!("{op}: {err}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,7 +965,7 @@ mod tests {
         // Code 99 is unused.
         let frame = Frame::new(99, Vec::new());
         let ds = MemoryDatastore::new();
-        let Err(err) = process_frame(&frame, &ds).await else {
+        let Err(err) = process_frame(&frame, &ds, &NoopClusterAdmin).await else {
             panic!("expected error for unknown code");
         };
         assert!(matches!(err, RiakError::UnknownMessageCode(99)));
@@ -774,7 +986,9 @@ mod tests {
         // we reply with an RpbErrorResp instead.
         let frame = Frame::new(MessageCode::GetResp.as_u8(), Vec::new());
         let ds = MemoryDatastore::new();
-        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let frames = collect_frames(stream).await;
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].code, MessageCode::ErrorResp.as_u8());
@@ -787,7 +1001,7 @@ mod tests {
         // GetReq with a truncated length-delimited string field.
         let frame = Frame::new(MessageCode::GetReq.as_u8(), vec![0x0a, 0xff]);
         let ds = MemoryDatastore::new();
-        let Err(err) = process_frame(&frame, &ds).await else {
+        let Err(err) = process_frame(&frame, &ds, &NoopClusterAdmin).await else {
             panic!("expected decode error");
         };
         assert!(matches!(err, RiakError::Decode(_)));
@@ -806,7 +1020,9 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let _ = process_frame(&frame, ds.as_ref()).await.expect("ok");
+        let _ = process_frame(&frame, ds.as_ref(), &NoopClusterAdmin)
+            .await
+            .expect("ok");
         assert_eq!(ds.dispatch_count(), 1);
     }
 
@@ -819,7 +1035,9 @@ mod tests {
             MessageCode::ListBucketsReq.as_u8(),
             RpbListBucketsReq::default().encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let frames = collect_frames(stream).await;
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].code, MessageCode::ListBucketsResp.as_u8());
@@ -843,7 +1061,9 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let frames = collect_frames(stream).await;
         assert_eq!(frames.len(), 5, "expected 4 chunks plus a terminator");
         let mut total_keys = 0usize;
@@ -879,7 +1099,9 @@ mod tests {
             MessageCode::ListBucketsReq.as_u8(),
             RpbListBucketsReq::default().encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let frames = collect_frames(stream).await;
         // 512 / 256 = 2 full chunks, then one empty terminator.
         assert_eq!(frames.len(), 3);
@@ -921,7 +1143,9 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+            .await
+            .expect("ok");
         let frames = collect_frames(stream).await;
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].code, MessageCode::ErrorResp.as_u8());

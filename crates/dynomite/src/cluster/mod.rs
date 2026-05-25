@@ -40,6 +40,7 @@
 //! assert_eq!(p.dc(), "dc1");
 //! ```
 
+pub mod admin_rpc;
 pub mod datacenter;
 pub mod dispatch;
 pub mod failure_detector;
@@ -49,6 +50,11 @@ pub mod peer;
 pub mod pool;
 pub mod snitch;
 pub mod vnode;
+
+pub use self::admin_rpc::{
+    ClusterAdmin, ClusterChange, ClusterChangeKind, ClusterError, JoinPlan, NoopClusterAdmin,
+    PeerSnapshot, PeerSpec, PoolClusterAdmin,
+};
 
 pub use self::datacenter::{Continuum, Datacenter, Rack};
 pub use self::dispatch::{ClusterDispatcher, DispatchPlan, ReplicaTarget};
