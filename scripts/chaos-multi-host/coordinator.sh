@@ -81,7 +81,11 @@ SSH_BASE_OPTS=(-o IdentitiesOnly=yes -i "$SSH_KEY"
 
 ARNOLD_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" arnold)
 NUC_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" -o ProxyJump=arnold gburd@nuc)
-MEH_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" meh)
+# meh's user login shell is fish; route every remote command
+# through bash explicitly so the env-prefix syntax
+# (MODE='x' cmd ...) used by start_host / start_workload /
+# start_injector is parsed by bash, not fish.
+MEH_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" meh bash -lc)
 
 ARNOLD_RSYNC_E="ssh ${SSH_BASE_OPTS[*]}"
 NUC_RSYNC_E="ssh ${SSH_BASE_OPTS[*]} -o ProxyJump=arnold"
