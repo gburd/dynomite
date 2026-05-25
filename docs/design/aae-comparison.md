@@ -27,9 +27,9 @@ Tree shape (`TreeShape` defaults, see `aae::config`):
 
 Exchange protocol:
 
-1. **ROOT-SYNC** — peer A sends its 24 time-bucket roots (pairs of `(bucket_id, hash)`); peer B compares, replies with the time buckets that disagree.
-2. **TREE-SYNC** — for each disagreeing time bucket, peer A sends the 1024 segment hashes; peer B replies with the segment ids that disagree.
-3. **KEY-SYNC** — for each disagreeing segment, peer A sends the full set of `(bucket, key, vclock_hash)` triples currently in that segment; peer B compares and returns the keys whose vclocks differ.
+1. **ROOT-SYNC**  -  peer A sends its 24 time-bucket roots (pairs of `(bucket_id, hash)`); peer B compares, replies with the time buckets that disagree.
+2. **TREE-SYNC**  -  for each disagreeing time bucket, peer A sends the 1024 segment hashes; peer B replies with the segment ids that disagree.
+3. **KEY-SYNC**  -  for each disagreeing segment, peer A sends the full set of `(bucket, key, vclock_hash)` triples currently in that segment; peer B compares and returns the keys whose vclocks differ.
 
 The diverging-key list is then handed to `RepairTask::evaluate`,
 which picks `RepairOutcome::Winner` (sole DVV dominator) or
@@ -104,7 +104,7 @@ designer: Martin Sumner.  Key components:
 
 * **`kv_index_tictactree`** (https://github.com/martinsumner/kv_index_tictactree):
   the new merkle library.  "Tictactree" comes from "tic-tac merkle
-  tree" — a rolling-window merkle structure where time itself is
+  tree"  -  a rolling-window merkle structure where time itself is
   one of the dimensions.  This is where the name we borrowed
   comes from.
 * **`leveled`** (https://github.com/martinsumner/leveled): a
