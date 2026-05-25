@@ -286,7 +286,7 @@ log "multi-host chaos coordinator starting"
 log "  run id:   $RUN_ID"
 log "  duration: $DURATION s"
 log "  mode:     $MODE"
-log "  hosts:    floki arnold nuc meh"
+log "  hosts:    floki arnold nuc"
 log "  logs:     $LOCAL_LOGS"
 log "================================================================"
 
@@ -309,16 +309,13 @@ bootstrap_remote_src() {
 
 bootstrap_remote_src dc-arnold arnold        "$ARNOLD_RSYNC_E" "${ARNOLD_SSH[@]}"
 bootstrap_remote_src dc-nuc    gburd@nuc     "$NUC_RSYNC_E"    "${NUC_SSH[@]}"
-bootstrap_remote_src dc-meh    meh           "$MEH_RSYNC_E"    "${MEH_SSH[@]}"
 
 "${ARNOLD_SSH[@]}" "[ -d /scratch/dynomite-chaos/src ]" || { log "arnold:src missing"; exit 1; }
 "${NUC_SSH[@]}"    "[ -d /scratch/dynomite-chaos/src ]" || { log "nuc:src missing"; exit 1; }
-"${MEH_SSH[@]}"    "[ -d /scratch/dynomite-chaos/src ]" || { log "meh:src missing"; exit 1; }
 
 start_floki
 start_host dc-arnold "$TOKENS_ARNOLD" "$(arnold_seeds)" "${ARNOLD_SSH[@]}"
 start_host dc-nuc    "$TOKENS_NUC"    "$(nuc_seeds)"    "${NUC_SSH[@]}"
-start_host dc-meh    "$TOKENS_MEH"    "$(meh_seeds)"    "${MEH_SSH[@]}"
 
 # Brief settle so any deferred state is in place.
 sleep 5
@@ -326,12 +323,10 @@ sleep 5
 start_workload dc-floki  /bin/bash             bash -lc
 start_workload dc-arnold /bin/bash             "${ARNOLD_SSH[@]}"
 start_workload dc-nuc    /bin/bash             "${NUC_SSH[@]}"
-start_workload dc-meh    /bin/bash             "${MEH_SSH[@]}"
 
 start_injector dc-floki  /bin/bash             bash -lc
 start_injector dc-arnold /bin/bash             "${ARNOLD_SSH[@]}"
 start_injector dc-nuc    /usr/local/bin/bash   "${NUC_SSH[@]}"
-start_injector dc-meh    /bin/bash             "${MEH_SSH[@]}"
 
 log "==> all components up; sleeping for $DURATION seconds"
 sleep "$DURATION"
