@@ -71,9 +71,28 @@ pub use crate::server::{handle_conn, serve_pbc, serve_pbc_tls};
 // the existing block so parallel branches do not conflict.
 pub use crate::server::{handle_conn_with_admin, serve_pbc_tls_with_admin, serve_pbc_with_admin};
 
+// Routing-hooks entry point -- bucket-property knobs slice.
+// Re-exported below the prior block so parallel branches do
+// not conflict.
+pub use crate::server::{handle_conn_with_hooks, serve_pbc_with_routing};
+
 pub mod aae;
 pub mod datatypes;
 
 // MapReduce framework added by the v0.0.3 slice. The module owns
 // its own public surface; see `crate::mapreduce` for entry points.
 pub mod mapreduce;
+
+// Walk-N-successors replication and bucket-routing helpers.
+// Re-exported below the prior block so parallel branches do
+// not conflict.
+pub mod bucket_props;
+pub mod replication;
+pub mod router;
+
+pub use crate::bucket_props::{BucketProps, BucketPropsRegistry};
+pub use crate::replication::{
+    plan_replicas, ReplicationPlan, ReplicationStrategy, ReplicationStrategyError, RingPoint,
+    RingView,
+};
+pub use crate::router::{BucketRouter, PeerOp, PeerOutbound, RouteDecision, RoutingHooks};
