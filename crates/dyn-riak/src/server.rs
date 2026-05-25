@@ -79,6 +79,7 @@ use crate::proto::pb::messages::{
     RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, DYN_STAGED_CHANGE_ADD,
     DYN_STAGED_CHANGE_REMOVE, INDEX_QUERY_TYPE_EQ, INDEX_QUERY_TYPE_RANGE,
 };
+use crate::router::{PeerOp, RoutingHooks};
 
 /// Maximum number of bucket / key entries packed into a single
 /// streaming `RpbListBucketsResp` / `RpbListKeysResp` frame.
@@ -203,23 +204,62 @@ pub async fn serve_pbc_tls_with_admin(
     serve_pbc_inner(listener, datastore, admin, Some(acceptor)).await
 }
 
+/// As [`serve_pbc_with_admin`], with [`RoutingHooks`] wired into
+/// the request path.
+///
+/// When hooks are wired, `RpbGetReq` / `RpbPutReq` / `RpbDelReq`
+/// frames are first routed through
+/// [`crate::router::BucketRouter::route`]; the resulting plan
+/// drives a per-replica fan-out via
+/// [`crate::router::PeerOutbound::dispatch`] before the local
+/// datastore call. Topology-strategy buckets fall through to
+/// the existing pipeline (no per-replica fan-out happens at
+/// this layer; the existing
+/// [`dynomite::cluster::dispatch::ClusterDispatcher`] is the
+/// source of truth there).
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+pub async fn serve_pbc_with_routing(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+    hooks: RoutingHooks,
+) -> Result<(), RiakError> {
+    serve_pbc_inner_with_hooks(listener, datastore, admin, None, Some(hooks)).await
+}
+
 async fn serve_pbc_inner(
     listener: TcpListener,
     datastore: Arc<dyn Datastore>,
     admin: Arc<dyn ClusterAdmin>,
     acceptor: Option<TlsAcceptor>,
 ) -> Result<(), RiakError> {
+    serve_pbc_inner_with_hooks(listener, datastore, admin, acceptor, None).await
+}
+
+async fn serve_pbc_inner_with_hooks(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+    acceptor: Option<TlsAcceptor>,
+    hooks: Option<RoutingHooks>,
+) -> Result<(), RiakError> {
     loop {
         let (sock, peer) = listener.accept().await?;
         let datastore = Arc::clone(&datastore);
         let admin = Arc::clone(&admin);
+        let hooks = hooks.clone();
         match acceptor.as_ref() {
             Some(acc) => {
                 let acc = acc.clone();
                 tokio::spawn(async move {
                     match acc.accept(sock).await {
                         Ok(tls) => {
-                            if let Err(e) = handle_conn_with_admin(tls, datastore, admin).await {
+                            if let Err(e) =
+                                handle_conn_with_hooks(tls, datastore, admin, hooks).await
+                            {
                                 tracing::warn!(
                                     %peer,
                                     error = %e,
@@ -237,7 +277,7 @@ async fn serve_pbc_inner(
             }
             None => {
                 tokio::spawn(async move {
-                    if let Err(e) = handle_conn_with_admin(sock, datastore, admin).await {
+                    if let Err(e) = handle_conn_with_hooks(sock, datastore, admin, hooks).await {
                         tracing::warn!(%peer, error = %e, "riak pbc connection ended with error");
                     }
                 });
@@ -281,6 +321,24 @@ pub async fn handle_conn_with_admin<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    handle_conn_with_hooks(stream, datastore, admin, None).await
+}
+
+/// As [`handle_conn_with_admin`], with optional
+/// [`RoutingHooks`] threaded through the per-frame dispatcher.
+///
+/// # Errors
+///
+/// Returns the first wire-level or datastore error encountered.
+pub async fn handle_conn_with_hooks<S>(
+    stream: S,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+    hooks: Option<RoutingHooks>,
+) -> Result<(), RiakError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let (mut reader, mut writer) = tokio::io::split(stream);
     loop {
         let frame = match read_frame(&mut reader).await {
@@ -291,7 +349,8 @@ where
             Err(other) => return Err(other),
         };
 
-        let mut response = process_frame(&frame, datastore.as_ref(), admin.as_ref()).await?;
+        let mut response =
+            process_frame(&frame, datastore.as_ref(), admin.as_ref(), hooks.as_ref()).await?;
         while let Some(item) = response.next().await {
             let f = item?;
             write_frame(&mut writer, &f).await?;
@@ -307,16 +366,17 @@ async fn process_frame(
     frame: &Frame,
     datastore: &dyn Datastore,
     admin: &dyn ClusterAdmin,
+    hooks: Option<&RoutingHooks>,
 ) -> Result<FrameStream, RiakError> {
     let code = MessageCode::from_u8(frame.code).map_err(RiakError::UnknownMessageCode)?;
     let stream: FrameStream = match code {
         MessageCode::PingReq => single_frame(handle_ping(&frame.body)?),
         MessageCode::ServerInfoReq => single_frame(handle_server_info(&frame.body)?),
-        MessageCode::GetReq => single_frame(handle_get(&frame.body, datastore).await?),
-        MessageCode::PutReq => single_frame(handle_put(&frame.body, datastore).await?),
-        MessageCode::DelReq => single_frame(handle_del(&frame.body, datastore).await?),
-        MessageCode::GetBucketReq => single_frame(handle_get_bucket(&frame.body)?),
-        MessageCode::SetBucketReq => single_frame(handle_set_bucket(&frame.body)?),
+        MessageCode::GetReq => single_frame(handle_get(&frame.body, datastore, hooks).await?),
+        MessageCode::PutReq => single_frame(handle_put(&frame.body, datastore, hooks).await?),
+        MessageCode::DelReq => single_frame(handle_del(&frame.body, datastore, hooks).await?),
+        MessageCode::GetBucketReq => single_frame(handle_get_bucket(&frame.body, hooks)?),
+        MessageCode::SetBucketReq => single_frame(handle_set_bucket(&frame.body, hooks)?),
         MessageCode::ListBucketsReq => handle_list_buckets(&frame.body, datastore)?,
         MessageCode::ListKeysReq => handle_list_keys(&frame.body, datastore)?,
         MessageCode::IndexReq => handle_index(&frame.body, datastore).await?,
@@ -386,8 +446,29 @@ fn handle_server_info(body: &[u8]) -> Result<Frame, RiakError> {
     ))
 }
 
-async fn handle_get(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+async fn handle_get(
+    body: &[u8],
+    datastore: &dyn Datastore,
+    hooks: Option<&RoutingHooks>,
+) -> Result<Frame, RiakError> {
     let req = RpbGetReq::decode(body)?;
+    if let Some(hooks) = hooks {
+        let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+        let decision = hooks.router.route(bucket_type, &req.bucket, &req.key);
+        for replica in decision.replica_list() {
+            hooks
+                .outbound
+                .dispatch(
+                    replica.peer_idx,
+                    PeerOp::Get {
+                        bucket_type: decision.bucket_type.clone(),
+                        bucket: req.bucket.clone(),
+                        key: req.key.clone(),
+                    },
+                )
+                .await;
+        }
+    }
     // Trampoline through the substrate so dispatch counts tick.
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
@@ -413,7 +494,11 @@ async fn handle_get(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, Ria
     ))
 }
 
-async fn handle_put(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+async fn handle_put(
+    body: &[u8],
+    datastore: &dyn Datastore,
+    hooks: Option<&RoutingHooks>,
+) -> Result<Frame, RiakError> {
     let req = RpbPutReq::decode(body)?;
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
@@ -427,6 +512,24 @@ async fn handle_put(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, Ria
             ));
         }
     };
+    if let Some(hooks) = hooks {
+        let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+        let decision = hooks.router.route(bucket_type, &req.bucket, &key);
+        for replica in decision.replica_list() {
+            hooks
+                .outbound
+                .dispatch(
+                    replica.peer_idx,
+                    PeerOp::Put {
+                        bucket_type: decision.bucket_type.clone(),
+                        bucket: req.bucket.clone(),
+                        key: key.clone(),
+                        value: req.value.clone(),
+                    },
+                )
+                .await;
+        }
+    }
     let indexes: Vec<(Vec<u8>, Vec<u8>)> = req
         .indexes
         .iter()
@@ -444,8 +547,29 @@ async fn handle_put(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, Ria
     }
 }
 
-async fn handle_del(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+async fn handle_del(
+    body: &[u8],
+    datastore: &dyn Datastore,
+    hooks: Option<&RoutingHooks>,
+) -> Result<Frame, RiakError> {
     let req = RpbDelReq::decode(body)?;
+    if let Some(hooks) = hooks {
+        let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+        let decision = hooks.router.route(bucket_type, &req.bucket, &req.key);
+        for replica in decision.replica_list() {
+            hooks
+                .outbound
+                .dispatch(
+                    replica.peer_idx,
+                    PeerOp::Del {
+                        bucket_type: decision.bucket_type.clone(),
+                        bucket: req.bucket.clone(),
+                        key: req.key.clone(),
+                    },
+                )
+                .await;
+        }
+    }
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
     match datastore.riak_delete(&req.bucket, &req.key).await {
@@ -590,29 +714,66 @@ fn error_frame(message: String) -> Frame {
     Frame::new(MessageCode::ErrorResp.as_u8(), resp.encode_to_vec())
 }
 
-fn handle_get_bucket(body: &[u8]) -> Result<Frame, RiakError> {
-    let _req = RpbGetBucketReq::decode(body)?;
-    // Until per-bucket persistence lands, the server reports
-    // conservative cluster defaults. These match Riak's
-    // out-of-the-box defaults for the `default` bucket type.
-    let resp = RpbGetBucketResp {
-        props: Some(RpbBucketProps {
+fn handle_get_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame, RiakError> {
+    let req = RpbGetBucketReq::decode(body)?;
+    // When a routing-hooks bundle is wired, the server consults
+    // the bucket-properties registry so a freshly-set
+    // [`RpbSetBucketReq`] round-trips through subsequent
+    // [`RpbGetBucketReq`] frames. Without hooks the legacy
+    // conservative defaults stay in force so existing tests
+    // that build the substrate without a registry continue to
+    // see the same response shape they always did.
+    let props = if let Some(hooks) = hooks {
+        let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+        let resolved = hooks.router.registry().resolve(bucket_type, &req.bucket);
+        RpbBucketProps {
+            n_val: Some(u32::from(resolved.effective_n_val())),
+            allow_mult: Some(false),
+            last_write_wins: Some(false),
+            chash_keyfun: Some(resolved.effective_keyfun().to_wire()),
+            replication_strategy: Some(resolved.effective_strategy().to_wire()),
+            ..RpbBucketProps::default()
+        }
+    } else {
+        RpbBucketProps {
             n_val: Some(3),
             allow_mult: Some(false),
             last_write_wins: Some(false),
             ..RpbBucketProps::default()
-        }),
+        }
     };
+    let resp = RpbGetBucketResp { props: Some(props) };
     Ok(Frame::new(
         MessageCode::GetBucketResp.as_u8(),
         resp.encode_to_vec(),
     ))
 }
 
-fn handle_set_bucket(body: &[u8]) -> Result<Frame, RiakError> {
-    let _req = RpbSetBucketReq::decode(body)?;
-    // The supplied properties are not yet persisted; the response
-    // is an empty acknowledgement so a conforming client treats
+fn handle_set_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame, RiakError> {
+    let req = RpbSetBucketReq::decode(body)?;
+    if let Some(hooks) = hooks {
+        let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+        if let Some(props) = req.props.as_ref() {
+            let mut bp = crate::bucket_props::BucketProps::default();
+            if let Some(w) = props.chash_keyfun {
+                if let Ok(kf) = crate::datatypes::keyfun::KeyFun::from_wire(w) {
+                    bp.keyfun = Some(kf);
+                }
+            }
+            if let Some(w) = props.replication_strategy {
+                if let Ok(s) = crate::replication::ReplicationStrategy::from_wire(w) {
+                    bp.strategy = Some(s);
+                }
+            }
+            if let Some(n) = props.n_val {
+                bp.n_val = Some(u8::try_from(n).unwrap_or(u8::MAX));
+            }
+            hooks.router.registry().set(bucket_type, &req.bucket, bp);
+        }
+    }
+    // Without a registry the supplied properties are dropped
+    // (legacy behaviour); the response is an empty
+    // acknowledgement either way so a conforming client treats
     // the call as successful.
     let resp = RpbSetBucketResp::default();
     Ok(Frame::new(
@@ -1027,7 +1188,7 @@ mod tests {
         // Code 99 is unused.
         let frame = Frame::new(99, Vec::new());
         let ds = MemoryDatastore::new();
-        let Err(err) = process_frame(&frame, &ds, &NoopClusterAdmin).await else {
+        let Err(err) = process_frame(&frame, &ds, &NoopClusterAdmin, None).await else {
             panic!("expected error for unknown code");
         };
         assert!(matches!(err, RiakError::UnknownMessageCode(99)));
@@ -1048,7 +1209,7 @@ mod tests {
         // we reply with an RpbErrorResp instead.
         let frame = Frame::new(MessageCode::GetResp.as_u8(), Vec::new());
         let ds = MemoryDatastore::new();
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1063,7 +1224,7 @@ mod tests {
         // GetReq with a truncated length-delimited string field.
         let frame = Frame::new(MessageCode::GetReq.as_u8(), vec![0x0a, 0xff]);
         let ds = MemoryDatastore::new();
-        let Err(err) = process_frame(&frame, &ds, &NoopClusterAdmin).await else {
+        let Err(err) = process_frame(&frame, &ds, &NoopClusterAdmin, None).await else {
             panic!("expected decode error");
         };
         assert!(matches!(err, RiakError::Decode(_)));
@@ -1082,7 +1243,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let _ = process_frame(&frame, ds.as_ref(), &NoopClusterAdmin)
+        let _ = process_frame(&frame, ds.as_ref(), &NoopClusterAdmin, None)
             .await
             .expect("ok");
         assert_eq!(ds.dispatch_count(), 1);
@@ -1097,7 +1258,7 @@ mod tests {
             MessageCode::ListBucketsReq.as_u8(),
             RpbListBucketsReq::default().encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1123,7 +1284,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1161,7 +1322,7 @@ mod tests {
             MessageCode::ListBucketsReq.as_u8(),
             RpbListBucketsReq::default().encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1205,7 +1366,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1294,7 +1455,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1344,7 +1505,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let mut stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let mut stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let first = stream.next().await.expect("first").expect("frame");
@@ -1368,7 +1529,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1400,7 +1561,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1451,7 +1612,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;

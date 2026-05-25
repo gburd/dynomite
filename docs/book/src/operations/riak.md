@@ -277,3 +277,70 @@ References:
   `crates/dyn-riak/src/datatypes/dvv.rs`; the deviation is
   recorded in `docs/parity.md` D4 and the design notes in
   `docs/journal/2026-05-25-dvv-default.md`.
+## Bucket properties
+
+Two operator-confirmed bucket-property knobs let Riak deployments
+match the upstream behaviour byte-for-byte without forcing every
+deployment onto the same defaults.
+
+### `chash_keyfun`: bucket-only hashing
+
+By default Dynomite hashes `<bucket>/<key>` to choose a
+partition; this is Riak's `chash_std_keyfun`. Some deployments
+want every key in a bucket to land on the same partition (so the
+bucket is effectively a single shard); for that case the per-
+bucket-property `chash_keyfun` selector accepts `BUCKETONLY`,
+which hashes only `<bucket>`. The wire-level enum is:
+
+| Value | Meaning                                                          |
+|-------|------------------------------------------------------------------|
+| 0     | `STD` -- hash `<bucket>/<key>` (default).                        |
+| 1     | `BUCKETONLY` -- hash `<bucket>` only.                            |
+| 99    | `CUSTOM` -- reserved. Not implemented; rejected at decode time.  |
+
+The selector is stored in
+`RpbBucketProps.chash_keyfun` (Dynomite extension at tag 30).
+Set it through the standard `RpbSetBucketReq` admin path; the
+in-memory enum is `dyn_riak::datatypes::keyfun::KeyFun`. The
+shaping happens before the cluster's hash function: the
+distribution layer (vnode or random-slicing) keeps consuming the
+already-hashed bytes verbatim.
+
+### `replication_strategy`: walk-N-successors
+
+Dynomite's classic replication fans a write across datacenters
+and racks per the configured consistency level; Riak instead
+replicates a key to the primary partition plus the next
+`n_val - 1` peers reached by walking forward on the ring,
+deduplicating peers with multiple ring slots. Both models are
+now available behind a per-bucket-property selector:
+
+| Value | Meaning                                                           |
+|-------|-------------------------------------------------------------------|
+| 0     | `TOPOLOGY` -- per-DC, per-rack quorum fan-out (Dynomite default). |
+| 1     | `SUCCESSORS` -- walk-N-successors (Riak default).                 |
+
+The default is mode-aware:
+
+* Non-Riak pools always run `TOPOLOGY`; the knob is not
+  exposed to operators.
+* Riak-mode pools default to `SUCCESSORS` for newly-created
+  bucket-types. Operators override per-bucket-type by
+  `RpbSetBucketReq`.
+
+Edge cases honoured by the planner:
+
+* Fewer peers than `n_val`: the plan returns whatever peers are
+  available and the operator sees a `tracing::warn!` at config-
+  validation time.
+* Peers in `Down` state: NOT skipped during planning (they are
+  returned as targets and the runtime
+  [`is_routable()`](https://docs.rs/dynomite) filter handles
+  the actual exclusion). This matches the topology mode's
+  behaviour.
+
+The selector is stored in
+`RpbBucketProps.replication_strategy` (Dynomite extension at
+tag 31). The in-memory enum is
+`dyn_riak::replication::ReplicationStrategy`; the planning
+function is `dyn_riak::replication::plan_replicas`.

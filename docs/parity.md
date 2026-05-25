@@ -1350,6 +1350,89 @@ Pinned by:
   (now consumes `&[(Bytes, DvvSet)]`; the
   `RepairOutcome::Winner` variant carries a `dvv: DvvSet`
   field).
+### D4: `chash_keyfun` per-bucket pre-hash shaping
+
+Riak's bucket-properties surface includes a `chash_keyfun`
+that picks the bytes fed to the partition hash. The Rust port
+models the canonical pair (`STD = 0`, `BUCKETONLY = 1`) as a
+numeric enum at
+`RpbBucketProps.chash_keyfun` (Dynomite extension at tag 30
+of the Riak proto schema). The reserved `CUSTOM = 99` slot is
+decoded but rejected with a typed error: we do not ship a
+user-defined keyfun. Operators who need a third shape are
+expected to file a request and a follow-up slice will land
+the required hooks.
+
+The shaping happens before the cluster's hash function:
+[`KeyFun::route_bytes(bucket, key)`](crate::datatypes::keyfun::KeyFun::route_bytes)
+produces either `<bucket>/<key>` (Std) or `<bucket>` alone
+(BucketOnly). The distribution layer (vnode or random-slicing)
+sees the produced bytes verbatim; no modules under
+`dynomite::hashkit` or `dynomite::cluster::vnode` were touched.
+
+Pinned by:
+- `dyn_riak::datatypes::keyfun::tests` (route shape, wire
+  round-trip, defaulting, `CUSTOM` rejection).
+- `dyn_riak::router::tests::bucketonly_keyfun_collapses_keys_to_one_partition`
+  (100-key workload at one peer).
+- `dyn_riak::router::tests::std_keyfun_distributes_within_5_percent_of_uniform`
+  (10000-key workload within 5 percent of uniform across 5
+  peers).
+- `crates/dyn-riak/tests/bucket_props_routing.rs::bucketonly_keyfun_routes_two_keys_to_same_primary`
+  (end-to-end PBC PUT, two keys land on the same per-peer
+  outbound channel).
+
+### D5: `replication_strategy` walk-N-successors as Riak-mode opt-in
+
+Dynomite's classic replication is the per-DC, per-rack quorum
+fan-out implemented by `cluster::dispatch::ClusterDispatcher`.
+Real Riak replicates a key to its primary partition plus the
+next `n_val - 1` peers reached by walking forward on the
+token ring, deduplicating peers with multiple ring slots.
+
+The Rust port surfaces both as a per-bucket-property
+`replication_strategy` selector
+(`TOPOLOGY = 0`, `SUCCESSORS = 1`; tag 31 in our
+`RpbBucketProps` extension). The default is mode-aware:
+non-Riak pools always run `TOPOLOGY` and the knob is not
+exposed to operators; Riak-mode pools default to `SUCCESSORS`
+for newly created bucket-types and operators override per-
+bucket-type via `RpbSetBucketReq`.
+
+The planner
+([`dyn_riak::replication::plan_replicas`](crate::replication::plan_replicas))
+is additive: `Topology` returns `ReplicationPlan::Topology(empty)`
+as a sentinel and the existing topology pipeline keeps
+producing the targets; `Successors` walks the ring and
+returns `[primary, succ1, succ2, ...]`. The dispatch
+integration is in `dyn_riak::router::BucketRouter` plus the
+new `serve_pbc_with_routing` entry point. The existing
+`serve_pbc` / `serve_pbc_with_admin` / `serve_pbc_tls*`
+functions trampoline through with no hooks, preserving every
+pre-existing test fixture.
+
+Edge cases are documented in the journal
+(`docs/journal/2026-05-25-walk-n-successors.md`):
+fewer-than-`n_val` peers returns whatever is available and
+relies on a config-validation `tracing::warn!`; Down peers
+are returned as targets and the runtime
+`is_routable()` filter handles exclusion (consistent with
+topology mode).
+
+Pinned by:
+- `dyn_riak::replication::tests` (5-peer ring fixture
+  exercising peer-0 / peer-3 / wrap-around cases, `n_val=2`
+  and `n_val=10` boundaries, dedup, empty-ring synthetic
+  primary).
+- `dyn_riak::bucket_props::tests` (mode-aware defaults,
+  override precedence, normalised bucket-type fallback).
+- `dyn_riak::router::tests::topology_strategy_yields_empty_replica_list`
+  (sentinel passthrough).
+- `crates/dyn-riak/tests/bucket_props_routing.rs::successors_strategy_fans_one_put_out_to_three_peers`
+  (end-to-end PBC PUT to three distinct peer outbound
+  channels via mock `PeerOutbound`).
+- `crates/dyn-riak/tests/bucket_props_routing.rs::topology_strategy_does_not_fan_out_via_successors_path`
+  (existing topology mode unchanged).
 
 ### Stage 11: entropy chunks are length-prefixed instead of fixed `cipher_size`
 
