@@ -59,15 +59,19 @@ export MODE
 # range and only one node per DC, that's still LocalDatastore
 # for keys hashing into the local range and Replicas (cross-DC)
 # for keys that don't. Pass-1 used identical tokens on every
-# node so cross-DC routing was never triggered.
+# node so cross-DC routing was never triggered.  Pass-3 uses a
+# 4-way split (floki=0, arnold=1G, nuc=2G, meh=3G of u32::MAX)
+# so every DC owns one quadrant of the ring.
 TOKENS_FLOKI="0"
-TOKENS_ARNOLD="1431655765"
-TOKENS_NUC="2863311530"
+TOKENS_ARNOLD="1073741824"
+TOKENS_NUC="2147483648"
+TOKENS_MEH="3221225472"
 
 FLOKI_TS_IP="100.104.16.13"
 ARNOLD_TS_IP="100.117.233.104"
 ARNOLD_LAN_IP="192.168.1.37"
 NUC_LAN_IP="192.168.1.61"
+MEH_LAN_IP="192.168.1.185"
 
 SSH_KEY="$HOME/.ssh/id_ed25519"
 SSH_BASE_OPTS=(-o IdentitiesOnly=yes -i "$SSH_KEY"
@@ -77,19 +81,20 @@ SSH_BASE_OPTS=(-o IdentitiesOnly=yes -i "$SSH_KEY"
 
 ARNOLD_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" arnold)
 NUC_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" -o ProxyJump=arnold gburd@nuc)
+MEH_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" meh)
 
 ARNOLD_RSYNC_E="ssh ${SSH_BASE_OPTS[*]}"
 NUC_RSYNC_E="ssh ${SSH_BASE_OPTS[*]} -o ProxyJump=arnold"
+MEH_RSYNC_E="ssh ${SSH_BASE_OPTS[*]}"
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOCAL_LOGS/coordinator.log" ; }
 
-# Each host's view of the cluster: floki sees arnold via
-# Tailscale and nuc as effectively unreachable (no cross-host
-# routing yet); arnold can reach both floki (Tailscale) and nuc
-# (LAN); nuc reaches arnold via LAN, floki effectively
-# unreachable. The seed lists below reflect the topology so
-# `dyn_seeds` is parsed correctly even though the binary does
-# not yet open outbound peer connections.
+# Each host's view of the cluster.  Pass-3 has full 4-way
+# connectivity: floki and arnold see each other over Tailscale;
+# nuc/meh are LAN; arnold acts as the LAN gateway for cross-DC
+# (floki <-> arnold via Tailscale; arnold <-> nuc/meh via LAN).
+# meh sees the LAN directly and reaches arnold/nuc on LAN; it
+# reaches floki via the Tailscale-bridged arnold seed.
 
 floki_seeds() {
     cat <<SEEDS
@@ -101,12 +106,21 @@ arnold_seeds() {
     cat <<SEEDS
     - $FLOKI_TS_IP:$DYN_LISTEN_PORT:rack-1:dc-floki:$TOKENS_FLOKI
     - $NUC_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-nuc:$TOKENS_NUC
+    - $MEH_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-meh:$TOKENS_MEH
 SEEDS
 }
 
 nuc_seeds() {
     cat <<SEEDS
     - $ARNOLD_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS_ARNOLD
+    - $MEH_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-meh:$TOKENS_MEH
+SEEDS
+}
+
+meh_seeds() {
+    cat <<SEEDS
+    - $ARNOLD_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-arnold:$TOKENS_ARNOLD
+    - $NUC_LAN_IP:$DYN_LISTEN_PORT:rack-1:dc-nuc:$TOKENS_NUC
 SEEDS
 }
 
@@ -271,6 +285,27 @@ log "  mode:     $MODE"
 log "  hosts:    floki arnold nuc meh"
 log "  logs:     $LOCAL_LOGS"
 log "================================================================"
+
+# Self-healing source bootstrap: if a remote host's
+# /scratch/dynomite-chaos/src is missing, rsync the local
+# source there before the start step needs it.  Fast no-op when
+# the tree is already present and up to date.
+bootstrap_remote_src() {
+    local label="$1"; shift
+    local rsync_target="$1"; shift
+    local rsync_e="$1"; shift
+    local mkdir_runner=("$@")
+    log "bootstrap $label src"
+    "${mkdir_runner[@]}" "mkdir -p /scratch/dynomite-chaos/src /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs /scratch/dynomite-chaos/build/release"
+    rsync -a --delete \
+        --exclude target/ --exclude .git/ --exclude _/dynomite/.git/ \
+        -e "$rsync_e" \
+        "$REPO/" "$rsync_target:/scratch/dynomite-chaos/src/"
+}
+
+bootstrap_remote_src dc-arnold arnold        "$ARNOLD_RSYNC_E" "${ARNOLD_SSH[@]}"
+bootstrap_remote_src dc-nuc    gburd@nuc     "$NUC_RSYNC_E"    "${NUC_SSH[@]}"
+bootstrap_remote_src dc-meh    meh           "$MEH_RSYNC_E"    "${MEH_SSH[@]}"
 
 "${ARNOLD_SSH[@]}" "[ -d /scratch/dynomite-chaos/src ]" || { log "arnold:src missing"; exit 1; }
 "${NUC_SSH[@]}"    "[ -d /scratch/dynomite-chaos/src ]" || { log "nuc:src missing"; exit 1; }
