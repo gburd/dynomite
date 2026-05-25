@@ -49,15 +49,18 @@
 //!
 //! [crypto provider]: rustls::crypto::CryptoProvider
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, BufReader};
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls::server::{ClientHello, ResolvesServerCert, WebPkiClientVerifier};
+use rustls::sign::CertifiedKey;
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -242,6 +245,305 @@ pub fn server_name_owned(host: &str) -> Result<ServerName<'static>, TlsError> {
         .map_err(|e| TlsError::Rustls(format!("server name: {e}")))
 }
 
+/// SNI label the peer plane uses to route handshakes to the
+/// matching per-DC profile.
+///
+/// Both ends of a peer-plane TLS handshake set the SNI to
+/// `dc-<peer-dc>.dynomite.local`; the listener's SNI resolver
+/// (see [`TlsProfileMap::build_sni_acceptor`]) parses this label
+/// to pick the certificate.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::net::tls::dc_sni_hostname;
+/// assert_eq!(dc_sni_hostname("dc1"), "dc-dc1.dynomite.local");
+/// ```
+#[must_use]
+pub fn dc_sni_hostname(dc: &str) -> String {
+    format!("dc-{dc}.dynomite.local")
+}
+
+/// Inverse of [`dc_sni_hostname`]: extract the DC name from an
+/// SNI label that follows the `dc-<dc>.dynomite.local` shape, or
+/// return `None` if the label does not match.
+fn dc_from_sni_label(name: &str) -> Option<&str> {
+    name.strip_prefix("dc-")
+        .and_then(|rest| rest.strip_suffix(".dynomite.local"))
+        .filter(|dc| !dc.is_empty())
+}
+
+/// PEM material for one TLS profile.
+///
+/// Used by [`TlsProfileMap::build`] to assemble per-DC server
+/// and client configs from on-disk paths. `cert` and `key` are
+/// required; `ca` is optional and, when present, pins the
+/// trust anchor for both directions and turns the listener
+/// into a mutual-TLS deployment.
+#[derive(Debug, Clone)]
+pub struct TlsProfileSpec {
+    /// PEM certificate path.
+    pub cert: PathBuf,
+    /// PEM private-key path matching [`Self::cert`].
+    pub key: PathBuf,
+    /// Optional PEM CA bundle.
+    pub ca: Option<PathBuf>,
+}
+
+/// Bundle of precompiled rustls configs for the peer plane,
+/// keyed by datacenter name plus an optional default profile
+/// used as a fallback for any DC without an explicit entry.
+///
+/// The map is built once at startup by
+/// [`TlsProfileMap::build`] and shared (cheaply, every member
+/// is an `Arc` under the hood) across the dnode listener and
+/// every per-peer outbound supervisor. Lookups are O(log n) in
+/// the number of DCs.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::collections::BTreeMap;
+/// use std::path::PathBuf;
+/// use dynomite::net::tls::{TlsProfileMap, TlsProfileSpec};
+///
+/// let mut per_dc = BTreeMap::new();
+/// per_dc.insert(
+///     "dc1".to_string(),
+///     TlsProfileSpec {
+///         cert: PathBuf::from("/etc/dynomite/dc1.pem"),
+///         key: PathBuf::from("/etc/dynomite/dc1.key"),
+///         ca: None,
+///     },
+/// );
+/// let map = TlsProfileMap::build(None, per_dc).unwrap();
+/// assert!(map.client_config_for_dc("dc1").is_some());
+/// assert!(map.client_config_for_dc("dc-without-profile").is_none());
+/// ```
+#[derive(Clone, Default)]
+pub struct TlsProfileMap {
+    per_dc_server: BTreeMap<String, Arc<ServerConfig>>,
+    per_dc_client: BTreeMap<String, Arc<ClientConfig>>,
+    per_dc_certified: BTreeMap<String, Arc<CertifiedKey>>,
+    default_server: Option<Arc<ServerConfig>>,
+    default_client: Option<Arc<ClientConfig>>,
+    default_certified: Option<Arc<CertifiedKey>>,
+    /// Combined CA cert chain (DER) across every profile that
+    /// supplied a CA bundle. Used by
+    /// [`Self::build_sni_acceptor`] to assemble a single client
+    /// verifier that trusts any configured CA.
+    combined_ca_certs: Vec<CertificateDer<'static>>,
+    has_any_client_ca: bool,
+}
+
+impl std::fmt::Debug for TlsProfileMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TlsProfileMap")
+            .field("per_dc", &self.per_dc_server.keys().collect::<Vec<_>>())
+            .field("has_default", &self.default_server.is_some())
+            .field("has_any_client_ca", &self.has_any_client_ca)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TlsProfileMap {
+    /// Build a map from a default profile (the legacy
+    /// `peer_tls_*` triple) plus a `dc -> TlsProfileSpec` map.
+    ///
+    /// Either argument may be empty: a `None` `default` plus
+    /// an empty `per_dc` produces an empty map (peer plane runs
+    /// plaintext).
+    ///
+    /// # Errors
+    /// Returns the first [`TlsError`] from a failing PEM load.
+    pub fn build(
+        default: Option<TlsProfileSpec>,
+        per_dc: BTreeMap<String, TlsProfileSpec>,
+    ) -> Result<Self, TlsError> {
+        ensure_provider_installed();
+        let provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(rustls::crypto::ring::default_provider()));
+
+        let mut map = Self::default();
+
+        if let Some(spec) = default {
+            let server_cfg = load_server_config(&spec.cert, &spec.key, spec.ca.as_deref())?;
+            let client_cfg = load_client_config(spec.ca.as_deref())?;
+            let certified = load_certified_key(&spec.cert, &spec.key, provider.as_ref())?;
+            if let Some(ca_path) = spec.ca.as_deref() {
+                map.combined_ca_certs.extend(load_certs(ca_path)?);
+                map.has_any_client_ca = true;
+            }
+            map.default_server = Some(server_cfg);
+            map.default_client = Some(client_cfg);
+            map.default_certified = Some(certified);
+        }
+
+        for (dc, spec) in per_dc {
+            let server_cfg = load_server_config(&spec.cert, &spec.key, spec.ca.as_deref())?;
+            let client_cfg = load_client_config(spec.ca.as_deref())?;
+            let certified = load_certified_key(&spec.cert, &spec.key, provider.as_ref())?;
+            if let Some(ca_path) = spec.ca.as_deref() {
+                map.combined_ca_certs.extend(load_certs(ca_path)?);
+                map.has_any_client_ca = true;
+            }
+            map.per_dc_server.insert(dc.clone(), server_cfg);
+            map.per_dc_client.insert(dc.clone(), client_cfg);
+            map.per_dc_certified.insert(dc, certified);
+        }
+
+        Ok(map)
+    }
+
+    /// True when no profile (default or per-DC) is configured.
+    /// In this state the peer plane runs plaintext.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.default_server.is_none() && self.per_dc_server.is_empty()
+    }
+
+    /// Server config to use for a connection negotiated with a
+    /// peer in `dc`. Returns the per-DC entry if present,
+    /// otherwise the default profile, otherwise `None`.
+    #[must_use]
+    pub fn server_config_for_dc(&self, dc: &str) -> Option<Arc<ServerConfig>> {
+        self.per_dc_server
+            .get(dc)
+            .cloned()
+            .or_else(|| self.default_server.clone())
+    }
+
+    /// Client config to use when dialing a peer in `dc`.
+    /// Returns the per-DC entry if present, otherwise the
+    /// default profile, otherwise `None`.
+    #[must_use]
+    pub fn client_config_for_dc(&self, dc: &str) -> Option<Arc<ClientConfig>> {
+        self.per_dc_client
+            .get(dc)
+            .cloned()
+            .or_else(|| self.default_client.clone())
+    }
+
+    /// Default server config (the legacy / fallback profile).
+    #[must_use]
+    pub fn default_server_config(&self) -> Option<Arc<ServerConfig>> {
+        self.default_server.clone()
+    }
+
+    /// Default client config (the legacy / fallback profile).
+    #[must_use]
+    pub fn default_client_config(&self) -> Option<Arc<ClientConfig>> {
+        self.default_client.clone()
+    }
+
+    /// True when at least one configured profile carries a CA
+    /// bundle. When set, the SNI listener requires every
+    /// inbound peer to present a certificate signed by one of
+    /// the configured CAs (mTLS).
+    #[must_use]
+    pub fn requires_client_auth(&self) -> bool {
+        self.has_any_client_ca
+    }
+
+    /// Names of the DCs with explicit per-DC entries (sorted).
+    #[must_use]
+    pub fn dc_names(&self) -> Vec<String> {
+        self.per_dc_certified.keys().cloned().collect()
+    }
+
+    /// Build a single [`tokio_rustls::TlsAcceptor`] whose
+    /// `ServerConfig` picks the certificate by SNI hostname
+    /// (`dc-<dc-name>.dynomite.local`) and falls back to the
+    /// default profile when SNI is missing or does not match.
+    ///
+    /// Returns `None` when [`Self::is_empty`] is true.
+    ///
+    /// # Errors
+    /// Returns [`TlsError::Rustls`] when rustls rejects the
+    /// assembled root store / verifier (e.g. a malformed CA
+    /// certificate that slipped through the loader).
+    pub fn build_sni_acceptor(&self) -> Result<Option<tokio_rustls::TlsAcceptor>, TlsError> {
+        if self.is_empty() {
+            return Ok(None);
+        }
+        ensure_provider_installed();
+        let resolver = DcSniResolver {
+            by_dc: self.per_dc_certified.clone(),
+            default: self.default_certified.clone(),
+        };
+        let builder = ServerConfig::builder();
+        let cfg = if self.has_any_client_ca {
+            // Combine every CA bundle (default + per-DC) into a
+            // single root store for client verification. This
+            // keeps the listener's mTLS check uniform across
+            // SNI-routed certs; an inbound peer chains to any
+            // of the configured CAs.
+            let mut roots = RootCertStore::empty();
+            self.populate_combined_ca_roots(&mut roots)?;
+            let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
+                .build()
+                .map_err(|e| TlsError::Rustls(format!("client verifier: {e}")))?;
+            builder
+                .with_client_cert_verifier(verifier)
+                .with_cert_resolver(Arc::new(resolver))
+        } else {
+            builder
+                .with_no_client_auth()
+                .with_cert_resolver(Arc::new(resolver))
+        };
+        Ok(Some(tokio_rustls::TlsAcceptor::from(Arc::new(cfg))))
+    }
+
+    /// Populate a [`RootCertStore`] with the CAs from every
+    /// per-DC entry plus the default profile. Used by
+    /// [`Self::build_sni_acceptor`] when at least one profile
+    /// carries a CA.
+    fn populate_combined_ca_roots(&self, roots: &mut RootCertStore) -> Result<(), TlsError> {
+        for cert in &self.combined_ca_certs {
+            roots
+                .add(cert.clone())
+                .map_err(|e| TlsError::Rustls(format!("ca add: {e}")))?;
+        }
+        Ok(())
+    }
+}
+
+/// Custom rustls cert resolver: maps SNI of the shape
+/// `dc-<dc-name>.dynomite.local` to a per-DC `CertifiedKey`,
+/// falling back to the default profile when the SNI is missing
+/// or does not match.
+#[derive(Debug)]
+struct DcSniResolver {
+    by_dc: BTreeMap<String, Arc<CertifiedKey>>,
+    default: Option<Arc<CertifiedKey>>,
+}
+
+impl ResolvesServerCert for DcSniResolver {
+    fn resolve(&self, hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        if let Some(name) = hello.server_name() {
+            if let Some(dc) = dc_from_sni_label(name) {
+                if let Some(ck) = self.by_dc.get(dc) {
+                    return Some(ck.clone());
+                }
+            }
+        }
+        self.default.clone()
+    }
+}
+
+fn load_certified_key(
+    cert_path: &Path,
+    key_path: &Path,
+    provider: &rustls::crypto::CryptoProvider,
+) -> Result<Arc<CertifiedKey>, TlsError> {
+    let certs = load_certs(cert_path)?;
+    let key = load_private_key(key_path)?;
+    let ck = CertifiedKey::from_der(certs, key, provider)
+        .map_err(|e| TlsError::Rustls(format!("certified key: {e}")))?;
+    Ok(Arc::new(ck))
+}
+
 /// [`Transport`] wrapping a server-side TLS stream over a TCP
 /// connection.
 #[derive(Debug)]
@@ -417,5 +719,126 @@ mod tests {
     #[test]
     fn server_name_owned_accepts_dns_label() {
         assert!(server_name_owned("localhost").is_ok());
+    }
+
+    fn write_self_signed(dir: &TempDir, prefix: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let (cert_pem, key_pem) = issue_self_signed();
+        (
+            write_pem(dir, &format!("{prefix}-cert.pem"), &cert_pem),
+            write_pem(dir, &format!("{prefix}-key.pem"), &key_pem),
+        )
+    }
+
+    #[test]
+    fn dc_sni_hostname_round_trips() {
+        assert_eq!(dc_sni_hostname("dc1"), "dc-dc1.dynomite.local");
+        assert_eq!(dc_from_sni_label("dc-dc1.dynomite.local"), Some("dc1"));
+        assert_eq!(dc_from_sni_label("localhost"), None);
+        assert_eq!(dc_from_sni_label("dc-.dynomite.local"), None);
+        assert_eq!(dc_from_sni_label("dc-dc1.example.com"), None);
+    }
+
+    #[test]
+    fn tls_profile_map_empty_is_empty() {
+        let map = TlsProfileMap::build(None, BTreeMap::new()).unwrap();
+        assert!(map.is_empty());
+        assert!(map.client_config_for_dc("dc1").is_none());
+        assert!(map.server_config_for_dc("dc1").is_none());
+        assert!(!map.requires_client_auth());
+        assert!(map.build_sni_acceptor().unwrap().is_none());
+    }
+
+    #[test]
+    fn tls_profile_map_default_only_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_self_signed(&dir, "default");
+        let map = TlsProfileMap::build(
+            Some(TlsProfileSpec {
+                cert,
+                key,
+                ca: None,
+            }),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(!map.is_empty());
+        // Any DC name resolves to the default.
+        assert!(map.client_config_for_dc("dc1").is_some());
+        assert!(map.server_config_for_dc("dc-without-profile").is_some());
+        assert!(map.default_client_config().is_some());
+        assert!(map.build_sni_acceptor().unwrap().is_some());
+    }
+
+    #[test]
+    fn tls_profile_map_per_dc_overrides_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let (def_cert, def_key) = write_self_signed(&dir, "default");
+        let (dc1_cert, dc1_key) = write_self_signed(&dir, "dc1");
+        let mut per_dc = BTreeMap::new();
+        per_dc.insert(
+            "dc1".into(),
+            TlsProfileSpec {
+                cert: dc1_cert,
+                key: dc1_key,
+                ca: None,
+            },
+        );
+        let map = TlsProfileMap::build(
+            Some(TlsProfileSpec {
+                cert: def_cert,
+                key: def_key,
+                ca: None,
+            }),
+            per_dc,
+        )
+        .unwrap();
+        // dc1 must hit its own entry.
+        let dc1 = map.client_config_for_dc("dc1").unwrap();
+        // Distinct DC must fall back to the default.
+        let other = map.client_config_for_dc("other-dc").unwrap();
+        assert!(
+            !Arc::ptr_eq(&dc1, &other),
+            "per-DC entry must differ from the default fallback"
+        );
+        assert_eq!(map.dc_names(), vec!["dc1".to_string()]);
+    }
+
+    #[test]
+    fn tls_profile_map_per_dc_only_no_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_self_signed(&dir, "dc2");
+        let mut per_dc = BTreeMap::new();
+        per_dc.insert(
+            "dc2".into(),
+            TlsProfileSpec {
+                cert,
+                key,
+                ca: None,
+            },
+        );
+        let map = TlsProfileMap::build(None, per_dc).unwrap();
+        assert!(map.client_config_for_dc("dc2").is_some());
+        // No default: an unknown DC returns None and the
+        // caller falls back to plaintext.
+        assert!(map.client_config_for_dc("dc3").is_none());
+        assert!(map.server_config_for_dc("dc3").is_none());
+    }
+
+    #[test]
+    fn tls_profile_map_propagates_load_error() {
+        let dir = tempfile::tempdir().unwrap();
+        // Cert path that does not exist.
+        let bogus = dir.path().join("missing.pem");
+        let mut per_dc = BTreeMap::new();
+        per_dc.insert(
+            "dc1".into(),
+            TlsProfileSpec {
+                cert: bogus.clone(),
+                key: bogus,
+                ca: None,
+            },
+        );
+        let err = TlsProfileMap::build(None, per_dc).expect_err("missing");
+        assert!(matches!(err, TlsError::Io { .. }), "got {err:?}");
     }
 }
