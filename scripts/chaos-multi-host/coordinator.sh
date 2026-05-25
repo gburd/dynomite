@@ -286,7 +286,8 @@ nohup python3 /scratch/dynomite-chaos/src/scripts/chaos-multi-host/workload-driv
     --retry-on='$RETRY_POLICY' \\
     > /scratch/dynomite-chaos/logs/workload-$label.stderr 2>&1 < /dev/null &
 echo \$! > /scratch/dynomite-chaos/run/workload.pid
-EOF}
+EOF
+}
 
 start_injector() {
     local label="$1"; shift
