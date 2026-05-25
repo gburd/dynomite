@@ -47,7 +47,8 @@ pub use endpoint::{ConfListen, EndpointKind};
 pub use enums::{ConsistencyLevel, DataStore, HashType, SecureServerOption};
 pub use error::ConfError;
 pub use pool::{
-    ConfBucketType, ConfPool, ConfRiak, ConfRiakWasmModule, ObservabilityConfig, Servers,
+    ConfBucketType, ConfPool, ConfRiak, ConfRiakWasmModule, ConfTlsProfile, ObservabilityConfig,
+    Servers,
 };
 pub use server::{ConfDynSeed, ConfServer};
 pub use tokens::{TokenComponent, TokenList};
