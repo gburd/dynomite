@@ -70,3 +70,15 @@ pub use crate::proto::pb::datatypes::{
     ScalarValue, MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_FLAG, MAP_FIELD_TYPE_MAP,
     MAP_FIELD_TYPE_REGISTER, MAP_FIELD_TYPE_SET,
 };
+
+// Cluster admin extension messages -- v0.0.4 admin slice. The
+// type set covers the five PBC pairs invoked by `dyn-admin`'s
+// cluster-list / cluster-join / cluster-leave / cluster-plan /
+// cluster-commit subcommands. Re-exported below the prior block
+// so parallel branches do not conflict.
+pub use crate::proto::pb::messages::{
+    DynRpbClusterCommitReq, DynRpbClusterCommitResp, DynRpbClusterJoinReq, DynRpbClusterJoinResp,
+    DynRpbClusterLeaveReq, DynRpbClusterLeaveResp, DynRpbClusterPlanReq, DynRpbClusterPlanResp,
+    DynRpbListPeersReq, DynRpbListPeersResp, DynRpbPeerInfo, DynRpbStagedChange,
+    DYN_STAGED_CHANGE_ADD, DYN_STAGED_CHANGE_REMOVE,
+};

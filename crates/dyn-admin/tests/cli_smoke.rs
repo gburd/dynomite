@@ -31,40 +31,40 @@ fn help_lists_every_v0_subcommand() {
         "metrics",
         "ping",
         "cluster-list",
+        "cluster-join",
+        "cluster-leave",
+        "cluster-plan",
+        "cluster-commit",
     ] {
         assert!(out.contains(sub), "help is missing {sub}: {out}");
     }
 }
 
 #[test]
-fn deferred_subcommands_are_absent_not_stubbed() {
-    // riak-admin's mutating commands intentionally do not appear in
-    // v0. The brief documents these as deferred follow-ups; this
-    // test pins the "absent, not stubbed" guarantee.
-    let assertion = Command::cargo_bin("dyn-admin")
-        .unwrap()
-        .arg("--help")
-        .assert()
-        .success();
-    let out = String::from_utf8(assertion.get_output().stdout.clone()).unwrap();
-    for deferred in [
+fn cluster_mutating_subcommands_are_present() {
+    // The cluster-mutation subcommands are wired in the v0.0.4 admin
+    // slice; they live under the same `cluster-*` family and the
+    // help text must announce every one. Invoking each without a
+    // listening server fails because TCP connect is refused, but
+    // the failure goes through clap's parser successfully (no
+    // `unknown subcommand` error).
+    for sub in [
         "cluster-join",
         "cluster-leave",
         "cluster-plan",
         "cluster-commit",
     ] {
-        assert!(
-            !out.contains(deferred),
-            "deferred subcommand {deferred} appears in help: {out}"
-        );
+        let mut cmd = Command::cargo_bin("dyn-admin").unwrap();
+        let extra: &[&str] = match sub {
+            "cluster-join" => &["127.0.0.1:1"],
+            "cluster-leave" => &["99"],
+            _ => &[],
+        };
+        cmd.arg(sub).args(extra).arg("--node").arg("127.0.0.1:1");
+        cmd.assert()
+            .failure()
+            .stderr(predicate::str::contains("dyn-admin:"));
     }
-    // Invoking a deferred name explicitly must error out (clap rejects
-    // unknown subcommands) rather than landing in some stub branch.
-    Command::cargo_bin("dyn-admin")
-        .unwrap()
-        .arg("cluster-join")
-        .assert()
-        .failure();
 }
 
 #[test]

@@ -8,7 +8,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use dyn_admin::commands::{cluster_list, metrics, ping, ring, stats, status};
+use dyn_admin::commands::{
+    cluster_commit, cluster_join, cluster_leave, cluster_list, cluster_plan, metrics, ping, ring,
+    stats, status,
+};
 use dyn_admin::output::OutputFormat;
 
 /// Default address operators expect when no `--node` flag is passed.
@@ -33,9 +36,10 @@ struct Cli {
 }
 
 /// Subcommand catalogue. Mirrors the `riak-admin` columns documented
-/// in `docs/riak-compat-plan.md` Section 5; mutating commands
-/// (`cluster-join`, `cluster-leave`, `cluster-plan`, `cluster-commit`)
-/// are deferred and intentionally absent in v0.
+/// in `docs/riak-compat-plan.md` Section 5. The mutating commands
+/// (`cluster-join`, `cluster-leave`, `cluster-plan`,
+/// `cluster-commit`) drive the cluster admin RPC family added in
+/// the v0.0.4 dyn-admin slice.
 #[derive(Debug, Subcommand)]
 enum Cmd {
     /// Print the node identity (PBC) plus a stats summary (HTTP).
@@ -97,6 +101,46 @@ enum Cmd {
         /// PBC `host:port` of the seed node.
         #[arg(long = "seed", default_value = DEFAULT_PBC_NODE)]
         seed: String,
+        /// Emit JSON instead of human text.
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Stage a peer-join.
+    ClusterJoin {
+        /// Target peer to add, in `host:port` form.
+        target: String,
+        /// PBC `host:port` of the node to send the request to.
+        #[arg(long = "node", default_value = DEFAULT_PBC_NODE)]
+        node: String,
+        /// Emit JSON instead of human text.
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Stage a peer-leave.
+    ClusterLeave {
+        /// Index of the peer to remove.
+        peer_idx: u32,
+        /// PBC `host:port` of the node to send the request to.
+        #[arg(long = "node", default_value = DEFAULT_PBC_NODE)]
+        node: String,
+        /// Emit JSON instead of human text.
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Show staged-but-uncommitted cluster changes.
+    ClusterPlan {
+        /// PBC `host:port` of the node to send the request to.
+        #[arg(long = "node", default_value = DEFAULT_PBC_NODE)]
+        node: String,
+        /// Emit JSON instead of human text.
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Commit every staged cluster change.
+    ClusterCommit {
+        /// PBC `host:port` of the node to send the request to.
+        #[arg(long = "node", default_value = DEFAULT_PBC_NODE)]
+        node: String,
         /// Emit JSON instead of human text.
         #[arg(long = "json")]
         json: bool,
@@ -175,6 +219,20 @@ async fn dispatch(cli: Cli) -> Result<(), dyn_admin::AdminError> {
         }
         Cmd::ClusterList { seed, json } => {
             cluster_list::run(&seed, OutputFormat::from_flag(json), &mut stdout).await
+        }
+        Cmd::ClusterJoin { target, node, json } => {
+            cluster_join::run(&node, &target, OutputFormat::from_flag(json), &mut stdout).await
+        }
+        Cmd::ClusterLeave {
+            peer_idx,
+            node,
+            json,
+        } => cluster_leave::run(&node, peer_idx, OutputFormat::from_flag(json), &mut stdout).await,
+        Cmd::ClusterPlan { node, json } => {
+            cluster_plan::run(&node, OutputFormat::from_flag(json), &mut stdout).await
+        }
+        Cmd::ClusterCommit { node, json } => {
+            cluster_commit::run(&node, OutputFormat::from_flag(json), &mut stdout).await
         }
     }
 }

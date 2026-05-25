@@ -66,6 +66,11 @@ pub use crate::error::RiakError;
 pub use crate::proto::http::{serve_http, serve_http_tls};
 pub use crate::server::{handle_conn, serve_pbc, serve_pbc_tls};
 
+// Cluster admin RPC entry points -- v0.0.4 admin slice. Wired
+// to the `dyn-admin` cluster-* subcommands. Re-exported below
+// the existing block so parallel branches do not conflict.
+pub use crate::server::{handle_conn_with_admin, serve_pbc_tls_with_admin, serve_pbc_with_admin};
+
 pub mod aae;
 pub mod datatypes;
 
