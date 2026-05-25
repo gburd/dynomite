@@ -171,6 +171,12 @@ pub struct ClusterDispatcher {
     /// recorded as hints and counted toward the consistency
     /// threshold, instead of being silently skipped.
     hint_store: Option<Arc<crate::cluster::hints::HintStore>>,
+    /// Optional failure-cause metrics handle. When wired, every
+    /// error-producing branch in the dispatcher increments the
+    /// matching counter via the [`crate::stats::FailureMetrics`]
+    /// accumulator. When `None`, the dispatcher's behaviour is
+    /// unchanged.
+    failure_metrics: Option<Arc<crate::stats::FailureMetrics>>,
 }
 
 impl ClusterDispatcher {
@@ -201,6 +207,7 @@ impl ClusterDispatcher {
             peer_backends: std::collections::HashMap::new(),
             mbuf_pool: MbufPool::default(),
             hint_store: None,
+            failure_metrics: None,
         }
     }
 
@@ -336,6 +343,47 @@ impl ClusterDispatcher {
         self.hint_store.as_ref()
     }
 
+    /// Attach a [`crate::stats::FailureMetrics`] handle.
+    ///
+    /// When wired, each error-producing branch in the
+    /// dispatcher (no-targets, peer-channel-full,
+    /// peer-channel-closed, backend-channel-full,
+    /// backend-channel-closed, response-timeout) increments
+    /// the matching counter so an operator can pull the
+    /// per-cause histogram off the `/stats` and `/metrics`
+    /// endpoints. The default behaviour is unchanged when no
+    /// metrics handle is supplied.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use dynomite::cluster::dispatch::ClusterDispatcher;
+    /// # use dynomite::cluster::peer::{Peer, PeerEndpoint};
+    /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// # use dynomite::hashkit::DynToken;
+    /// # use dynomite::stats::FailureMetrics;
+    /// let cfg = PoolConfig::default();
+    /// let local = Peer::new(
+    ///     0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
+    ///     vec![DynToken::from_u32(0)], true, true, false,
+    /// );
+    /// let pool = Arc::new(ServerPool::new(cfg, vec![local]));
+    /// let metrics = Arc::new(FailureMetrics::new());
+    /// let _disp = ClusterDispatcher::new(pool).with_failure_metrics(metrics);
+    /// ```
+    #[must_use]
+    pub fn with_failure_metrics(mut self, metrics: Arc<crate::stats::FailureMetrics>) -> Self {
+        self.failure_metrics = Some(metrics);
+        self
+    }
+
+    /// Borrow the wired failure-metrics handle, if any.
+    #[must_use]
+    pub fn failure_metrics(&self) -> Option<&Arc<crate::stats::FailureMetrics>> {
+        self.failure_metrics.as_ref()
+    }
+
     /// True when both the hint store is wired AND the pool has
     /// `enable_hinted_handoff: true`. Hot-path predicate.
     #[must_use]
@@ -362,6 +410,7 @@ impl ClusterDispatcher {
         let cfg = self.pool.config();
         let peers = self.pool.peers().read();
         if peers.is_empty() {
+            self.record_no_targets_metric(cfg, ConsistencyLevel::default());
             return DispatchPlan::NoTargets;
         }
         if matches!(req.routing(), MsgRouting::LocalNodeOnly) {
@@ -393,6 +442,7 @@ impl ClusterDispatcher {
         let include_down = self.hinted_handoff_active() && !is_read;
         let routable = collect_routable(&dcs, &peers, &token, include_down);
         if routable.is_empty() {
+            self.record_no_targets_metric(cfg, consistency);
             return DispatchPlan::NoTargets;
         }
         let (local, remote): (Vec<_>, Vec<_>) = routable
@@ -400,7 +450,33 @@ impl ClusterDispatcher {
             .partition(|(dc_idx, _, _)| dcs[*dc_idx].name() == cfg.dc);
         let plan =
             plan_with_consistency(cfg, &dcs, &peers, consistency, req.routing(), local, remote);
-        cap_replicas(plan, n_val_cap)
+        let plan = cap_replicas(plan, n_val_cap);
+        if matches!(plan, DispatchPlan::NoTargets) {
+            self.record_no_targets_metric(cfg, consistency);
+        }
+        plan
+    }
+
+    /// Record a `dispatch_no_targets_total` metric tick using
+    /// the local-DC labels, when a metrics handle is wired.
+    fn record_no_targets_metric(
+        &self,
+        cfg: &crate::cluster::pool::PoolConfig,
+        consistency: ConsistencyLevel,
+    ) {
+        if let Some(m) = self.failure_metrics.as_ref() {
+            m.record_no_targets(&cfg.dc, &cfg.rack, consistency);
+        }
+    }
+
+    /// Resolve the destination DC of a peer (for per-peer
+    /// failure metrics). Local peers and unknown indexes both
+    /// fall back to the configured local DC.
+    fn peer_dc_label(&self, peer_idx: u32) -> String {
+        let peers = self.pool.peers().read();
+        peers
+            .get(peer_idx as usize)
+            .map_or_else(|| self.pool.config().dc.clone(), |p| p.dc().to_string())
     }
 }
 
@@ -610,9 +686,19 @@ impl Dispatcher for ClusterDispatcher {
                         ty: crate::proto::dnode::DmsgType::Req,
                         target_peer_idx: None,
                     };
-                    if tx.try_send(env).is_err() {
+                    if let Err(err) = tx.try_send(env) {
                         // Backend channel full or closed: surface
                         // an error to the client immediately.
+                        if let Some(m) = self.failure_metrics.as_ref() {
+                            match err {
+                                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                                    m.record_backend_send_full();
+                                }
+                                tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                                    m.record_backend_send_closed();
+                                }
+                            }
+                        }
                         let err_type =
                             if matches!(req.ty(), MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
                                 MsgType::RspRedisError
@@ -769,6 +855,7 @@ impl ClusterDispatcher {
         let req_id = req.id();
         let req_ty = req.ty();
         let mbuf_pool = self.mbuf_pool.clone();
+        let failure_metrics = self.failure_metrics.clone();
         tokio::spawn(coalesce_actor(
             req_id,
             req_ty,
@@ -779,6 +866,7 @@ impl ClusterDispatcher {
             responder,
             mbuf_pool,
             repair_ctx,
+            failure_metrics,
         ));
         DispatchOutcome::Pending
     }
@@ -844,14 +932,52 @@ impl ClusterDispatcher {
             ty: crate::proto::dnode::DmsgType::Req,
             target_peer_idx: Some(target.peer_idx),
         };
-        if target.is_local {
-            self.backend
-                .as_ref()
-                .is_some_and(|tx| tx.try_send(env).is_ok())
+        let send_result = if target.is_local {
+            self.backend.as_ref().map(|tx| tx.try_send(env))
         } else {
             self.peer_backends
                 .get(&target.peer_idx)
-                .is_some_and(|tx| tx.try_send(env).is_ok())
+                .map(|tx| tx.try_send(env))
+        };
+        match send_result {
+            Some(Ok(())) => true,
+            Some(Err(err)) => {
+                self.observe_send_error(target, &err);
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Convert a `tokio::sync::mpsc::error::TrySendError` into a
+    /// failure-metrics observation. Local targets bump the
+    /// backend counters; peer targets bump the per-peer
+    /// counters labelled with the peer's DC.
+    fn observe_send_error(
+        &self,
+        target: &ReplicaTarget,
+        err: &tokio::sync::mpsc::error::TrySendError<OutboundRequest>,
+    ) {
+        let Some(m) = self.failure_metrics.as_ref() else {
+            return;
+        };
+        if target.is_local {
+            match err {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => m.record_backend_send_full(),
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                    m.record_backend_send_closed();
+                }
+            }
+        } else {
+            let peer_dc = self.peer_dc_label(target.peer_idx);
+            match err {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                    m.record_peer_send_full(target.peer_idx, &peer_dc);
+                }
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                    m.record_peer_send_closed(target.peer_idx, &peer_dc);
+                }
+            }
         }
     }
 
@@ -940,14 +1066,20 @@ impl ClusterDispatcher {
             ty: crate::proto::dnode::DmsgType::Req,
             target_peer_idx: Some(target.peer_idx),
         };
-        let sent = if target.is_local {
-            self.backend
-                .as_ref()
-                .is_some_and(|tx| tx.try_send(env).is_ok())
+        let send_result = if target.is_local {
+            self.backend.as_ref().map(|tx| tx.try_send(env))
         } else {
             self.peer_backends
                 .get(&target.peer_idx)
-                .is_some_and(|tx| tx.try_send(env).is_ok())
+                .map(|tx| tx.try_send(env))
+        };
+        let sent = match send_result {
+            Some(Ok(())) => true,
+            Some(Err(ref err)) => {
+                self.observe_send_error(target, err);
+                false
+            }
+            None => false,
         };
         if sent {
             return DispatchOutcome::Pending;
@@ -1044,6 +1176,7 @@ async fn coalesce_actor(
     client_tx: ServerSink,
     mbuf_pool: MbufPool,
     repair_ctx: Option<ReadRepairContext>,
+    failure_metrics: Option<Arc<crate::stats::FailureMetrics>>,
 ) {
     use crate::proto::redis::{CoalesceOutcome, CoalesceTracker};
     let mut tracker = CoalesceTracker::new(req_id, consistency, targets, &local_dc);
@@ -1112,8 +1245,13 @@ async fn coalesce_actor(
     if !emitted {
         // No reply was emitted and the channel closed (every
         // per-target sender dropped without producing a reply).
-        // Surface a quorum-unreachable error so the client does
-        // not hang.
+        // From the dispatcher's perspective the request has
+        // timed out at the coalescer layer; surface a
+        // quorum-unreachable error so the client does not hang
+        // and bump the response-timeout counter.
+        if let Some(m) = failure_metrics.as_ref() {
+            m.record_response_timeout(consistency);
+        }
         let err_type = if matches!(req_ty, MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
             MsgType::RspRedisError
         } else {
@@ -1759,5 +1897,120 @@ mod tests {
             DispatchPlan::Replicas { targets: rs, .. } => assert_eq!(rs.len(), 3),
             other => panic!("expected uncapped plan, got {other:?}"),
         }
+    }
+
+    /// Smoke test for the failure-cause counter wiring: a
+    /// `NoTargets` plan increments the labelled counter
+    /// exactly once.
+    #[test]
+    fn no_targets_records_failure_metric() {
+        let mut p0 = peer(0, "dc1", "rA", 10, true, true);
+        p0.set_state(PeerState::Down, 0);
+        let p = pool(
+            ConsistencyLevel::DcQuorum,
+            ConsistencyLevel::DcQuorum,
+            vec![p0],
+        );
+        let metrics = Arc::new(crate::stats::FailureMetrics::new());
+        let disp = ClusterDispatcher::new(p).with_failure_metrics(metrics.clone());
+        let req = Msg::new(1, MsgType::ReqRedisGet, true);
+        assert_eq!(disp.plan(&req, b"k"), DispatchPlan::NoTargets);
+        let snap = metrics.snapshot();
+        assert_eq!(snap.no_targets.len(), 1);
+        let entry = &snap.no_targets[0];
+        assert_eq!(entry.dc, "dc1");
+        assert_eq!(entry.rack, "rA");
+        assert_eq!(entry.consistency, ConsistencyLevel::DcQuorum);
+        assert_eq!(entry.count, 1);
+    }
+
+    /// A closed mpsc channel returns `Closed` from
+    /// `try_send`. Wire the dispatcher's local-datastore path
+    /// to such a channel, fire one request, and assert the
+    /// `dispatch_backend_send_closed_total` counter ticks by
+    /// exactly one.
+    #[tokio::test]
+    async fn closed_backend_channel_records_closed_metric() {
+        let p = pool(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            vec![peer(0, "dc1", "rA", 10, true, true)],
+        );
+        let (tx, rx) = mpsc::channel::<crate::net::server::OutboundRequest>(4);
+        drop(rx);
+        let metrics = Arc::new(crate::stats::FailureMetrics::new());
+        let disp = ClusterDispatcher::new(p)
+            .with_backend(tx)
+            .with_failure_metrics(metrics.clone());
+        let mut req = Msg::new(1, MsgType::ReqRedisGet, true);
+        // Attach a non-empty mbuf so the dispatcher actually
+        // attempts the try_send (empty bytes short-circuit
+        // to Drop before the channel is touched).
+        let pool_buf = crate::io::mbuf::MbufPool::default();
+        let mut buf = pool_buf.get();
+        buf.copy_from_slice(b"PING\r\n");
+        req.mbufs_mut().push_back(buf);
+        let (resp_tx, _resp_rx) = mpsc::channel(1);
+        let outcome = disp.dispatch(req, resp_tx);
+        assert!(matches!(outcome, DispatchOutcome::Error(_)));
+        let snap = metrics.snapshot();
+        assert_eq!(snap.backend_send_closed, 1);
+        assert_eq!(snap.backend_send_full, 0);
+    }
+
+    /// Integration-style unit test: build a two-peer pool,
+    /// mark one peer Down, drive 100 dispatches across the
+    /// ring, and assert the `dispatch_no_targets_total`
+    /// counter reflects every observed `NoTargets` plan.
+    #[test]
+    fn two_peer_pool_with_one_down_records_per_key_no_targets() {
+        let cfg = crate::cluster::PoolConfig {
+            dc: "dc1".into(),
+            rack: "rA".into(),
+            read_consistency: ConsistencyLevel::DcQuorum,
+            write_consistency: ConsistencyLevel::DcQuorum,
+            ..crate::cluster::PoolConfig::default()
+        };
+        // Single-rack two-peer ring: peer 0 owns the upper
+        // half via wrap-around (token 2_147_483_648), peer 1
+        // owns the lower half (token 0 plus the boundary up to
+        // 2_147_483_648). With both peers in rack `rA` the
+        // continuum has two entries, so each key maps to
+        // exactly one peer; marking peer 1 Down causes its
+        // arc to produce `NoTargets`.
+        let p0 = peer(0, "dc1", "rA", 2_147_483_648, true, true);
+        let mut p1 = peer(1, "dc1", "rA", 0, false, true);
+        p1.set_state(PeerState::Down, 0);
+        let pool_arc = ServerPool::new(cfg, vec![p0, p1]);
+        pool_arc.preselect_remote_racks();
+        let metrics = Arc::new(crate::stats::FailureMetrics::new());
+        let disp = ClusterDispatcher::new(Arc::new(pool_arc)).with_failure_metrics(metrics.clone());
+        let mut planned_no_targets = 0u64;
+        let mut planned_routable = 0u64;
+        for i in 0..100u32 {
+            let key = format!("k{i:03}");
+            let req = Msg::new(u64::from(i), MsgType::ReqRedisGet, true);
+            match disp.plan(&req, key.as_bytes()) {
+                DispatchPlan::NoTargets => planned_no_targets += 1,
+                DispatchPlan::Replicas { .. } | DispatchPlan::LocalDatastore => {
+                    planned_routable += 1;
+                }
+                DispatchPlan::Drop => panic!("unexpected Drop in plan"),
+            }
+        }
+        assert!(planned_no_targets > 0, "expected some NoTargets dispatches");
+        assert!(planned_routable > 0, "expected some routable dispatches");
+        let snap = metrics.snapshot();
+        let counter_total: u64 = snap.no_targets.iter().map(|e| e.count).sum();
+        assert_eq!(
+            counter_total, planned_no_targets,
+            "dispatch_no_targets_total must match observed NoTargets count",
+        );
+        // No `Closed`/`Full` channel errors expected: we did
+        // not wire any backends.
+        assert_eq!(snap.backend_send_full, 0);
+        assert_eq!(snap.backend_send_closed, 0);
+        assert!(snap.peer_send_full.is_empty());
+        assert!(snap.peer_send_closed.is_empty());
     }
 }

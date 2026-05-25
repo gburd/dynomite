@@ -56,6 +56,83 @@ emits.
 | `dynomite_remote_peer_in_queue_p99` | gauge | (none) | 99th percentile of the remote-DC peer inbound queue length. |
 | `dynomite_remote_peer_out_queue_p99` | gauge | (none) | 99th percentile of the remote-DC peer outbound queue length. |
 
+## Failure-cause counters
+
+The metrics above describe what the engine is doing when traffic is
+flowing normally. The counters in this section disambiguate the
+different error causes the dispatcher and gossip planes can produce.
+All of them initialise to zero and only become meaningful once the
+operator wires the dispatcher and gossip handler with a shared
+`FailureMetrics` accumulator (the `dynomited` binary does this
+automatically; embedders do it via
+`ClusterDispatcher::with_failure_metrics(...)` and
+`GossipHandler::with_failure_metrics(...)`).
+
+The counters answer questions like "is the cluster losing requests
+because peers are flapping in and out of `Down`, or because
+perper-peer outbound channels are saturated?" Pre-existing aggregate
+error counters (`dynomite_pool_client_err_total`,
+`dynomite_pool_client_dropped_requests_total`) report the total but
+do not separate the cause; the families below do.
+
+| Name | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `dispatch_no_targets_total` | counter | `dc`, `rack`, `consistency_level` | Dispatcher returned `NoTargets` because the only routable peer for the hashed token was Down or absent. The `consistency_level` label is one of `DC_ONE`, `DC_QUORUM`, `DC_SAFE_QUORUM`, `DC_EACH_SAFE_QUORUM`. |
+| `dispatch_peer_send_full_total` | counter | `peer_idx`, `peer_dc` | The dispatcher's `try_send` to a peer's outbound channel returned `Full`. Sustained values indicate the peer-supervisor task is not draining its inbound queue fast enough. |
+| `dispatch_peer_send_closed_total` | counter | `peer_idx`, `peer_dc` | The dispatcher's `try_send` to a peer's outbound channel returned `Closed`. The peer-supervisor task has exited; expect a reconnect-supervised replacement to land soon. |
+| `dispatch_backend_send_full_total` | counter | (none) | The dispatcher's `try_send` to the local datastore backend channel returned `Full`. The local backend driver is not keeping up with inbound throughput. |
+| `dispatch_backend_send_closed_total` | counter | (none) | The dispatcher's `try_send` to the local datastore backend returned `Closed`. The backend driver task has exited. |
+| `dispatch_response_timeout_total` | counter | `consistency_level` | The response coalescer or single-target responder gave up waiting for replies. Currently fires when every per-target sender drops without producing a reply. |
+| `peer_state_transitions_total` | counter | `peer_idx`, `from_state`, `to_state` | Number of gossip-driven peer-state transitions. Both labels carry the [`PeerState`] string label (`UNKNOWN`, `JOINING`, `NORMAL`, `STANDBY`, `DOWN`, `RESET`, `LEAVING`). |
+| `peer_state_current` | gauge | `peer_idx`, `dc`, `rack` | Current state of each non-local peer as a numeric code: `0=UNKNOWN`, `1=JOINING`, `2=NORMAL`, `3=STANDBY`, `4=DOWN`, `5=RESET`, `6=LEAVING`. |
+| `gossip_phi_score_milli` | gauge | `peer_idx`, `dc`, `rack` | Current phi-accrual failure-detector score per peer, scaled by 1000 (i.e. emitted as thousandths). The default suspicion threshold is 8.0 (8000 here); divide by 1000 in PromQL to recover phi. |
+
+The `_milli` suffix on `gossip_phi_score_milli` is deliberate.
+Prometheus integer gauges are 64-bit signed; the phi value is a
+floating-point number that we widen by 1000 to preserve thousandths
+precision while staying within the integer-gauge wire format. A
+suspicion threshold of `phi > 8.0` therefore corresponds to
+`gossip_phi_score_milli > 8000` in PromQL.
+
+### Sample PromQL queries
+
+Total `NoTargets` rate per consistency level (this is the metric to
+watch during chaos runs to confirm peer-state oscillation as the
+root cause):
+
+```promql
+sum by (consistency_level) (
+  rate(dispatch_no_targets_total[1m])
+)
+```
+
+Per-peer flap count over the last hour (a peer that is flapping will
+show a high transition count):
+
+```promql
+sum by (peer_idx) (
+  increase(peer_state_transitions_total[1h])
+)
+```
+
+Live phi score per peer, in raw phi units:
+
+```promql
+gossip_phi_score_milli / 1000
+```
+
+Dispatch error breakdown (one line per cause; useful as a stacked
+graph in Grafana to see which cause dominates the error budget):
+
+```promql
+sum (rate(dispatch_no_targets_total[1m])) +
+sum (rate(dispatch_peer_send_full_total[1m])) +
+sum (rate(dispatch_peer_send_closed_total[1m])) +
+sum (rate(dispatch_backend_send_full_total[1m])) +
+sum (rate(dispatch_backend_send_closed_total[1m])) +
+sum (rate(dispatch_response_timeout_total[1m]))
+```
+
 The histogram quantile rollups are emitted as gauges, not as
 Prometheus histograms, because the engine stores Cassandra-style
 estimated histograms whose internal buckets are not the standard

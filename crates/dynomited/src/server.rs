@@ -207,6 +207,18 @@ pub struct Server {
     /// plaintext (in which case the cell stays empty and the
     /// reload pipeline has nothing to swap).
     tls_profiles: Option<SharedTlsProfiles>,
+    /// Shared failure-cause metrics accumulator. Plumbed into
+    /// the dispatcher (which records per-cause dispatch error
+    /// counters) and the gossip handler (which records peer
+    /// state transitions and phi-score gauges). The run loop
+    /// snapshots these into the stats sink on a periodic
+    /// timer so the `/stats` and `/metrics` endpoints expose
+    /// them.
+    failure_metrics: Arc<dynomite::stats::FailureMetrics>,
+    /// Mutex-shared stats snapshot the [`StatsServer`] reads
+    /// from. The run loop refreshes the failure block of this
+    /// snapshot on a one-second timer.
+    stats_sink: Arc<Mutex<Snapshot>>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
 }
@@ -452,6 +464,8 @@ impl Server {
             None
         };
         let mut dispatcher = ClusterDispatcher::new(server_pool.clone()).with_backend(backend_tx);
+        let failure_metrics = Arc::new(dynomite::stats::FailureMetrics::new());
+        dispatcher = dispatcher.with_failure_metrics(failure_metrics.clone());
         if let Some(store) = hint_store.as_ref() {
             dispatcher = dispatcher.with_hint_store(store.clone());
         }
@@ -561,7 +575,7 @@ impl Server {
         let stats_sink = Arc::new(Mutex::new(Snapshot::default()));
         let stats = match stats_listen_addr {
             Some(addr) => Some(
-                StatsServer::bind(addr, stats_sink)
+                StatsServer::bind(addr, stats_sink.clone())
                     .await
                     .map_err(ServerError::Io)?,
             ),
@@ -583,7 +597,8 @@ impl Server {
         .unwrap_or(dynomite::cluster::gossip::DEFAULT_GOSSIP_INTERVAL_MS);
         let gossip_handler = Arc::new(
             dynomite::cluster::gossip::GossipHandler::new(server_pool.clone())
-                .with_interval(Duration::from_millis(gossip_interval_ms)),
+                .with_interval(Duration::from_millis(gossip_interval_ms))
+                .with_failure_metrics(failure_metrics.clone()),
         );
         let local_pname = dyn_listen_addr.map_or_else(
             || "127.0.0.1:0".to_string(),
@@ -648,6 +663,8 @@ impl Server {
             conf_path: None,
             reloadable,
             tls_profiles,
+            failure_metrics,
+            stats_sink,
             shutdown_tx,
             shutdown_rx,
         })
@@ -824,9 +841,39 @@ impl Server {
             conf_path,
             reloadable,
             tls_profiles,
+            failure_metrics,
+            stats_sink,
             shutdown_tx,
             mut shutdown_rx,
         } = self;
+
+        // Periodic stats sink refresher: every second copies
+        // the latest failure-metrics snapshot into the shared
+        // sink the StatsServer reads from. The non-failure
+        // fields stay at their default values until the
+        // engine grows a real `Stats` aggregator (currently
+        // out of scope for the binary).
+        let stats_refresher: JoinHandle<()> = {
+            let metrics = failure_metrics.clone();
+            let sink = stats_sink.clone();
+            let mut cancel_rx = shutdown_rx.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(1));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = cancel_rx.changed() => {
+                            if *cancel_rx.borrow() { return; }
+                        }
+                        _ = ticker.tick() => {
+                            let mut guard = sink.lock();
+                            guard.failure = metrics.snapshot();
+                        }
+                    }
+                }
+            })
+        };
 
         let entropy_handle: Option<JoinHandle<()>> = match entropy_driver {
             Some(driver) => {
@@ -1028,6 +1075,9 @@ impl Server {
             h.abort();
             let _ = h.await;
         }
+        // Stop the periodic stats refresher.
+        stats_refresher.abort();
+        let _ = stats_refresher.await;
         #[cfg(feature = "riak")]
         {
             for h in [riak_pbc_handle, riak_http_handle, riak_aae_handle]

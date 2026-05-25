@@ -3,6 +3,7 @@
 use std::fmt::{self, Write};
 
 use crate::stats::codec::{StatsMetricType, POOL_CODEC, SERVER_CODEC};
+use crate::stats::failure::FailureSnapshot;
 use crate::stats::histogram::Histogram;
 
 /// Engine-wide identifying strings included in every snapshot.
@@ -295,6 +296,8 @@ pub struct Snapshot {
     pub pool: PoolStats,
     /// Aggregated server counters.
     pub server: ServerStats,
+    /// Aggregated failure-cause metrics.
+    pub failure: FailureSnapshot,
 }
 
 impl Snapshot {
