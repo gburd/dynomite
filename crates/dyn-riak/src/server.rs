@@ -255,7 +255,7 @@ async fn process_frame(frame: &Frame, datastore: &dyn Datastore) -> Result<Frame
         MessageCode::SetBucketReq => single_frame(handle_set_bucket(&frame.body)?),
         MessageCode::ListBucketsReq => handle_list_buckets(&frame.body, datastore)?,
         MessageCode::ListKeysReq => handle_list_keys(&frame.body, datastore)?,
-        MessageCode::IndexReq => single_frame(handle_index(&frame.body, datastore).await?),
+        MessageCode::IndexReq => handle_index(&frame.body, datastore).await?,
         MessageCode::MapRedReq => single_frame(handle_mapred(&frame.body).await?),
         // Response codes are illegal inbound.
         MessageCode::ErrorResp
@@ -382,20 +382,29 @@ async fn handle_del(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, Ria
 
 /// Run a 2i secondary-index query against the datastore.
 ///
-/// Both equality (`qtype = 0`) and range (`qtype = 1`) queries
-/// are honoured. Streaming responses are not implemented in
-/// this slice; the entire result set is packed into a single
-/// [`RpbIndexResp`] frame with `done = Some(true)`. The
+/// Both equality (`qtype = 0`) and range (`qtype = 1`) queries are
+/// honoured. The result set is streamed back as a sequence of
+/// [`RpbIndexResp`] frames carrying up to [`LIST_CHUNK_SIZE`] keys
+/// each, finished with a body-less terminator frame whose `done =
+/// Some(true)` flag is the only payload. Datastore errors mid-walk
+/// translate to an `RpbErrorResp` and stop the stream.
+///
+/// Backwards compat: a client that ignores `done` and reads only
+/// the first frame still gets a partial answer (the first chunk).
+/// A datastore that does not implement 2i (the
+/// [`MemoryDatastore`](dynomite::embed::MemoryDatastore) default)
+/// emits a single error frame with `errmsg` describing the
+/// limitation.
+///
 /// `pagination_sort`, `term_regex`, `continuation`, and
-/// `cover_context` fields on the request are accepted but not
-/// acted on; supporting them is tracked in the journal entry
-/// for this slice.
+/// `cover_context` on the request are accepted but not acted on;
+/// supporting them is tracked in the slice's journal entry.
 ///
 /// 2i queries do NOT trampoline through [`Datastore::dispatch`]
 /// because the existing list / property paths (the only other
 /// non-KV ops) also bypass it; the substrate's dispatch counter
 /// is reserved for K/V operations.
-async fn handle_index(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+async fn handle_index(body: &[u8], datastore: &dyn Datastore) -> Result<FrameStream, RiakError> {
     let req = RpbIndexReq::decode(body)?;
     let result = match req.qtype {
         INDEX_QUERY_TYPE_EQ => {
@@ -412,9 +421,9 @@ async fn handle_index(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, R
                 .await
         }
         other => {
-            return Ok(error_frame(format!(
+            return Ok(single_frame(error_frame(format!(
                 "riak index: unsupported qtype {other}; expected 0 (eq) or 1 (range)"
-            )));
+            ))));
         }
     };
     match result {
@@ -425,22 +434,75 @@ async fn handle_index(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, R
                     keys.truncate(cap);
                 }
             }
-            let resp = RpbIndexResp {
-                keys,
-                results: Vec::new(),
-                continuation: None,
-                done: Some(true),
-            };
-            Ok(Frame::new(
-                MessageCode::IndexResp.as_u8(),
-                resp.encode_to_vec(),
-            ))
+            Ok(Box::pin(index_keys_to_frames(keys)))
         }
-        Err(DatastoreError::Unsupported(_)) => Ok(error_frame(
+        Err(DatastoreError::Unsupported(_)) => Ok(single_frame(error_frame(
             "secondary-index queries not implemented for this datastore".into(),
-        )),
-        Err(e) => Ok(error_frame(format!("riak index: {e}"))),
+        ))),
+        Err(e) => Ok(single_frame(error_frame(format!("riak index: {e}")))),
     }
+}
+
+/// Producer state for the streaming 2i path. The result set is
+/// already materialised in `Vec<Vec<u8>>`; chunking happens at the
+/// server boundary so a client sees one frame per
+/// [`LIST_CHUNK_SIZE`] keys plus a `done = true` terminator.
+enum IndexChunkState {
+    /// Streaming: the next chunk is drained from `keys`.
+    Streaming { keys: Vec<Vec<u8>> },
+    /// All keys delivered; emit the body-less terminator frame.
+    Terminate,
+    /// Stream finished.
+    Done,
+}
+
+fn index_keys_to_frames(keys: Vec<Vec<u8>>) -> impl Stream<Item = Result<Frame, RiakError>> + Send {
+    futures_util::stream::unfold(IndexChunkState::Streaming { keys }, |state| async move {
+        match state {
+            IndexChunkState::Done => None,
+            IndexChunkState::Terminate => {
+                let resp = RpbIndexResp {
+                    keys: Vec::new(),
+                    results: Vec::new(),
+                    continuation: None,
+                    done: Some(true),
+                };
+                let frame = Frame::new(MessageCode::IndexResp.as_u8(), resp.encode_to_vec());
+                Some((Ok(frame), IndexChunkState::Done))
+            }
+            IndexChunkState::Streaming { mut keys } => {
+                if keys.is_empty() {
+                    // Empty result set: emit a single terminator
+                    // frame so a client that reads exactly one
+                    // frame still observes `done = true`.
+                    let resp = RpbIndexResp {
+                        keys: Vec::new(),
+                        results: Vec::new(),
+                        continuation: None,
+                        done: Some(true),
+                    };
+                    let frame = Frame::new(MessageCode::IndexResp.as_u8(), resp.encode_to_vec());
+                    return Some((Ok(frame), IndexChunkState::Done));
+                }
+                let take = LIST_CHUNK_SIZE.min(keys.len());
+                let tail = keys.split_off(take);
+                let chunk = keys; // first `take` entries
+                let next = if tail.is_empty() {
+                    IndexChunkState::Terminate
+                } else {
+                    IndexChunkState::Streaming { keys: tail }
+                };
+                let resp = RpbIndexResp {
+                    keys: chunk,
+                    results: Vec::new(),
+                    continuation: None,
+                    done: Some(false),
+                };
+                let frame = Frame::new(MessageCode::IndexResp.as_u8(), resp.encode_to_vec());
+                Some((Ok(frame), next))
+            }
+        }
+    })
 }
 
 /// Build an `RpbErrorResp` frame from a human-readable message.
@@ -933,5 +995,233 @@ mod tests {
             "errmsg should mention the unsupported variant: {:?}",
             String::from_utf8_lossy(&resp.errmsg)
         );
+    }
+
+    // ---- streaming 2i (secondary index) ----
+
+    /// Datastore that returns a configurable Vec<Vec<u8>> from
+    /// `riak_index_eq`. Used to verify the chunk-size streaming
+    /// behaviour without relying on a real index walker.
+    struct ScriptedIndexStore {
+        keys: Vec<Vec<u8>>,
+    }
+
+    impl Datastore for ScriptedIndexStore {
+        fn protocol(&self) -> dynomite::embed::hooks::Protocol {
+            dynomite::embed::hooks::Protocol::Custom
+        }
+        fn dispatch(
+            &self,
+            req: Msg,
+        ) -> dynomite::embed::hooks::BoxFuture<
+            '_,
+            Result<Msg, dynomite::embed::hooks::DatastoreError>,
+        > {
+            Box::pin(async move {
+                let mut rsp = Msg::new(req.id(), MsgType::Unknown, false);
+                rsp.set_parent_id(req.id());
+                Ok(rsp)
+            })
+        }
+        fn riak_index_eq<'a>(
+            &'a self,
+            _bucket: &'a [u8],
+            _index_name: &'a [u8],
+            _value: &'a [u8],
+        ) -> dynomite::embed::hooks::BoxFuture<
+            'a,
+            Result<Vec<Vec<u8>>, dynomite::embed::hooks::DatastoreError>,
+        > {
+            let keys = self.keys.clone();
+            Box::pin(async move { Ok(keys) })
+        }
+        fn riak_index_range<'a>(
+            &'a self,
+            _bucket: &'a [u8],
+            _index_name: &'a [u8],
+            _min: &'a [u8],
+            _max: &'a [u8],
+        ) -> dynomite::embed::hooks::BoxFuture<
+            'a,
+            Result<Vec<Vec<u8>>, dynomite::embed::hooks::DatastoreError>,
+        > {
+            let keys = self.keys.clone();
+            Box::pin(async move { Ok(keys) })
+        }
+    }
+
+    #[tokio::test]
+    async fn index_eq_streams_chunks_of_chunk_size() {
+        // 1000 keys -> 3 full 256-key chunks + 1 partial (232) + 1
+        // terminator = 5 frames, mirroring the list-keys layout.
+        let mut keys = Vec::new();
+        for i in 0..1000u16 {
+            keys.push(format!("k{i:04}").as_bytes().to_vec());
+        }
+        let ds = ScriptedIndexStore { keys };
+        let frame = Frame::new(
+            MessageCode::IndexReq.as_u8(),
+            RpbIndexReq {
+                bucket: b"u".to_vec(),
+                index: b"age_int".to_vec(),
+                qtype: INDEX_QUERY_TYPE_EQ,
+                key: Some(b"42".to_vec()),
+                ..RpbIndexReq::default()
+            }
+            .encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 5, "4 chunks plus a terminator");
+        let mut total = 0usize;
+        for (i, f) in frames.iter().enumerate() {
+            assert_eq!(f.code, MessageCode::IndexResp.as_u8());
+            let resp = RpbIndexResp::decode(f.body.as_slice()).expect("decode");
+            if i == frames.len() - 1 {
+                assert_eq!(resp.done, Some(true));
+                assert!(resp.keys.is_empty());
+            } else {
+                assert_eq!(
+                    resp.done,
+                    Some(false),
+                    "non-terminator frames carry done=false"
+                );
+                total += resp.keys.len();
+                if i < 3 {
+                    assert_eq!(resp.keys.len(), LIST_CHUNK_SIZE);
+                } else {
+                    assert_eq!(resp.keys.len(), 1000 - 3 * LIST_CHUNK_SIZE);
+                }
+            }
+        }
+        assert_eq!(total, 1000);
+    }
+
+    #[tokio::test]
+    async fn index_eq_first_frame_carries_partial_keys_for_old_clients() {
+        // Backwards compat: a client that ignores `done` and reads
+        // exactly one frame still observes a usable (partial)
+        // result set.
+        let mut keys = Vec::new();
+        for i in 0..600u16 {
+            keys.push(format!("k{i:04}").as_bytes().to_vec());
+        }
+        let ds = ScriptedIndexStore { keys };
+        let frame = Frame::new(
+            MessageCode::IndexReq.as_u8(),
+            RpbIndexReq {
+                bucket: b"u".to_vec(),
+                index: b"x".to_vec(),
+                qtype: INDEX_QUERY_TYPE_EQ,
+                key: Some(b"v".to_vec()),
+                ..RpbIndexReq::default()
+            }
+            .encode_to_vec(),
+        );
+        let mut stream = process_frame(&frame, &ds).await.expect("ok");
+        let first = stream.next().await.expect("first").expect("frame");
+        assert_eq!(first.code, MessageCode::IndexResp.as_u8());
+        let parsed = RpbIndexResp::decode(first.body.as_slice()).expect("decode");
+        assert_eq!(parsed.keys.len(), LIST_CHUNK_SIZE);
+        assert_eq!(parsed.done, Some(false));
+    }
+
+    #[tokio::test]
+    async fn index_empty_yields_single_terminator() {
+        let ds = ScriptedIndexStore { keys: Vec::new() };
+        let frame = Frame::new(
+            MessageCode::IndexReq.as_u8(),
+            RpbIndexReq {
+                bucket: b"u".to_vec(),
+                index: b"x".to_vec(),
+                qtype: INDEX_QUERY_TYPE_EQ,
+                key: Some(b"v".to_vec()),
+                ..RpbIndexReq::default()
+            }
+            .encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 1);
+        let resp = RpbIndexResp::decode(frames[0].body.as_slice()).expect("decode");
+        assert_eq!(resp.done, Some(true));
+        assert!(resp.keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn index_eq_max_results_caps_total_streamed_keys() {
+        // 1000 raw keys, max_results=300 -> should observe 300
+        // total keys across the stream (chunk + partial chunk +
+        // terminator).
+        let mut keys = Vec::new();
+        for i in 0..1000u16 {
+            keys.push(format!("k{i:04}").as_bytes().to_vec());
+        }
+        let ds = ScriptedIndexStore { keys };
+        let frame = Frame::new(
+            MessageCode::IndexReq.as_u8(),
+            RpbIndexReq {
+                bucket: b"u".to_vec(),
+                index: b"x".to_vec(),
+                qtype: INDEX_QUERY_TYPE_EQ,
+                key: Some(b"v".to_vec()),
+                max_results: Some(300),
+                ..RpbIndexReq::default()
+            }
+            .encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let frames = collect_frames(stream).await;
+        let mut total = 0usize;
+        for f in &frames {
+            let resp = RpbIndexResp::decode(f.body.as_slice()).expect("decode");
+            total += resp.keys.len();
+        }
+        assert_eq!(total, 300);
+        let last = frames.last().expect("last");
+        let last_resp = RpbIndexResp::decode(last.body.as_slice()).expect("decode");
+        assert_eq!(last_resp.done, Some(true));
+    }
+
+    #[tokio::test]
+    async fn index_unsupported_datastore_yields_error_frame() {
+        // The Noop store does not override riak_index_*; the
+        // default returns Unsupported, which surfaces as a single
+        // RpbErrorResp frame.
+        struct Noop;
+        impl Datastore for Noop {
+            fn protocol(&self) -> dynomite::embed::hooks::Protocol {
+                dynomite::embed::hooks::Protocol::Custom
+            }
+            fn dispatch(
+                &self,
+                req: Msg,
+            ) -> dynomite::embed::hooks::BoxFuture<
+                '_,
+                Result<Msg, dynomite::embed::hooks::DatastoreError>,
+            > {
+                Box::pin(async move {
+                    let mut rsp = Msg::new(req.id(), MsgType::Unknown, false);
+                    rsp.set_parent_id(req.id());
+                    Ok(rsp)
+                })
+            }
+        }
+        let ds = Noop;
+        let frame = Frame::new(
+            MessageCode::IndexReq.as_u8(),
+            RpbIndexReq {
+                bucket: b"u".to_vec(),
+                index: b"x".to_vec(),
+                qtype: INDEX_QUERY_TYPE_EQ,
+                key: Some(b"v".to_vec()),
+                ..RpbIndexReq::default()
+            }
+            .encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds).await.expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].code, MessageCode::ErrorResp.as_u8());
     }
 }
