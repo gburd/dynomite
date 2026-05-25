@@ -887,6 +887,198 @@ RIAK_WORKLOADS = [
 ]
 
 
+# --- error classification + retry policy ---
+#
+# The driver classifies every raised exception into one of a
+# small set of semantic error classes and consults a per-class
+# retry budget before recording a failure. This matches what an
+# operator-typical Dynomite client SDK does and lets the chaos
+# reports separate transient gossip churn (NoTargets that clears
+# in milliseconds) from genuine data unavailability (NoTargets
+# that persists across retries).
+#
+# Classes:
+#   NoTargets       -- dispatcher refused the request (no replica
+#                      could be selected). Surfaced as
+#                      ``-DYNOMITE: ...`` in RESP, ``SERVER_ERROR
+#                      ... no quorum`` in memcache, or an
+#                      ``RpbErrorResp`` whose errmsg matches
+#                      "NoTargets" / "no quorum" in Riak.
+#   Timeout         -- ``socket.timeout`` from a recv (read
+#                      timeout) or a Riak errmsg containing
+#                      "timeout".
+#   Closed          -- peer reset / EOF mid-reply. Surfaced as a
+#                      ``ConnectionError`` from the hand-rolled
+#                      readers, or an ``OSError`` like
+#                      ECONNRESET.
+#   WrongConnection -- recoverable handshake-level rejection
+#                      that clears after reconnecting (Redis
+#                      ``-NOAUTH``).
+#   Unknown         -- anything else (protocol-level, unmapped
+#                      server errors). Never retried; always
+#                      counted as a failure.
+
+RETRY_DEFAULT = "NoTargets:1,Timeout:0"
+
+RECOVERABLE_CLASSES = ("NoTargets", "Timeout", "Closed", "WrongConnection")
+
+
+def parse_retry_policy(spec: str) -> dict:
+    """Parse a ``--retry-on`` spec into a {class: budget} dict.
+
+    The spec is a comma-separated list of ``Class[:N]`` entries.
+    A missing ``:N`` defaults to ``:1``. An empty spec disables
+    every retry. Unknown class names are rejected so a typo does
+    not silently turn off retries the operator expected.
+    """
+    out: dict = {}
+    if not spec:
+        return out
+    for raw in spec.split(","):
+        entry = raw.strip()
+        if not entry:
+            continue
+        if ":" in entry:
+            cls, n_str = entry.split(":", 1)
+            cls = cls.strip()
+            n_str = n_str.strip()
+            if not n_str:
+                raise ValueError(
+                    "missing budget after ':' in retry spec entry: %r" % entry
+                )
+            try:
+                n = int(n_str)
+            except ValueError:
+                raise ValueError(
+                    "non-integer retry budget in entry: %r" % entry
+                )
+            if n < 0:
+                raise ValueError(
+                    "negative retry budget in entry: %r" % entry
+                )
+        else:
+            cls = entry
+            n = 1
+        if cls not in RECOVERABLE_CLASSES:
+            raise ValueError(
+                "unknown error class %r in retry spec; valid classes: %s"
+                % (cls, ",".join(RECOVERABLE_CLASSES))
+            )
+        out[cls] = n
+    return out
+
+
+def classify_error(exc: BaseException, mode: str) -> str:
+    """Map a raised exception to one of the semantic error classes.
+
+    ``mode`` selects the protocol-specific server-error parser
+    (``redis``, ``memcache``, or ``riak``). Anything that does
+    not match a known recoverable shape is reported as
+    ``"Unknown"`` and the caller treats it as a non-retryable
+    failure.
+    """
+    # ``socket.timeout`` is a subclass of ``OSError`` on Python 3,
+    # so check it before the OSError fallback.
+    if isinstance(exc, socket.timeout):
+        return "Timeout"
+    if isinstance(exc, ConnectionError):
+        # Our hand-rolled readers raise ``ConnectionError`` with
+        # a "peer closed" / "could not establish" message on EOF
+        # mid-reply or self-loop avoidance. Both are recoverable
+        # by reconnecting.
+        return "Closed"
+    msg = ""
+    if exc.args:
+        first = exc.args[0]
+        msg = first if isinstance(first, str) else str(first)
+    if mode == "redis" and isinstance(exc, RespError):
+        # The dispatcher prepends ``-DYNOMITE: `` (or a
+        # capitalised ``-Dynomite: ``) to every operational
+        # error. The leading minus is stripped by the RESP
+        # reader; we see the bare prefix.
+        # Native Redis errors like ``NOAUTH Authentication required``
+        # separate the prefix from the body with a space rather
+        # than a colon, so split on whichever appears first.
+        token = msg
+        for _sep in (":", " "):
+            _i = token.find(_sep)
+            if _i >= 0:
+                token = token[:_i]
+        head = token.strip().upper()
+        if head == "DYNOMITE":
+            return "NoTargets"
+        if head == "NOAUTH":
+            return "WrongConnection"
+        return "Unknown"
+    if mode == "memcache" and isinstance(exc, MemcacheError):
+        low = msg.lower()
+        if "server_error" in low and ("no quorum" in low or "notargets" in low):
+            return "NoTargets"
+        return "Unknown"
+    if mode == "riak" and isinstance(exc, RiakPbcError):
+        low = msg.lower()
+        if "notargets" in low or "no targets" in low or "no quorum" in low:
+            return "NoTargets"
+        if "timeout" in low:
+            return "Timeout"
+        return "Unknown"
+    if isinstance(exc, OSError):
+        # ECONNRESET / EPIPE / similar; the connection is gone
+        # and can be reopened. Treat as Closed for retry
+        # purposes.
+        return "Closed"
+    return "Unknown"
+
+
+def run_with_retry(
+    workload_fn,
+    conn,
+    mode: str,
+    policy: dict,
+    retries: dict,
+    cls_name: str,
+) -> tuple:
+    """Execute one workload op, applying the configured retry policy.
+
+    Returns ``(op, err_class)``:
+
+    * On success: ``(op_name, None)``. ``op_name`` is whatever
+      ``workload_fn`` returned.
+    * On final failure: ``(None, err_class)``. ``err_class`` is
+      the semantic class of the LAST attempt's exception (which
+      matches the first attempt's class for any retried request,
+      because a class only enters the policy if it is
+      recoverable).
+
+    Per-attempt retry consumption is recorded into ``retries``
+    keyed by ``"<cls_name>/<err_class>"`` so the per-second
+    NDJSON window picks them up. Each retry consumes 1 from the
+    per-class budget; budgets are reset per call (i.e. each
+    workload op gets a full fresh budget).
+    """
+    remaining = dict(policy)
+    while True:
+        try:
+            op = workload_fn(conn)
+            return op, None
+        except BaseException as exc:  # noqa: BLE001
+            err_class = classify_error(exc, mode)
+            # Always close the connection on error so the next
+            # attempt forces a reconnect. This mirrors what the
+            # earlier monolithic loop did and keeps the retry
+            # honest about reproducing what a real client SDK
+            # observes.
+            with suppress(Exception):
+                conn.close()
+            budget = remaining.get(err_class, 0)
+            if err_class in RECOVERABLE_CLASSES and budget > 0:
+                remaining[err_class] = budget - 1
+                key = cls_name + "/" + err_class
+                retries[key] = retries.get(key, 0) + 1
+                continue
+            return None, err_class
+
+
 # --- driver loop ---
 
 
@@ -913,7 +1105,22 @@ def main() -> int:
     p.add_argument("--riak-pbc-port", type=int, default=21800,
                    help="Riak PBC listener port (only used when "
                         "--mode riak); defaults to 21800")
+    p.add_argument("--retry-on", default=RETRY_DEFAULT,
+                   help="Comma-separated list of recoverable error "
+                        "classes with optional :N retry budget, e.g. "
+                        "'NoTargets:1,Timeout:0'. Empty string disables "
+                        "all retries (matches the pre-2026-05-25 "
+                        "behaviour where every error counted as a "
+                        "failure). Valid classes: "
+                        + ",".join(RECOVERABLE_CLASSES)
+                        + ". Default: " + RETRY_DEFAULT)
     args = p.parse_args()
+
+    try:
+        retry_policy = parse_retry_policy(args.retry_on)
+    except ValueError as exc:
+        print("invalid --retry-on: %s" % exc, file=sys.stderr)
+        return 2
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
@@ -926,6 +1133,7 @@ def main() -> int:
 
     counts: dict[tuple[str, str], int] = {}
     failures: dict[tuple[str, str], int] = {}
+    retries: dict[str, int] = {}
     last_flush = time.monotonic()
     started = time.monotonic()
 
@@ -965,22 +1173,29 @@ def main() -> int:
                 break
         cls_name, fn, _ = chosen_class
         try:
-            op = fn(conn)
-            counts[(cls_name, op)] = counts.get((cls_name, op), 0) + 1
+            op, err_class = run_with_retry(
+                fn, conn, effective_mode, retry_policy, retries, cls_name
+            )
         except net_errors as exc:
-            key = (cls_name, type(exc).__name__)
+            # ``run_with_retry`` traps every exception itself, but
+            # we keep this branch as a last-resort net so an
+            # unexpected error type cannot kill the driver.
+            err_class = classify_error(exc, effective_mode)
+            op = None
+        if op is not None:
+            counts[(cls_name, op)] = counts.get((cls_name, op), 0) + 1
+        else:
+            key = (cls_name, err_class)
             failures[key] = failures.get(key, 0) + 1
             # Log a small sample of failures to stderr so the
             # operator can correlate with dynomited / backend logs.
             if failures[key] <= 5:
                 print(
                     f"[{args.label}] {cls_name} call failed: "
-                    f"{type(exc).__name__}: {exc}",
+                    f"{err_class}",
                     file=sys.stderr,
                     flush=True,
                 )
-            with suppress(Exception):
-                conn.close()
         if sleep_per_op > 0:
             time.sleep(sleep_per_op)
 
@@ -993,10 +1208,12 @@ def main() -> int:
                 "elapsed": now - started,
                 "counts": {f"{c}/{o}": v for (c, o), v in counts.items()},
                 "failures": {f"{c}/{e}": v for (c, e), v in failures.items()},
+                "retries": dict(retries),
             }
             f.write(json.dumps(row) + "\n")
             counts.clear()
             failures.clear()
+            retries.clear()
             last_flush = now
 
     # final flush
@@ -1007,6 +1224,7 @@ def main() -> int:
         "elapsed": time.monotonic() - started,
         "counts": {f"{c}/{o}": v for (c, o), v in counts.items()},
         "failures": {f"{c}/{e}": v for (c, e), v in failures.items()},
+        "retries": dict(retries),
         "final": True,
     }
     f.write(json.dumps(row) + "\n")
@@ -1105,6 +1323,302 @@ class _RiakPbcEncodingTests(unittest.TestCase):
         # field 4 tag=0x22, len varint = 0xc8 0x01, then 200 bytes
         idx = body.index(b"\x22\xc8\x01")
         self.assertEqual(body[idx + 3:idx + 3 + 200], big)
+
+
+class _RetryPolicyParseTests(unittest.TestCase):
+    def test_empty_spec_returns_empty_dict(self) -> None:
+        self.assertEqual(parse_retry_policy(""), {})
+
+    def test_default_spec_parses(self) -> None:
+        got = parse_retry_policy(RETRY_DEFAULT)
+        self.assertEqual(got, {"NoTargets": 1, "Timeout": 0})
+
+    def test_missing_budget_defaults_to_one(self) -> None:
+        got = parse_retry_policy("NoTargets,Timeout:2")
+        self.assertEqual(got, {"NoTargets": 1, "Timeout": 2})
+
+    def test_full_policy_parses(self) -> None:
+        got = parse_retry_policy("NoTargets:3,Timeout:1,Closed:0,WrongConnection:2")
+        self.assertEqual(
+            got,
+            {"NoTargets": 3, "Timeout": 1, "Closed": 0, "WrongConnection": 2},
+        )
+
+    def test_unknown_class_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_retry_policy("BogusClass:1")
+
+    def test_negative_budget_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_retry_policy("Timeout:-1")
+
+    def test_non_integer_budget_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_retry_policy("Timeout:nope")
+
+    def test_whitespace_tolerant(self) -> None:
+        got = parse_retry_policy(" NoTargets : 2 ,  Timeout : 0 ")
+        self.assertEqual(got, {"NoTargets": 2, "Timeout": 0})
+
+
+class _ClassifyErrorTests(unittest.TestCase):
+    def test_socket_timeout_is_timeout(self) -> None:
+        self.assertEqual(classify_error(socket.timeout("read"), "redis"), "Timeout")
+        self.assertEqual(
+            classify_error(socket.timeout("read"), "memcache"), "Timeout"
+        )
+        self.assertEqual(classify_error(socket.timeout("read"), "riak"), "Timeout")
+
+    def test_connection_error_is_closed(self) -> None:
+        self.assertEqual(
+            classify_error(ConnectionError("peer closed mid-reply"), "redis"),
+            "Closed",
+        )
+
+    def test_redis_dynomite_prefix_is_no_targets(self) -> None:
+        self.assertEqual(
+            classify_error(RespError("DYNOMITE: no quorum"), "redis"),
+            "NoTargets",
+        )
+        # Title-cased prefix still matches.
+        self.assertEqual(
+            classify_error(RespError("Dynomite: no replicas"), "redis"),
+            "NoTargets",
+        )
+
+    def test_redis_noauth_is_wrong_connection(self) -> None:
+        self.assertEqual(
+            classify_error(RespError("NOAUTH Authentication required"), "redis"),
+            "WrongConnection",
+        )
+
+    def test_redis_unknown_resp_error(self) -> None:
+        self.assertEqual(
+            classify_error(RespError("WRONGTYPE Operation against a wrong key"),
+                           "redis"),
+            "Unknown",
+        )
+
+    def test_memcache_no_quorum_is_no_targets(self) -> None:
+        self.assertEqual(
+            classify_error(MemcacheError("SERVER_ERROR no quorum"), "memcache"),
+            "NoTargets",
+        )
+
+    def test_memcache_unrelated_server_error_is_unknown(self) -> None:
+        self.assertEqual(
+            classify_error(MemcacheError("SERVER_ERROR out of memory"),
+                           "memcache"),
+            "Unknown",
+        )
+
+    def test_riak_errmsg_no_targets(self) -> None:
+        self.assertEqual(
+            classify_error(RiakPbcError("riak error 1: NoTargets"), "riak"),
+            "NoTargets",
+        )
+        self.assertEqual(
+            classify_error(RiakPbcError("riak error 0: no quorum reached"),
+                           "riak"),
+            "NoTargets",
+        )
+
+    def test_riak_errmsg_timeout(self) -> None:
+        self.assertEqual(
+            classify_error(RiakPbcError("riak error 0: timeout waiting"), "riak"),
+            "Timeout",
+        )
+
+    def test_riak_errmsg_unknown(self) -> None:
+        self.assertEqual(
+            classify_error(RiakPbcError("riak error 0: malformed request"),
+                           "riak"),
+            "Unknown",
+        )
+
+    def test_oserror_is_closed(self) -> None:
+        self.assertEqual(classify_error(OSError("ECONNRESET"), "redis"), "Closed")
+
+
+class _FakeConn:
+    """Stand-in connection for retry-loop tests.
+
+    Records ``close()`` calls so a test can confirm the retry
+    loop actually drops the socket between attempts.
+    """
+
+    def __init__(self) -> None:
+        self.closed = 0
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+def _scripted_workload(script: list):
+    """Build a workload_fn that walks the given script.
+
+    Each script entry is either an exception instance (raised
+    on that attempt) or a string (returned as the op name on a
+    successful attempt).
+    """
+    state = {"i": 0}
+
+    def fn(_conn) -> str:
+        i = state["i"]
+        state["i"] = i + 1
+        if i >= len(script):
+            raise AssertionError(
+                "workload script exhausted at attempt %d" % i
+            )
+        item = script[i]
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    fn.calls = state  # type: ignore[attr-defined]
+    return fn
+
+
+class _RunWithRetryTests(unittest.TestCase):
+    def test_first_try_success(self) -> None:
+        retries: dict = {}
+        fn = _scripted_workload(["SET"])
+        op, err = run_with_retry(
+            fn, _FakeConn(), "redis",
+            parse_retry_policy("NoTargets:1,Timeout:0"),
+            retries, "strings",
+        )
+        self.assertEqual(op, "SET")
+        self.assertIsNone(err)
+        self.assertEqual(retries, {})
+        self.assertEqual(fn.calls["i"], 1)
+
+    def test_no_targets_then_success(self) -> None:
+        retries: dict = {}
+        fn = _scripted_workload([
+            RespError("DYNOMITE: no quorum"),
+            "SET",
+        ])
+        conn = _FakeConn()
+        op, err = run_with_retry(
+            fn, conn, "redis",
+            parse_retry_policy("NoTargets:1,Timeout:0"),
+            retries, "strings",
+        )
+        self.assertEqual(op, "SET")
+        self.assertIsNone(err)
+        self.assertEqual(retries, {"strings/NoTargets": 1})
+        # Connection was closed once between attempts.
+        self.assertEqual(conn.closed, 1)
+        self.assertEqual(fn.calls["i"], 2)
+
+    def test_no_targets_twice_with_budget_one_fails(self) -> None:
+        retries: dict = {}
+        fn = _scripted_workload([
+            RespError("DYNOMITE: no quorum"),
+            RespError("DYNOMITE: no quorum"),
+        ])
+        op, err = run_with_retry(
+            fn, _FakeConn(), "redis",
+            parse_retry_policy("NoTargets:1,Timeout:0"),
+            retries, "strings",
+        )
+        self.assertIsNone(op)
+        self.assertEqual(err, "NoTargets")
+        # Budget=1 means exactly one retry was attempted and
+        # consumed; the second NoTargets exhausts the budget
+        # and counts as a failure.
+        self.assertEqual(retries, {"strings/NoTargets": 1})
+        self.assertEqual(fn.calls["i"], 2)
+
+    def test_timeout_with_zero_budget_fails_immediately(self) -> None:
+        retries: dict = {}
+        fn = _scripted_workload([socket.timeout("read")])
+        op, err = run_with_retry(
+            fn, _FakeConn(), "redis",
+            parse_retry_policy("NoTargets:1,Timeout:0"),
+            retries, "hash",
+        )
+        self.assertIsNone(op)
+        self.assertEqual(err, "Timeout")
+        self.assertEqual(retries, {})
+        self.assertEqual(fn.calls["i"], 1)
+
+    def test_unknown_error_class_is_not_retried(self) -> None:
+        retries: dict = {}
+        fn = _scripted_workload([
+            RespError("WRONGTYPE Operation against a wrong key"),
+        ])
+        op, err = run_with_retry(
+            fn, _FakeConn(), "redis",
+            parse_retry_policy("NoTargets:3,Timeout:3"),
+            retries, "strings",
+        )
+        self.assertIsNone(op)
+        self.assertEqual(err, "Unknown")
+        self.assertEqual(retries, {})
+        self.assertEqual(fn.calls["i"], 1)
+
+    def test_empty_policy_disables_all_retries(self) -> None:
+        retries: dict = {}
+        fn = _scripted_workload([
+            RespError("DYNOMITE: no quorum"),
+        ])
+        op, err = run_with_retry(
+            fn, _FakeConn(), "redis",
+            parse_retry_policy(""),
+            retries, "strings",
+        )
+        self.assertIsNone(op)
+        self.assertEqual(err, "NoTargets")
+        self.assertEqual(retries, {})
+
+    def test_retry_budget_resets_per_call(self) -> None:
+        # Two independent invocations with budget=1 each: the
+        # second invocation should still get its full retry,
+        # not inherit a depleted budget from the first.
+        policy = parse_retry_policy("NoTargets:1")
+        retries: dict = {}
+
+        fn1 = _scripted_workload([
+            RespError("DYNOMITE: no quorum"),
+            "SET",
+        ])
+        op1, _ = run_with_retry(
+            fn1, _FakeConn(), "redis", policy, retries, "strings",
+        )
+        self.assertEqual(op1, "SET")
+
+        fn2 = _scripted_workload([
+            RespError("DYNOMITE: no quorum"),
+            "GET",
+        ])
+        op2, _ = run_with_retry(
+            fn2, _FakeConn(), "redis", policy, retries, "strings",
+        )
+        self.assertEqual(op2, "GET")
+        self.assertEqual(retries, {"strings/NoTargets": 2})
+
+    def test_mixed_classes_consume_separate_budgets(self) -> None:
+        # A Timeout followed by a NoTargets with budgets 1/1
+        # should retry both and ultimately succeed.
+        retries: dict = {}
+        fn = _scripted_workload([
+            socket.timeout("read"),
+            RespError("DYNOMITE: no quorum"),
+            "SET",
+        ])
+        op, err = run_with_retry(
+            fn, _FakeConn(), "redis",
+            parse_retry_policy("NoTargets:1,Timeout:1"),
+            retries, "strings",
+        )
+        self.assertEqual(op, "SET")
+        self.assertIsNone(err)
+        self.assertEqual(
+            retries,
+            {"strings/Timeout": 1, "strings/NoTargets": 1},
+        )
 
 
 if __name__ == "__main__":

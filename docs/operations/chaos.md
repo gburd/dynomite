@@ -102,6 +102,78 @@ so the test exercises exactly the bytes that go on the wire and
 runs unchanged on FreeBSD's stock `python3`. The flake's
 `python3` is sufficient.
 
+### Retry semantics (`--retry-on`)
+
+A real Dynomite operator's client SDK retries on transient
+errors before treating them as a failure. The chaos workload
+driver mirrors that: by default it retries `NoTargets` once and
+never retries `Timeout`, controlled by a `--retry-on` flag and
+a matching `RETRY_POLICY` env knob on `coordinator.sh`.
+
+```
+--retry-on=NoTargets:1,Timeout:0   (default)
+--retry-on=NoTargets:3,Timeout:1,Closed:0
+--retry-on=                        (empty -> never retry; pre-2026-05-25 behaviour)
+```
+
+The spec is a comma-separated list of `Class[:N]` entries.
+`N` is the per-call retry budget (missing `:N` defaults to 1).
+Valid classes:
+
+| Class             | Source                                                 |
+|-------------------|--------------------------------------------------------|
+| `NoTargets`       | RESP `-DYNOMITE: ...`, memcache `SERVER_ERROR ... no quorum`, Riak `RpbErrorResp` matching "NoTargets" / "no quorum" |
+| `Timeout`         | `socket.timeout` from a recv, Riak `errmsg` containing "timeout" |
+| `Closed`          | `ConnectionError` from a hand-rolled reader, `OSError` (ECONNRESET, EPIPE) |
+| `WrongConnection` | RESP `-NOAUTH ...` (clears after reconnecting)         |
+
+Anything that does not match a known shape is `Unknown` and is
+never retried (treated as a failure on the first attempt).
+
+Each retry consumes 1 from the per-class budget; budgets reset
+between workload ops. When the budget is exhausted the request
+counts as a failure with the original error class.
+
+#### Reading retries vs failures
+
+Every per-second NDJSON snapshot now carries three counters:
+
+```json
+{
+  "counts":   { "strings/SET": 12345 },
+  "failures": { "strings/NoTargets": 3 },
+  "retries":  { "strings/NoTargets": 12, "strings/Timeout": 2 }
+}
+```
+
+* High `retries`, low `failures`: the cluster wobbled but the
+  driver absorbed the wobble. Healthy.
+* High `retries` AND high `failures`: a class is genuinely past
+  its budget. Investigate.
+* Low `retries`, high `failures`: rare for the new defaults
+  but means most failures are in the `Unknown` bucket
+  (unmapped server-error shapes; non-recoverable). Update the
+  classifier in `workload-driver.py` if a recurring class is
+  being miscategorised.
+
+The note in `failures` keys: the second segment is now the
+semantic class name (`NoTargets`, `Timeout`, `Closed`,
+`WrongConnection`, `Unknown`) rather than the Python exception
+type name (`RespError`, `ConnectionError`, `MemcacheError`,
+`RiakPbcError`). The report generator picks this up
+transparently; tooling that parsed the old key shape needs
+updating.
+
+#### Behaviour change
+
+Default behaviour changed on 2026-05-25: previously every
+raised exception counted as a failure. To restore the old
+semantics exactly (every error counts), pass `--retry-on=`
+on the workload-driver CLI or set `RETRY_POLICY=""` in the
+coordinator's environment. Reports generated before this date
+have no `retries` field; the report generator treats the
+missing field as zero.
+
 ## Running a pass
 
 From the coordinator host (floki):
@@ -116,6 +188,16 @@ CHAOS_DURATION_SECS=7200 \
 RUN_ID="prod-mc-$(date -u +%Y%m%d-%H%M%SZ)" \
 MODE=memcache \
 CHAOS_DURATION_SECS=7200 \
+  scripts/chaos-multi-host/coordinator.sh
+
+# Override the retry policy (more aggressive)
+RUN_ID="prod-aggressive-$(date -u +%Y%m%d-%H%M%SZ)" \
+RETRY_POLICY="NoTargets:3,Timeout:1" \
+  scripts/chaos-multi-host/coordinator.sh
+
+# Disable retries entirely (pre-2026-05-25 behaviour)
+RUN_ID="prod-noretry-$(date -u +%Y%m%d-%H%M%SZ)" \
+RETRY_POLICY="" \
   scripts/chaos-multi-host/coordinator.sh
 
 # Detached (immune to terminal SIGHUP / parent-shell exit):

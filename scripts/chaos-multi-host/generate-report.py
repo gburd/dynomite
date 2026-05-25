@@ -133,10 +133,11 @@ def parse_workload_ndjson(path: Path):
     """
     counts = collections.Counter()
     failures = collections.Counter()
+    retries = collections.Counter()
     snapshots = []
     first_ts = last_ts = None
     if not path.exists():
-        return counts, failures, snapshots, first_ts, last_ts
+        return counts, failures, retries, snapshots, first_ts, last_ts
     with path.open() as f:
         for line in f:
             line = line.strip()
@@ -150,13 +151,15 @@ def parse_workload_ndjson(path: Path):
                 counts[k] += v
             for k, v in d.get("failures", {}).items():
                 failures[k] += v
+            for k, v in d.get("retries", {}).items():
+                retries[k] += v
             snapshots.append(d)
             ts = d.get("ts")
             if isinstance(ts, (int, float)):
                 if first_ts is None:
                     first_ts = ts
                 last_ts = ts
-    return counts, failures, snapshots, first_ts, last_ts
+    return counts, failures, retries, snapshots, first_ts, last_ts
 
 
 def parse_chaos_events(path: Path):
@@ -333,11 +336,12 @@ def render_report(run_dir: Path) -> str:
     for label in host_labels:
         wpath = host_dirs[label] / f"workload-{label}.ndjson"
         cpath = host_dirs[label] / f"chaos-events-{label}.ndjson"
-        counts, failures, snapshots, first_ts, last_ts = parse_workload_ndjson(wpath)
+        counts, failures, retries, snapshots, first_ts, last_ts = parse_workload_ndjson(wpath)
         kinds, events = parse_chaos_events(cpath)
         per_host[label] = {
             "counts": counts,
             "failures": failures,
+            "retries": retries,
             "snapshots": snapshots,
             "first_ts": first_ts,
             "last_ts": last_ts,
