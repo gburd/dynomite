@@ -441,6 +441,7 @@ pub struct ConfPool {
 ///     tls_cert: None,
 ///     tls_key: None,
 ///     tls_ca: None,
+///     wasm_modules: None,
 /// };
 /// assert!(r.validate().is_ok());
 /// ```
@@ -485,6 +486,48 @@ pub struct ConfRiak {
     /// requesting a client certificate.
     #[serde(default)]
     pub tls_ca: Option<PathBuf>,
+    /// `wasm_modules:` - optional list of Wasm modules to
+    /// register with the MapReduce executor at startup. Each
+    /// entry pairs a logical `id` with the on-disk `path` of a
+    /// Wasm binary (`.wasm`) or WAT text (`.wat`) file. When
+    /// `dynomited` is built with the `wasm` Cargo feature it
+    /// loads every entry through
+    /// [`dyn_riak::mapreduce::wasm::load_modules_from_config`]
+    /// and exposes the resulting store on the executor; without
+    /// the feature the field is parsed and validated but the
+    /// loader is never called (the runtime returns the typed
+    /// `WasmNotImplemented` error if a `Phase::WasmModule` is
+    /// submitted).
+    ///
+    /// Validation: every `id` must be unique and every `path`
+    /// must point at an existing file at validation time.
+    #[serde(default)]
+    pub wasm_modules: Option<Vec<ConfRiakWasmModule>>,
+}
+
+/// One Wasm module entry inside a [`ConfRiak::wasm_modules`]
+/// list.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::PathBuf;
+/// use dynomite::conf::ConfRiakWasmModule;
+/// let m = ConfRiakWasmModule {
+///     id: "identity".into(),
+///     path: PathBuf::from("/etc/dynomited/wasm/identity.wasm"),
+/// };
+/// assert_eq!(m.id, "identity");
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfRiakWasmModule {
+    /// Logical module identifier referenced from a
+    /// `Phase::WasmModule { module_id }` MapReduce phase.
+    pub id: String,
+    /// Filesystem path to the Wasm binary (`.wasm`) or WAT
+    /// text (`.wat`) file. Read once at startup.
+    pub path: PathBuf,
 }
 
 impl ConfRiak {
@@ -558,6 +601,32 @@ impl ConfRiak {
                     .map_or_else(String::new, |p| p.display().to_string()),
                 reason: "requires tls_cert and tls_key to also be set".into(),
             });
+        }
+        if let Some(modules) = self.wasm_modules.as_deref() {
+            let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            for m in modules {
+                if m.id.is_empty() {
+                    return Err(ConfError::BadServer {
+                        field: "wasm_modules.id",
+                        value: String::new(),
+                        reason: "wasm module id must not be empty".into(),
+                    });
+                }
+                if !seen.insert(m.id.as_str()) {
+                    return Err(ConfError::BadServer {
+                        field: "wasm_modules.id",
+                        value: m.id.clone(),
+                        reason: "wasm module ids must be unique".into(),
+                    });
+                }
+                if !m.path.is_file() {
+                    return Err(ConfError::BadServer {
+                        field: "wasm_modules.path",
+                        value: m.path.display().to_string(),
+                        reason: format!("wasm module file not found for id '{}'", m.id),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -1890,5 +1959,112 @@ p:
         });
         p.apply_defaults();
         assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn riak_wasm_modules_yaml_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let m1 = dir.path().join("identity.wasm");
+        let m2 = dir.path().join("sum.wasm");
+        std::fs::write(&m1, b"\0asm\x01\0\0\0").unwrap();
+        std::fs::write(&m2, b"\0asm\x01\0\0\0").unwrap();
+        let yaml = format!(
+            r"
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+riak:
+  pbc_listen: 127.0.0.1:8087
+  wasm_modules:
+  - id: identity
+    path: {m1}
+  - id: sum
+    path: {m2}
+",
+            m1 = m1.display(),
+            m2 = m2.display(),
+        );
+        let p: ConfPool = serde_yaml::from_str(&yaml).unwrap();
+        let r = p.riak.as_ref().unwrap();
+        let mods = r.wasm_modules.as_ref().unwrap();
+        assert_eq!(mods.len(), 2);
+        assert_eq!(mods[0].id, "identity");
+        assert_eq!(mods[0].path, m1);
+        assert_eq!(mods[1].id, "sum");
+        assert_eq!(mods[1].path, m2);
+        // Round-trip back to YAML and re-parse.
+        let dumped = serde_yaml::to_string(&p).unwrap();
+        let p2: ConfPool = serde_yaml::from_str(&dumped).unwrap();
+        assert_eq!(p2.riak.unwrap().wasm_modules, r.wasm_modules);
+    }
+
+    #[test]
+    fn riak_wasm_modules_unique_ids_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.wasm");
+        std::fs::write(&path, b"\0").unwrap();
+        let r = ConfRiak {
+            wasm_modules: Some(vec![
+                ConfRiakWasmModule {
+                    id: "m".into(),
+                    path: path.clone(),
+                },
+                ConfRiakWasmModule {
+                    id: "m".into(),
+                    path: path.clone(),
+                },
+            ]),
+            ..ConfRiak::default()
+        };
+        let err = r.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "wasm_modules.id",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn riak_wasm_modules_path_must_exist() {
+        let r = ConfRiak {
+            wasm_modules: Some(vec![ConfRiakWasmModule {
+                id: "missing".into(),
+                path: std::path::PathBuf::from("/no/such/path/at/all.wasm"),
+            }]),
+            ..ConfRiak::default()
+        };
+        let err = r.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "wasm_modules.path",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn riak_wasm_modules_empty_id_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.wasm");
+        std::fs::write(&path, b"\0").unwrap();
+        let r = ConfRiak {
+            wasm_modules: Some(vec![ConfRiakWasmModule {
+                id: String::new(),
+                path,
+            }]),
+            ..ConfRiak::default()
+        };
+        let err = r.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "wasm_modules.id",
+                ..
+            }
+        ));
     }
 }

@@ -60,8 +60,8 @@ pub use crate::aae::exchange::{
     PHASE_TREE_SYNC,
 };
 pub use crate::aae::repair::{
-    LexicographicOrder, MpscRepairSink, Outcome, RepairDirection, RepairScheduler, RepairSink,
-    RepairTask, VClockOrder,
+    LexicographicOrder, MpscRepairSink, Outcome, RepairDirection, RepairOutcome, RepairScheduler,
+    RepairSink, RepairTask, VClockOrder,
 };
 pub use crate::aae::scheduler::{Clock, MockClock, Scheduler, SweepPlan, SweepTick, SystemClock};
 pub use crate::aae::tictac::{KeyEntry, Tree, TreeError, TreeShape};
