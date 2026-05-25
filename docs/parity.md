@@ -1292,6 +1292,65 @@ Pinned by:
 - `crates/dynomite/benches/random_slicing.rs` (criterion
   comparison against the vnode dispatcher).
 
+### D4: Causality tracking: DVVSet over classic vector clocks
+
+The Riak port tracks per-key causality with a Dotted Version
+Vector Set ([`dyn_riak::datatypes::DvvSet`]) instead of the
+classic vector-clock shape used by the C engine's `vclock`
+utility (the C code does not implement a CRDT-typed Riak; this
+deviation describes the choice made for the Rust Riak surface).
+The DVVSet variant is taken from Almeida, Baquero, Goncalves,
+Preguica and Fonte, "Dotted Version Vectors: Logical Clocks for
+Optimistic Replication" (2010), and the follow-up Goncalves,
+Almeida, Baquero and Fonte, "Scalable and Accurate Causality
+Tracking for Eventually Consistent Stores" (2014). The Riak
+codebase moved to a DVV-style scheme in 2.0 for the same
+false-concurrency reason; we inherit that choice as the
+default.
+
+A classic vector clock per actor records only the highest
+sequence number observed for that actor and cannot represent
+gaps in the per-actor history. DVVSet pairs the contiguous
+vector clock with an explicit list of "dots" -- per-actor
+non-contiguous events whose predecessors have not yet been
+observed. The dot list is absorbed back into the vc the moment
+the missing predecessors arrive via sync, so the canonical
+form drifts back to a tight VV under steady state. Until then,
+the dot list is the receipt that distinguishes "I saw events
+1..=3 and the singleton 5" from "I saw events 1..=5".
+
+The `RpbDtFetchResp.context` field stays opaque to clients
+per the Riak convention; the on-the-wire bytes change shape
+(see `docs/journal/2026-05-25-dvv-default.md` for the
+side-by-side wire-shape diff) but clients round-trip whatever
+the server hands back without parsing it, so the migration is
+transparent.
+
+The legacy [`Vclock`] type is retained for archaeology and
+direct in-test comparisons; it is `#[deprecated(since =
+"0.0.2")]` and any new call site outside the three documented
+ones (the re-export in `crates/dyn-riak/src/datatypes/mod.rs`,
+the module file `crates/dyn-riak/src/datatypes/vclock.rs`, and
+the integration test
+`crates/dyn-riak/tests/datatypes_round_trip.rs`) trips the
+deprecation lint and demands its own allowance entry.
+
+Pinned by:
+- `dyn_riak::datatypes::dvv::tests` (22 unit tests on the
+  algorithm).
+- `crates/dyn-riak/tests/dvv_properties.rs` (9 hegeltest
+  properties: single-actor sequential dominance, cross-actor
+  concurrency, merge associativity / commutativity /
+  idempotence, sync identity, dot absorption, encode
+  round-trip, compare totality).
+- `dyn_riak::proto::pb::datatypes::tests::dvvset_*` (3 tests
+  exercising the protobuf-context blob round trip on both
+  fetch and update sides).
+- `crates/dyn-riak/src/aae/repair.rs::RepairTask::evaluate`
+  (now consumes `&[(Bytes, DvvSet)]`; the
+  `RepairOutcome::Winner` variant carries a `dvv: DvvSet`
+  field).
+
 ### Stage 11: entropy chunks are length-prefixed instead of fixed `cipher_size`
 
 The reference engine sends every chunk as exactly `cipher_size`

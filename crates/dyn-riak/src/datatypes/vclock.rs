@@ -1,4 +1,14 @@
-//! Vector clock for CRDT conflict-resolution metadata.
+//! Classic vector clock (deprecated; superseded by
+//! [`crate::datatypes::DvvSet`]).
+//!
+//! Retained for archaeology and direct in-test comparisons.
+//! New callers should use [`crate::datatypes::DvvSet`], which
+//! tracks per-actor non-contiguous events through dots and
+//! avoids the false-concurrency artefact classic VVs can
+//! exhibit when one actor performs sync-then-update against a
+//! peer that has not yet caught up. See
+//! `docs/journal/2026-05-25-dvv-default.md` for the migration
+//! notes.
 //!
 //! A vector clock tracks how many events each [`crate::datatypes::ActorId`]
 //! has emitted. Two clocks compare under the standard
@@ -16,12 +26,23 @@
 //! [`Vclock::encode`] / [`Vclock::decode`] for round-tripping a
 //! clock through the `bytes` field on the protobuf messages.
 
+// Internal unit tests in this module reference `Vclock` and
+// `VclockOrder` directly. Allowing the deprecation lint at
+// module scope keeps the kept-for-archaeology behaviour live
+// without forcing every test to repeat the attribute. See
+// `docs/journal/allowances.md` (2026-05-25 entry).
+#![allow(deprecated)]
+
 use std::collections::BTreeMap;
 
 use crate::datatypes::ActorId;
 
 /// Result of comparing two vector clocks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[deprecated(
+    since = "0.0.2",
+    note = "use `dyn_riak::datatypes::DvvOrder` (DVVSet) instead; see docs/journal/2026-05-25-dvv-default.md"
+)]
 pub enum VclockOrder {
     /// `self` strictly precedes `other`.
     Less,
@@ -36,6 +57,10 @@ pub enum VclockOrder {
 
 /// Vector clock keyed by [`ActorId`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[deprecated(
+    since = "0.0.2",
+    note = "use `dyn_riak::datatypes::DvvSet` instead; see docs/journal/2026-05-25-dvv-default.md"
+)]
 pub struct Vclock {
     entries: BTreeMap<ActorId, u64>,
 }

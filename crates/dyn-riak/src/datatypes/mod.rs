@@ -16,8 +16,11 @@
 //!   restricted to a singleton domain. Concurrent enable + disable
 //!   resolves to enabled.
 //!
-//! Vector clocks for tag generation and conflict-resolution
-//! metadata live in [`vclock`].
+//! Per-key causality is tracked by [`DvvSet`] (the default for
+//! Riak mode; see the [`dvv`] module for the algorithm and the
+//! citations). The classic [`Vclock`] type is retained for
+//! archaeology and direct in-test comparisons but is
+//! `#[deprecated]` in favour of [`DvvSet`].
 //!
 //! # Actor-id mapping
 //!
@@ -42,6 +45,7 @@
 //! three on randomly generated states.
 
 pub mod counter;
+pub mod dvv;
 pub mod flag;
 pub mod register;
 pub mod set;
@@ -56,9 +60,16 @@ pub mod map;
 use std::cmp::Ordering;
 
 pub use crate::datatypes::counter::PnCounter;
+pub use crate::datatypes::dvv::{DvvOrder, DvvSet};
 pub use crate::datatypes::flag::EwFlag;
 pub use crate::datatypes::register::LwwRegister;
 pub use crate::datatypes::set::OrSet;
+// `Vclock` is `#[deprecated]` in favour of `DvvSet`. The lint
+// fires on this re-export because the legacy aliases are still
+// reachable from `dyn_riak::datatypes::*`. The allowance is
+// kept-for-archaeology and recorded in
+// `docs/journal/allowances.md` (2026-05-25 entry).
+#[allow(deprecated)]
 pub use crate::datatypes::vclock::{Vclock, VclockOrder};
 
 pub use crate::datatypes::hll::HyperLogLog;
