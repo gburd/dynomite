@@ -42,6 +42,39 @@ event() {
         >> "$EVENTS"
 }
 
+# JSON-escape a multi-line string for embedding in a single JSON
+# string field. Backslashes, double quotes and tabs are escaped
+# inline; newlines are passed through a vertical-tab placeholder
+# (a byte that is forbidden in our log payloads) and then
+# rewritten to the literal two-character sequence backslash-n so
+# the resulting blob is safe to splice between double quotes in
+# the ndjson detail object.
+#
+# Usage: out=$(json_string_escape "$multiline")
+json_string_escape() {
+    printf '%s' "$1" \
+        | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' \
+        | tr '\n' '\v' \
+        | sed 's/\v/\\n/g'
+}
+
+# Compute a SHA-256 fingerprint of a file using whichever tool
+# is available on this host. Linux ships sha256sum; FreeBSD
+# ships sha256(1) and shasum(1). Returns the literal string
+# "unknown" if no hasher is found, so the event payload stays
+# parseable.
+file_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v sha256 >/dev/null 2>&1; then
+        sha256 -q "$1" 2>/dev/null
+    else
+        printf 'unknown'
+    fi
+}
+
 dyn_pid() {
     if [ -f "$RUN/dynomited.pid" ]; then
         local pid; pid=$(cat "$RUN/dynomited.pid" 2>/dev/null)
@@ -75,14 +108,33 @@ redis_pid() {
     return 1
 }
 
+# restart_dynomited [failure_event_name]
+#
+# Re-launch dynomited via start-host.sh, killing any stale
+# pre-existing process first. On failure, emit an ndjson event
+# that includes the start-host.sh exit code and the last 50
+# lines of its combined stdout+stderr log so a post-mortem can
+# attribute the failure without per-host log scraping.
+#
+# The first argument selects the failure-event kind so callers
+# can distinguish a scheduled-kill restart from a recovery
+# restart in the event stream. Defaults to restart_failed.
 restart_dynomited() {
+    local fail_event="${1:-restart_failed}"
+    local restart_log="$LOGS/restart-$DC_NAME.log"
     event restart "{\"reason\":\"sigkill\"}"
     kill_stale_dynomited
     MODE="$MODE" bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
         "$DC_NAME" "$TOKENS" "$SEEDS" \
         "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" \
-        >> "$LOGS/restart-$DC_NAME.log" 2>&1 \
-        || event restart_failed "{\"reason\":\"start-host.sh-nonzero\"}"
+        >> "$restart_log" 2>&1
+    local rc=$?
+    if [ "$rc" -ne 0 ]; then
+        local tail_blob
+        tail_blob=$(json_string_escape "$(tail -n 50 "$restart_log" 2>/dev/null || true)")
+        event "$fail_event" \
+            "{\"reason\":\"start-host.sh-nonzero\",\"rc\":$rc,\"tail\":\"$tail_blob\"}"
+    fi
 }
 
 # Kill any dynomited process bound to this DC's config file. The
@@ -127,6 +179,14 @@ kill_stale_dynomited() {
 trap 'event injector_exit "{}"; exit 0' TERM INT
 
 event injector_start "{\"datacenter\":\"$DC_NAME\"}"
+
+# Fingerprint the start-args file once at boot. When the same DC
+# produces different failure signatures across a multi-mode
+# pass-3 run we can correlate the event stream tails with the
+# exact argument set that produced them.
+START_ARGS_SHA=$(file_sha256 "$START_ARGS_FILE")
+event start_args_fingerprint \
+    "{\"file\":\"$START_ARGS_FILE\",\"sha256\":\"$START_ARGS_SHA\",\"mode\":\"$MODE\"}"
 
 # Schedule windows.
 NEXT_PAUSE=$(( $(date +%s) + (RANDOM % 60 + 60) ))   # 1-2 min
@@ -182,11 +242,18 @@ while true; do
                     fi
                     sleep 1
                     # Restart via start-host.sh's container path.
+                    bounce_log="$LOGS/restart-backend-$DC_NAME.log"
                     MODE="$MODE" bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
                         "$DC_NAME" "$TOKENS" "$SEEDS" \
                         "$DATASTORE_PORT" "$DYN_LISTEN_PORT" \
                         "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" \
-                        >> "$LOGS/restart-backend-$DC_NAME.log" 2>&1 || true
+                        >> "$bounce_log" 2>&1
+                    bounce_rc=$?
+                    if [ "$bounce_rc" -ne 0 ]; then
+                        bounce_tail=$(json_string_escape "$(tail -n 50 "$bounce_log" 2>/dev/null || true)")
+                        event redis_bounce_failed \
+                            "{\"reason\":\"start-host.sh-nonzero\",\"rc\":$bounce_rc,\"tail\":\"$bounce_tail\"}"
+                    fi
                     ;;
                 *)
                     kill -KILL "$id" 2>/dev/null || true
@@ -246,7 +313,7 @@ while true; do
     if ! dyn_pid >/dev/null; then
         if [ "${MISSING_STREAK:-0}" -ge 1 ]; then
             event recovery_restart "{\"streak\":$MISSING_STREAK}"
-            restart_dynomited
+            restart_dynomited recovery_restart_failed
             MISSING_STREAK=0
         else
             MISSING_STREAK=$(( ${MISSING_STREAK:-0} + 1 ))
