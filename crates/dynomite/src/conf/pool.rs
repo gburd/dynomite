@@ -6,6 +6,7 @@
 //! in [`Option`]; [`ConfPool::apply_defaults`] later fills in the
 //! sentinel-driven defaults.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -332,6 +333,27 @@ pub struct ConfPool {
     /// `webpki_roots` Mozilla bundle is used.
     #[serde(default)]
     pub peer_tls_ca: Option<PathBuf>,
+    /// `peer_tls_profiles:` - per-DC TLS material lookup. Each
+    /// entry is keyed by the target peer's datacenter name; the
+    /// value is a [`ConfTlsProfile`] giving the cert / key / CA
+    /// triple to use when negotiating peer-plane TLS to or from a
+    /// peer in that DC. When the inbound listener accepts a
+    /// connection it picks the cert by SNI hostname
+    /// (`dc-<dc-name>.dynomite.local`); the outbound peer
+    /// supervisor dials with the same SNI hostname so the remote
+    /// listener can route the handshake.
+    ///
+    /// When this map is empty (the default), the legacy
+    /// `peer_tls_cert` / `peer_tls_key` / `peer_tls_ca` triple is
+    /// the only profile in use, applied to every peer regardless
+    /// of DC. When the map is non-empty, each entry takes
+    /// precedence over the legacy fields for matching DCs; the
+    /// legacy fields become the implicit "default" profile used
+    /// for any DC without an explicit entry. When neither the
+    /// map nor the legacy fields are set, the peer plane is
+    /// plaintext.
+    #[serde(default)]
+    pub peer_tls_profiles: BTreeMap<String, ConfTlsProfile>,
     /// `mbuf_size:` - mbuf chunk size in bytes.
     pub mbuf_size: Option<i64>,
     /// `max_msgs:` - allocated message buffer size.
@@ -542,6 +564,110 @@ pub struct ConfRiakWasmModule {
     /// Filesystem path to the Wasm binary (`.wasm`) or WAT
     /// text (`.wat`) file. Read once at startup.
     pub path: PathBuf,
+}
+
+/// One per-DC TLS profile inside [`ConfPool::peer_tls_profiles`].
+///
+/// Each profile names a PEM cert / private-key pair and an
+/// optional CA bundle. The map's key is the datacenter name
+/// (matching the value an operator sets in `dyn_seeds:` for
+/// peers in that DC); when a peer's DC has no entry, the
+/// connection falls back to the legacy `peer_tls_*` fields
+/// (treated as the implicit "default" profile). When neither a
+/// per-DC entry nor the default fields are set, the connection
+/// is plaintext.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::PathBuf;
+/// use dynomite::conf::ConfTlsProfile;
+/// let p = ConfTlsProfile {
+///     cert: Some(PathBuf::from("/etc/dynomite/dc1.pem")),
+///     key: Some(PathBuf::from("/etc/dynomite/dc1.key")),
+///     ca: Some(PathBuf::from("/etc/dynomite/dc1-ca.pem")),
+/// };
+/// assert!(p.validate("dc1").is_ok());
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct ConfTlsProfile {
+    /// PEM certificate path. Must be set together with [`Self::key`].
+    pub cert: Option<PathBuf>,
+    /// PEM private-key path matching [`Self::cert`].
+    pub key: Option<PathBuf>,
+    /// Optional PEM CA bundle. When set, peer-plane connections
+    /// using this profile pin the bundle as their trust anchor
+    /// (and the listener requires inbound peers to present a
+    /// certificate signed by a CA in the bundle for mTLS). When
+    /// unset, the listener does not request a client certificate
+    /// and the outbound side falls back to the bundled
+    /// `webpki_roots` Mozilla anchors.
+    pub ca: Option<PathBuf>,
+}
+
+impl ConfTlsProfile {
+    /// Validate that the profile is internally consistent.
+    ///
+    /// `cert` and `key` must both be set or both be unset; a
+    /// `ca` requires the cert / key pair. The `dc` argument is
+    /// the map key the profile lives under and is included in
+    /// any error message so an operator can identify the
+    /// offending entry.
+    ///
+    /// # Errors
+    /// Returns [`ConfError::BadServer`] when the cert / key
+    /// pair is mismatched, or when `ca` is set without the cert
+    /// / key pair.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::PathBuf;
+    /// use dynomite::conf::ConfTlsProfile;
+    /// let p = ConfTlsProfile {
+    ///     cert: Some(PathBuf::from("/etc/x.pem")),
+    ///     key: None,
+    ///     ca: None,
+    /// };
+    /// assert!(p.validate("dc1").is_err());
+    /// ```
+    pub fn validate(&self, dc: &str) -> Result<(), ConfError> {
+        match (self.cert.as_deref(), self.key.as_deref()) {
+            (Some(_), Some(_)) | (None, None) => {}
+            (Some(c), None) => {
+                return Err(ConfError::BadServer {
+                    field: "peer_tls_profiles.cert",
+                    value: c.display().to_string(),
+                    reason: format!(
+                        "peer_tls_profiles[{dc}].cert is set but .key is not; both must be set together"
+                    ),
+                });
+            }
+            (None, Some(k)) => {
+                return Err(ConfError::BadServer {
+                    field: "peer_tls_profiles.key",
+                    value: k.display().to_string(),
+                    reason: format!(
+                        "peer_tls_profiles[{dc}].key is set but .cert is not; both must be set together"
+                    ),
+                });
+            }
+        }
+        if self.ca.is_some() && self.cert.is_none() {
+            return Err(ConfError::BadServer {
+                field: "peer_tls_profiles.ca",
+                value: self
+                    .ca
+                    .as_ref()
+                    .map_or_else(String::new, |p| p.display().to_string()),
+                reason: format!(
+                    "peer_tls_profiles[{dc}].ca requires .cert and .key to also be set"
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl ConfRiak {
@@ -1245,7 +1371,10 @@ impl ConfPool {
     /// `peer_tls_cert` and `peer_tls_key` must both be set or
     /// both be unset. `peer_tls_ca` is independent (it controls
     /// optional mutual TLS) but only meaningful when the cert /
-    /// key pair is set.
+    /// key pair is set. Each per-DC profile in
+    /// `peer_tls_profiles` is validated by
+    /// [`ConfTlsProfile::validate`]; the per-DC profile names
+    /// must be non-empty.
     fn validate_peer_tls(&self) -> Result<(), ConfError> {
         validate_tls_pair(
             "peer_tls_cert",
@@ -1262,6 +1391,16 @@ impl ConfPool {
                     .map_or_else(String::new, |p| p.display().to_string()),
                 reason: "requires peer_tls_cert and peer_tls_key to also be set".into(),
             });
+        }
+        for (dc, profile) in &self.peer_tls_profiles {
+            if dc.is_empty() {
+                return Err(ConfError::BadServer {
+                    field: "peer_tls_profiles",
+                    value: String::new(),
+                    reason: "per-DC TLS profile name must not be empty".into(),
+                });
+            }
+            profile.validate(dc)?;
         }
         Ok(())
     }
@@ -2083,5 +2222,146 @@ riak:
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn peer_tls_profile_pair_unset_is_ok() {
+        let p = ConfTlsProfile::default();
+        assert!(p.validate("dc1").is_ok());
+    }
+
+    #[test]
+    fn peer_tls_profile_cert_without_key_rejected() {
+        let p = ConfTlsProfile {
+            cert: Some(std::path::PathBuf::from("/x.crt")),
+            ..ConfTlsProfile::default()
+        };
+        let err = p.validate("dc1").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "peer_tls_profiles.cert",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn peer_tls_profile_key_without_cert_rejected() {
+        let p = ConfTlsProfile {
+            key: Some(std::path::PathBuf::from("/x.key")),
+            ..ConfTlsProfile::default()
+        };
+        let err = p.validate("dc1").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "peer_tls_profiles.key",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn peer_tls_profile_ca_without_cert_rejected() {
+        let p = ConfTlsProfile {
+            ca: Some(std::path::PathBuf::from("/x.ca")),
+            ..ConfTlsProfile::default()
+        };
+        let err = p.validate("dc1").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "peer_tls_profiles.ca",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn peer_tls_profiles_empty_dc_name_rejected() {
+        let mut p = pool();
+        p.peer_tls_profiles.insert(
+            String::new(),
+            ConfTlsProfile {
+                cert: Some(std::path::PathBuf::from("/x.crt")),
+                key: Some(std::path::PathBuf::from("/x.key")),
+                ca: None,
+            },
+        );
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "peer_tls_profiles",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn peer_tls_profiles_per_dc_pair_validates() {
+        let mut p = pool();
+        p.peer_tls_profiles.insert(
+            "dc1".into(),
+            ConfTlsProfile {
+                cert: Some(std::path::PathBuf::from("/dc1.crt")),
+                key: Some(std::path::PathBuf::from("/dc1.key")),
+                ca: None,
+            },
+        );
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn peer_tls_profiles_per_dc_cert_without_key_rejected() {
+        let mut p = pool();
+        p.peer_tls_profiles.insert(
+            "dc1".into(),
+            ConfTlsProfile {
+                cert: Some(std::path::PathBuf::from("/dc1.crt")),
+                key: None,
+                ca: None,
+            },
+        );
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "peer_tls_profiles.cert",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn peer_tls_profiles_yaml_round_trip() {
+        let yaml = r"
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+peer_tls_profiles:
+  dc1:
+    cert: /etc/dynomite/dc1.pem
+    key: /etc/dynomite/dc1.key
+    ca: /etc/dynomite/dc1-ca.pem
+  dc2:
+    cert: /etc/dynomite/dc2.pem
+    key: /etc/dynomite/dc2.key
+";
+        let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.peer_tls_profiles.len(), 2);
+        assert_eq!(
+            p.peer_tls_profiles["dc1"].cert.as_deref(),
+            Some(std::path::Path::new("/etc/dynomite/dc1.pem"))
+        );
+        assert!(p.peer_tls_profiles["dc2"].ca.is_none());
+        let dumped = serde_yaml::to_string(&p).unwrap();
+        let p2: ConfPool = serde_yaml::from_str(&dumped).unwrap();
+        assert_eq!(p2.peer_tls_profiles, p.peer_tls_profiles);
     }
 }

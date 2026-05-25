@@ -445,6 +445,7 @@ impl Server {
             let peer_idx = peer.idx();
             let host = peer.endpoint().host().to_string();
             let port = peer.endpoint().port();
+            let peer_dc = peer.dc().to_string();
             let peer_pname = peer.endpoint().pname();
             // Resolve once. We log and continue on failure - the
             // supervisor will then sit on the channel and silently
@@ -473,7 +474,7 @@ impl Server {
             dispatcher = dispatcher.with_peer_backend(peer_idx, peer_tx.clone());
             gossip_peer_txs.push((peer_idx, peer_pname.clone(), peer_tx));
             let peer_tls_for_supervisor = peer_tls.clone();
-            let peer_host_for_supervisor = host.clone();
+            let peer_dc_for_supervisor = peer_dc.clone();
             let handle: JoinHandle<Result<(), NetError>> = {
                 use tracing::Instrument as _;
                 let span = tracing::info_span!(
@@ -488,7 +489,7 @@ impl Server {
                             peer_idx,
                             peer_rx,
                             peer_tls_for_supervisor,
-                            peer_host_for_supervisor,
+                            peer_dc_for_supervisor,
                         )
                         .await
                     }
@@ -1410,8 +1411,19 @@ async fn peer_supervisor(
     peer_idx: u32,
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
     tls: Option<PeerTlsRuntime>,
-    host: String,
+    peer_dc: String,
 ) -> Result<(), NetError> {
+    // Resolve the per-peer client-side TLS handles once. When the
+    // profile map carries no entry for `peer_dc` and no default
+    // is set, the supervisor falls back to plaintext for this
+    // peer (matching the brief's "if neither is set, the
+    // connection is plaintext" contract).
+    let peer_tls_connector: Option<tokio_rustls::TlsConnector> = tls.as_ref().and_then(|rt| {
+        rt.profiles
+            .client_config_for_dc(peer_dc.as_str())
+            .map(dynomite::net::tls::connector_from)
+    });
+    let sni_hostname = dynomite::net::tls::dc_sni_hostname(peer_dc.as_str());
     let mut backoff_ms: u64 = 100;
     let backoff_max_ms: u64 = 5_000;
     loop {
@@ -1447,9 +1459,14 @@ async fn peer_supervisor(
         );
         // Wrap with TLS when configured. On handshake failure we
         // log and re-enter the reconnect loop with backoff so a
-        // mis-trusted CA does not saturate the CPU.
-        let transport: Box<dyn dynomite::io::reactor::Transport> = if let Some(rt) = tls.as_ref() {
-            let server_name = match dynomite::net::tls::server_name_owned(host.as_str()) {
+        // mis-trusted CA does not saturate the CPU. The connector
+        // is selected once at supervisor start from the per-peer
+        // DC profile (or the default profile, or `None` for
+        // plaintext).
+        let transport: Box<dyn dynomite::io::reactor::Transport> = if let Some(connector) =
+            peer_tls_connector.as_ref()
+        {
+            let server_name = match dynomite::net::tls::server_name_owned(sni_hostname.as_str()) {
                 Ok(n) => n,
                 Err(e) => {
                     tracing::warn!(
@@ -1462,7 +1479,7 @@ async fn peer_supervisor(
                     continue;
                 }
             };
-            match rt.connector.connect(server_name, stream).await {
+            match connector.connect(server_name, stream).await {
                 Ok(tls_stream) => Box::new(dynomite::net::tls::TlsClientTransport::new(
                     tls_stream,
                     ConnRole::DnodePeerServer,
@@ -1511,54 +1528,111 @@ async fn peer_supervisor(
 /// The struct is `Clone`-cheap (each field is an `Arc` under the
 /// hood) so the `Server::build` closure can hand a fresh copy to
 /// every spawned task without a global mutex.
+///
+/// `acceptor` is the SNI-routed listener acceptor; the
+/// underlying [`TlsProfileMap`] retains the per-DC client
+/// configs so the per-peer supervisor can resolve a connector
+/// matching the target peer's DC.
 #[derive(Clone)]
 struct PeerTlsRuntime {
     acceptor: tokio_rustls::TlsAcceptor,
-    connector: tokio_rustls::TlsConnector,
+    profiles: dynomite::net::tls::TlsProfileMap,
 }
 
 /// Resolve the peer-plane TLS knobs into a `PeerTlsRuntime`.
 ///
-/// Returns `Ok(None)` when neither cert nor key is set; returns
-/// `Ok(Some(_))` when both are set; returns an error when the
-/// PEM material fails to load. Mismatched `(cert, key)` is
-/// already rejected by [`dynomite::conf::ConfPool::validate`],
-/// but we keep the defensive branch so direct callers (tests)
-/// also see a clear error.
+/// Returns `Ok(None)` when neither the legacy `peer_tls_*`
+/// triple nor the per-DC `peer_tls_profiles` map is populated;
+/// returns `Ok(Some(_))` when at least one profile is configured.
+/// Mismatched `(cert, key)` is already rejected by
+/// [`dynomite::conf::ConfPool::validate`], but we keep the
+/// defensive branches so direct callers (tests) also see a
+/// clear error.
 fn build_peer_tls_runtime(conf_pool: &ConfPool) -> Result<Option<PeerTlsRuntime>, ServerError> {
-    match (
+    let default_spec = match (
         conf_pool.peer_tls_cert.as_deref(),
         conf_pool.peer_tls_key.as_deref(),
     ) {
-        (None, None) => Ok(None),
-        (Some(cert), Some(key)) => {
-            let ca = conf_pool.peer_tls_ca.as_deref();
-            let server_cfg =
-                dynomite::net::tls::load_server_config(cert, key, ca).map_err(|e| {
-                    ServerError::BadConfig {
-                        field: "peer_tls_cert",
-                        reason: e.to_string(),
-                    }
-                })?;
-            let client_cfg =
-                dynomite::net::tls::load_client_config(ca).map_err(|e| ServerError::BadConfig {
-                    field: "peer_tls_ca",
-                    reason: e.to_string(),
-                })?;
-            Ok(Some(PeerTlsRuntime {
-                acceptor: dynomite::net::tls::acceptor_from(server_cfg),
-                connector: dynomite::net::tls::connector_from(client_cfg),
-            }))
+        (None, None) => None,
+        (Some(cert), Some(key)) => Some(dynomite::net::tls::TlsProfileSpec {
+            cert: cert.to_path_buf(),
+            key: key.to_path_buf(),
+            ca: conf_pool.peer_tls_ca.clone(),
+        }),
+        (Some(_), None) => {
+            return Err(ServerError::BadConfig {
+                field: "peer_tls_key",
+                reason: "peer_tls_cert is set but peer_tls_key is not".into(),
+            });
         }
-        (Some(_), None) => Err(ServerError::BadConfig {
-            field: "peer_tls_key",
-            reason: "peer_tls_cert is set but peer_tls_key is not".into(),
-        }),
-        (None, Some(_)) => Err(ServerError::BadConfig {
-            field: "peer_tls_cert",
-            reason: "peer_tls_key is set but peer_tls_cert is not".into(),
-        }),
+        (None, Some(_)) => {
+            return Err(ServerError::BadConfig {
+                field: "peer_tls_cert",
+                reason: "peer_tls_key is set but peer_tls_cert is not".into(),
+            });
+        }
+    };
+
+    let mut per_dc: std::collections::BTreeMap<String, dynomite::net::tls::TlsProfileSpec> =
+        std::collections::BTreeMap::new();
+    for (dc, profile) in &conf_pool.peer_tls_profiles {
+        match (profile.cert.as_deref(), profile.key.as_deref()) {
+            (Some(cert), Some(key)) => {
+                per_dc.insert(
+                    dc.clone(),
+                    dynomite::net::tls::TlsProfileSpec {
+                        cert: cert.to_path_buf(),
+                        key: key.to_path_buf(),
+                        ca: profile.ca.clone(),
+                    },
+                );
+            }
+            (None, None) => {
+                // Empty entry is meaningless; treat as a config
+                // error to avoid silently downgrading the DC to
+                // plaintext when the operator clearly meant to
+                // configure something.
+                return Err(ServerError::BadConfig {
+                    field: "peer_tls_profiles",
+                    reason: format!("peer_tls_profiles[{dc}] is empty"),
+                });
+            }
+            (Some(_), None) => {
+                return Err(ServerError::BadConfig {
+                    field: "peer_tls_profiles.key",
+                    reason: format!("peer_tls_profiles[{dc}].cert is set but .key is not"),
+                });
+            }
+            (None, Some(_)) => {
+                return Err(ServerError::BadConfig {
+                    field: "peer_tls_profiles.cert",
+                    reason: format!("peer_tls_profiles[{dc}].key is set but .cert is not"),
+                });
+            }
+        }
     }
+
+    if default_spec.is_none() && per_dc.is_empty() {
+        return Ok(None);
+    }
+
+    let profiles = dynomite::net::tls::TlsProfileMap::build(default_spec, per_dc).map_err(|e| {
+        ServerError::BadConfig {
+            field: "peer_tls_profiles",
+            reason: e.to_string(),
+        }
+    })?;
+    let acceptor = profiles
+        .build_sni_acceptor()
+        .map_err(|e| ServerError::BadConfig {
+            field: "peer_tls_profiles",
+            reason: e.to_string(),
+        })?
+        .ok_or_else(|| ServerError::BadConfig {
+            field: "peer_tls_profiles",
+            reason: "profile map built but produced no acceptor (internal invariant)".into(),
+        })?;
+    Ok(Some(PeerTlsRuntime { acceptor, profiles }))
 }
 
 fn default_gossip_interval_ms_i64() -> i64 {
