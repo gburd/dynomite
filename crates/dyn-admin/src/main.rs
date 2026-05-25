@@ -9,8 +9,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use dyn_admin::commands::{
-    cluster_commit, cluster_join, cluster_leave, cluster_list, cluster_plan, metrics, ping, ring,
-    stats, status,
+    cluster_commit, cluster_join, cluster_leave, cluster_list, cluster_plan, distribution_dump,
+    metrics, ping, ring, stats, status,
 };
 use dyn_admin::output::OutputFormat;
 
@@ -145,6 +145,17 @@ enum Cmd {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Pretty-print the configured distribution / shadow
+    /// distribution and the cumulative shadow-disagreement
+    /// counter for the targeted node.
+    DistributionDump {
+        /// Stats HTTP `host:port` of the node.
+        #[arg(long = "node", default_value = DEFAULT_STATS_NODE)]
+        node: String,
+        /// Emit JSON instead of human text.
+        #[arg(long = "json")]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -233,6 +244,9 @@ async fn dispatch(cli: Cli) -> Result<(), dyn_admin::AdminError> {
         }
         Cmd::ClusterCommit { node, json } => {
             cluster_commit::run(&node, OutputFormat::from_flag(json), &mut stdout).await
+        }
+        Cmd::DistributionDump { node, json } => {
+            distribution_dump::run(&node, OutputFormat::from_flag(json), &mut stdout).await
         }
     }
 }

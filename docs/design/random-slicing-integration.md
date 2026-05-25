@@ -36,6 +36,43 @@ chaos pass-3 (see Section 4 below).
 
 ## Section 2. How does it differ from our current vnode-based distribution?
 
+### Section 2.1 Replication in Dynomite vs classic Dynamo (operator clarification 2026-05-25)
+
+A careful reader will notice that random slicing per se does
+not say anything about replication. Three points clarify how
+the distribution algorithm interacts with our replication
+model:
+
+1. **Classic Dynamo (e.g., Riak) replicates by walking N
+   successors on the ring.** The hash function picks a
+   primary token; the next `N - 1` tokens (in ring order) own
+   the replicas. Removing or adding a node shifts the
+   successor windows for everyone touching the affected
+   range.
+2. **Dynomite replicates by topology**, not by successor walk.
+   The same token is replicated across DCs and racks: the
+   per-DC / per-rack ring is consulted independently and the
+   dispatcher fans out to the same logical position in every
+   ring. Replicas are siblings on a multi-DC graph, not
+   neighbours on a single ring.
+3. **Riak bucket-types' `n_val` is a soft cap on fan-out**;
+   it does **not** synthesize successors. When a bucket type
+   sets `n_val: 3`, the dispatcher trims its replica list to
+   at most three targets (rack-local first, then sibling
+   racks, then sibling DCs); it does not invent extra peers
+   to hit `n_val` when the topology is smaller. Random
+   slicing changes how the *primary* peer is chosen for a
+   given key; it does not change the replica fan-out shape.
+
+This matters for the migration plan in Section 5: switching
+from `vnode` to `random_slicing` rebalances which peer is the
+*primary* for each key, but the per-DC / per-rack replica set
+is unchanged. The data-movement cost is bounded by the
+fraction of keys whose primary changes, not by the topology
+size.
+
+## Section 2.0 Side-by-side comparison
+
 We currently use a per-rack continuum: each peer publishes a list of
 tokens (32-bit positions on the ring) and the dispatcher maps a key
 to the smallest continuum entry whose token is greater than or equal

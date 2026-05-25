@@ -36,9 +36,12 @@ mod random;
 
 pub mod ketama;
 pub mod modula;
+pub mod random_slicing;
 pub mod token;
 
+pub use crate::hashkit::murmur3::murmur3_x64_64;
 pub use crate::hashkit::random::PseudoRng;
+pub use crate::hashkit::random_slicing::{RandomSlices, RandomSlicesError};
 pub use crate::hashkit::token::DynToken;
 
 /// All hashing algorithms supported by the engine.
@@ -52,7 +55,7 @@ pub use crate::hashkit::token::DynToken;
 ///
 /// ```
 /// use dynomite::hashkit::HashType;
-/// assert_eq!(HashType::all().len(), 13);
+/// assert_eq!(HashType::all().len(), 14);
 /// assert_eq!(HashType::Murmur3.as_str(), "murmur3");
 /// ```
 #[allow(non_camel_case_types)]
@@ -84,6 +87,10 @@ pub enum HashType {
     Jenkins,
     /// MurmurHash3 x86 128-bit.
     Murmur3,
+    /// MurmurHash3 truncated to 64 bits (used by the
+    /// random-slicing distribution lookup).
+    #[allow(non_camel_case_types)]
+    Murmur3X64_64,
 }
 
 impl HashType {
@@ -111,6 +118,7 @@ impl HashType {
             HashType::Murmur => "murmur",
             HashType::Jenkins => "jenkins",
             HashType::Murmur3 => "murmur3",
+            HashType::Murmur3X64_64 => "murmur3_x64_64",
         }
     }
 
@@ -138,6 +146,7 @@ impl HashType {
             HashType::Murmur,
             HashType::Jenkins,
             HashType::Murmur3,
+            HashType::Murmur3X64_64,
         ]
     }
 
@@ -187,7 +196,53 @@ pub fn hash(ty: HashType, key: &[u8]) -> DynToken {
         HashType::Murmur => murmur::hash(key),
         HashType::Jenkins => jenkins::hash(key),
         HashType::Murmur3 => murmur3::hash(key),
+        HashType::Murmur3X64_64 => {
+            // Pack the 64-bit fingerprint into the low two
+            // words of a `DynToken` so callers that compare
+            // against the existing 32-bit ring math observe the
+            // canonical low-half ordering. The random-slicing
+            // dispatcher does not consume tokens directly; it
+            // calls [`hash64`] for its u64 ring lookup.
+            let h = murmur3::murmur3_x64_64(0xc0a1_e5ce, key);
+            let mut token = DynToken::default();
+            token.size(2).expect("len 2 fits");
+            let mag = token.mag_mut();
+            mag[0] = h as u32;
+            mag[1] = (h >> 32) as u32;
+            token
+        }
     }
+}
+
+/// Hash `key` and return a 64-bit value used by the
+/// random-slicing distribution table.
+///
+/// Every algorithm has a deterministic 64-bit projection: the
+/// 64-bit and 128-bit families return their natural width
+/// (truncated to 64 bits where applicable), and the legacy
+/// 32-bit families lift their result into the low half of the
+/// returned `u64`. The function is total over
+/// [`HashType::all`].
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::{hash64, HashType};
+///
+/// let a = hash64(HashType::Murmur3X64_64, b"alice");
+/// let b = hash64(HashType::Murmur3X64_64, b"alice");
+/// assert_eq!(a, b);
+/// ```
+#[must_use]
+pub fn hash64(ty: HashType, key: &[u8]) -> u64 {
+    if matches!(ty, HashType::Murmur3X64_64) {
+        return murmur3::murmur3_x64_64(0xc0a1_e5ce, key);
+    }
+    let token = hash(ty, key);
+    let mag = token.mag();
+    let lo = u64::from(mag[0]);
+    let hi = if mag.len() > 1 { u64::from(mag[1]) } else { 0 };
+    (hi << 32) | lo
 }
 
 /// Compute the raw 128-byte MD5 digest of `key`.
@@ -251,10 +306,10 @@ mod tests {
     fn dispatch_lengths_match_c_codec() {
         for ty in HashType::all().iter().copied() {
             let token = hash(ty, b"k");
-            let expected = if matches!(ty, HashType::Murmur3) {
-                4
-            } else {
-                1
+            let expected = match ty {
+                HashType::Murmur3 => 4,
+                HashType::Murmur3X64_64 => 2,
+                _ => 1,
             };
             assert_eq!(
                 token.len(),

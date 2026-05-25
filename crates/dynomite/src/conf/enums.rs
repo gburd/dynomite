@@ -39,6 +39,123 @@ macro_rules! string_enum_serde {
 
 string_enum_serde!(SecureServerOption);
 string_enum_serde!(HashType);
+string_enum_serde!(Distribution);
+
+/// Distribution algorithm selected by the pool's `distribution:`
+/// directive.
+///
+/// `Vnode` is the historical default and the only mode the C
+/// reference engine supported in the Rust port until
+/// `RandomSlicing` was added. `Ketama`, `Modula`, and `Random`
+/// are accepted for backward compatibility with the C
+/// configuration vocabulary; they collapse to `Vnode` at
+/// runtime and emit a deprecation warning at config-load time.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::Distribution;
+/// assert_eq!(Distribution::parse("vnode").unwrap(), Distribution::Vnode);
+/// assert_eq!(
+///     Distribution::parse("random_slicing").unwrap(),
+///     Distribution::RandomSlicing
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum Distribution {
+    /// Per-rack continuum keyed by per-peer token lists. The
+    /// historical default.
+    Vnode,
+    /// Compatibility alias accepted by the C reference; collapsed
+    /// to [`Self::Vnode`] at runtime with a deprecation warning.
+    Ketama,
+    /// Compatibility alias accepted by the C reference; collapsed
+    /// to [`Self::Vnode`] at runtime with a deprecation warning.
+    Modula,
+    /// Compatibility alias accepted by the C reference; collapsed
+    /// to [`Self::Vnode`] at runtime with a deprecation warning.
+    Random,
+    /// Random-slicing distribution: a small, gap-free `(name,
+    /// size)` partition table over the 64-bit hash space. See
+    /// [`crate::hashkit::random_slicing`].
+    RandomSlicing,
+}
+
+impl Default for Distribution {
+    fn default() -> Self {
+        Self::Vnode
+    }
+}
+
+impl Distribution {
+    /// Parse a `distribution:` value (case-insensitive).
+    ///
+    /// # Errors
+    /// Returns [`ConfError::BadDistribution`] when the value is
+    /// not a recognised mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Distribution;
+    /// assert_eq!(Distribution::parse("VNODE").unwrap(), Distribution::Vnode);
+    /// assert!(Distribution::parse("sphere").is_err());
+    /// ```
+    pub fn parse(s: &str) -> Result<Self, ConfError> {
+        Ok(match s.to_ascii_lowercase().as_str() {
+            "vnode" => Distribution::Vnode,
+            "ketama" => Distribution::Ketama,
+            "modula" => Distribution::Modula,
+            "random" => Distribution::Random,
+            "random_slicing" | "random-slicing" => Distribution::RandomSlicing,
+            _ => return Err(ConfError::BadDistribution(s.to_string())),
+        })
+    }
+
+    /// Render back to the canonical YAML name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Distribution;
+    /// assert_eq!(Distribution::Vnode.as_str(), "vnode");
+    /// assert_eq!(Distribution::RandomSlicing.as_str(), "random_slicing");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Distribution::Vnode => "vnode",
+            Distribution::Ketama => "ketama",
+            Distribution::Modula => "modula",
+            Distribution::Random => "random",
+            Distribution::RandomSlicing => "random_slicing",
+        }
+    }
+
+    /// True for the modes that survived the C-to-Rust port
+    /// untouched; `Ketama`, `Modula`, and `Random` are accepted
+    /// for backward compatibility but collapse to `Vnode` at
+    /// runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Distribution;
+    /// assert!(Distribution::Vnode.is_supported());
+    /// assert!(Distribution::RandomSlicing.is_supported());
+    /// assert!(!Distribution::Ketama.is_supported());
+    /// ```
+    #[must_use]
+    pub const fn is_supported(self) -> bool {
+        matches!(self, Distribution::Vnode | Distribution::RandomSlicing)
+    }
+}
+
+impl fmt::Display for Distribution {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Datastore family selected by `data_store:`.
 ///
@@ -330,6 +447,10 @@ pub enum HashType {
     Jenkins,
     /// Murmur hash 3 (128-bit).
     Murmur3,
+    /// MurmurHash3 truncated to 64 bits (used by random
+    /// slicing).
+    #[allow(non_camel_case_types)]
+    Murmur3X64_64,
 }
 
 impl HashType {
@@ -357,6 +478,7 @@ impl HashType {
             "murmur" => HashType::Murmur,
             "jenkins" => HashType::Jenkins,
             "murmur3" => HashType::Murmur3,
+            "murmur3_x64_64" => HashType::Murmur3X64_64,
             other => return Err(ConfError::BadHash(other.to_string())),
         })
     }
@@ -384,6 +506,7 @@ impl HashType {
             HashType::Murmur => "murmur",
             HashType::Jenkins => "jenkins",
             HashType::Murmur3 => "murmur3",
+            HashType::Murmur3X64_64 => "murmur3_x64_64",
         }
     }
 }
@@ -450,8 +573,44 @@ mod tests {
             "murmur",
             "jenkins",
             "murmur3",
+            "murmur3_x64_64",
         ] {
             assert_eq!(HashType::parse(name).unwrap().as_str(), name);
         }
+    }
+
+    #[test]
+    fn distribution_round_trip() {
+        for &name in &["vnode", "ketama", "modula", "random", "random_slicing"] {
+            assert_eq!(Distribution::parse(name).unwrap().as_str(), name);
+        }
+        // Case-insensitive parse for back-compat with the C
+        // reference, which accepts upper-case.
+        assert_eq!(Distribution::parse("VNODE").unwrap(), Distribution::Vnode);
+        // Hyphenated alias accepted.
+        assert_eq!(
+            Distribution::parse("random-slicing").unwrap(),
+            Distribution::RandomSlicing
+        );
+        assert!(matches!(
+            Distribution::parse("sphere"),
+            Err(ConfError::BadDistribution(_))
+        ));
+        assert!(Distribution::Vnode.is_supported());
+        assert!(Distribution::RandomSlicing.is_supported());
+        assert!(!Distribution::Ketama.is_supported());
+    }
+
+    #[test]
+    fn distribution_default_is_vnode() {
+        assert_eq!(Distribution::default(), Distribution::Vnode);
+    }
+
+    #[test]
+    fn distribution_yaml_round_trip() {
+        // Serialise via serde, then parse back.
+        let raw = serde_yaml::to_string(&Distribution::RandomSlicing).unwrap();
+        let parsed: Distribution = serde_yaml::from_str(&raw).unwrap();
+        assert_eq!(parsed, Distribution::RandomSlicing);
     }
 }

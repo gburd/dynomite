@@ -44,7 +44,7 @@ mod server;
 mod tokens;
 
 pub use endpoint::{ConfListen, EndpointKind};
-pub use enums::{ConsistencyLevel, DataStore, HashType, SecureServerOption};
+pub use enums::{ConsistencyLevel, DataStore, Distribution, HashType, SecureServerOption};
 pub use error::ConfError;
 pub use pool::{
     ConfBucketType, ConfPool, ConfRiak, ConfRiakWasmModule, ConfTlsProfile, ObservabilityConfig,

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::endpoint::ConfListen;
-use super::enums::{ConsistencyLevel, DataStore, HashType, SecureServerOption};
+use super::enums::{ConsistencyLevel, DataStore, Distribution, HashType, SecureServerOption};
 use super::error::ConfError;
 use super::server::{ConfDynSeed, ConfServer};
 use super::tokens::TokenList;
@@ -215,9 +215,21 @@ pub struct ConfPool {
     /// `hash_tag:` - two-character delimiter pair.
     pub hash_tag: Option<String>,
 
-    /// `distribution:` - deprecated; recorded for warning but ignored.
+    /// `distribution:` - distribution algorithm. Defaults to
+    /// [`Distribution::Vnode`]. Setting one of the legacy
+    /// `ketama` / `modula` / `random` values is accepted but
+    /// emits a deprecation warning at config-load time and
+    /// collapses to `vnode` at runtime.
     #[serde(default)]
-    pub distribution: Option<String>,
+    pub distribution: Option<Distribution>,
+    /// `distribution_shadow:` - optional shadow distribution
+    /// computed alongside the live one. When set, the
+    /// dispatcher routes via [`Self::distribution`] but also
+    /// computes the shadow route for every key and bumps a
+    /// counter when the two disagree. Used to validate a
+    /// migration before flipping the live distribution.
+    #[serde(default)]
+    pub distribution_shadow: Option<Distribution>,
     /// `server_connections:` - deprecated; recorded for warning but ignored.
     #[serde(default)]
     pub server_connections: Option<i64>,
@@ -970,6 +982,45 @@ pub struct ObservabilityConfig {
 }
 
 impl ConfPool {
+    /// Resolve the configured [`Distribution`] for the engine.
+    ///
+    /// Folds the legacy `ketama` / `modula` / `random` aliases
+    /// down to [`Distribution::Vnode`] (the only algorithm those
+    /// names ever resolved to in the Rust port). Emits a
+    /// `tracing::warn!` for the legacy aliases the first time
+    /// the field is read so the operator notices the
+    /// deprecation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::{ConfPool, Distribution};
+    /// let p = ConfPool {
+    ///     distribution: Some(Distribution::RandomSlicing),
+    ///     ..ConfPool::default()
+    /// };
+    /// assert_eq!(p.resolved_distribution(), Distribution::RandomSlicing);
+    /// ```
+    #[must_use]
+    pub fn resolved_distribution(&self) -> Distribution {
+        match self.distribution {
+            None | Some(Distribution::Vnode) => Distribution::Vnode,
+            Some(Distribution::RandomSlicing) => Distribution::RandomSlicing,
+            Some(other) => {
+                tracing::warn!(
+                    target: "dynomite::conf",
+                    distribution = other.as_str(),
+                    "distribution mode '{}' is a legacy alias and resolves to 'vnode'; \
+                     update the YAML to either 'vnode' or 'random_slicing'",
+                    other
+                );
+                Distribution::Vnode
+            }
+        }
+    }
+}
+
+impl ConfPool {
     /// Apply defaults to any field still left `None` after parsing.
     ///
     /// # Examples
@@ -1547,6 +1598,47 @@ mod tests {
         p.mbuf_size = Some(127);
         p.apply_defaults();
         assert!(matches!(p.validate("p"), Err(ConfError::OutOfRange { .. })));
+    }
+
+    #[test]
+    fn distribution_field_round_trips_through_yaml() {
+        let yaml = r"
+p:
+  listen: 127.0.0.1:8102
+  dyn_listen: 127.0.0.1:8101
+  tokens: '0'
+  servers:
+  - 127.0.0.1:6379:1
+  data_store: 0
+  distribution: random_slicing
+  distribution_shadow: vnode
+  hash: murmur3_x64_64
+";
+        let parsed: std::collections::BTreeMap<String, ConfPool> =
+            serde_yaml::from_str(yaml).unwrap();
+        let pool = parsed.get("p").unwrap();
+        assert_eq!(pool.distribution, Some(Distribution::RandomSlicing));
+        assert_eq!(pool.distribution_shadow, Some(Distribution::Vnode));
+        assert_eq!(pool.hash, Some(HashType::Murmur3X64_64));
+        assert_eq!(pool.resolved_distribution(), Distribution::RandomSlicing);
+    }
+
+    #[test]
+    fn distribution_legacy_alias_resolves_to_vnode() {
+        let mut p = pool();
+        p.distribution = Some(Distribution::Ketama);
+        assert_eq!(p.resolved_distribution(), Distribution::Vnode);
+        p.distribution = Some(Distribution::Modula);
+        assert_eq!(p.resolved_distribution(), Distribution::Vnode);
+        p.distribution = Some(Distribution::Random);
+        assert_eq!(p.resolved_distribution(), Distribution::Vnode);
+    }
+
+    #[test]
+    fn distribution_default_unset_is_vnode() {
+        let p = pool();
+        assert!(p.distribution.is_none());
+        assert_eq!(p.resolved_distribution(), Distribution::Vnode);
     }
 
     #[test]

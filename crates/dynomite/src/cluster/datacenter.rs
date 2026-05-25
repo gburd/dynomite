@@ -22,7 +22,21 @@
 //! assert_eq!(dc.racks().len(), 1);
 //! ```
 
-use crate::hashkit::DynToken;
+use crate::hashkit::{random_slicing::RandomSlices, DynToken};
+
+/// Per-rack ring storage. Either the historical token continuum
+/// (a sorted [`Vec<Continuum>`]) or a [`RandomSlices`] table.
+/// The dispatcher consults whichever variant is present without
+/// caring which one it is; the engine produces only one shape
+/// per rack at a time.
+#[derive(Clone, Debug, Default)]
+pub enum RackRing {
+    /// Historical per-peer token continuum.
+    #[default]
+    Continuum,
+    /// Random-slicing partition table.
+    RandomSlicing(RandomSlices),
+}
 
 /// One ring point: a `(token, peer_idx)` mapping.
 #[derive(Clone, Debug)]
@@ -63,6 +77,13 @@ pub struct Rack {
     nserver_continuum: u32,
     ncontinuum: u32,
     continuums: Vec<Continuum>,
+    /// Optional [`RandomSlices`] table; populated when the
+    /// pool's distribution is
+    /// [`crate::conf::Distribution::RandomSlicing`].
+    /// [`Self::continuums`] stays in sync with the peer set so
+    /// the shadow distribution path can binary-search the same
+    /// rack without a second build.
+    ring: RackRing,
 }
 
 impl Rack {
@@ -85,6 +106,7 @@ impl Rack {
             nserver_continuum: 0,
             ncontinuum: 0,
             continuums: Vec::new(),
+            ring: RackRing::Continuum,
         }
     }
 
@@ -164,6 +186,38 @@ impl Rack {
         self.continuums.clear();
         self.ncontinuum = 0;
         self.nserver_continuum = 0;
+        self.ring = RackRing::Continuum;
+    }
+
+    /// Borrow the rack's ring representation.
+    #[must_use]
+    pub fn ring(&self) -> &RackRing {
+        &self.ring
+    }
+
+    /// Install a [`RandomSlices`] table on this rack. The
+    /// continuum stays populated so the shadow-distribution
+    /// path (and any operator-side dump) can still walk the
+    /// vnode view.
+    pub fn set_random_slices(&mut self, slices: RandomSlices) {
+        self.ring = RackRing::RandomSlicing(slices);
+    }
+
+    /// True when the rack's live distribution is random
+    /// slicing.
+    #[must_use]
+    pub fn is_random_slicing(&self) -> bool {
+        matches!(self.ring, RackRing::RandomSlicing(_))
+    }
+
+    /// Borrow the rack's [`RandomSlices`] table when one is
+    /// installed.
+    #[must_use]
+    pub fn random_slices(&self) -> Option<&RandomSlices> {
+        match &self.ring {
+            RackRing::RandomSlicing(s) => Some(s),
+            RackRing::Continuum => None,
+        }
     }
 }
 
