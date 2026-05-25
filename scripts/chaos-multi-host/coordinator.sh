@@ -442,8 +442,9 @@ bootstrap_remote_src() {
     local label="$1"; shift
     local rsync_target="$1"; shift
     local rsync_e="$1"; shift
+    local push_binary="${1:-yes}"; shift 2>/dev/null || true
     local mkdir_runner=("$@")
-    log "bootstrap $label src"
+    log "bootstrap $label src (push_binary=$push_binary)"
     "${mkdir_runner[@]}" bash -s <<'EOF'
 mkdir -p /scratch/dynomite-chaos/src \
          /scratch/dynomite-chaos/run \
@@ -454,16 +455,26 @@ EOF
         --exclude target/ --exclude .git/ --exclude _/dynomite/.git/ \
         -e "$rsync_e" \
         "$REPO/" "$rsync_target:/scratch/dynomite-chaos/src/"
+    # Ship the locally-built dynomited binary when the remote
+    # OS+arch matches the build host. nuc runs FreeBSD, so the
+    # caller passes push_binary=no and the operator is
+    # expected to maintain a FreeBSD-native binary at
+    # /scratch/dynomite-chaos/build/release/dynomited.
+    if [ "$push_binary" = "yes" ] && [ -x "$REPO/target/release/dynomited" ]; then
+        rsync -a -e "$rsync_e" \
+            "$REPO/target/release/dynomited" \
+            "$rsync_target:/scratch/dynomite-chaos/build/release/dynomited"
+    fi
 }
 
 if host_enabled arnold; then
-    bootstrap_remote_src dc-arnold arnold "$ARNOLD_RSYNC_E" "${ARNOLD_SSH[@]}"
+    bootstrap_remote_src dc-arnold arnold "$ARNOLD_RSYNC_E" yes "${ARNOLD_SSH[@]}"
 fi
 if host_enabled nuc; then
-    bootstrap_remote_src dc-nuc gburd@nuc "$NUC_RSYNC_E" "${NUC_SSH[@]}"
+    bootstrap_remote_src dc-nuc gburd@nuc "$NUC_RSYNC_E" no "${NUC_SSH[@]}"
 fi
 if host_enabled meh; then
-    bootstrap_remote_src dc-meh meh "$MEH_RSYNC_E" "${MEH_SSH[@]}"
+    bootstrap_remote_src dc-meh meh "$MEH_RSYNC_E" yes "${MEH_SSH[@]}"
 fi
 
 src_check() {
