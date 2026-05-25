@@ -50,6 +50,18 @@ RIAK_PBC_PORT=21800
 MODE="${MODE:-redis}"
 export MODE
 
+# Per-class retry budget passed through to workload-driver.py.
+# Operator-typical Dynomite client SDKs retry once on NoTargets
+# (transient gossip churn) and never on Timeout (genuine
+# unavailability), so the chaos rig adopts the same defaults
+# unless an operator overrides via the env. Set
+# ``RETRY_POLICY=""`` to disable retries entirely (matches the
+# pre-2026-05-25 behaviour where every error counted as a
+# failure); see ``docs/operations/chaos.md`` for the wider
+# discussion.
+RETRY_POLICY="${RETRY_POLICY-NoTargets:1,Timeout:0}"
+export RETRY_POLICY
+
 # Per-DC distinct tokens (pass-2). Distinct token slices on the
 # ring force keys to hash into a specific DC, exercising outbound
 # peer connections from the dispatcher's `Replicas` plan.
@@ -233,6 +245,7 @@ start_workload() {
         --out /scratch/dynomite-chaos/logs/workload-$label.ndjson \
         --duration $DURATION \
         --qps 200 \
+        --retry-on='$RETRY_POLICY' \
         > /scratch/dynomite-chaos/logs/workload-$label.stderr 2>&1 < /dev/null &
     echo \$! > /scratch/dynomite-chaos/run/workload.pid"
 }
@@ -338,6 +351,7 @@ log "multi-host chaos coordinator starting"
 log "  run id:   $RUN_ID"
 log "  duration: $DURATION s"
 log "  mode:     $MODE"
+log "  retry:    ${RETRY_POLICY:-<none>}"
 log "  hosts:    floki arnold nuc"
 log "  logs:     $LOCAL_LOGS"
 log "================================================================"
