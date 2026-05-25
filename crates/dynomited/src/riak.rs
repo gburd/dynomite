@@ -36,6 +36,9 @@ use dyn_riak::aae::repair::{RepairSink, RepairTask};
 use dyn_riak::aae::scheduler::{Scheduler, SweepPlan, SystemClock};
 use dyn_riak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls};
 
+#[cfg(feature = "wasm")]
+use dyn_riak::mapreduce::wasm::{load_modules_from_config, WasmLimits, WasmModuleStore};
+
 /// Errors produced while binding the Riak listeners.
 #[derive(Debug, thiserror::Error)]
 pub enum RiakWireError {
@@ -52,6 +55,9 @@ pub enum RiakWireError {
     /// I/O failure binding a listener.
     #[error("riak: io binding listener: {0}")]
     Io(#[from] std::io::Error),
+    /// Loading a Wasm module from disk or compiling it failed.
+    #[error("riak: wasm module load failed: {0}")]
+    Wasm(String),
 }
 
 /// Bound listeners and tasks owned by [`crate::server::Server`].
@@ -87,6 +93,15 @@ pub struct RiakHandles {
     /// [`ConfRiak::tls_cert`] / [`ConfRiak::tls_key`] /
     /// [`ConfRiak::tls_ca`].
     pub tls: Option<tokio_rustls::TlsAcceptor>,
+    /// Optional Wasm phase store loaded from
+    /// [`ConfRiak::wasm_modules`]. Populated when `dynomited`
+    /// is built with the `wasm` Cargo feature and the YAML
+    /// list is non-empty; otherwise `None`. The MapReduce
+    /// executor uses the store via
+    /// [`dyn_riak::mapreduce::run_job_with_wasm`] when a job
+    /// references a `Phase::WasmModule`.
+    #[cfg(feature = "wasm")]
+    pub wasm: Option<Arc<WasmModuleStore>>,
 }
 
 /// Eagerly bind the Riak listeners described by `riak`.
@@ -156,6 +171,8 @@ pub async fn build_handles(
         datastore,
         aae,
         tls: build_riak_tls_acceptor(riak)?,
+        #[cfg(feature = "wasm")]
+        wasm: build_wasm_store_from_config(riak)?,
     }))
 }
 
@@ -190,6 +207,36 @@ fn build_riak_tls_acceptor(
             reason: "tls_key is set but tls_cert is not".into(),
         }),
     }
+}
+
+/// Build the optional [`WasmModuleStore`] for the Riak
+/// MapReduce executor from [`ConfRiak::wasm_modules`].
+///
+/// Returns `Ok(None)` when the YAML list is absent or empty;
+/// otherwise reads each path from disk and registers it on a
+/// fresh [`WasmModuleStore`] under the configured `id`.
+///
+/// # Errors
+///
+/// [`RiakWireError::Wasm`] when a path cannot be read or the
+/// bytes fail to compile as a Wasm module.
+#[cfg(feature = "wasm")]
+pub fn build_wasm_store_from_config(
+    riak: &ConfRiak,
+) -> Result<Option<Arc<WasmModuleStore>>, RiakWireError> {
+    let Some(modules) = riak.wasm_modules.as_deref() else {
+        return Ok(None);
+    };
+    if modules.is_empty() {
+        return Ok(None);
+    }
+    let pairs: Vec<(String, std::path::PathBuf)> = modules
+        .iter()
+        .map(|m| (m.id.clone(), m.path.clone()))
+        .collect();
+    let store = load_modules_from_config(&pairs, WasmLimits::default())
+        .map_err(|e| RiakWireError::Wasm(e.to_string()))?;
+    Ok(Some(Arc::new(store)))
 }
 
 /// Spawn the Riak listener tasks.

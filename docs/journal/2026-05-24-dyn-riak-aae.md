@@ -179,6 +179,52 @@ both pre- and post-update form" check.
 * `bash scripts/check_no_port_comments.sh` -- clean.
 * `bash scripts/check_ascii.sh` -- clean.
 
+## Update 2026-05-24: sibling-aware merge
+
+The original `LexicographicOrder`-only winner-selection has
+been extended with a real sibling-aware cross-replica merge:
+
+* `RepairOutcome::Winner { value, vclock }` and
+  `RepairOutcome::Siblings(Vec<(Bytes, Vclock)>)` describe the
+  two outcomes of an N-replica merge.
+* `RepairTask::evaluate(replicas: &[(Bytes, Vclock)])` walks
+  the input pairs, drops any entry whose vector clock is
+  strictly dominated by another entry's clock under
+  [`Vclock::compare`], deduplicates exact-equal clocks, and
+  returns the surviving set as either `Winner(_)` (one
+  survivor) or `Siblings(_)` (two or more concurrent
+  survivors).
+* `RepairOutcome::resolve_with_warn(key)` is the v1 escape
+  hatch: when the outcome is `Siblings`, it logs a
+  `tracing::warn!` carrying the divergent key and the count of
+  concurrent survivors, then defers to the lex-largest sibling
+  value (with vclock bytes as tiebreaker). This keeps progress
+  flowing on a divergence while making the loss visible to
+  operators; first-class siblings storage is the follow-up.
+
+New unit tests under `aae::repair::tests`:
+
+* `evaluate_winner_when_one_dominates_others` -- A's clock
+  strictly dominates B's and C's; outcome is `Winner(A)`.
+* `evaluate_siblings_when_all_concurrent` -- three replicas,
+  three distinct actor clocks, outcome is `Siblings(3)`.
+* `evaluate_siblings_excludes_dominated_entries` -- A
+  dominates B (so B is dropped), A and C are concurrent;
+  outcome is `Siblings(2)` with exactly A and C.
+* `evaluate_dedupes_equal_clocks` -- two replicas with
+  identical clocks dedupe to one survivor and return
+  `Winner`.
+* `resolve_with_warn_picks_lex_largest_on_siblings` -- the
+  v1 fallback selects the lex-largest sibling.
+* `resolve_with_warn_passes_winner_through` -- the
+  `Winner(_)` outcome is returned unchanged.
+
+The pre-existing `Outcome::AmbiguousVClock` event remains in
+place for the two-side `Divergence` flow; the new
+`RepairOutcome` API is a separate cross-replica primitive
+that callers (the read-repair scheduler in particular) reach
+for when they have already fetched all `n_val` replicas.
+
 ## Deferred (next slices)
 
 * **dynomited integration**: the lead's brief explicitly defers

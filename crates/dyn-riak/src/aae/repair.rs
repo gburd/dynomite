@@ -32,10 +32,12 @@
 
 use std::sync::Arc;
 
+use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use crate::aae::exchange::Divergence;
 use crate::aae::tictac::KeyEntry;
+use crate::datatypes::vclock::{Vclock, VclockOrder};
 
 /// Direction marker for a repair: which side carries the winner
 /// vclock.
@@ -47,6 +49,86 @@ pub enum RepairDirection {
     /// scheduler enqueues itself a self-repair task that the
     /// next read will service).
     PullFromRemote,
+}
+
+/// Outcome of a cross-replica winner-selection across N
+/// replicas of one key.
+///
+/// Used by [`RepairTask::evaluate`] when the divergent key has
+/// been fetched from every replica and the scheduler must
+/// decide whether one value strictly dominates the others or
+/// whether the replicas hold genuine concurrent siblings.
+///
+/// # Examples
+///
+/// ```
+/// use bytes::Bytes;
+/// use dyn_riak::aae::repair::{RepairOutcome, RepairTask};
+/// use dyn_riak::datatypes::{ActorId, Vclock};
+///
+/// // Build two clocks where `a` strictly dominates `b`.
+/// let actor = ActorId::new("dc1", "peer");
+/// let mut a = Vclock::new();
+/// a.increment(&actor);
+/// a.increment(&actor);
+/// let mut b = Vclock::new();
+/// b.increment(&actor);
+///
+/// let replicas = vec![
+///     (Bytes::from_static(b"v_a"), a),
+///     (Bytes::from_static(b"v_b"), b),
+/// ];
+/// match RepairTask::evaluate(&replicas) {
+///     RepairOutcome::Winner { value, .. } => assert_eq!(value, "v_a"),
+///     RepairOutcome::Siblings(_) => panic!("a should dominate b"),
+/// }
+/// ```
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum RepairOutcome {
+    /// One replica strictly dominates every other replica;
+    /// the dominated entries are discarded.
+    Winner {
+        /// The winning value bytes.
+        value: Bytes,
+        /// The winner's vector clock.
+        vclock: Vclock,
+    },
+    /// Two or more replicas hold concurrent (or equal) clocks
+    /// after every dominated entry has been removed; the
+    /// caller decides whether to store siblings, log a
+    /// warning, or fall back to a tiebreaker.
+    Siblings(Vec<(Bytes, Vclock)>),
+}
+
+impl RepairOutcome {
+    /// Resolve the outcome to a single `(value, vclock)` pair,
+    /// emitting a `tracing::warn!` event when the outcome is
+    /// [`RepairOutcome::Siblings`]. The fallback selection rule
+    /// is the lexicographically-largest sibling value, with
+    /// ties broken by the encoded vclock bytes; this matches
+    /// the v1 "siblings as deferred follow-up" plan called out
+    /// on the brief.
+    ///
+    /// `key` is reported alongside the warning so operators can
+    /// correlate sibling events with specific Riak objects.
+    #[must_use]
+    pub fn resolve_with_warn(self, key: &[u8]) -> (Bytes, Vclock) {
+        match self {
+            Self::Winner { value, vclock } => (value, vclock),
+            Self::Siblings(siblings) => {
+                tracing::warn!(
+                    target: "dyn_riak::aae::repair",
+                    key = %String::from_utf8_lossy(key),
+                    siblings = siblings.len(),
+                    "sibling-aware merge: concurrent vclocks; falling back to lex-largest value"
+                );
+                siblings
+                    .into_iter()
+                    .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.encode().cmp(&b.1.encode())))
+                    .expect("invariant: Siblings carries at least two entries")
+            }
+        }
+    }
 }
 
 /// One repair the scheduler has decided to enact. Caller-owned;
@@ -65,6 +147,73 @@ pub struct RepairTask {
     pub vclock: Vec<u8>,
     /// Repair direction.
     pub direction: RepairDirection,
+}
+
+impl RepairTask {
+    /// Cross-replica winner selection.
+    ///
+    /// Given the `(value, vclock)` pair fetched from each of
+    /// the `N` replicas of one key, return [`RepairOutcome::Winner`]
+    /// when exactly one entry survives the dominance filter
+    /// and [`RepairOutcome::Siblings`] otherwise. An entry is
+    /// dominated when at least one other entry's vector clock
+    /// strictly succeeds it under [`Vclock::compare`]. Entries
+    /// whose clocks are pairwise [`VclockOrder::Equal`] are
+    /// deduplicated by their encoded clock bytes so identical
+    /// state across replicas does not surface as siblings.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic. An empty `replicas` slice yields
+    /// `RepairOutcome::Siblings(Vec::new())`; callers are
+    /// expected to filter out that degenerate case before
+    /// calling.
+    #[must_use]
+    pub fn evaluate(replicas: &[(Bytes, Vclock)]) -> RepairOutcome {
+        let n = replicas.len();
+        let mut keep = vec![true; n];
+        for i in 0..n {
+            if !keep[i] {
+                continue;
+            }
+            for j in 0..n {
+                if i == j || !keep[j] {
+                    continue;
+                }
+                match replicas[i].1.compare(&replicas[j].1) {
+                    VclockOrder::Less => {
+                        // i is strictly dominated by j; drop i.
+                        keep[i] = false;
+                        break;
+                    }
+                    VclockOrder::Equal if i > j => {
+                        // Deduplicate identical clocks: keep
+                        // the lower index, drop the higher.
+                        keep[i] = false;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let surviving: Vec<(Bytes, Vclock)> = replicas
+            .iter()
+            .zip(keep.iter())
+            .filter_map(|((v, c), &k)| {
+                if k {
+                    Some((v.clone(), c.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if surviving.len() == 1 {
+            let (value, vclock) = surviving.into_iter().next().expect("len == 1");
+            RepairOutcome::Winner { value, vclock }
+        } else {
+            RepairOutcome::Siblings(surviving)
+        }
+    }
 }
 
 /// Outcome of one divergence resolution. The scheduler emits
@@ -278,6 +427,19 @@ impl RepairScheduler {
 mod tests {
     use super::*;
     use crate::aae::exchange::Divergence;
+    use crate::datatypes::ActorId;
+
+    fn aid(peer: &str) -> ActorId {
+        ActorId::new("dc1", peer)
+    }
+
+    fn vc(actor: &ActorId, ticks: u64) -> Vclock {
+        let mut v = Vclock::new();
+        for _ in 0..ticks {
+            v.increment(actor);
+        }
+        v
+    }
 
     #[test]
     fn lexicographic_order_picks_longer() {
@@ -380,5 +542,123 @@ mod tests {
         let outcomes = sched.resolve(&div);
         assert_eq!(outcomes.len(), 1);
         assert!(matches!(&outcomes[0], Outcome::PeerUnavailable { .. }));
+    }
+
+    #[test]
+    fn evaluate_winner_when_one_dominates_others() {
+        let actor = aid("p1");
+        let a = vc(&actor, 3);
+        let b = vc(&actor, 1);
+        let c = vc(&actor, 2);
+        let replicas = vec![
+            (Bytes::from_static(b"v_a"), a.clone()),
+            (Bytes::from_static(b"v_b"), b),
+            (Bytes::from_static(b"v_c"), c),
+        ];
+        match RepairTask::evaluate(&replicas) {
+            RepairOutcome::Winner { value, vclock } => {
+                assert_eq!(value, Bytes::from_static(b"v_a"));
+                assert_eq!(vclock, a);
+            }
+            RepairOutcome::Siblings(s) => panic!("expected Winner, got Siblings({})", s.len()),
+        }
+    }
+
+    #[test]
+    fn evaluate_siblings_when_all_concurrent() {
+        let p1 = aid("p1");
+        let p2 = aid("p2");
+        let p3 = aid("p3");
+        let a = vc(&p1, 1);
+        let b = vc(&p2, 1);
+        let c = vc(&p3, 1);
+        let replicas = vec![
+            (Bytes::from_static(b"v_a"), a),
+            (Bytes::from_static(b"v_b"), b),
+            (Bytes::from_static(b"v_c"), c),
+        ];
+        match RepairTask::evaluate(&replicas) {
+            RepairOutcome::Siblings(s) => {
+                assert_eq!(s.len(), 3);
+            }
+            RepairOutcome::Winner { .. } => panic!("expected Siblings(3), got Winner"),
+        }
+    }
+
+    #[test]
+    fn evaluate_siblings_excludes_dominated_entries() {
+        // A strictly dominates B (so B is dropped); A and C
+        // are concurrent (different actors). Expected:
+        // Siblings([A, C]).
+        let p1 = aid("p1");
+        let p2 = aid("p2");
+        let mut a = Vclock::new();
+        a.increment(&p1);
+        a.increment(&p1);
+        let b = vc(&p1, 1);
+        let c = vc(&p2, 1);
+        let replicas = vec![
+            (Bytes::from_static(b"v_a"), a.clone()),
+            (Bytes::from_static(b"v_b"), b),
+            (Bytes::from_static(b"v_c"), c.clone()),
+        ];
+        match RepairTask::evaluate(&replicas) {
+            RepairOutcome::Siblings(s) => {
+                assert_eq!(s.len(), 2, "B is dominated by A and must be excluded");
+                let values: Vec<&Bytes> = s.iter().map(|(v, _)| v).collect();
+                assert!(values.contains(&&Bytes::from_static(b"v_a")));
+                assert!(values.contains(&&Bytes::from_static(b"v_c")));
+                assert!(!values.contains(&&Bytes::from_static(b"v_b")));
+            }
+            RepairOutcome::Winner { .. } => panic!("expected Siblings(2), got Winner"),
+        }
+    }
+
+    #[test]
+    fn evaluate_dedupes_equal_clocks() {
+        // Two replicas with identical clocks but different
+        // values: the dedupe step keeps the first; with only
+        // one survivor the outcome is Winner.
+        let actor = aid("p1");
+        let a = vc(&actor, 2);
+        let replicas = vec![
+            (Bytes::from_static(b"v_a"), a.clone()),
+            (Bytes::from_static(b"v_a_dup"), a.clone()),
+        ];
+        match RepairTask::evaluate(&replicas) {
+            RepairOutcome::Winner { value, vclock } => {
+                assert_eq!(value, Bytes::from_static(b"v_a"));
+                assert_eq!(vclock, a);
+            }
+            RepairOutcome::Siblings(s) => {
+                panic!("expected Winner after dedupe, got Siblings({})", s.len())
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_with_warn_picks_lex_largest_on_siblings() {
+        let p1 = aid("p1");
+        let p2 = aid("p2");
+        let outcome = RepairOutcome::Siblings(vec![
+            (Bytes::from_static(b"alpha"), vc(&p1, 1)),
+            (Bytes::from_static(b"zulu"), vc(&p2, 1)),
+            (Bytes::from_static(b"mike"), vc(&p1, 1)),
+        ]);
+        let (value, _) = outcome.resolve_with_warn(b"some-key");
+        assert_eq!(value, Bytes::from_static(b"zulu"));
+    }
+
+    #[test]
+    fn resolve_with_warn_passes_winner_through() {
+        let actor = aid("p1");
+        let v = vc(&actor, 5);
+        let outcome = RepairOutcome::Winner {
+            value: Bytes::from_static(b"only"),
+            vclock: v.clone(),
+        };
+        let (value, vclock) = outcome.resolve_with_warn(b"k");
+        assert_eq!(value, Bytes::from_static(b"only"));
+        assert_eq!(vclock, v);
     }
 }

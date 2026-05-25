@@ -64,6 +64,14 @@ quic = ["dynomite/quic"]
 # does not change behaviour for operators who do not configure
 # a `riak:` block in their YAML.
 riak = ["dep:dyn-riak", "dyn-riak/noxu"]
+# Enable Wasm phase fitting for the Riak MapReduce executor.
+# When set, `dynomited` reads the `riak.wasm_modules:` YAML
+# block at startup, loads each entry through
+# `dyn_riak::mapreduce::wasm::load_modules_from_config`, and
+# registers the resulting store with the executor. Implies
+# `riak`. Pulls in `wasmtime` (and `ciborium`) via the
+# `dyn-riak/wasm` feature.
+wasm = ["riak", "dyn-riak/wasm"]
 
 [dependencies]
 dynomite = { path = "../dynomite" }
