@@ -319,3 +319,110 @@ regression test that exercises every error path in the
 dispatcher (`NoTargets`, both `try_send` paths) and asserts
 the client receives a parseable error reply rather than a
 timeout.
+
+## Pass-3 follow-ups (queued 2026-05-25 from redis-mode results)
+
+Pass-3 redis mode showed a 14-point success-rate drop vs pass-2
+(99.17% -> 85.31%) and a 5-hour nuc teardown hang.  See
+`dist/chaos-reports/v0.1.0/multi-host-pass-3-redis.md` (forthcoming
+via item P3-2.6 below).
+
+### Tier 1 (small, high-value; from this run's findings)
+
+#### P3-1.1 Token-coverage validation
+
+Add `cluster::pool::validate_token_coverage()` that asserts the
+union of every peer's token range is `[0, u32::MAX]` with no gaps.
+Run at config validation time.  Reject configs where the ring is
+incomplete.  Likely root cause of the 14-point drop: the chaos
+coordinator's hardcoded 4-way split with only 3 hosts running
+left ~25% of the ring (3G..4G) unowned, so every key hashing
+into that range returned `NoTargets` (now visible as a real error
+since the `make_error` fix shipped).  Half-day effort.
+
+#### P3-1.2 Teardown timeout
+
+Wrap every teardown SSH in `timeout 60 ssh ...` so a wedged tunnel
+cannot block the next mode.  For nuc specifically: try direct SSH
+over Tailscale first; fall back to ProxyJump only on failure.
+20 minute fix; saves 10+ hours per pass-3.
+
+#### P3-1.3 Restart-failed residual diagnosis
+
+arnold and nuc still show 11% `restart_failed` rate even with
+bug #12's stale-kill in place (73 + 76 events in pass-3).  Capture
+the actual error from `start-host.sh` when it fails (currently
+just an event tag); add `event restart_failed_detail "<stderr-tail>"`.
+Run pass-4 with the captured details and triage from there.
+Half-day investigation budget.
+
+#### P3-1.4 meh as 4th chaos host
+
+Refactor the SSH runner pattern in `coordinator.sh` from
+`"${runner[@]}" "<cmd>"` (string-arg, login-shell-dependent) to
+`"${runner[@]}" bash -s <<<"<cmd>"` (stdin-piped, login-shell-
+independent) at every callsite.  About 7-10 callsites.  Add meh
+back to the host list once that lands.  Unblocks 4-host chaos.
+1-2 days.
+
+### Tier 2 (deeper; medium effort)
+
+#### P3-2.5 Gossip-driven peer-state oscillation
+
+With phi-accrual now live, every kill/restart cycle moves a peer
+Normal->Down->Normal as gossip catches up.  Each transition has
+a settling window where `Replicas` plans return NoTargets.  Add
+metrics: per-minute peer-state-transition count; classify errors
+by cause (peer-Down vs timeout vs channel-full).  If gossip churn
+dominates the error budget, expose `gossip_phi_threshold` more
+prominently and tune via pass-5.  3-5 days.
+
+#### P3-2.6 Auto-generate per-mode chaos report
+
+Extend `scripts/chaos-multi-host/generate-report.py` to take
+`--run-id` and emit
+`dist/chaos-reports/v0.1.0/multi-host-pass-N-<mode>.md` with
+the standard table (per-host + aggregate counts, success rate,
+chaos events by kind, top failure reasons).  Eliminates the
+hand-pasting that the chaos lead has been doing every run.
+1 day.
+
+#### P3-2.7 Workload-driver retry semantics
+
+Current driver counts every error as a failure.  In production
+a Dynomite operator's client SDK retries on `NoTargets` and
+`Timeout`.  Add `--retry-on <comma-separated-errors>` to
+`workload-driver.py` (default: retry NoTargets x1, Timeout x0).
+Re-run a focused 30-minute redis chaos to separate "transient
+gossip churn" from "genuine data unavailability".  1 day.
+
+### Tier 3 (broader; 1+ weeks each)
+
+#### P3-3.8 Network-partition + clock-skew + disk-full chaos modes
+
+Stub scripts under `scripts/netem/` exist but are not wired
+into the injector rotation.  Pass-3 only exercised
+SIGSTOP/SIGKILL/redis-bounce.  Extend `chaos-injector.sh` with
+`MODE_FAULTS=process+network+clock+disk` env knob; per-pass we
+pick which faults to enable.  1 week.
+
+#### P3-3.9 Differential rig integration with chaos
+
+The differential rig (revived this session) compares Rust vs C
+output for a static corpus.  It does not yet drive a multi-host
+cluster.  Build a "differential chaos" mode where the same
+workload drives both a Rust dynomited cluster AND a C dynomite
+cluster on the same hosts; assert reply equivalence.  Requires
+the C build operational on all 3 hosts.  2 weeks.
+
+### Random-slicing investigation (parallel to Tier 1)
+
+Independent design item: a friend's article on InfoQ
+(https://www.infoq.com/articles/dynamo-riak-random-slicing/)
+plus a reference C implementation at `hash_demo.c` describes
+random-slicing as an alternative to consistent hashing.  Key
+property: intervals always cover the full ring by construction,
+so a 3-of-4 host topology cannot leave a quadrant unowned.
+Investigate fit as an alternative `Distribution` mode alongside
+`vnode` / `ketama` / `modula`.  Design-only deliverable;
+implementation gated on operator approval.
