@@ -12,6 +12,7 @@
 //! a fresh [`Snapshot`] that the REST endpoint serves.
 
 mod codec;
+mod failure;
 mod histogram;
 mod numeric;
 mod prometheus;
@@ -27,6 +28,10 @@ use tokio_util::sync::CancellationToken;
 
 pub use crate::stats::codec::{
     MetricSpec, PoolField, ServerField, StatsMetricType, POOL_CODEC, SERVER_CODEC,
+};
+pub use crate::stats::failure::{
+    FailureMetrics, FailureSnapshot, NoTargetsEntry, PeerEntry, PeerStateEntry, PhiEntry,
+    TimeoutEntry, TransitionEntry,
 };
 pub use crate::stats::histogram::{Histogram, BUCKET_COUNT};
 pub use crate::stats::prometheus::render_prometheus;
@@ -54,6 +59,7 @@ pub use crate::stats::snapshot::{
 #[derive(Debug)]
 pub struct Stats {
     inner: Arc<Mutex<StatsInner>>,
+    failure: Arc<FailureMetrics>,
     started: Instant,
 }
 
@@ -233,8 +239,33 @@ impl Stats {
     pub fn new(info: ServiceInfo, pool: PoolStats, server: ServerStats) -> Self {
         Self {
             inner: Arc::new(Mutex::new(StatsInner::new(info, pool, server))),
+            failure: Arc::new(FailureMetrics::new()),
             started: Instant::now(),
         }
+    }
+
+    /// Borrow the failure-cause metrics handle.
+    ///
+    /// The dispatcher and the gossip handler clone this `Arc`
+    /// so they can record per-cause errors and per-peer state
+    /// transitions. The handle is created at construction time
+    /// and lives for the lifetime of the [`Stats`] value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::{PoolStats, ServerStats, ServiceInfo, Stats};
+    /// let s = Stats::new(
+    ///     ServiceInfo::default(),
+    ///     PoolStats::new("p"),
+    ///     ServerStats::new("s"),
+    /// );
+    /// let m = s.failure_metrics();
+    /// assert!(m.snapshot().is_empty());
+    /// ```
+    #[must_use]
+    pub fn failure_metrics(&self) -> Arc<FailureMetrics> {
+        self.failure.clone()
     }
 
     /// Record a latency observation in the matching histogram.
@@ -574,6 +605,7 @@ impl Stats {
             dyn_memory: inner.dyn_memory,
             pool: inner.pool.clone(),
             server: inner.server.clone(),
+            failure: self.failure.snapshot(),
         }
     }
 

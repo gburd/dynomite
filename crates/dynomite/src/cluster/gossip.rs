@@ -396,6 +396,12 @@ pub struct GossipHandler {
     pool: Arc<ServerPool>,
     threshold: f64,
     interval: Duration,
+    /// Optional failure-cause metrics handle. When wired,
+    /// every peer-state transition observed by
+    /// [`Self::evaluate`] increments the matching
+    /// `peer_state_transitions_total` counter and updates the
+    /// `peer_state_current` and `gossip_phi_score` gauges.
+    failure_metrics: Option<Arc<crate::stats::FailureMetrics>>,
 }
 
 impl GossipHandler {
@@ -407,7 +413,23 @@ impl GossipHandler {
             pool,
             threshold: DEFAULT_THRESHOLD,
             interval: Duration::from_millis(DEFAULT_GOSSIP_INTERVAL_MS),
+            failure_metrics: None,
         }
+    }
+
+    /// Attach a [`crate::stats::FailureMetrics`] handle.
+    ///
+    /// When set, [`Self::evaluate`] emits a
+    /// `peer_state_transitions_total` counter tick and a
+    /// `peer_state_current` gauge update for every transition
+    /// it applies, plus a `gossip_phi_score` gauge update for
+    /// every non-local peer regardless of whether its state
+    /// changed. Default behaviour is unchanged when no metrics
+    /// handle is supplied.
+    #[must_use]
+    pub fn with_failure_metrics(mut self, metrics: Arc<crate::stats::FailureMetrics>) -> Self {
+        self.failure_metrics = Some(metrics);
+        self
     }
 
     /// Override the phi threshold (default 8.0).
@@ -465,7 +487,17 @@ impl GossipHandler {
                 p.failure_detector_mut().record_heartbeat(now);
                 if p.failure_detector().phi(now) <= self.threshold && p.state() != PeerState::Normal
                 {
+                    let prev = p.state();
                     p.set_state(PeerState::Normal, now_secs_wall());
+                    if let Some(m) = self.failure_metrics.as_ref() {
+                        m.record_peer_state_transition(
+                            p.idx(),
+                            p.dc(),
+                            p.rack(),
+                            prev,
+                            PeerState::Normal,
+                        );
+                    }
                 }
                 return;
             }
@@ -483,7 +515,17 @@ impl GossipHandler {
             }
             p.failure_detector_mut().record_heartbeat(now);
             if p.failure_detector().phi(now) <= self.threshold && p.state() != PeerState::Normal {
+                let prev = p.state();
                 p.set_state(PeerState::Normal, now_secs_wall());
+                if let Some(m) = self.failure_metrics.as_ref() {
+                    m.record_peer_state_transition(
+                        p.idx(),
+                        p.dc(),
+                        p.rack(),
+                        prev,
+                        PeerState::Normal,
+                    );
+                }
             }
         }
     }
@@ -503,16 +545,25 @@ impl GossipHandler {
             if p.is_local() {
                 continue;
             }
-            let target = if p.failure_detector().last_heartbeat().is_some()
-                && p.failure_detector().phi(now) <= self.threshold
+            let phi = p.failure_detector().phi(now);
+            if let Some(m) = self.failure_metrics.as_ref() {
+                m.observe_phi(p.idx(), p.dc(), p.rack(), phi);
+            }
+            let target = if p.failure_detector().last_heartbeat().is_some() && phi <= self.threshold
             {
                 PeerState::Normal
             } else {
                 PeerState::Down
             };
-            if p.state() != target {
+            let prev = p.state();
+            if prev != target {
                 p.set_state(target, now_secs_wall());
                 transitions.push((p.idx(), target));
+                if let Some(m) = self.failure_metrics.as_ref() {
+                    m.record_peer_state_transition(p.idx(), p.dc(), p.rack(), prev, target);
+                }
+            } else if let Some(m) = self.failure_metrics.as_ref() {
+                m.observe_peer_state(p.idx(), p.dc(), p.rack(), target);
             }
         }
         transitions
@@ -529,7 +580,17 @@ impl GossipHandler {
                 continue;
             }
             if p.endpoint().pname() == pname && p.state() != PeerState::Down {
+                let prev = p.state();
                 p.set_state(PeerState::Down, now_secs_wall());
+                if let Some(m) = self.failure_metrics.as_ref() {
+                    m.record_peer_state_transition(
+                        p.idx(),
+                        p.dc(),
+                        p.rack(),
+                        prev,
+                        PeerState::Down,
+                    );
+                }
                 return;
             }
         }
@@ -767,5 +828,76 @@ mod tests {
         assert_eq!(remote_state(&pool), PeerState::Normal);
         handler.mark_down_pname("127.0.0.1:8102");
         assert_eq!(remote_state(&pool), PeerState::Down);
+    }
+
+    /// `evaluate` toggles a peer Normal->Down once gossip
+    /// quiesces. The wired `FailureMetrics` accumulator must
+    /// see exactly one `(from=Normal, to=Down)` transition
+    /// counter tick and the matching `peer_state_current`
+    /// gauge entry.
+    #[test]
+    fn handler_evaluate_records_normal_to_down_transition() {
+        let pool = handler_helpers::pool();
+        let metrics = std::sync::Arc::new(crate::stats::FailureMetrics::new());
+        let handler = GossipHandler::new(pool.clone()).with_failure_metrics(metrics.clone());
+        let t0 = std::time::Instant::now();
+        // Drive 100 heartbeats so the peer is firmly `Normal`.
+        for i in 0..100 {
+            let now = t0 + std::time::Duration::from_secs(i);
+            handler.record_heartbeat_pname("127.0.0.1:8102", now);
+            handler.evaluate(now);
+        }
+        let mid_snap = metrics.snapshot();
+        let normal_count = mid_snap
+            .peer_state_transitions
+            .iter()
+            .filter(|t| t.to == PeerState::Normal)
+            .map(|t| t.count)
+            .sum::<u64>();
+        // There should be exactly one Down->Normal flip from
+        // the very first heartbeat.
+        assert_eq!(
+            normal_count, 1,
+            "got transitions: {:?}",
+            mid_snap.peer_state_transitions
+        );
+
+        // Now stop heartbeats and skip 60 seconds of wall
+        // time. evaluate should flip the peer to Down once.
+        let later = t0 + std::time::Duration::from_secs(159);
+        let transitions = handler.evaluate(later);
+        assert_eq!(transitions, vec![(1, PeerState::Down)]);
+
+        let snap = metrics.snapshot();
+        let down_entry = snap
+            .peer_state_transitions
+            .iter()
+            .find(|t| t.from == PeerState::Normal && t.to == PeerState::Down)
+            .expect("normal->down transition should be recorded");
+        assert_eq!(down_entry.count, 1);
+        assert_eq!(down_entry.peer_idx, 1);
+
+        // The current-state gauge follows the latest
+        // observation.
+        let current = snap
+            .peer_state_current
+            .iter()
+            .find(|c| c.peer_idx == 1)
+            .expect("peer_state_current entry should be present");
+        assert_eq!(current.state, PeerState::Down);
+        assert_eq!(current.dc, "dc1");
+        assert_eq!(current.rack, "r1");
+
+        // Phi gauge must be populated for the remote peer.
+        let phi_entry = snap
+            .peer_phi
+            .iter()
+            .find(|p| p.peer_idx == 1)
+            .expect("gossip_phi_score gauge should be populated");
+        assert!(
+            phi_entry.phi >= 0.0,
+            "phi should be non-negative; got {}",
+            phi_entry.phi
+        );
     }
 }

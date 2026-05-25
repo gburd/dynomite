@@ -35,7 +35,9 @@
 
 use prometheus::{Encoder, IntCounterVec, IntGaugeVec, Opts, Registry, TextEncoder};
 
+use crate::cluster::peer::PeerState;
 use crate::stats::codec::{StatsMetricType, POOL_CODEC, SERVER_CODEC};
+use crate::stats::failure::FailureSnapshot;
 use crate::stats::snapshot::{HistogramSummary, Snapshot};
 
 /// Render a [`Snapshot`] in the Prometheus 0.0.4 text exposition format.
@@ -72,6 +74,7 @@ pub fn render_prometheus(snap: &Snapshot) -> String {
     register_pool(&registry, snap);
     register_server(&registry, snap);
     register_peer_state(&registry, snap);
+    register_failure_metrics(&registry, &snap.failure);
     register_histogram_summaries(&registry, snap);
     register_queue_p99s(&registry, snap);
 
@@ -246,6 +249,233 @@ fn register_peer_state(registry: &Registry, snap: &Snapshot) {
     registry
         .register(Box::new(gauge))
         .expect("invariant: peer_state registers cleanly");
+}
+
+fn register_failure_metrics(registry: &Registry, failure: &FailureSnapshot) {
+    register_failure_no_targets(registry, failure);
+    register_failure_peer_send(registry, failure);
+    register_failure_backend_send(registry, failure);
+    register_failure_response_timeout(registry, failure);
+    register_failure_peer_state(registry, failure);
+    register_failure_phi(registry, failure);
+}
+
+fn register_failure_no_targets(registry: &Registry, failure: &FailureSnapshot) {
+    let opts = Opts::new(
+        "dispatch_no_targets_total",
+        "Dispatch failures because the only routable peer for the hashed token was Down or absent.",
+    );
+    let counter = IntCounterVec::new(opts, &["dc", "rack", "consistency_level"])
+        .expect("invariant: dispatch_no_targets descriptor is valid");
+    for entry in &failure.no_targets {
+        counter
+            .with_label_values(&[&entry.dc, &entry.rack, entry.consistency.name()])
+            .inc_by(entry.count);
+    }
+    registry
+        .register(Box::new(counter))
+        .expect("invariant: dispatch_no_targets registers cleanly");
+}
+
+fn register_failure_peer_send(registry: &Registry, failure: &FailureSnapshot) {
+    let full = IntCounterVec::new(
+        Opts::new(
+            "dispatch_peer_send_full_total",
+            "Dispatcher try_send to a peer's outbound channel returned Full.",
+        ),
+        &["peer_idx", "peer_dc"],
+    )
+    .expect("invariant: dispatch_peer_send_full descriptor is valid");
+    for entry in &failure.peer_send_full {
+        full.with_label_values(&[&entry.peer_idx.to_string(), &entry.peer_dc])
+            .inc_by(entry.count);
+    }
+    registry
+        .register(Box::new(full))
+        .expect("invariant: dispatch_peer_send_full registers cleanly");
+
+    let closed = IntCounterVec::new(
+        Opts::new(
+            "dispatch_peer_send_closed_total",
+            "Dispatcher try_send to a peer's outbound channel returned Closed.",
+        ),
+        &["peer_idx", "peer_dc"],
+    )
+    .expect("invariant: dispatch_peer_send_closed descriptor is valid");
+    for entry in &failure.peer_send_closed {
+        closed
+            .with_label_values(&[&entry.peer_idx.to_string(), &entry.peer_dc])
+            .inc_by(entry.count);
+    }
+    registry
+        .register(Box::new(closed))
+        .expect("invariant: dispatch_peer_send_closed registers cleanly");
+}
+
+fn register_failure_backend_send(registry: &Registry, failure: &FailureSnapshot) {
+    let full = IntCounterVec::new(
+        Opts::new(
+            "dispatch_backend_send_full_total",
+            "Dispatcher try_send to the local datastore backend returned Full.",
+        ),
+        &[],
+    )
+    .expect("invariant: dispatch_backend_send_full descriptor is valid");
+    if failure.backend_send_full > 0 {
+        full.with_label_values(&[])
+            .inc_by(failure.backend_send_full);
+    } else {
+        let _ = full.with_label_values(&[]);
+    }
+    registry
+        .register(Box::new(full))
+        .expect("invariant: dispatch_backend_send_full registers cleanly");
+
+    let closed = IntCounterVec::new(
+        Opts::new(
+            "dispatch_backend_send_closed_total",
+            "Dispatcher try_send to the local datastore backend returned Closed.",
+        ),
+        &[],
+    )
+    .expect("invariant: dispatch_backend_send_closed descriptor is valid");
+    if failure.backend_send_closed > 0 {
+        closed
+            .with_label_values(&[])
+            .inc_by(failure.backend_send_closed);
+    } else {
+        let _ = closed.with_label_values(&[]);
+    }
+    registry
+        .register(Box::new(closed))
+        .expect("invariant: dispatch_backend_send_closed registers cleanly");
+}
+
+fn register_failure_response_timeout(registry: &Registry, failure: &FailureSnapshot) {
+    let counter = IntCounterVec::new(
+        Opts::new(
+            "dispatch_response_timeout_total",
+            "Dispatcher's response coalescer gave up waiting for replies.",
+        ),
+        &["consistency_level"],
+    )
+    .expect("invariant: dispatch_response_timeout descriptor is valid");
+    for entry in &failure.response_timeout {
+        counter
+            .with_label_values(&[entry.consistency.name()])
+            .inc_by(entry.count);
+    }
+    registry
+        .register(Box::new(counter))
+        .expect("invariant: dispatch_response_timeout registers cleanly");
+}
+
+fn register_failure_peer_state(registry: &Registry, failure: &FailureSnapshot) {
+    let trans = IntCounterVec::new(
+        Opts::new(
+            "peer_state_transitions_total",
+            "Number of gossip-driven peer-state transitions, labelled by from/to state.",
+        ),
+        &["peer_idx", "from_state", "to_state"],
+    )
+    .expect("invariant: peer_state_transitions descriptor is valid");
+    for entry in &failure.peer_state_transitions {
+        trans
+            .with_label_values(&[
+                &entry.peer_idx.to_string(),
+                entry.from.name(),
+                entry.to.name(),
+            ])
+            .inc_by(entry.count);
+    }
+    registry
+        .register(Box::new(trans))
+        .expect("invariant: peer_state_transitions registers cleanly");
+
+    let current = IntGaugeVec::new(
+        Opts::new(
+            "peer_state_current",
+            "Current peer state. Numeric value matches PeerState's repr(u8): \
+             0=Unknown, 1=Joining, 2=Normal, 3=Standby, 4=Down, 5=Reset, 6=Leaving.",
+        ),
+        &["peer_idx", "dc", "rack"],
+    )
+    .expect("invariant: peer_state_current descriptor is valid");
+    for entry in &failure.peer_state_current {
+        current
+            .with_label_values(&[&entry.peer_idx.to_string(), &entry.dc, &entry.rack])
+            .set(peer_state_value(entry.state));
+    }
+    registry
+        .register(Box::new(current))
+        .expect("invariant: peer_state_current registers cleanly");
+}
+
+fn register_failure_phi(registry: &Registry, failure: &FailureSnapshot) {
+    let gauge = IntGaugeVec::new(
+        Opts::new(
+            "gossip_phi_score_milli",
+            "Phi-accrual failure detector score per peer, scaled by 1000 (gauge units = thousandths).",
+        ),
+        &["peer_idx", "dc", "rack"],
+    )
+    .expect("invariant: gossip_phi_score descriptor is valid");
+    for entry in &failure.peer_phi {
+        let value = phi_to_milli_clamped(entry.phi);
+        gauge
+            .with_label_values(&[&entry.peer_idx.to_string(), &entry.dc, &entry.rack])
+            .set(value);
+    }
+    registry
+        .register(Box::new(gauge))
+        .expect("invariant: gossip_phi_score registers cleanly");
+}
+
+/// Map a [`PeerState`] to the integer value the Prometheus gauge
+/// publishes. Mirrors the enum's `repr(u8)` discriminants but
+/// goes via a match so the conversion is explicit and the
+/// pedantic cast lints stay clean.
+fn peer_state_value(state: PeerState) -> i64 {
+    match state {
+        PeerState::Unknown => 0,
+        PeerState::Joining => 1,
+        PeerState::Normal => 2,
+        PeerState::Standby => 3,
+        PeerState::Down => 4,
+        PeerState::Reset => 5,
+        PeerState::Leaving => 6,
+    }
+}
+
+/// Render a finite phi value in thousandths as an `i64`. The
+/// snapshot already clamps the upstream value; this helper
+/// repeats the clamp for safety against future refactors.
+fn phi_to_milli_clamped(phi: f64) -> i64 {
+    if !phi.is_finite() || phi <= 0.0 {
+        return 0;
+    }
+    let saturating = i64::MAX / 1000;
+    let scaled = (phi * 1000.0).round();
+    if !scaled.is_finite() || scaled <= 0.0 {
+        return 0;
+    }
+    let bits = scaled.to_bits();
+    let exp_field = u32::try_from((bits >> 52) & 0x7FF).unwrap_or(0);
+    if exp_field < 1023 {
+        return 0;
+    }
+    let unbiased = exp_field - 1023;
+    if unbiased >= 63 {
+        return saturating;
+    }
+    let mant = bits & ((1u64 << 52) - 1);
+    let m = (1u64 << 52) | mant;
+    let value = if unbiased >= 52 {
+        m.checked_shl(unbiased - 52).unwrap_or(u64::MAX)
+    } else {
+        m >> (52 - unbiased)
+    };
+    i64::try_from(value).unwrap_or(saturating).min(saturating)
 }
 
 fn register_histogram_summaries(registry: &Registry, snap: &Snapshot) {
@@ -471,6 +701,81 @@ mod tests {
         assert!(
             out.contains("dynomite_peer_state{peer=\"redis_local\",state=\"down\"} 0"),
             "peer_state down line missing:\n{out}"
+        );
+    }
+
+    /// The failure-cause counters are wired into the
+    /// renderer; verify each family lands with the expected
+    /// HELP and TYPE headers and that label values from the
+    /// snapshot make it onto the wire.
+    #[test]
+    fn render_prometheus_emits_failure_cause_counters() {
+        use crate::cluster::peer::PeerState;
+        use crate::msg::ConsistencyLevel;
+        use crate::stats::FailureMetrics;
+
+        let metrics = FailureMetrics::new();
+        metrics.record_no_targets("dc1", "rA", ConsistencyLevel::DcQuorum);
+        metrics.record_peer_send_full(7, "dc2");
+        metrics.record_peer_send_closed(7, "dc2");
+        metrics.record_backend_send_full();
+        metrics.record_backend_send_closed();
+        metrics.record_response_timeout(ConsistencyLevel::DcOne);
+        metrics.record_peer_state_transition(3, "dc1", "rA", PeerState::Normal, PeerState::Down);
+        metrics.observe_phi(3, "dc1", "rA", 4.5);
+
+        let mut snap = make_snap();
+        snap.failure = metrics.snapshot();
+        let out = render_prometheus(&snap);
+
+        assert!(
+            out.contains("# TYPE dispatch_no_targets_total counter"),
+            "missing dispatch_no_targets type line:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "dispatch_no_targets_total{consistency_level=\"DC_QUORUM\",dc=\"dc1\",rack=\"rA\"} 1"
+            ),
+            "missing dispatch_no_targets row:\n{out}"
+        );
+        assert!(
+            out.contains("# TYPE dispatch_peer_send_full_total counter"),
+            "missing dispatch_peer_send_full type line:\n{out}"
+        );
+        assert!(
+            out.contains("dispatch_peer_send_full_total{peer_dc=\"dc2\",peer_idx=\"7\"} 1"),
+            "missing dispatch_peer_send_full row:\n{out}"
+        );
+        assert!(
+            out.contains("dispatch_peer_send_closed_total{peer_dc=\"dc2\",peer_idx=\"7\"} 1"),
+            "missing dispatch_peer_send_closed row:\n{out}"
+        );
+        assert!(
+            out.contains("dispatch_backend_send_full_total 1"),
+            "missing dispatch_backend_send_full row:\n{out}"
+        );
+        assert!(
+            out.contains("dispatch_backend_send_closed_total 1"),
+            "missing dispatch_backend_send_closed row:\n{out}"
+        );
+        assert!(
+            out.contains("dispatch_response_timeout_total{consistency_level=\"DC_ONE\"} 1"),
+            "missing dispatch_response_timeout row:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "peer_state_transitions_total{from_state=\"NORMAL\",peer_idx=\"3\",to_state=\"DOWN\"} 1"
+            ),
+            "missing peer_state_transitions row:\n{out}"
+        );
+        assert!(
+            out.contains("peer_state_current{dc=\"dc1\",peer_idx=\"3\",rack=\"rA\"} 4"),
+            "missing peer_state_current row (state=Down=4):\n{out}"
+        );
+        // phi=4.5 -> 4500 in the milli gauge.
+        assert!(
+            out.contains("gossip_phi_score_milli{dc=\"dc1\",peer_idx=\"3\",rack=\"rA\"} 4500"),
+            "missing gossip_phi_score_milli row:\n{out}"
         );
     }
 }
