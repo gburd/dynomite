@@ -217,16 +217,20 @@ caveat as Section 2.
 
 ## Section 6. Recommendations
 
-| Item | Description | Files | Effort | Operator impact |
-|---|---|---|---|---|
-| R1 | Persist tree across restart | `aae/tictac.rs` + new `aae/persist.rs` | 2 days | none (auto-rebuild on missing snapshot) |
-| R2 | Native-fold path for `NoxuDatastore` | `aae/tictac.rs::Tree::insert_from_datastore` | 3 days | none (transparent perf win) |
-| R3 | Per-token (not per-peer) exchange | `aae/scheduler.rs`, `aae/exchange.rs` | 2 days | none (more granular) |
-| R4 | Operator metrics for AAE health | `stats/failure.rs` already has the slot; wire AAE counters | 1 day | none (new prometheus lines) |
-| R5 | `dyn-admin aae-status` command | `crates/dyn-admin/src/commands/aae_status.rs` | 1 day | new operator surface |
+| Item | Description | Files | Effort | Status | Operator impact |
+|---|---|---|---|---|---|
+| R1 | Persist tree across restart | `aae/tictac.rs` + new `aae/persist.rs` | 2 days | DONE (this branch) | none (auto-rebuild on missing snapshot) |
+| R2 | Native-fold path for `NoxuDatastore` | `aae/tictac.rs::Tree::build_from_noxu_fold`, `aae/noxu_fold.rs` | 3 days | DONE (this branch) | none (transparent perf win) |
+| R3 | Per-token (not per-peer) exchange | `aae/scheduler.rs`, `aae/exchange.rs` | 2 days | open | none (more granular) |
+| R4 | Operator metrics for AAE health | `stats/failure.rs` already has the slot; wire AAE counters | 1 day | open | none (new prometheus lines) |
+| R5 | `dyn-admin aae-status` command | `crates/dyn-admin/src/commands/aae_status.rs` | 1 day | open | new operator surface |
 
 Total: ~9 days for "the realistic gen-2 polish path."  None
 of these change the wire format or add a new dependency.
+
+R1 and R2 landed on branch `stage/aae-r1-r2-persist-noxufold`
+(see `docs/journal/2026-05-25-aae-r1-r2.md` for the design
+write-up). Commit shas are recorded in that journal entry.
 
 A "redo against a real persisted backend with native-fold
 semantics" would be a much larger project (matches what gen-2

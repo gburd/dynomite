@@ -2301,3 +2301,61 @@ as a parity oracle:
 All three items are filed under "Project-wide follow-ups"
 and will be addressed alongside the wider differential gate
 work that flips `DIFFERENTIAL_STRICT=1` on by default.
+
+### D6: AAE snapshot persistence
+
+Dynomite has no equivalent of Riak's Tictac AAE machinery,
+so the parity surface is the Riak-side reference rather than
+the C Dynomite tree. The Rust port now persists the AAE
+tree across process restarts to avoid a full datastore
+rescan on cold start.
+
+* Snapshot module:
+  [`dyn_riak::aae::persist`](crate::aae::persist) with the
+  v1 file format documented at the module level.
+* Cadence: `ConfAae::snapshot_interval_seconds` (default
+  300s) drives `Scheduler::snapshot_due()` /
+  `Scheduler::mark_snapshot_taken()`; the embedder writes
+  via [`Tree::save_snapshot`](crate::aae::tictac::Tree::save_snapshot)
+  on each due tick.
+* Recovery: [`Tree::load_snapshot`](crate::aae::tictac::Tree::load_snapshot)
+  reverses the encoding; corrupt or version-skewed files
+  surface as `PersistError::{Corrupted,VersionSkew,BadShape}`
+  and the scheduler treats them as "rebuild from scratch."
+
+Pinned by:
+- `dyn_riak::aae::persist::tests` (9 unit tests on the
+  encoder, decoder, atomic save, and corruption surfaces).
+- `dyn_riak::aae::scheduler::tests` (2 cadence tests on
+  `snapshot_due` / `mark_snapshot_taken`).
+- `crates/dyn-riak/tests/aae_persist_round_trip.rs` (4
+  integration tests on the restart contract).
+
+### D7: AAE Noxu native-fold rebuild
+
+When the configured datastore is `NoxuDatastore` the AAE
+cold-rebuild path walks the underlying B-tree once in
+storage order rather than looping through the public
+`Datastore` API. The win is sequential reads (cache-
+friendly, no per-key MVCC handshake) plus a bounded memory
+peak.
+
+* Module:
+  [`dyn_riak::aae::noxu_fold`](crate::aae::noxu_fold), gated
+  behind the `noxu` cargo feature.
+* Helper:
+  [`NoxuDatastore::fold_primary`](crate::datastore::NoxuDatastore::fold_primary)
+  exposes a typed cursor walk that filters out 2i records.
+* Storage records do not carry a per-record vclock or
+  timestamp; the fold passes the value bytes as the AAE
+  `vclock` slot and `0` as the timestamp. See the module
+  docs for the rationale and the noxu-tree
+  `compress_key` debug assertion the fold worked around
+  by using `Get::First` + `Get::Next` instead of
+  `Get::SearchGte`.
+
+Pinned by:
+- `dyn_riak::aae::noxu_fold::tests` (4 unit tests:
+  empty-datastore, 1000-key fold, 2i-filtered fold,
+  bit-equal comparison vs explicit-insert path).
+

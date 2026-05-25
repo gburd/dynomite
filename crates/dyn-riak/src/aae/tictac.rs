@@ -363,6 +363,70 @@ pub enum TreeError {
     /// not exist on this tree.
     #[error("time bucket {0} out of range")]
     TimeBucketOutOfRange(u32),
+    /// A method was called with a `segment` index that does
+    /// not exist for the given time bucket.
+    #[error("segment {0} out of range")]
+    SegmentOutOfRange(u32),
+}
+
+impl Tree {
+    /// Install a segment hash and key directory directly,
+    /// bypassing the per-key XOR aggregation. Used by the
+    /// snapshot loader so the reconstructed segment hash
+    /// matches the persisted hash exactly even if the
+    /// directory has been tampered with on disk.
+    ///
+    /// # Errors
+    /// Returns [`TreeError::TimeBucketOutOfRange`] when
+    /// `time_bucket >= shape().n_time_buckets` and
+    /// [`TreeError::SegmentOutOfRange`] when
+    /// `segment >= shape().n_segments`.
+    pub(crate) fn install_segment(
+        &mut self,
+        time_bucket: u32,
+        segment: u32,
+        hash: u64,
+        entries: Vec<KeyEntry>,
+    ) -> Result<(), TreeError> {
+        let row = self
+            .buckets
+            .get_mut(time_bucket as usize)
+            .ok_or(TreeError::TimeBucketOutOfRange(time_bucket))?;
+        if segment >= self.shape.n_segments {
+            return Err(TreeError::SegmentOutOfRange(segment));
+        }
+        row.segments[segment as usize] = hash;
+        let set: BTreeSet<KeyEntry> = entries.into_iter().collect();
+        if set.is_empty() {
+            row.directory.remove(&segment);
+        } else {
+            row.directory.insert(segment, set);
+        }
+        Ok(())
+    }
+
+    /// Walk every `(time_bucket, segment)` pair whose
+    /// directory is non-empty and return the materialised
+    /// `(time_bucket, segment, segment_hash, entries)`
+    /// tuples. Used by the snapshot writer; segments with
+    /// empty directories have segment hash 0 by
+    /// construction so they need not be persisted.
+    pub(crate) fn collect_nonempty_segments(&self) -> Vec<(u32, u32, u64, Vec<KeyEntry>)> {
+        let mut out = Vec::new();
+        for (tb_idx, row) in self.buckets.iter().enumerate() {
+            let tb = u32::try_from(tb_idx)
+                .expect("invariant: time bucket index fits in u32 by construction");
+            for (seg, set) in &row.directory {
+                if set.is_empty() {
+                    continue;
+                }
+                let hash = row.segments[*seg as usize];
+                let entries: Vec<KeyEntry> = set.iter().cloned().collect();
+                out.push((tb, *seg, hash, entries));
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
