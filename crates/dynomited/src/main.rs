@@ -215,6 +215,22 @@ fn run_server(cli: &Cli) -> ExitCode {
         cfg.pool_mut().enable_gossip = Some(true);
     }
 
+    if let Some(s) = cli.distribution_shadow.as_deref() {
+        match dynomite::conf::Distribution::parse(s) {
+            Ok(d) => {
+                cfg.pool_mut().distribution_shadow = Some(d);
+                tracing::info!(
+                    shadow = d.as_str(),
+                    "shadow distribution mode enabled via --distribution-shadow"
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "--distribution-shadow value rejected");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
     // CLI overrides for the optional Riak surface. The flags
     // are only present when the binary was built with the
     // `riak` Cargo feature; without the feature this whole
@@ -222,6 +238,9 @@ fn run_server(cli: &Cli) -> ExitCode {
     // any) is used verbatim.
     #[cfg(feature = "riak")]
     apply_riak_overrides(cli, &mut cfg);
+
+    #[cfg(feature = "riak")]
+    apply_riak_distribution_default(&mut cfg);
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -297,4 +316,29 @@ fn apply_riak_overrides(cli: &Cli, cfg: &mut Config) {
         block.aae_enabled = Some(true);
     }
     pool.riak = Some(block);
+}
+
+/// When the Riak listener is configured AND the operator did
+/// not explicitly select a distribution, default to
+/// [`dynomite::conf::Distribution::RandomSlicing`]. Riak-shaped
+/// deployments inherit Riak's full-coverage partition
+/// invariant by default; operators who want the legacy vnode
+/// behaviour can still set `distribution: vnode` in the YAML.
+#[cfg(feature = "riak")]
+fn apply_riak_distribution_default(cfg: &mut Config) {
+    let pool = cfg.pool_mut();
+    let riak_listening = pool
+        .riak
+        .as_ref()
+        .is_some_and(|r| r.pbc_listen.is_some() || r.http_listen.is_some());
+    if !riak_listening {
+        return;
+    }
+    if pool.distribution.is_none() {
+        pool.distribution = Some(dynomite::conf::Distribution::RandomSlicing);
+        tracing::info!(
+            distribution = "random_slicing",
+            "Riak mode default distribution: random_slicing"
+        );
+    }
 }

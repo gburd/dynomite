@@ -17,7 +17,9 @@ use parking_lot::RwLock;
 
 use crate::cluster::datacenter::Datacenter;
 use crate::cluster::peer::Peer;
-use crate::conf::{ConfPool, ConsistencyLevel as ConfConsistencyLevel, DataStore, HashType};
+use crate::conf::{
+    ConfPool, ConsistencyLevel as ConfConsistencyLevel, DataStore, Distribution, HashType,
+};
 
 use crate::msg::ConsistencyLevel;
 use crate::net::auto_eject::AutoEject;
@@ -75,6 +77,15 @@ pub struct PoolConfig {
     pub data_store: DataStore,
     /// Hash function used for token ring lookups.
     pub hash: HashType,
+    /// Distribution algorithm used to map a hashed key to a
+    /// peer. Defaults to [`Distribution::Vnode`].
+    pub distribution: Distribution,
+    /// Optional shadow distribution. When `Some`, the
+    /// dispatcher computes both the live and shadow routes for
+    /// every request and bumps a counter when they disagree.
+    /// The actual route is the configured
+    /// [`Self::distribution`].
+    pub distribution_shadow: Option<Distribution>,
     /// Read consistency level.
     pub read_consistency: ConsistencyLevel,
     /// Write consistency level.
@@ -127,6 +138,8 @@ impl Default for PoolConfig {
             rack: "localrack".into(),
             data_store: DataStore::Redis,
             hash: HashType::Murmur,
+            distribution: Distribution::Vnode,
+            distribution_shadow: None,
             read_consistency: ConsistencyLevel::DcOne,
             write_consistency: ConsistencyLevel::DcOne,
             timeout_ms: 5_000,
@@ -212,6 +225,8 @@ impl PoolConfig {
             rack: pool.rack.clone().unwrap_or_else(|| "localrack".into()),
             data_store,
             hash: pool.hash.unwrap_or(HashType::Murmur),
+            distribution: pool.resolved_distribution(),
+            distribution_shadow: pool.distribution_shadow,
             read_consistency: parse_consistency(&pool.read_consistency),
             write_consistency: parse_consistency(&pool.write_consistency),
             timeout_ms: pool
@@ -370,7 +385,12 @@ impl ServerPool {
     }
 
     /// Rebuild the per-rack token continuum from the current peer
-    /// table. Mirrors `vnode_update`.
+    /// table. Mirrors `vnode_update`. When the configured
+    /// distribution is
+    /// [`crate::conf::Distribution::RandomSlicing`], a
+    /// [`crate::hashkit::random_slicing::RandomSlices`] table is
+    /// installed on each rack alongside the continuum so the
+    /// shadow-distribution path can still walk the vnode view.
     pub fn rebuild_ring(&self) {
         let peers = self.peers.read();
         let mut dcs = self.datacenters.write();
@@ -394,6 +414,46 @@ impl ServerPool {
             })
             .collect();
         crate::cluster::vnode::rebuild_continuums(&mut dcs, &entries);
+        let live_or_shadow_uses_rs = matches!(
+            self.config.distribution,
+            crate::conf::Distribution::RandomSlicing
+        ) || matches!(
+            self.config.distribution_shadow,
+            Some(crate::conf::Distribution::RandomSlicing)
+        );
+        if live_or_shadow_uses_rs {
+            Self::install_random_slices(&peers, &mut dcs);
+        }
+    }
+
+    fn install_random_slices(peers: &[crate::cluster::peer::Peer], dcs: &mut [Datacenter]) {
+        use crate::hashkit::random_slicing::RandomSlices;
+        for dc in dcs.iter_mut() {
+            let dc_name = dc.name().to_string();
+            for rack in dc.racks_mut().iter_mut() {
+                let mut names: Vec<String> = peers
+                    .iter()
+                    .filter(|p| p.dc() == dc_name && p.rack() == rack.name())
+                    .map(|p| p.endpoint().pname())
+                    .collect();
+                names.sort();
+                names.dedup();
+                if names.is_empty() {
+                    continue;
+                }
+                let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+                if let Ok(slices) = RandomSlices::from_uniform(&refs) {
+                    rack.set_random_slices(slices);
+                } else {
+                    tracing::warn!(
+                        target: "dynomite::cluster::pool",
+                        rack = rack.name(),
+                        dc = %dc_name,
+                        "random-slicing build failed; falling back to vnode for this rack"
+                    );
+                }
+            }
+        }
     }
 
     /// Walk the datacenters and choose, for each remote DC, a rack

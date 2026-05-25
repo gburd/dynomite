@@ -42,6 +42,7 @@
 //! assert!(matches!(plan, DispatchPlan::LocalDatastore));
 //! ```
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -55,6 +56,44 @@ use crate::io::mbuf::MbufPool;
 use crate::msg::{ConsistencyLevel, Msg, MsgRouting, MsgType};
 use crate::net::dispatcher::{DispatchOutcome, Dispatcher, OutboundEnvelope, ServerSink};
 use crate::net::server::OutboundRequest;
+
+/// Process-global Prometheus-friendly counter of
+/// shadow-distribution disagreements. The dispatcher bumps this
+/// counter every time the configured `distribution` and the
+/// configured `distribution_shadow` choose different peers for
+/// the same key. Exposed for both the stats endpoint and the
+/// integration test that exercises shadow mode.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::cluster::dispatch::distribution_shadow_disagreement_total;
+/// let _seen = distribution_shadow_disagreement_total();
+/// ```
+#[must_use]
+pub fn distribution_shadow_disagreement_total() -> u64 {
+    SHADOW_DISAGREEMENTS.load(Ordering::Relaxed)
+}
+
+/// Reset the shadow-disagreement counter. Used by integration
+/// tests that need a clean baseline; never called from
+/// production code.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::cluster::dispatch::reset_distribution_shadow_disagreement_total;
+/// reset_distribution_shadow_disagreement_total();
+/// ```
+pub fn reset_distribution_shadow_disagreement_total() {
+    SHADOW_DISAGREEMENTS.store(0, Ordering::Relaxed);
+}
+
+static SHADOW_DISAGREEMENTS: AtomicU64 = AtomicU64::new(0);
+
+fn bump_shadow_disagreement() {
+    SHADOW_DISAGREEMENTS.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Build the `dispatch.plan` info span and enter it. Returns the
 /// originating client request span (captured before the plan
@@ -95,6 +134,7 @@ fn map_hash(h: ConfHashType) -> HashType {
         ConfHashType::Murmur => HashType::Murmur,
         ConfHashType::Jenkins => HashType::Jenkins,
         ConfHashType::Murmur3 => HashType::Murmur3,
+        ConfHashType::Murmur3X64_64 => HashType::Murmur3X64_64,
     }
 }
 
@@ -420,6 +460,7 @@ impl ClusterDispatcher {
             return DispatchPlan::LocalDatastore;
         }
         let token = hashkit::hash(map_hash(cfg.hash), key);
+        let key_hash64 = hashkit::hash64(map_hash(cfg.hash), key);
         let bucket = crate::proto::redis::bucket_name(key);
         let bucket_type = cfg.resolve_bucket_type(bucket);
         let is_read = matches!(req.ty(), MsgType::Unknown) || req.flags().is_read;
@@ -440,7 +481,29 @@ impl ClusterDispatcher {
         // handoff is off), Down peers are filtered out as
         // before.
         let include_down = self.hinted_handoff_active() && !is_read;
-        let routable = collect_routable(&dcs, &peers, &token, include_down);
+        let routable = collect_routable(
+            &dcs,
+            &peers,
+            &token,
+            key_hash64,
+            cfg.distribution,
+            include_down,
+        );
+        if let Some(shadow) = cfg.distribution_shadow {
+            if shadow != cfg.distribution {
+                let shadow_routable =
+                    collect_routable(&dcs, &peers, &token, key_hash64, shadow, include_down);
+                if !plans_agree(&routable, &shadow_routable) {
+                    bump_shadow_disagreement();
+                    tracing::debug!(
+                        target: "dynomite::dispatch::shadow",
+                        live = cfg.distribution.as_str(),
+                        shadow = shadow.as_str(),
+                        "shadow distribution disagreed on key route"
+                    );
+                }
+            }
+        }
         if routable.is_empty() {
             self.record_no_targets_metric(cfg, consistency);
             return DispatchPlan::NoTargets;
@@ -505,16 +568,52 @@ fn cap_replicas(plan: DispatchPlan, cap: u8) -> DispatchPlan {
     }
 }
 
+fn plans_agree(a: &[(usize, usize, u32)], b: &[(usize, usize, u32)]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut a_idx: Vec<u32> = a.iter().map(|t| t.2).collect();
+    let mut b_idx: Vec<u32> = b.iter().map(|t| t.2).collect();
+    a_idx.sort_unstable();
+    b_idx.sort_unstable();
+    a_idx == b_idx
+}
+
 fn collect_routable(
     dcs: &[crate::cluster::Datacenter],
     peers: &[crate::cluster::peer::Peer],
     token: &crate::hashkit::DynToken,
+    hash64: u64,
+    distribution: crate::conf::Distribution,
     include_down: bool,
 ) -> Vec<(usize, usize, u32)> {
     let mut routable: Vec<(usize, usize, u32)> = Vec::new();
     for (dc_idx, dc) in dcs.iter().enumerate() {
         for (rack_idx, rack) in dc.racks().iter().enumerate() {
-            if let Some(peer_idx) = vnode::dispatch(rack.continuums(), token) {
+            let candidate = match (distribution, rack.random_slices()) {
+                (crate::conf::Distribution::RandomSlicing, Some(slices)) => {
+                    // Map the chosen claimant name back onto a
+                    // peer index. The slice table holds peer
+                    // pname strings (host:port) so the
+                    // resolution is a linear scan over the
+                    // rack's peer set, which is small (peers
+                    // per rack, not the whole pool).
+                    slices.claimant_for(hash64).and_then(|name| {
+                        peers.iter().find_map(|p| {
+                            if p.dc() == dc.name()
+                                && p.rack() == rack.name()
+                                && p.endpoint().pname() == name
+                            {
+                                Some(p.idx())
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                }
+                _ => vnode::dispatch(rack.continuums(), token),
+            };
+            if let Some(peer_idx) = candidate {
                 if let Some(peer) = peers.get(peer_idx as usize) {
                     let state = peer.state();
                     let accept = state.is_routable()
