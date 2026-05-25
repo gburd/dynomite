@@ -81,6 +81,12 @@ SSH_BASE_OPTS=(-o IdentitiesOnly=yes -i "$SSH_KEY"
 
 ARNOLD_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" arnold)
 NUC_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" -o ProxyJump=arnold gburd@nuc)
+# LAN-direct path to nuc, bypassing arnold's ProxyJump. Used
+# during teardown when arnold may be SIGSTOPped or restarting
+# under chaos and the proxy hop is liable to wedge. May fail if
+# floki cannot reach the nuc LAN over Tailscale subnet routing;
+# the teardown handler falls back to NUC_SSH on failure.
+NUC_DIRECT_SSH=(env SSH_AUTH_SOCK="" ssh "${SSH_BASE_OPTS[@]}" "gburd@$NUC_LAN_IP")
 # meh's user login shell is fish; route every remote command
 # through bash explicitly so the env-prefix syntax
 # (MODE='x' cmd ...) used by start_host / start_workload /
@@ -243,34 +249,80 @@ start_injector() {
 
 # ---- teardown ----
 
+# Teardown timeout-and-continue policy.
+#
+# Every remote step here is wrapped in `timeout --signal=KILL`
+# so a wedged SSH (e.g. ProxyJump hop stuck behind a
+# SIGSTOPped arnold) cannot block the next chaos mode. A real
+# teardown takes only seconds; the budgets below are generous.
+#
+#   step                   budget   on-timeout
+#   ---------------------  -------  -----------------------------
+#   dc-floki kill+cleanup  60s      WARN; continue to next host
+#   dc-arnold kill+cleanup 60s      WARN; continue to next host
+#   dc-nuc via direct LAN  30s      try ProxyJump fallback
+#   dc-nuc via ProxyJump   60s      WARN; continue to next host
+#   rsync arnold logs      60s      WARN; logs may be partial
+#   rsync nuc logs         60s      WARN; logs may be partial
+#
+# Per-host teardown failures are NON-fatal. The coordinator's
+# only job here is to free the next mode in the pass-3 sequence.
 teardown() {
     log "==> TEARDOWN"
-    for spec in \
-        "dc-floki:bash:bash -lc" \
-        "dc-arnold:bash:${ARNOLD_SSH[*]}" \
-        "dc-nuc:bash:${NUC_SSH[*]}"; do
-        IFS=: read -r label _ runner <<<"$spec"
-        log "  teardown $label"
-        $runner "for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid; do \
-            [ -f \$f ] && pid=\$(cat \$f) && kill -TERM \$pid 2>/dev/null; \
-        done; sleep 2; \
-        for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid /scratch/dynomite-chaos/run/dynomited.pid; do \
-            [ -f \$f ] && pid=\$(cat \$f) && kill -KILL \$pid 2>/dev/null; \
-        done; \
-        if [ -f /scratch/dynomite-chaos/run/redis.pid ]; then \
-            id=\$(cat /scratch/dynomite-chaos/run/redis.pid); \
-            case \$id in \
-                container:*) (command -v podman >/dev/null && podman rm -f \${id#container:}) || (command -v docker >/dev/null && docker rm -f \${id#container:}); ;; \
-                *) kill -KILL \$id 2>/dev/null; ;; \
-            esac; \
-        fi; \
-        true" >> "$LOCAL_LOGS/$label-teardown.log" 2>&1 || true
-    done
+
+    # Single shell snippet executed on each host. Single-quoted
+    # so $f and $(cat ...) are evaluated on the remote side.
+    # shellcheck disable=SC2016
+    local remote_cmd='for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid; do
+        [ -f $f ] && pid=$(cat $f) && kill -TERM $pid 2>/dev/null;
+    done; sleep 2;
+    for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid /scratch/dynomite-chaos/run/dynomited.pid; do
+        [ -f $f ] && pid=$(cat $f) && kill -KILL $pid 2>/dev/null;
+    done;
+    if [ -f /scratch/dynomite-chaos/run/redis.pid ]; then
+        id=$(cat /scratch/dynomite-chaos/run/redis.pid);
+        case $id in
+            container:*) (command -v podman >/dev/null && podman rm -f ${id#container:}) || (command -v docker >/dev/null && docker rm -f ${id#container:}); ;;
+            *) kill -KILL $id 2>/dev/null; ;;
+        esac;
+    fi;
+    true'
+
+    log "  teardown dc-floki"
+    timeout --signal=KILL 60s bash -lc "$remote_cmd" \
+        >> "$LOCAL_LOGS/dc-floki-teardown.log" 2>&1 \
+        || log "  WARN dc-floki teardown timed out after 60s; continuing"
+
+    log "  teardown dc-arnold"
+    timeout --signal=KILL 60s "${ARNOLD_SSH[@]}" "$remote_cmd" \
+        >> "$LOCAL_LOGS/dc-arnold-teardown.log" 2>&1 \
+        || log "  WARN dc-arnold teardown timed out after 60s; continuing"
+
+    # nuc: try LAN-direct first because the normal ProxyJump
+    # route may be wedged when arnold is mid-chaos-restart.
+    # Fall back to ProxyJump if the LAN is not reachable from
+    # floki over Tailscale subnet routing.
+    log "  teardown dc-nuc"
+    if timeout --signal=KILL 30s "${NUC_DIRECT_SSH[@]}" "$remote_cmd" \
+            >> "$LOCAL_LOGS/dc-nuc-teardown.log" 2>&1; then
+        log "    dc-nuc teardown via direct SSH"
+    elif timeout --signal=KILL 60s "${NUC_SSH[@]}" "$remote_cmd" \
+            >> "$LOCAL_LOGS/dc-nuc-teardown.log" 2>&1; then
+        log "    dc-nuc teardown via ProxyJump (direct failed)"
+    else
+        log "  WARN dc-nuc teardown timed out via both direct and ProxyJump; continuing"
+    fi
 
     log "  rsync arnold logs"
-    rsync -az -e "$ARNOLD_RSYNC_E" arnold:/scratch/dynomite-chaos/logs/ "$LOCAL_LOGS/arnold-logs/" || true
+    timeout --signal=KILL 60s \
+        rsync -az -e "$ARNOLD_RSYNC_E" \
+            arnold:/scratch/dynomite-chaos/logs/ "$LOCAL_LOGS/arnold-logs/" \
+        || log "  WARN arnold log rsync timed out after 60s; continuing"
     log "  rsync nuc logs"
-    rsync -az -e "$NUC_RSYNC_E" gburd@nuc:/scratch/dynomite-chaos/logs/ "$LOCAL_LOGS/nuc-logs/" || true
+    timeout --signal=KILL 60s \
+        rsync -az -e "$NUC_RSYNC_E" \
+            gburd@nuc:/scratch/dynomite-chaos/logs/ "$LOCAL_LOGS/nuc-logs/" \
+        || log "  WARN nuc log rsync timed out after 60s; continuing"
     log "  copy floki logs"
     cp -r /scratch/dynomite-chaos/logs "$LOCAL_LOGS/floki-logs" 2>/dev/null || true
 
