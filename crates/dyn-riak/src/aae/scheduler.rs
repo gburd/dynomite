@@ -180,6 +180,7 @@ pub struct Scheduler<C: Clock> {
     next_due: Mutex<Instant>,
     cursor: Mutex<usize>,
     plan: Mutex<Option<SweepPlan>>,
+    next_snapshot_due: Mutex<Instant>,
 }
 
 impl<C: Clock> Scheduler<C> {
@@ -190,12 +191,14 @@ impl<C: Clock> Scheduler<C> {
     #[must_use]
     pub fn new(cfg: ConfAae, clock: Arc<C>) -> Self {
         let now = clock.now();
+        let snapshot_due = now + Duration::from_secs(cfg.snapshot_interval_seconds);
         Self {
             cfg,
             clock,
             next_due: Mutex::new(now),
             cursor: Mutex::new(0),
             plan: Mutex::new(None),
+            next_snapshot_due: Mutex::new(snapshot_due),
         }
     }
 
@@ -241,6 +244,38 @@ impl<C: Clock> Scheduler<C> {
         *due = now + self.cfg.segment_interval();
         Some(tick)
     }
+
+    /// Whether a snapshot is due now. Used by the AAE
+    /// driver to decide whether to call
+    /// [`crate::aae::tictac::Tree::save_snapshot`] on the
+    /// current tick. Calling [`Scheduler::mark_snapshot_taken`]
+    /// resets the cadence; if the caller does not call it,
+    /// `snapshot_due` continues to return `true` so a
+    /// transient save failure is retried on every poll.
+    pub fn snapshot_due(&self) -> bool {
+        if !self.cfg.enabled {
+            return false;
+        }
+        let now = self.clock.now();
+        let due = self
+            .next_snapshot_due
+            .lock()
+            .expect("snapshot_due mutex poisoned");
+        now >= *due
+    }
+
+    /// Reset the snapshot cadence. The driver calls this
+    /// after a successful snapshot save; the next snapshot
+    /// will not be due until
+    /// `now + snapshot_interval_seconds`.
+    pub fn mark_snapshot_taken(&self) {
+        let now = self.clock.now();
+        let mut due = self
+            .next_snapshot_due
+            .lock()
+            .expect("snapshot_due mutex poisoned");
+        *due = now + Duration::from_secs(self.cfg.snapshot_interval_seconds);
+    }
 }
 
 #[cfg(test)]
@@ -255,6 +290,7 @@ mod tests {
             n_time_buckets: 4,
             n_segments: 32,
             time_window_seconds: 60,
+            ..ConfAae::default()
         }
     }
 
@@ -320,5 +356,44 @@ mod tests {
         }
         // Cursor should now be back at 0.
         assert_eq!(sched.cursor(), 0);
+    }
+
+    #[test]
+    fn snapshot_due_fires_on_configured_cadence() {
+        let clock = Arc::new(MockClock::new());
+        let mut c = cfg();
+        c.snapshot_interval_seconds = 300;
+        let sched: Scheduler<MockClock> = Scheduler::new(c, clock.clone());
+
+        // Right after construction the next snapshot is
+        // 300s out; nothing is due yet.
+        assert!(!sched.snapshot_due());
+
+        // Advancing a hair under 300s still not due.
+        clock.advance(Duration::from_secs(299));
+        assert!(!sched.snapshot_due());
+
+        // At 300s the snapshot is due.
+        clock.advance(Duration::from_secs(1));
+        assert!(sched.snapshot_due());
+
+        // mark_snapshot_taken resets the cadence.
+        sched.mark_snapshot_taken();
+        assert!(!sched.snapshot_due());
+
+        // A second window must elapse before the next is due.
+        clock.advance(Duration::from_secs(301));
+        assert!(sched.snapshot_due());
+    }
+
+    #[test]
+    fn snapshot_due_returns_false_when_disabled() {
+        let clock = Arc::new(MockClock::new());
+        let mut c = cfg();
+        c.enabled = false;
+        c.snapshot_interval_seconds = 1;
+        let sched: Scheduler<MockClock> = Scheduler::new(c, clock.clone());
+        clock.advance(Duration::from_secs(3600));
+        assert!(!sched.snapshot_due());
     }
 }
