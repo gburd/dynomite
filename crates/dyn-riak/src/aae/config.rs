@@ -16,6 +16,7 @@
 //! assert!(cfg.validate().is_ok());
 //! ```
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Default cadence for a full sweep over every peer pair (24h).
@@ -44,6 +45,16 @@ pub const MAX_SEGMENTS: u32 = 1 << 20;
 /// Hard ceiling on the number of time-buckets per tree.
 pub const MAX_TIME_BUCKETS: u32 = 1 << 12;
 
+/// Default cadence at which the AAE driver writes a fresh
+/// snapshot of its tree to disk (5 minutes).
+pub const DEFAULT_SNAPSHOT_INTERVAL_SECONDS: u64 = 5 * 60;
+
+/// Default directory under which the AAE snapshot file lives.
+pub const DEFAULT_AAE_STATE_DIR: &str = "/var/lib/dynomite/aae";
+
+/// Filename of the AAE snapshot under [`ConfAae::aae_state_dir`].
+pub const SNAPSHOT_FILE_NAME: &str = "tree.snapshot";
+
 /// Operator-facing AAE configuration.
 ///
 /// # Examples
@@ -57,6 +68,7 @@ pub const MAX_TIME_BUCKETS: u32 = 1 << 12;
 ///     n_time_buckets: 12,
 ///     n_segments: 512,
 ///     time_window_seconds: 60 * 60,
+///     ..ConfAae::default()
 /// };
 /// assert!(cfg.validate().is_ok());
 /// ```
@@ -74,6 +86,15 @@ pub struct ConfAae {
     pub n_segments: u32,
     /// Width of one time bucket, in seconds.
     pub time_window_seconds: u64,
+    /// Cadence at which the AAE driver persists its tree to
+    /// disk. The snapshot is consumed on the next process
+    /// start to avoid a full datastore rescan; see
+    /// [`crate::aae::persist`].
+    pub snapshot_interval_seconds: u64,
+    /// Directory holding the AAE state files (currently the
+    /// snapshot file). Created on first save with mode
+    /// `0700` on Unix.
+    pub aae_state_dir: PathBuf,
 }
 
 impl Default for ConfAae {
@@ -85,6 +106,8 @@ impl Default for ConfAae {
             n_time_buckets: DEFAULT_TIME_BUCKETS,
             n_segments: DEFAULT_SEGMENTS,
             time_window_seconds: DEFAULT_TIME_WINDOW_SECONDS,
+            snapshot_interval_seconds: DEFAULT_SNAPSHOT_INTERVAL_SECONDS,
+            aae_state_dir: PathBuf::from(DEFAULT_AAE_STATE_DIR),
         }
     }
 }
@@ -132,6 +155,9 @@ impl ConfAae {
                 self.segment_interval_seconds, self.full_sweep_interval_seconds
             ));
         }
+        if self.snapshot_interval_seconds == 0 {
+            return Err("snapshot_interval_seconds must be > 0".to_string());
+        }
         Ok(())
     }
 
@@ -145,6 +171,18 @@ impl ConfAae {
     #[must_use]
     pub fn full_sweep_interval(&self) -> Duration {
         Duration::from_secs(self.full_sweep_interval_seconds)
+    }
+
+    /// The configured snapshot cadence as a [`Duration`].
+    #[must_use]
+    pub fn snapshot_interval(&self) -> Duration {
+        Duration::from_secs(self.snapshot_interval_seconds)
+    }
+
+    /// Path where the snapshot file is written and read from.
+    #[must_use]
+    pub fn snapshot_path(&self) -> PathBuf {
+        self.aae_state_dir.join(SNAPSHOT_FILE_NAME)
     }
 }
 

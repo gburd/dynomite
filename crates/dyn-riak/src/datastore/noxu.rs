@@ -437,6 +437,59 @@ impl NoxuDatastore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+
+    /// Walk every primary K/V record in storage order,
+    /// calling `f` once per `(bucket, key, value)` triple.
+    ///
+    /// Used by the AAE rebuild path to construct the merkle
+    /// tree directly from the storage cursor instead of
+    /// looping through the public `Datastore` API. Walking the
+    /// underlying cursor in storage order is cache-friendlier
+    /// than re-issuing one `riak_get` per key: each step is a
+    /// single B-tree advance, no per-key MVCC handshake, and
+    /// no per-key lock toggle.
+    ///
+    /// Forward 2i and reverse 2i records are skipped
+    /// transparently; the callback only sees primary records.
+    /// The callback returns `Result<(), NoxuDatastoreError>`
+    /// so it can short-circuit on its own errors; the iteration
+    /// stops at the first error and returns it to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces the underlying [`NoxuError`] for the cursor
+    /// open / advance / close steps, plus any error the
+    /// caller's `f` returns.
+    pub fn fold_primary<F>(&self, mut f: F) -> Result<(), NoxuDatastoreError>
+    where
+        F: FnMut(&[u8], &[u8], &[u8]) -> Result<(), NoxuDatastoreError>,
+    {
+        let db = self.lock_db();
+        full_scan(&db, |full_key, value| {
+            // The three record kinds share the database
+            // keyspace. Filter for the primary prefix here
+            // rather than seeding the cursor at the prefix:
+            // SearchGte over a small prefix can interact
+            // poorly with Noxu's BIN-prefix compression on
+            // a freshly-rebalanced tree (debug-only assert
+            // in noxu_tree::tree::compress_key). A full
+            // first-to-last walk avoids the seek entirely.
+            if !full_key.starts_with(PRIMARY_TAG) {
+                return Ok(());
+            }
+            let suffix = &full_key[PRIMARY_TAG.len()..];
+            let Some(sep_idx) = suffix.iter().position(|b| *b == SEP) else {
+                // Malformed key; skip rather than abort the
+                // sweep so a single bad record cannot stall
+                // a full AAE rebuild.
+                return Ok(());
+            };
+            let (bucket, rest) = suffix.split_at(sep_idx);
+            // rest starts with the SEP byte; advance past it.
+            let key = &rest[1..];
+            f(bucket, key, value)
+        })
+    }
 }
 
 impl Datastore for NoxuDatastore {
@@ -680,6 +733,32 @@ where
         }
         f(k, value.data())?;
         // Advance to the next record.
+        status = cursor.get(&mut key, &mut value, Get::Next, None)?;
+    }
+    let _ = cursor.close();
+    Ok(())
+}
+
+/// Iterate every record in the database, in storage order,
+/// calling `f` once per record. Used by [`NoxuDatastore::
+/// fold_primary`]; the callback is responsible for the
+/// per-record prefix filter.
+///
+/// We prefer this over [`scan_prefix`] for full-database walks
+/// because the SearchGte seek that opens [`scan_prefix`] can
+/// trip a debug-only assert in `noxu-tree`'s BIN-prefix
+/// compression on certain tree shapes. A bare `Get::First`
+/// followed by `Get::Next` advances avoids the seek path.
+fn full_scan<F>(db: &Database, mut f: F) -> Result<(), NoxuDatastoreError>
+where
+    F: FnMut(&[u8], &[u8]) -> Result<(), NoxuDatastoreError>,
+{
+    let mut cursor: Cursor = db.open_cursor(None, Some(&CursorConfig::new()))?;
+    let mut key = DatabaseEntry::new();
+    let mut value = DatabaseEntry::new();
+    let mut status = cursor.get(&mut key, &mut value, Get::First, None)?;
+    while matches!(status, OperationStatus::Success) {
+        f(key.data(), value.data())?;
         status = cursor.get(&mut key, &mut value, Get::Next, None)?;
     }
     let _ = cursor.close();
