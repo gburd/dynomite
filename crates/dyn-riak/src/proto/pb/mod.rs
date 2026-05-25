@@ -82,3 +82,11 @@ pub use crate::proto::pb::messages::{
     DynRpbListPeersReq, DynRpbListPeersResp, DynRpbPeerInfo, DynRpbStagedChange,
     DYN_STAGED_CHANGE_ADD, DYN_STAGED_CHANGE_REMOVE,
 };
+
+// Bucket-property selectors -- bucketonly keyfun and walk-N-
+// successors replication slice. Re-exported below the prior block
+// so parallel branches do not conflict.
+pub use crate::proto::pb::messages::{
+    CHASH_KEYFUN_BUCKETONLY, CHASH_KEYFUN_CUSTOM, CHASH_KEYFUN_STD,
+    REPLICATION_STRATEGY_SUCCESSORS, REPLICATION_STRATEGY_TOPOLOGY,
+};

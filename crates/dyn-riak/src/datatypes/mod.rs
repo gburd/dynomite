@@ -53,6 +53,11 @@ pub mod vclock;
 pub mod hll;
 pub mod map;
 
+// Pre-hash key shaping (per-bucket-property `chash_keyfun`)
+// added by the bucket-property knobs slice. Re-exported below
+// the prior block so parallel branches do not conflict.
+pub mod keyfun;
+
 use std::cmp::Ordering;
 
 pub use crate::datatypes::counter::PnCounter;
@@ -63,6 +68,8 @@ pub use crate::datatypes::vclock::{Vclock, VclockOrder};
 
 pub use crate::datatypes::hll::HyperLogLog;
 pub use crate::datatypes::map::{FieldKey, FieldType, FieldValue, Map, MapOp, NestedOp};
+
+pub use crate::datatypes::keyfun::{KeyFun, KeyFunError};
 
 /// Identifier for a replica that produces CRDT operations.
 ///
