@@ -105,13 +105,24 @@ async fn mapred_via_pbc() {
     let frame = read_frame(&mut r).await.expect("read");
     assert_eq!(frame.code, MessageCode::MapRedResp.as_u8());
     let resp = RpbMapRedResp::decode(frame.body.as_slice()).expect("decode");
-    assert_eq!(resp.done, Some(true));
+    // Streaming PBC contract: the first response frame carries
+    // the phase-0 batch and `done = Some(false)`; the terminator
+    // frame is read separately below.
+    assert_eq!(resp.done, Some(false));
+    assert_eq!(resp.phase, Some(1));
     let body = resp.response.expect("response present");
     let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
     let arr = parsed.as_array().expect("array");
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["phase"], 1);
-    assert_eq!(arr[0]["value"], serde_json::json!(4));
+    assert_eq!(arr[0]["data"], serde_json::json!([4]));
+
+    let term = read_frame(&mut r).await.expect("read terminator");
+    assert_eq!(term.code, MessageCode::MapRedResp.as_u8());
+    let term_resp = RpbMapRedResp::decode(term.body.as_slice()).expect("decode terminator");
+    assert_eq!(term_resp.done, Some(true));
+    assert!(term_resp.response.is_none());
+    assert!(term_resp.phase.is_none());
 
     drop(r);
     drop(w);
