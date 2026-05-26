@@ -465,18 +465,15 @@ impl NoxuDatastore {
         F: FnMut(&[u8], &[u8], &[u8]) -> Result<(), NoxuDatastoreError>,
     {
         let db = self.lock_db();
-        full_scan(&db, |full_key, value| {
-            // The three record kinds share the database
-            // keyspace. Filter for the primary prefix here
-            // rather than seeding the cursor at the prefix:
-            // SearchGte over a small prefix can interact
-            // poorly with Noxu's BIN-prefix compression on
-            // a freshly-rebalanced tree (debug-only assert
-            // in noxu_tree::tree::compress_key). A full
-            // first-to-last walk avoids the seek entirely.
-            if !full_key.starts_with(PRIMARY_TAG) {
-                return Ok(());
-            }
+        // Seek straight to the primary-tag prefix; everything
+        // before it is bookkeeping (forward / reverse 2i
+        // records) which the AAE rebuild does not need.
+        // Earlier versions of Noxu (pre-v1.5.0) panicked in
+        // `noxu_tree::tree::compress_key` when SearchGte was
+        // seeded at a 2-byte prefix on a many-key tree;
+        // commit `d76b755` fixed that, so the cursor seek is
+        // safe again.
+        scan_prefix(&db, PRIMARY_TAG, |full_key, value| {
             let suffix = &full_key[PRIMARY_TAG.len()..];
             let Some(sep_idx) = suffix.iter().position(|b| *b == SEP) else {
                 // Malformed key; skip rather than abort the
@@ -739,35 +736,9 @@ where
     Ok(())
 }
 
-/// Iterate every record in the database, in storage order,
-/// calling `f` once per record. Used by [`NoxuDatastore::
-/// fold_primary`]; the callback is responsible for the
-/// per-record prefix filter.
-///
-/// We prefer this over [`scan_prefix`] for full-database walks
-/// because the SearchGte seek that opens [`scan_prefix`] can
-/// trip a debug-only assert in `noxu-tree`'s BIN-prefix
-/// compression on certain tree shapes. A bare `Get::First`
-/// followed by `Get::Next` advances avoids the seek path.
-fn full_scan<F>(db: &Database, mut f: F) -> Result<(), NoxuDatastoreError>
-where
-    F: FnMut(&[u8], &[u8]) -> Result<(), NoxuDatastoreError>,
-{
-    let mut cursor: Cursor = db.open_cursor(None, Some(&CursorConfig::new()))?;
-    let mut key = DatabaseEntry::new();
-    let mut value = DatabaseEntry::new();
-    let mut status = cursor.get(&mut key, &mut value, Get::First, None)?;
-    while matches!(status, OperationStatus::Success) {
-        f(key.data(), value.data())?;
-        status = cursor.get(&mut key, &mut value, Get::Next, None)?;
-    }
-    let _ = cursor.close();
-    Ok(())
-}
-
-// Re-export the encoding helper so the integration test can
-// construct expected wire-form values without re-deriving the
-// schema.
+/// Re-export the encoding helper so the integration test can
+/// construct expected wire-form values without re-deriving the
+/// schema.
 #[doc(hidden)]
 pub fn encode_index_value_for_test(
     index_name: &[u8],
