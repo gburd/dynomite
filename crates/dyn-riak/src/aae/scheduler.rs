@@ -31,7 +31,12 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use dynomite::hashkit::DynToken;
+
 use crate::aae::config::ConfAae;
+use crate::aae::exchange::{Divergence, Exchange, ExchangeError, PeerView};
+use crate::aae::metrics::AaeMetrics;
+use crate::aae::tictac::Tree;
 
 /// Pluggable clock. Provided so tests can advance time
 /// deterministically without sleeping.
@@ -98,6 +103,14 @@ pub struct SweepTick {
     pub peer_idx: u32,
     /// Top-level time bucket the tick will exercise.
     pub time_bucket: u32,
+    /// Hex representation of the token this tick targets.
+    /// `None` when the plan was built per-peer; `Some` when it
+    /// was built per-token via
+    /// [`SweepPlan::new_per_token`]. The hex encoding is the
+    /// same one [`DynToken::to_hex`] returns and round-trips
+    /// via [`dynomite::hashkit::parse_token`] when prefixed
+    /// with `0x`.
+    pub token_hex: Option<String>,
 }
 
 /// Materialised plan for one full sweep.
@@ -142,6 +155,74 @@ impl SweepPlan {
             ticks.push(SweepTick {
                 peer_idx: peer,
                 time_bucket: bucket,
+                token_hex: None,
+            });
+        }
+        Self { ticks }
+    }
+
+    /// Per-token plan over the supplied `(peer_idx, tokens)`
+    /// pairs.
+    ///
+    /// Each peer that owns N tokens contributes
+    /// `N * n_time_buckets` ticks; the resulting plan walks
+    /// `(peer, token, time_bucket)` triples in round-robin
+    /// order so every peer sees a slice of progress on every
+    /// rotation. The total tick count is bounded by the
+    /// configured cadence envelope:
+    /// `ceil(full_sweep / segment_interval)`. Operators who
+    /// want a single sweep to cover every triple must size
+    /// the envelope accordingly.
+    ///
+    /// Tokens are recorded as their hex representation
+    /// ([`DynToken::to_hex`]) so the plan stays cheap to
+    /// clone and trivially serialisable through metrics and
+    /// admin RPCs.
+    #[must_use]
+    pub fn new_per_token(
+        peers_with_tokens: &[(u32, Vec<DynToken>)],
+        n_time_buckets: u32,
+        cfg: &ConfAae,
+    ) -> Self {
+        let total_ticks = cfg
+            .full_sweep_interval_seconds
+            .div_ceil(cfg.segment_interval_seconds.max(1));
+        let total_ticks = usize::try_from(total_ticks).unwrap_or(usize::MAX);
+
+        // Flatten to a list of (peer, token_hex) pairs so the
+        // round-robin walk visits every peer in turn before
+        // returning to the first peer's next token.
+        let mut peer_token_pairs: Vec<(u32, String)> = Vec::new();
+        let max_tokens = peers_with_tokens
+            .iter()
+            .map(|(_, ts)| ts.len())
+            .max()
+            .unwrap_or(0);
+        for ti in 0..max_tokens {
+            for (peer, tokens) in peers_with_tokens {
+                if let Some(t) = tokens.get(ti) {
+                    peer_token_pairs.push((*peer, t.to_hex()));
+                }
+            }
+        }
+
+        let triple_count = peer_token_pairs
+            .len()
+            .saturating_mul(n_time_buckets as usize);
+        if triple_count == 0 {
+            return Self { ticks: Vec::new() };
+        }
+
+        let envelope = total_ticks.min(triple_count);
+        let mut ticks = Vec::with_capacity(envelope);
+        for i in 0..envelope {
+            let pair = &peer_token_pairs[i % peer_token_pairs.len()];
+            let bucket = u32::try_from((i / peer_token_pairs.len()) % (n_time_buckets as usize))
+                .unwrap_or(0);
+            ticks.push(SweepTick {
+                peer_idx: pair.0,
+                time_bucket: bucket,
+                token_hex: Some(pair.1.clone()),
             });
         }
         Self { ticks }
@@ -181,6 +262,7 @@ pub struct Scheduler<C: Clock> {
     cursor: Mutex<usize>,
     plan: Mutex<Option<SweepPlan>>,
     next_snapshot_due: Mutex<Instant>,
+    metrics: Mutex<Option<Arc<AaeMetrics>>>,
 }
 
 impl<C: Clock> Scheduler<C> {
@@ -199,6 +281,51 @@ impl<C: Clock> Scheduler<C> {
             cursor: Mutex::new(0),
             plan: Mutex::new(None),
             next_snapshot_due: Mutex::new(snapshot_due),
+            metrics: Mutex::new(None),
+        }
+    }
+
+    /// Attach an [`AaeMetrics`] handle. The handle is a
+    /// shared `Arc`; the same accumulator is fed by every
+    /// scheduler in a multi-peer driver. The driver calls
+    /// [`Scheduler::observe_exchange_attempt`],
+    /// [`Scheduler::observe_exchange_success`],
+    /// [`Scheduler::observe_divergent_keys`] etc. from
+    /// inside the per-tick hot path.
+    pub fn install_metrics(&self, metrics: Arc<AaeMetrics>) {
+        let mut g = self.metrics.lock().expect("metrics mutex poisoned");
+        *g = Some(metrics);
+    }
+
+    /// Borrow the installed metrics handle.
+    #[must_use]
+    pub fn metrics(&self) -> Option<Arc<AaeMetrics>> {
+        self.metrics.lock().expect("metrics mutex poisoned").clone()
+    }
+
+    /// Increment `aae_exchange_attempts_total` for the given
+    /// peer. No-op when no metrics handle is installed.
+    pub fn observe_exchange_attempt(&self, peer_idx: u32, dc: &str, rack: &str) {
+        if let Some(m) = self.metrics() {
+            m.record_exchange_attempt(peer_idx, dc, rack);
+        }
+    }
+
+    /// Increment `aae_exchange_success_total` for the given
+    /// peer. No-op when no metrics handle is installed.
+    pub fn observe_exchange_success(&self, peer_idx: u32, dc: &str, rack: &str) {
+        if let Some(m) = self.metrics() {
+            m.record_exchange_success(peer_idx, dc, rack);
+        }
+    }
+
+    /// Add `count` divergent keys to
+    /// `aae_exchange_divergent_keys_total` for the given
+    /// peer. No-op when no metrics handle is installed or
+    /// when `count == 0`.
+    pub fn observe_divergent_keys(&self, peer_idx: u32, dc: &str, rack: &str, count: u64) {
+        if let Some(m) = self.metrics() {
+            m.record_divergent_keys(peer_idx, dc, rack, count);
         }
     }
 
@@ -275,6 +402,40 @@ impl<C: Clock> Scheduler<C> {
             .lock()
             .expect("snapshot_due mutex poisoned");
         *due = now + Duration::from_secs(self.cfg.snapshot_interval_seconds);
+    }
+
+    /// Run one [`Exchange`] per token in `tokens` against
+    /// `remote`, accumulating the divergences each token
+    /// produces. The local [`Tree`] is shared across tokens;
+    /// per-token semantics are about cadence and reporting,
+    /// not tree partitioning. The returned vector pairs each
+    /// token's hex representation with the divergences it
+    /// surfaced, so callers can route repairs and metrics
+    /// per token.
+    ///
+    /// Backward-compat: this method runs whether or not
+    /// [`ConfAae::per_token_exchange`] is set; the config
+    /// flag governs which sweep plan the operator installs,
+    /// not whether per-token driving is available.
+    ///
+    /// # Errors
+    ///
+    /// Forwards the first [`ExchangeError`] surfaced by any
+    /// token's exchange. The remaining tokens are not run on
+    /// error so an operator can retry the failed slice
+    /// without re-doing the successful prefix.
+    pub fn exchange_per_token<V: PeerView + Clone>(
+        local: &Tree,
+        remote: &V,
+        tokens: &[DynToken],
+    ) -> Result<Vec<(String, Vec<Divergence>)>, ExchangeError> {
+        let mut out = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            let exch = Exchange::new(local, remote.clone());
+            let divs = exch.run()?;
+            out.push((token.to_hex(), divs));
+        }
+        Ok(out)
     }
 }
 
@@ -395,5 +556,136 @@ mod tests {
         let sched: Scheduler<MockClock> = Scheduler::new(c, clock.clone());
         clock.advance(Duration::from_secs(3600));
         assert!(!sched.snapshot_due());
+    }
+
+    #[test]
+    fn per_token_plan_emits_one_tick_per_triple() {
+        // Two peers, one with two tokens, the other with one.
+        let peers = vec![
+            (1u32, vec![DynToken::from_u32(100), DynToken::from_u32(200)]),
+            (2u32, vec![DynToken::from_u32(300)]),
+        ];
+        let mut c = cfg();
+        // Generous envelope so the plan is not truncated.
+        c.full_sweep_interval_seconds = 60 * 60;
+        c.segment_interval_seconds = 60;
+        let plan = SweepPlan::new_per_token(&peers, 4, &c);
+
+        // Total triples: peer1*tok0 + peer2*tok0 + peer1*tok1 = 3 unique
+        // (peer, token) pairs * 4 buckets = 12 triples.
+        assert_eq!(plan.len(), 12);
+        for tick in plan.ticks() {
+            assert!(tick.token_hex.is_some(), "per-token plan must tag tokens");
+        }
+        // Round-robin: first three ticks are bucket 0 across peers.
+        assert_eq!(plan.ticks()[0].time_bucket, 0);
+        assert_eq!(plan.ticks()[1].time_bucket, 0);
+        assert_eq!(plan.ticks()[2].time_bucket, 0);
+        // Tick 3 advances to bucket 1.
+        assert_eq!(plan.ticks()[3].time_bucket, 1);
+    }
+
+    #[test]
+    fn per_token_plan_handles_no_peers() {
+        let plan = SweepPlan::new_per_token(&[], 4, &cfg());
+        assert!(plan.is_empty());
+    }
+
+    #[test]
+    fn per_token_plan_handles_peers_with_no_tokens() {
+        let plan = SweepPlan::new_per_token(&[(1u32, Vec::new())], 4, &cfg());
+        assert!(plan.is_empty());
+    }
+
+    #[test]
+    fn per_token_plan_token_hex_roundtrips() {
+        let peers = vec![(7u32, vec![DynToken::from_u32(0xdead)])];
+        let plan = SweepPlan::new_per_token(&peers, 1, &cfg());
+        let hex = plan.ticks()[0].token_hex.as_ref().unwrap();
+        assert_eq!(hex, "0000dead");
+    }
+
+    #[test]
+    fn exchange_per_token_runs_one_exchange_per_token() {
+        use crate::aae::exchange::LocalPeerView;
+        use crate::aae::tictac::{Tree, TreeShape};
+        let shape = TreeShape {
+            n_time_buckets: 2,
+            n_segments: 16,
+            time_window_seconds: 60,
+        };
+        let mut a = Tree::new(shape);
+        let mut b = Tree::new(shape);
+        for i in 0..32u32 {
+            let k = format!("k{i}");
+            a.insert(b"users", k.as_bytes(), b"vc1", 0);
+            b.insert(b"users", k.as_bytes(), b"vc1", 0);
+        }
+        // Identical trees: zero divergences across every token.
+        let view = LocalPeerView::new(&b);
+        let tokens = vec![DynToken::from_u32(1), DynToken::from_u32(2)];
+        let pairs =
+            Scheduler::<MockClock>::exchange_per_token(&a, &view, &tokens).expect("exchange");
+        assert_eq!(pairs.len(), 2);
+        for (hex, divs) in &pairs {
+            assert!(!hex.is_empty());
+            assert!(divs.is_empty(), "identical trees must not diverge");
+        }
+    }
+
+    #[test]
+    fn exchange_per_token_surfaces_divergence() {
+        use crate::aae::exchange::LocalPeerView;
+        use crate::aae::tictac::{Tree, TreeShape};
+        let shape = TreeShape {
+            n_time_buckets: 2,
+            n_segments: 16,
+            time_window_seconds: 60,
+        };
+        let mut a = Tree::new(shape);
+        let b = Tree::new(shape);
+        a.insert(b"users", b"alice", b"vc1", 0);
+        // b is missing alice; per-token loop must report the
+        // local-only entry on every token (the tree is shared
+        // across tokens for now).
+        let view = LocalPeerView::new(&b);
+        let tokens = vec![DynToken::from_u32(7)];
+        let pairs =
+            Scheduler::<MockClock>::exchange_per_token(&a, &view, &tokens).expect("exchange");
+        assert_eq!(pairs.len(), 1);
+        let (_hex, divs) = &pairs[0];
+        assert!(
+            divs.iter()
+                .any(|d| d.local_only.iter().any(|e| e.key == b"alice")),
+            "alice must surface as local-only"
+        );
+    }
+
+    #[test]
+    fn install_metrics_routes_observations_to_handle() {
+        use crate::aae::metrics::AaeMetrics;
+        let clock = Arc::new(MockClock::new());
+        let sched: Scheduler<MockClock> = Scheduler::new(cfg(), clock);
+        let m = Arc::new(AaeMetrics::new());
+        sched.install_metrics(Arc::clone(&m));
+        sched.observe_exchange_attempt(3, "dc1", "rA");
+        sched.observe_exchange_success(3, "dc1", "rA");
+        sched.observe_divergent_keys(3, "dc1", "rA", 5);
+        let snap = m.snapshot();
+        assert_eq!(snap.exchange_attempts.len(), 1);
+        assert_eq!(snap.exchange_attempts[0].count, 1);
+        assert_eq!(snap.exchange_success.len(), 1);
+        assert_eq!(snap.divergent_keys[0].count, 5);
+    }
+
+    #[test]
+    fn observations_without_metrics_handle_are_noops() {
+        let clock = Arc::new(MockClock::new());
+        let sched: Scheduler<MockClock> = Scheduler::new(cfg(), clock);
+        // No install_metrics call. Observations must not panic.
+        sched.observe_exchange_attempt(0, "dc1", "rA");
+        sched.observe_exchange_success(0, "dc1", "rA");
+        sched.observe_divergent_keys(0, "dc1", "rA", 7);
+        assert!(sched.metrics().is_none());
     }
 }

@@ -76,6 +76,10 @@ pub use crate::server::{handle_conn_with_admin, serve_pbc_tls_with_admin, serve_
 // not conflict.
 pub use crate::server::{handle_conn_with_hooks, serve_pbc_with_routing};
 
+// AAE-status entry points -- AAE R5 slice. Re-exported below
+// the prior block so parallel branches do not conflict.
+pub use crate::server::{handle_conn_with_aae_status, serve_pbc_with_aae_status};
+
 pub mod aae;
 pub mod datatypes;
 

@@ -840,6 +840,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "noxu-db",
+ "parking_lot",
  "prost",
  "rcgen",
  "rustls",
