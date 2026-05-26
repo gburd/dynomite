@@ -260,3 +260,194 @@ driver produces traffic with at least one successful operation.
 See the journal entry
 `docs/journal/2026-05-24-chaos-multi-mode.md` for the smoke
 results from the addition of `meh` and the multi-mode work.
+
+## Fault library
+
+The chaos injector ships four families of failure modes,
+selected per pass via the `MODE_FAULTS` environment variable
+on `coordinator.sh`:
+
+```bash
+MODE_FAULTS=process,network,clock,disk \
+  scripts/chaos-multi-host/coordinator.sh
+```
+
+When `MODE_FAULTS` is unset (the default) the injector runs the
+legacy three-timer process-only schedule unchanged, byte-for-
+byte identical to the pre-2026-05-26 behaviour. Setting the env
+var explicitly (even to `MODE_FAULTS=process`) switches to the
+unified scheduler that picks one fault uniformly at random
+across the enabled-and-runnable classes every 60-180 s. The
+coordinator does not parse `MODE_FAULTS` itself; it just
+exports it through to each per-host injector.
+
+### Process (`process`)
+
+Default, always available. No host prerequisites beyond the
+ability to signal child PIDs.
+
+| Sub-fault                    | What it does                                  |
+|------------------------------|-----------------------------------------------|
+| `fault_process_pause`        | SIGSTOP dynomited for 5-15 s, then SIGCONT    |
+| `fault_process_kill`         | SIGKILL dynomited and restart via start-host  |
+| `fault_process_redis_bounce` | Restart the local redis/memcached datastore   |
+
+### Network (`network`)
+
+Per-host network jitter via `tc qdisc` on a configurable
+device (default `lo`; override with `CHAOS_NETEM_DEV=eth0` or
+`CHAOS_NETEM_DEV=ts0` for Tailscale).
+
+| Sub-fault                    | What it does                                  |
+|------------------------------|-----------------------------------------------|
+| `fault_network_partition`    | 100% drop on the dynomite peer port (5-30 s)  |
+| `fault_network_delay`        | 50-200 ms one-way delay (30-90 s)             |
+| `fault_network_loss`         | 1-5% packet loss (30-60 s)                    |
+| `fault_network_bandcap`      | 1 Mbit/s throughput cap (30 s)                |
+
+**Prerequisites**: `tc` from `iproute2` plus `CAP_NET_ADMIN`
+on the injector process. The flake ships `iproute2`; the
+operator is responsible for granting the capability (the rig
+runs as the unprivileged `gburd` user, so this typically
+means a `setcap cap_net_admin=ep` on the injector binary, an
+unprivileged user namespace, or running the injector under
+sudo).
+
+If either prerequisite is missing the network class is
+dropped from the runnable set at start-up. The injector emits
+a `prereq_skip` event with the reason and continues with the
+remaining classes; every host's `injector_classes` event also
+lists both the configured and the runnable class set so the
+operator can confirm at a glance which classes actually
+fired during a pass.
+
+Cleanup is a single `tc qdisc del dev <dev> root` and is
+idempotent. The SIGTERM trap calls it on every exit path; a
+startup-time scrub also runs it once so a previous injector
+that died mid-fault does not leak a qdisc into the next pass.
+
+### Clock (`clock`)
+
+Wall-clock skew applied to a fresh dynomited launch via
+`faketime` (libfaketime).
+
+| Sub-fault                    | What it does                                  |
+|------------------------------|-----------------------------------------------|
+| `fault_clock_skew` (positive)| `+30..+120 s` skew for 60-120 s               |
+| `fault_clock_skew` (negative)| `-10 s` skew for 60-120 s                     |
+
+The single `fault_clock_skew` routine picks the sign uniformly
+per cycle; the negative variant exercises the gossip
+phi-accrual detector under a peer whose `now()` runs behind
+the cluster.
+
+The mechanic: the injector writes the offset to
+`$RUN/clock-skew-active`, kills dynomited, and calls
+`restart_dynomited` with `FAKETIME=<offset>` exported.
+`start-host.sh` honours the env knob (and falls back to
+reading the marker file) to wrap the dynomited launch with
+`faketime "$FAKETIME"`. After the duration, the marker is
+removed, dynomited is killed again and restarted under the
+real clock.
+
+**Prerequisites**: `faketime` on `PATH`. The flake's
+`libfaketime` package ships it; on hosts where it is missing
+the class is dropped at start-up.
+
+Cleanup removes the marker file. The dynomited running under
+faketime keeps running until either the next clock-skew cycle
+or the coordinator's teardown phase, which is the desired
+behaviour: log collection sees a dynomited that exited with
+the skew that was applied.
+
+### Disk (`disk`)
+
+Per-host I/O degradation against the host's tmpfs and the
+redis backend's block device.
+
+| Sub-fault                    | What it does                                  |
+|------------------------------|-----------------------------------------------|
+| `fault_disk_squeeze`         | Fill `/scratch` to 95% (capped at 10 GiB)     |
+| `fault_disk_full`            | `dd` until `ENOSPC`, hold for 5 s             |
+| `fault_disk_iolat`           | cgroups-v2 `io.max` 1 MiB/s cap on redis      |
+
+The `iolat` sub-fault creates a cgroup at
+`/sys/fs/cgroup/chaos-iolat-<DC>`, moves the redis pid into
+it, and writes a 1 MiB/s read+write `io.max` limit for the
+block device backing `/scratch`. Approximating "5 ms+/op
+latency" via a throughput cap is a deliberate pragmatic
+choice: cgroups v2 only exposes throughput and IOPS knobs,
+and the operator-visible failure mode (slow redis ->
+dispatcher queue growth -> client timeouts) is the same.
+
+**Prerequisites**:
+
+* cgroups v2 mounted at `/sys/fs/cgroup`.
+* The `io` controller listed in `cgroup.controllers`.
+* Write access to the chosen cgroup path (typically root or a
+  systemd-delegated subtree).
+
+`squeeze` and `full` only need write access to `$RUN`; if
+those are met but the `io` controller is missing, the disk
+class is still runnable but `iolat` self-skips at fault
+invocation time with a `fault_disk_iolat_skipped` event.
+
+Cleanup removes both ballast files and resets every entry in
+`io.max` to `max`. The cgroup itself is kept across faults
+to avoid the move-process-back-to-root dance; a stale cgroup
+with default `io.max` settings is harmless.
+
+### Required-tool detection
+
+The injector probes each enabled class once at start-up:
+
+* `network`: `command -v tc` plus a no-op qdisc add+del.
+  If both fail, the class is dropped.
+* `clock`: `command -v faketime`. If missing, drop.
+* `disk`: `/sys/fs/cgroup/cgroup.controllers` exists, lists
+  `io`, and `$RUN` is writable. The `iolat` sub-fault has
+  finer-grained checks at invocation time.
+
+The results land in two events on the chaos-events stream:
+
+```
+{"kind":"prereq_skip","detail":{"class":"network","reason":"tc-add-denied"}}
+{"kind":"injector_classes","detail":{"configured":"process,network,clock,disk","runnable":"process,disk"}}
+```
+
+The report generator picks both up histogrammatically; an
+operator can confirm at a glance which classes actually fired
+during a pass.
+
+### Cleanup-on-trap policy
+
+Every fault routine pairs an install with a matching cleanup.
+The SIGTERM/SIGINT trap on the injector top-level calls
+`cleanup_all`, the union of the per-class cleanups, all
+idempotent: `tc qdisc del`, `rm -f` of marker / ballast
+files, `io.max` reset to `max`. `cleanup_all` also runs once
+at injector startup so a previous run that died mid-fault
+without running its trap does not leak state into the next
+pass.
+
+The smoke test
+`scripts/chaos-multi-host/test_fault_smoke.sh` exercises each
+fault routine with a shortened duration and asserts the host
+is clean afterwards. A leaked tc qdisc, marker file, or
+ballast file is a hard test failure. Run it locally before
+shipping changes that touch the injector:
+
+```bash
+bash scripts/chaos-multi-host/test_fault_smoke.sh
+```
+
+The smoke skips classes whose prereqs are missing on the dev
+box; to exercise the full matrix on a developer workstation,
+combine an unprivileged user network namespace (which grants
+`CAP_NET_ADMIN`) with a flake-provided `faketime`:
+
+```bash
+nix-shell -p libfaketime --run \
+  "unshare -rn bash -c 'ip link set lo up; \
+     bash scripts/chaos-multi-host/test_fault_smoke.sh'"
+```
