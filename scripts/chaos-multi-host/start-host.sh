@@ -20,13 +20,27 @@
 #                             --features riak; aborts with a
 #                             clear error if the binary does not
 #                             expose the --riak-pbc-listen flag.
+#   MODE=differential       - run the existing Rust dynomited
+#                             on its configured ports AND a C
+#                             `dynomite` reference on shifted
+#                             ports (+100 on client/dyn/stats).
+#                             Both proxies front the same redis
+#                             backend so phase 4 can compare
+#                             responses byte-for-byte. Requires
+#                             $ROOT/cref-build/dynomite to be
+#                             present (built by
+#                             scripts/chaos-multi-host/build_cref_remote.sh);
+#                             aborts with a clear error if the
+#                             binary is missing.
 #   ROOT=/scratch/dynomite-chaos (default install root)
 
 set -euo pipefail
 
 DC_NAME="${1:?DC name required}"
 TOKENS="${2:?token list required}"
-SEEDS="${3:?seeds string required}"
+# Allow an empty seeds string (single-host smoke); only the
+# unset case is an error.
+SEEDS="${3?seeds string required}"
 DATASTORE_PORT="${4:-17100}"
 DYN_LISTEN_PORT="${5:-18101}"
 CLIENT_LISTEN_PORT="${6:-18102}"
@@ -58,11 +72,26 @@ case "$MODE" in
         DATA_STORE_VAL=0
         ENABLE_RIAK_PBC=1
         ;;
+    differential)
+        # Both proxies (Rust + C) speak Redis to a shared
+        # backend on $DATASTORE_PORT. The C cluster shadows
+        # the Rust one on shifted ports.
+        EFFECTIVE_MODE=redis
+        DATA_STORE_VAL=0
+        ENABLE_RIAK_PBC=0
+        ;;
     *)
-        echo "unknown MODE=$MODE (expected redis|memcache|riak)" >&2
+        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential)" >&2
         exit 1
         ;;
 esac
+
+# Differential-mode port shifts. The C cluster mirrors the
+# Rust ports +100 so a single host can run both proxies
+# without a port collision.
+C_CLIENT_LISTEN_PORT=$((CLIENT_LISTEN_PORT + 100))
+C_DYN_LISTEN_PORT=$((DYN_LISTEN_PORT + 100))
+C_STATS_LISTEN_PORT=$((STATS_LISTEN_PORT + 100))
 
 ROOT="${ROOT:-/scratch/dynomite-chaos}"
 RUN="$ROOT/run"
@@ -224,9 +253,19 @@ dyn_o_mite:
   remote_peer_connections: 4
   dyn_read_timeout: 1000
   dyn_write_timeout: 1000
+EOF
+
+# Append the seeds block only when SEEDS is non-empty. The C
+# `simple_provider` and the Rust seeds parser both treat an
+# empty seeds list as "no peers" (single-host smoke); writing
+# `dyn_seeds:` followed by a blank line is a YAML parse error
+# in the C config loader.
+if [ -n "$(printf '%s' "$SEEDS" | tr -d ' \t\n\r')" ]; then
+    cat >> "$CONF" <<EOF
   dyn_seeds:
 $SEEDS
 EOF
+fi
 
 # Append the riak block when MODE=riak. The block is a YAML
 # sibling of dyn_o_mite (under the same top-level pool key)
@@ -266,23 +305,132 @@ DYN_PID=$!
 # spawn pid as a fallback.
 echo "$DYN_PID" > "$RUN/dynomited.spawn-pid"
 
-# Wait for dynomited's stats endpoint to come up so the coordinator
-# can move on. Use curl when present, else /dev/tcp.
+# Wait for dynomited's stats endpoint to come up so the
+# caller can move on. Use curl when present, else /dev/tcp.
+# In MODE=differential we do not exit on the Rust side; the
+# C proxy still needs to come up below.
+rust_ready=0
 for i in $(seq 1 60); do
     if command -v curl >/dev/null 2>&1; then
         if curl -s --max-time 1 "http://127.0.0.1:$STATS_LISTEN_PORT/" 2>/dev/null | grep -q '"service"'; then
-            echo "==> dynomited up on $DC_NAME"
-            exit 0
+            rust_ready=1
+            break
         fi
     else
         if printf 'GET / HTTP/1.0\r\n\r\n' | timeout 1 bash -c "exec 9<>/dev/tcp/127.0.0.1/$STATS_LISTEN_PORT && cat >&9 && cat <&9" 2>/dev/null | grep -q '"service"'; then
-            echo "==> dynomited up on $DC_NAME"
-            exit 0
+            rust_ready=1
+            break
         fi
     fi
     sleep 0.5
 done
 
-echo "==> dynomited never listened on stats:$STATS_LISTEN_PORT" >&2
-tail -50 "$LOGS/dynomited-$DC_NAME.stderr" "$LOGS/dynomited-$DC_NAME.log" 2>/dev/null >&2 || true
-exit 1
+if [ "$rust_ready" -ne 1 ]; then
+    echo "==> dynomited never listened on stats:$STATS_LISTEN_PORT" >&2
+    tail -50 "$LOGS/dynomited-$DC_NAME.stderr" "$LOGS/dynomited-$DC_NAME.log" 2>/dev/null >&2 || true
+    exit 1
+fi
+echo "==> dynomited up on $DC_NAME"
+
+if [ "$MODE" != "differential" ]; then
+    exit 0
+fi
+
+# Differential mode: bring up the C dynomite reference next
+# to the Rust dynomited. Both share the same backend redis;
+# the C proxy listens on shifted ports (+100). Reaching this
+# point implies the Rust stats endpoint is already healthy.
+start_c_dynomite() {
+    local cref_bin="$ROOT/cref-build/dynomite"
+    if [ ! -x "$cref_bin" ]; then
+        echo "==> ERROR: MODE=differential requires $cref_bin" >&2
+        echo "           run scripts/chaos-multi-host/build_cref_remote.sh on this host first" >&2
+        return 1
+    fi
+
+    # Translate the Rust seed list to the C-port view by
+    # rewriting the dyn_listen port in each seed line. Each
+    # SEEDS entry has shape "<ip>:<dyn_port>:<rack>:<dc>:<token>".
+    local c_seeds
+    c_seeds="$(printf '%s\n' "$SEEDS" | sed -E "s/:$DYN_LISTEN_PORT:/:$C_DYN_LISTEN_PORT:/g")"
+
+    # The C engine waits for at least one peer ack via gossip
+    # before promoting itself out of JOINING; with no seeds the
+    # node would stay in JOINING forever and reject every
+    # client write. dynomite.c short-circuits to NORMAL when
+    # `enable_gossip` is false. We honour that contract here:
+    # populated seed list -> gossip enabled (production multi-
+    # host differential mode); empty seed list -> gossip
+    # disabled (single-host smoke).
+    local enable_gossip_c=true
+    if [ -z "$(printf '%s' "$c_seeds" | tr -d ' \t\n\r')" ]; then
+        enable_gossip_c=false
+    fi
+
+    local c_conf="$RUN/dynomite-c.yml"
+    cat > "$c_conf" <<CCONF
+dyn_o_mite:
+  listen: 0.0.0.0:$C_CLIENT_LISTEN_PORT
+  dyn_listen: 0.0.0.0:$C_DYN_LISTEN_PORT
+  stats_listen: 127.0.0.1:$C_STATS_LISTEN_PORT
+  servers:
+    - 127.0.0.1:$DATASTORE_PORT:1
+  tokens: '$TOKENS'
+  datacenter: $DC_NAME
+  rack: rack-1
+  data_store: $DATA_STORE_VAL
+  read_consistency: DC_ONE
+  write_consistency: DC_ONE
+  enable_gossip: $enable_gossip_c
+  gos_interval: 1000
+  timeout: 5000
+  auto_eject_hosts: true
+  server_failure_limit: 2
+  server_retry_timeout: 5000
+  preconnect: false
+  client_connections: 1000
+  datastore_connections: 8
+  local_peer_connections: 4
+  remote_peer_connections: 4
+  dyn_read_timeout: 1000
+  dyn_write_timeout: 1000
+CCONF
+    if [ -n "$(printf '%s' "$c_seeds" | tr -d ' \t\n\r')" ]; then
+        cat >> "$c_conf" <<CCONF
+  dyn_seeds:
+$c_seeds
+CCONF
+    fi
+
+    echo "==> starting C dynomite (DC=$DC_NAME, ports client=$C_CLIENT_LISTEN_PORT dyn=$C_DYN_LISTEN_PORT stats=$C_STATS_LISTEN_PORT)"
+    nohup "$cref_bin" \
+        -c "$c_conf" \
+        -p "$RUN/dynomite-c.pid" \
+        -o "$LOGS/dynomite-c-$DC_NAME.log" \
+        -v 6 \
+        > "$LOGS/dynomite-c-$DC_NAME.stderr" 2>&1 &
+    local c_pid=$!
+    echo "$c_pid" > "$RUN/dynomite-c.spawn-pid"
+
+    # A bare TCP connect to the client listener is enough to
+    # prove the C proxy bound and listened. The C binary's
+    # stats page is plain-text rather than JSON, so we don't
+    # require a `"service"` substring.
+    local i
+    for i in $(seq 1 60); do
+        if printf '' | timeout 1 bash -c "exec 9<>/dev/tcp/127.0.0.1/$C_CLIENT_LISTEN_PORT" 2>/dev/null; then
+            echo "==> C dynomite up on $DC_NAME (client port $C_CLIENT_LISTEN_PORT)"
+            return 0
+        fi
+        sleep 0.5
+    done
+
+    echo "==> C dynomite never listened on client:$C_CLIENT_LISTEN_PORT" >&2
+    tail -50 "$LOGS/dynomite-c-$DC_NAME.stderr" "$LOGS/dynomite-c-$DC_NAME.log" 2>/dev/null >&2 || true
+    return 1
+}
+
+if ! start_c_dynomite; then
+    exit 1
+fi
+exit 0

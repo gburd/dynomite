@@ -451,3 +451,88 @@ nix-shell -p libfaketime --run \
   "unshare -rn bash -c 'ip link set lo up; \
      bash scripts/chaos-multi-host/test_fault_smoke.sh'"
 ```
+
+## Differential mode (substrate; phase 1+2)
+
+`MODE=differential` runs a Rust dynomited and a C `dynomite`
+side by side on every chaos host, both fronting the same
+backend redis. The substrate is in place; the workload-driver
+fan-out and reply-comparison logic are explicit follow-ups
+(see `docs/journal/2026-05-26-differential-chaos-substrate.md`
+sections "Phase 3" through "Phase 5").
+
+### Port layout
+
+Each host runs both proxies. The C proxy ports are the Rust
+ports + 100:
+
+| role | Rust port | C port |
+|---|---:|---:|
+| client listen | `CLIENT_LISTEN_PORT` | `+100` |
+| dyn (peer) listen | `DYN_LISTEN_PORT` | `+100` |
+| stats listen | `STATS_LISTEN_PORT` | `+100` |
+| backend redis | `DATASTORE_PORT` | shared |
+
+The C cluster's seed list is derived from the Rust seed list
+by rewriting the dyn port; the two gossip meshes are
+independent.
+
+### Host preparation
+
+Each host needs the C `dynomite` binary at
+`/scratch/dynomite-chaos/cref-build/dynomite`. The helper
+`scripts/chaos-multi-host/build_cref_remote.sh` builds it
+in-place via the upstream autotools chain and is idempotent
+against the submodule's git commit hash.
+
+Build prerequisites per host: `autoconf`, `automake`,
+`libtool`, `pkg-config`, `make`, a C compiler, and openssl
+development headers. The script's pre-flight probe enumerates
+them and exits 1 with a clear log line if any are missing.
+
+To prepare every host before the first differential pass:
+
+```bash
+for h in floki arnold nuc meh; do
+    bash scripts/chaos-multi-host/build_cref_remote.sh "$h" \
+        | tee "target/cref-$h.log"
+done
+```
+
+`--clean` wipes the cached source mirror and binary first.
+
+### Running a differential pass
+
+```bash
+MODE=differential bash scripts/chaos-multi-host/coordinator.sh
+```
+
+The coordinator's existing failed-host gate applies: a host
+whose C build fails is removed from the rest of the run; the
+pass continues on the remaining hosts. nuc (FreeBSD) is the
+most likely host to fail the build; the rig copes with a
+3-host topology if necessary.
+
+### Single-host smoke
+
+```bash
+bash scripts/chaos-multi-host/smoke-differential.sh
+```
+
+Boots both proxies on floki, asserts each port answers a
+SET / GET round-trip inside a 60-second window, then tears
+down. Port defaults are env-overridable
+(`DATASTORE_PORT`, `CLIENT_LISTEN_PORT`, ...).
+
+### Out of scope (phase 3+)
+
+The phase-1+2 substrate proves both clusters come up. It
+does NOT yet:
+
+* Drive the workload to both proxies in parallel (phase 3).
+* Compare replies byte-for-byte with an allowlist for
+  semantic divergences such as `INFO` and `TIME` (phase 4).
+* Apply chaos faults to both proxies in lockstep (phase 5).
+
+Effort estimates and design notes for phases 3 through 5 live
+in `docs/journal/2026-05-26-differential-chaos-substrate.md`.
