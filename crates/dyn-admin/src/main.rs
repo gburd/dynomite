@@ -9,8 +9,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use dyn_admin::commands::{
-    cluster_commit, cluster_join, cluster_leave, cluster_list, cluster_plan, distribution_dump,
-    metrics, ping, ring, stats, status,
+    bucket_props, cluster_commit, cluster_join, cluster_leave, cluster_list, cluster_plan,
+    distribution_dump, metrics, ping, ring, stats, status,
 };
 use dyn_admin::output::OutputFormat;
 
@@ -156,6 +156,60 @@ enum Cmd {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Inspect or update a bucket's `RpbBucketProps`.
+    BucketProps {
+        /// `get` or `set` subcommand.
+        #[command(subcommand)]
+        action: BucketPropsCmd,
+    },
+}
+
+/// `bucket-props` subcommand parser.
+#[derive(Debug, Subcommand)]
+enum BucketPropsCmd {
+    /// Fetch and print the bucket's current properties.
+    Get {
+        /// Bucket name.
+        bucket: String,
+        /// PBC `host:port`.
+        #[arg(long = "node", default_value = DEFAULT_PBC_NODE)]
+        node: String,
+        /// Emit JSON instead of human text.
+        #[arg(long = "json")]
+        json: bool,
+    },
+    /// Update one or more of the bucket's properties.
+    ///
+    /// Unspecified fields are read first and re-sent unchanged so a
+    /// partial update never clobbers a property the operator did not
+    /// name on the command line.
+    Set {
+        /// Bucket name.
+        bucket: String,
+        /// New replication factor.
+        #[arg(long = "n-val")]
+        n_val: Option<u32>,
+        /// New default read consistency: `one`, `quorum`, `all`,
+        /// `default`, or a literal integer.
+        #[arg(long = "read-consistency")]
+        read_consistency: Option<bucket_props::ConsistencyArg>,
+        /// New default write consistency: same shape as
+        /// `--read-consistency`.
+        #[arg(long = "write-consistency")]
+        write_consistency: Option<bucket_props::ConsistencyArg>,
+        /// Hash-key function: `std` or `bucketonly`.
+        #[arg(long = "keyfun")]
+        keyfun: Option<bucket_props::KeyFunArg>,
+        /// Replication strategy: `topology` or `successors`.
+        #[arg(long = "replication-strategy")]
+        replication_strategy: Option<bucket_props::ReplicationStrategyArg>,
+        /// PBC `host:port`.
+        #[arg(long = "node", default_value = DEFAULT_PBC_NODE)]
+        node: String,
+        /// Emit JSON instead of human text.
+        #[arg(long = "json")]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -247,6 +301,40 @@ async fn dispatch(cli: Cli) -> Result<(), dyn_admin::AdminError> {
         }
         Cmd::DistributionDump { node, json } => {
             distribution_dump::run(&node, OutputFormat::from_flag(json), &mut stdout).await
+        }
+        Cmd::BucketProps { action } => dispatch_bucket_props(action, &mut stdout).await,
+    }
+}
+
+/// Run a `bucket-props` subcommand. Pulled out of [`dispatch`] to
+/// keep the top-level match arm short.
+async fn dispatch_bucket_props(
+    action: BucketPropsCmd,
+    stdout: &mut impl Write,
+) -> Result<(), dyn_admin::AdminError> {
+    match action {
+        BucketPropsCmd::Get { bucket, node, json } => {
+            bucket_props::run_get(&node, &bucket, OutputFormat::from_flag(json), stdout).await
+        }
+        BucketPropsCmd::Set {
+            bucket,
+            n_val,
+            read_consistency,
+            write_consistency,
+            keyfun,
+            replication_strategy,
+            node,
+            json,
+        } => {
+            let opts = bucket_props::SetOptions {
+                n_val,
+                read: read_consistency,
+                write: write_consistency,
+                keyfun,
+                replication_strategy,
+            };
+            bucket_props::run_set(&node, &bucket, &opts, OutputFormat::from_flag(json), stdout)
+                .await
         }
     }
 }
