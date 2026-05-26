@@ -97,7 +97,13 @@ esac
 # policy. Two retries on Closed (vs one on NoTargets) reflects
 # both the higher base rate and the cheap per-attempt cost (a
 # single TCP reconnect against the local engine).
-RETRY_POLICY="${RETRY_POLICY-NoTargets:1,Timeout:0,Closed:2}"
+#
+# Pass-5 (2026-05-26) added per-class exponential backoff with
+# jitter to break the thundering-herd retries that re-saturated
+# a freshly-restarted dynomited's listener. The new per-class
+# suffix is ``:<base_ms>:<max_ms>``; sleep between attempts is
+# ``min(base_ms * 2^attempt, max_ms) * uniform(0.5, 1.5)``.
+RETRY_POLICY="${RETRY_POLICY-NoTargets:1:50:200,Timeout:0,Closed:2:100:1000}"
 export RETRY_POLICY
 
 # Per-DC distinct tokens. Distinct token slices on the ring

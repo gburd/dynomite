@@ -174,6 +174,78 @@ coordinator's environment. Reports generated before this date
 have no `retries` field; the report generator treats the
 missing field as zero.
 
+#### Backoff
+
+A second behaviour change landed on 2026-05-26: between
+attempts the driver now sleeps for an exponentially-growing
+window with uniform jitter, so several drivers retrying the
+same recoverable error at the same instant do not pile onto a
+freshly-bound listener (for example, a dynomited that the
+chaos injector just SIGKILL'd and that systemd restarted a
+second ago). The per-entry `--retry-on` syntax extends from
+`<class>:<count>` to:
+
+```
+<class>[:<count>[:<base_ms>[:<max_ms>]]]
+```
+
+Missing `count` defaults to `1`. Missing `base_ms`/`max_ms`
+default to `50`/`200` ms (the universal short-form defaults).
+The new ship-default coordinator policy is:
+
+```
+NoTargets:1:50:200,Timeout:0,Closed:2:100:1000
+```
+
+The sleep formula between attempt `n` and `n+1` is:
+
+```
+window_ms = min(base_ms * 2**n, max_ms)
+sleep_ms  = window_ms * uniform(0.5, 1.5)
+```
+
+i.e. exponential growth capped at `max_ms` with a symmetric
+jitter band. A 100ms base sleeps anywhere in `[50, 150]` ms on
+the first retry, anywhere in `[100, 300]` ms on the second,
+and plateaus at `[max_ms/2, max_ms*1.5]` once the doubling
+clears the cap.
+
+A per-op wallclock cap, `--retry-deadline-ms` (default 5000),
+stops a single op from blocking forever if the operator
+configures a high count and a high max. If the next backoff
+would push cumulative time-in-retry past the deadline, the
+loop gives up immediately and surfaces the failure with the
+most recent error class. Budget that did not fire is left
+unconsumed (no `retries` counter increment for a sleep we
+refused to perform).
+
+A new `retry_sleep_ms` NDJSON field, keyed exactly like
+`retries`, records the cumulative wallclock cost (in ms) of
+backoff sleeps in the window:
+
+```json
+{
+  "retries":        { "strings/Closed": 12, "strings/NoTargets": 3 },
+  "retry_sleep_ms": { "strings/Closed": 1843, "strings/NoTargets": 78 }
+}
+```
+
+Operators reading the field:
+
+* High `retry_sleep_ms`, low `failures`: backoff is doing its
+  job. The cluster wobbled, the driver waited, the wobble
+  cleared. Healthy.
+* High `retry_sleep_ms`, high `failures`: every retry is
+  hitting `max_ms` and not winning. Either `max_ms` is too
+  low (raise it), or the wobble is genuinely a multi-second
+  outage (treat as a real failure rather than tuning around).
+* `retry_sleep_ms` >> `retries * max_ms`: should not happen;
+  indicates a bug in the driver's accumulator. File an issue.
+
+Reports generated before 2026-05-26 do not have the
+`retry_sleep_ms` field; the report generator treats the
+missing field as zero.
+
 ## Running a pass
 
 From the coordinator host (floki):
