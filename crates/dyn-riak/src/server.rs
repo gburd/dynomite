@@ -1912,9 +1912,10 @@ mod tests {
         let body = mapred_req_two_phase(&[5, 6, 7, 8]);
         let frame = Frame::new(MessageCode::MapRedReq.as_u8(), body);
         let ds = MemoryDatastore::new();
-        let mut stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
-            .await
-            .expect("ok");
+        let mut stream =
+            process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
+                .await
+                .expect("ok");
         let first = stream.next().await.expect("first").expect("frame");
         assert_eq!(first.code, MessageCode::MapRedResp.as_u8());
         let parsed = RpbMapRedResp::decode(first.body.as_slice()).expect("decode");
