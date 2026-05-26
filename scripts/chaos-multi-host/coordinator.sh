@@ -285,10 +285,16 @@ $seeds_str
 __CHAOS_SEEDS_END__
 
 # Persist start-args so the chaos injector can restart
-# dynomited with the same arguments after a SIGKILL.
-# \$(cat ...) is intentionally literal: it is evaluated when
-# chaos-injector.sh sources start-args, not at write time.
-cat > /scratch/dynomite-chaos/run/start-args <<'__CHAOS_ARGS_END__'
+# dynomited with the same arguments after a SIGKILL. We bake
+# MODE / TOKENS / port values into the file at write time so
+# the chaos-injector's source of start-args sees the
+# operator-selected mode rather than defaulting to 'redis'
+# when MODE is unset in its environment. The SEEDS line
+# stays deferred (\$(cat ...) is intentionally literal in
+# the file) because the seeds payload is multi-line and is
+# easier to source from the canonical seeds.yml on the
+# remote host than to embed inline here.
+cat > /scratch/dynomite-chaos/run/start-args <<__CHAOS_ARGS_END__
 MODE='$MODE'
 TOKENS='$tokens'
 SEEDS=\$(cat /scratch/dynomite-chaos/run/seeds.yml)
