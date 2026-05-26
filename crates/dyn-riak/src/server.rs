@@ -67,18 +67,20 @@ use dynomite::embed::hooks::{DatastoreByteStream, DatastoreError};
 use dynomite::embed::Datastore;
 use dynomite::msg::{Msg, MsgType};
 
+use crate::aae::status::{AaeStatusProvider, AaeStatusSnapshot, NoopAaeStatusProvider};
 use crate::error::RiakError;
 use crate::mapreduce::{MrError, PhaseBatch};
 use crate::proto::pb::framer::{read_frame, write_frame, Frame};
 use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 use crate::proto::pb::messages::{
-    DynRpbClusterCommitReq, DynRpbClusterCommitResp, DynRpbClusterJoinReq, DynRpbClusterJoinResp,
-    DynRpbClusterLeaveReq, DynRpbClusterLeaveResp, DynRpbClusterPlanReq, DynRpbClusterPlanResp,
-    DynRpbListPeersReq, DynRpbListPeersResp, DynRpbPeerInfo, DynRpbStagedChange, MessageCode,
-    RpbBucketProps, RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp, RpbGetReq,
-    RpbGetResp, RpbGetServerInfoResp, RpbIndexReq, RpbIndexResp, RpbListBucketsReq,
-    RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp, RpbPingReq, RpbPingResp, RpbPutReq,
-    RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, DYN_STAGED_CHANGE_ADD,
+    DynRpbAaePeerStatus, DynRpbAaeStatusReq, DynRpbAaeStatusResp, DynRpbClusterCommitReq,
+    DynRpbClusterCommitResp, DynRpbClusterJoinReq, DynRpbClusterJoinResp, DynRpbClusterLeaveReq,
+    DynRpbClusterLeaveResp, DynRpbClusterPlanReq, DynRpbClusterPlanResp, DynRpbListPeersReq,
+    DynRpbListPeersResp, DynRpbPeerInfo, DynRpbStagedChange, MessageCode, RpbBucketProps,
+    RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp, RpbGetReq, RpbGetResp,
+    RpbGetServerInfoResp, RpbIndexReq, RpbIndexResp, RpbListBucketsReq, RpbListBucketsResp,
+    RpbListKeysReq, RpbListKeysResp, RpbPingReq, RpbPingResp, RpbPutReq, RpbPutResp,
+    RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, DYN_STAGED_CHANGE_ADD,
     DYN_STAGED_CHANGE_REMOVE, INDEX_QUERY_TYPE_EQ, INDEX_QUERY_TYPE_RANGE,
 };
 use crate::router::{PeerOp, RoutingHooks};
@@ -232,6 +234,23 @@ pub async fn serve_pbc_with_routing(
     serve_pbc_inner_with_hooks(listener, datastore, admin, None, Some(hooks)).await
 }
 
+/// As [`serve_pbc_with_admin`], with an [`AaeStatusProvider`]
+/// wired into the dispatch path so the new
+/// `DynRpbAaeStatusReq` admin op returns live AAE state.
+/// Routing hooks are not configured by this entry point.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+pub async fn serve_pbc_with_aae_status(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+    aae_status: Arc<dyn AaeStatusProvider>,
+) -> Result<(), RiakError> {
+    serve_pbc_full(listener, datastore, admin, None, None, Some(aae_status)).await
+}
+
 async fn serve_pbc_inner(
     listener: TcpListener,
     datastore: Arc<dyn Datastore>,
@@ -248,10 +267,24 @@ async fn serve_pbc_inner_with_hooks(
     acceptor: Option<TlsAcceptor>,
     hooks: Option<RoutingHooks>,
 ) -> Result<(), RiakError> {
+    serve_pbc_full(listener, datastore, admin, acceptor, hooks, None).await
+}
+
+async fn serve_pbc_full(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+    acceptor: Option<TlsAcceptor>,
+    hooks: Option<RoutingHooks>,
+    aae_status: Option<Arc<dyn AaeStatusProvider>>,
+) -> Result<(), RiakError> {
+    let aae_status: Arc<dyn AaeStatusProvider> =
+        aae_status.unwrap_or_else(|| Arc::new(NoopAaeStatusProvider));
     loop {
         let (sock, peer) = listener.accept().await?;
         let datastore = Arc::clone(&datastore);
         let admin = Arc::clone(&admin);
+        let aae = Arc::clone(&aae_status);
         let hooks = hooks.clone();
         match acceptor.as_ref() {
             Some(acc) => {
@@ -260,7 +293,7 @@ async fn serve_pbc_inner_with_hooks(
                     match acc.accept(sock).await {
                         Ok(tls) => {
                             if let Err(e) =
-                                handle_conn_with_hooks(tls, datastore, admin, hooks).await
+                                handle_conn_full(tls, datastore, admin, hooks, aae).await
                             {
                                 tracing::warn!(
                                     %peer,
@@ -279,7 +312,7 @@ async fn serve_pbc_inner_with_hooks(
             }
             None => {
                 tokio::spawn(async move {
-                    if let Err(e) = handle_conn_with_hooks(sock, datastore, admin, hooks).await {
+                    if let Err(e) = handle_conn_full(sock, datastore, admin, hooks, aae).await {
                         tracing::warn!(%peer, error = %e, "riak pbc connection ended with error");
                     }
                 });
@@ -341,6 +374,41 @@ pub async fn handle_conn_with_hooks<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let aae_status: Arc<dyn AaeStatusProvider> = Arc::new(NoopAaeStatusProvider);
+    handle_conn_full(stream, datastore, admin, hooks, aae_status).await
+}
+
+/// Drive a single PBC connection over `stream`, threading an
+/// [`AaeStatusProvider`] handle through the dispatcher so the
+/// new `DynRpbAaeStatusReq` / `DynRpbAaeStatusResp` admin op
+/// can return live data.
+///
+/// # Errors
+///
+/// Returns the first wire-level or datastore error encountered.
+pub async fn handle_conn_with_aae_status<S>(
+    stream: S,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+    hooks: Option<RoutingHooks>,
+    aae_status: Arc<dyn AaeStatusProvider>,
+) -> Result<(), RiakError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    handle_conn_full(stream, datastore, admin, hooks, aae_status).await
+}
+
+async fn handle_conn_full<S>(
+    stream: S,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+    hooks: Option<RoutingHooks>,
+    aae_status: Arc<dyn AaeStatusProvider>,
+) -> Result<(), RiakError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let (mut reader, mut writer) = tokio::io::split(stream);
     loop {
         let frame = match read_frame(&mut reader).await {
@@ -351,8 +419,14 @@ where
             Err(other) => return Err(other),
         };
 
-        let mut response =
-            process_frame(&frame, datastore.as_ref(), admin.as_ref(), hooks.as_ref()).await?;
+        let mut response = process_frame(
+            &frame,
+            datastore.as_ref(),
+            admin.as_ref(),
+            hooks.as_ref(),
+            aae_status.as_ref(),
+        )
+        .await?;
         while let Some(item) = response.next().await {
             let f = item?;
             write_frame(&mut writer, &f).await?;
@@ -369,6 +443,7 @@ async fn process_frame(
     datastore: &dyn Datastore,
     admin: &dyn ClusterAdmin,
     hooks: Option<&RoutingHooks>,
+    aae_status: &dyn AaeStatusProvider,
 ) -> Result<FrameStream, RiakError> {
     let code = MessageCode::from_u8(frame.code).map_err(RiakError::UnknownMessageCode)?;
     let stream: FrameStream = match code {
@@ -390,6 +465,7 @@ async fn process_frame(
         MessageCode::DynClusterCommitReq => {
             single_frame(handle_cluster_commit(&frame.body, admin)?)
         }
+        MessageCode::DynAaeStatusReq => single_frame(handle_aae_status(&frame.body, aae_status)?),
         // Response codes are illegal inbound.
         MessageCode::ErrorResp
         | MessageCode::PingResp
@@ -407,7 +483,8 @@ async fn process_frame(
         | MessageCode::DynClusterJoinResp
         | MessageCode::DynClusterLeaveResp
         | MessageCode::DynClusterPlanResp
-        | MessageCode::DynClusterCommitResp => {
+        | MessageCode::DynClusterCommitResp
+        | MessageCode::DynAaeStatusResp => {
             let body = RpbErrorResp {
                 errmsg: format!("unsupported inbound message code: {}", frame.code).into_bytes(),
                 errcode: 0,
@@ -1176,6 +1253,39 @@ fn handle_cluster_commit(body: &[u8], admin: &dyn ClusterAdmin) -> Result<Frame,
     }
 }
 
+fn handle_aae_status(body: &[u8], aae: &dyn AaeStatusProvider) -> Result<Frame, RiakError> {
+    let _ = DynRpbAaeStatusReq::decode(body)?;
+    let snap: AaeStatusSnapshot = aae.current_status();
+    let resp = DynRpbAaeStatusResp {
+        peers: snap
+            .peers
+            .iter()
+            .map(|p| DynRpbAaePeerStatus {
+                peer_idx: p.peer_idx,
+                dc: p.dc.as_bytes().to_vec(),
+                rack: p.rack.as_bytes().to_vec(),
+                last_exchange_unix: p.last_exchange_unix,
+                divergent_keys_since_last_full_sweep: p.divergent_keys_since_last_full_sweep,
+                repair_dispatched_total: p.repair_dispatched_total,
+            })
+            .collect(),
+        snapshot_path: snap.snapshot_path.into_bytes(),
+        snapshot_last_save_unix: snap.snapshot_last_save_unix,
+        snapshot_last_load_unix: snap.snapshot_last_load_unix,
+        snapshot_save_total: snap.snapshot_save_total,
+        snapshot_load_total: snap.snapshot_load_total,
+        snapshot_corruption_total: snap.snapshot_corruption_total,
+        tree_n_time_buckets: snap.tree_n_time_buckets,
+        tree_n_segments: snap.tree_n_segments,
+        tree_time_window_seconds: snap.tree_time_window_seconds,
+        tree_memory_estimate_bytes: snap.tree_memory_estimate_bytes,
+    };
+    Ok(Frame::new(
+        MessageCode::DynAaeStatusResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
 fn snapshot_to_pb(snap: &PeerSnapshot) -> DynRpbPeerInfo {
     DynRpbPeerInfo {
         idx: snap.idx,
@@ -1260,7 +1370,9 @@ mod tests {
         // Code 99 is unused.
         let frame = Frame::new(99, Vec::new());
         let ds = MemoryDatastore::new();
-        let Err(err) = process_frame(&frame, &ds, &NoopClusterAdmin, None).await else {
+        let Err(err) =
+            process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider).await
+        else {
             panic!("expected error for unknown code");
         };
         assert!(matches!(err, RiakError::UnknownMessageCode(99)));
@@ -1281,7 +1393,7 @@ mod tests {
         // we reply with an RpbErrorResp instead.
         let frame = Frame::new(MessageCode::GetResp.as_u8(), Vec::new());
         let ds = MemoryDatastore::new();
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1296,7 +1408,9 @@ mod tests {
         // GetReq with a truncated length-delimited string field.
         let frame = Frame::new(MessageCode::GetReq.as_u8(), vec![0x0a, 0xff]);
         let ds = MemoryDatastore::new();
-        let Err(err) = process_frame(&frame, &ds, &NoopClusterAdmin, None).await else {
+        let Err(err) =
+            process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider).await
+        else {
             panic!("expected decode error");
         };
         assert!(matches!(err, RiakError::Decode(_)));
@@ -1315,9 +1429,15 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let _ = process_frame(&frame, ds.as_ref(), &NoopClusterAdmin, None)
-            .await
-            .expect("ok");
+        let _ = process_frame(
+            &frame,
+            ds.as_ref(),
+            &NoopClusterAdmin,
+            None,
+            &NoopAaeStatusProvider,
+        )
+        .await
+        .expect("ok");
         assert_eq!(ds.dispatch_count(), 1);
     }
 
@@ -1330,7 +1450,7 @@ mod tests {
             MessageCode::ListBucketsReq.as_u8(),
             RpbListBucketsReq::default().encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1356,7 +1476,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1394,7 +1514,7 @@ mod tests {
             MessageCode::ListBucketsReq.as_u8(),
             RpbListBucketsReq::default().encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1438,7 +1558,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1527,7 +1647,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1577,9 +1697,10 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let mut stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
-            .await
-            .expect("ok");
+        let mut stream =
+            process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
+                .await
+                .expect("ok");
         let first = stream.next().await.expect("first").expect("frame");
         assert_eq!(first.code, MessageCode::IndexResp.as_u8());
         let parsed = RpbIndexResp::decode(first.body.as_slice()).expect("decode");
@@ -1601,7 +1722,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1633,7 +1754,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1684,7 +1805,7 @@ mod tests {
             }
             .encode_to_vec(),
         );
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1735,7 +1856,7 @@ mod tests {
         let body = mapred_req_two_phase(&[1, 2, 3]);
         let frame = Frame::new(MessageCode::MapRedReq.as_u8(), body);
         let ds = MemoryDatastore::new();
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1769,7 +1890,7 @@ mod tests {
         let body = mapred_req_two_phase(&[10, 20]);
         let frame = Frame::new(MessageCode::MapRedReq.as_u8(), body);
         let ds = MemoryDatastore::new();
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1791,7 +1912,7 @@ mod tests {
         let body = mapred_req_two_phase(&[5, 6, 7, 8]);
         let frame = Frame::new(MessageCode::MapRedReq.as_u8(), body);
         let ds = MemoryDatastore::new();
-        let mut stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let mut stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let first = stream.next().await.expect("first").expect("frame");
@@ -1821,7 +1942,7 @@ mod tests {
         };
         let frame = Frame::new(MessageCode::MapRedReq.as_u8(), req.encode_to_vec());
         let ds = MemoryDatastore::new();
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
@@ -1844,11 +1965,78 @@ mod tests {
         };
         let frame = Frame::new(MessageCode::MapRedReq.as_u8(), req.encode_to_vec());
         let ds = MemoryDatastore::new();
-        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
             .await
             .expect("ok");
         let frames = collect_frames(stream).await;
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].code, MessageCode::ErrorResp.as_u8());
+    }
+    #[tokio::test]
+    async fn aae_status_default_provider_returns_empty_snapshot() {
+        let ds = MemoryDatastore::new();
+        let frame = Frame::new(
+            MessageCode::DynAaeStatusReq.as_u8(),
+            DynRpbAaeStatusReq::default().encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &NoopAaeStatusProvider)
+            .await
+            .expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].code, MessageCode::DynAaeStatusResp.as_u8());
+        let resp = DynRpbAaeStatusResp::decode(frames[0].body.as_slice()).expect("decode");
+        assert!(resp.peers.is_empty());
+        assert_eq!(resp.snapshot_save_total, 0);
+    }
+
+    #[tokio::test]
+    async fn aae_status_custom_provider_returns_live_snapshot() {
+        struct Provider;
+        impl crate::aae::status::AaeStatusProvider for Provider {
+            fn current_status(&self) -> crate::aae::status::AaeStatusSnapshot {
+                crate::aae::status::AaeStatusSnapshot {
+                    peers: vec![crate::aae::status::AaePeerStatus {
+                        peer_idx: 7,
+                        dc: "dc1".into(),
+                        rack: "rA".into(),
+                        last_exchange_unix: 1_700_000_000,
+                        divergent_keys_since_last_full_sweep: 4,
+                        repair_dispatched_total: 3,
+                    }],
+                    snapshot_path: "/var/lib/dynomite/aae/tree.snapshot".into(),
+                    snapshot_last_save_unix: 1_700_000_300,
+                    snapshot_last_load_unix: 1_700_000_100,
+                    snapshot_save_total: 5,
+                    snapshot_load_total: 1,
+                    snapshot_corruption_total: 0,
+                    tree_n_time_buckets: 24,
+                    tree_n_segments: 1024,
+                    tree_time_window_seconds: 3600,
+                    tree_memory_estimate_bytes: 8192,
+                }
+            }
+        }
+        let ds = MemoryDatastore::new();
+        let frame = Frame::new(
+            MessageCode::DynAaeStatusReq.as_u8(),
+            DynRpbAaeStatusReq::default().encode_to_vec(),
+        );
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None, &Provider)
+            .await
+            .expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].code, MessageCode::DynAaeStatusResp.as_u8());
+        let resp = DynRpbAaeStatusResp::decode(frames[0].body.as_slice()).expect("decode");
+        assert_eq!(resp.peers.len(), 1);
+        assert_eq!(resp.peers[0].peer_idx, 7);
+        assert_eq!(resp.peers[0].dc, b"dc1".to_vec());
+        assert_eq!(resp.snapshot_save_total, 5);
+        assert_eq!(resp.tree_n_time_buckets, 24);
+        assert_eq!(
+            resp.snapshot_path,
+            b"/var/lib/dynomite/aae/tree.snapshot".to_vec()
+        );
     }
 }

@@ -36,6 +36,7 @@ fn help_lists_every_v0_subcommand() {
         "cluster-plan",
         "cluster-commit",
         "bucket-props",
+        "aae-status",
     ] {
         assert!(out.contains(sub), "help is missing {sub}: {out}");
     }

@@ -83,6 +83,12 @@ pub use crate::proto::pb::messages::{
     DYN_STAGED_CHANGE_ADD, DYN_STAGED_CHANGE_REMOVE,
 };
 
+// AAE-status admin extension messages -- AAE R5 slice. New
+// PBC ops 220 / 221 carrying the AAE worker's snapshot.
+pub use crate::proto::pb::messages::{
+    DynRpbAaePeerStatus, DynRpbAaeStatusReq, DynRpbAaeStatusResp,
+};
+
 // Bucket-property selectors -- bucketonly keyfun and walk-N-
 // successors replication slice. Re-exported below the prior block
 // so parallel branches do not conflict.

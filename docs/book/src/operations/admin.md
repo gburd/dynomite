@@ -13,8 +13,8 @@ Every subcommand reads from a running node over one of two ports:
 
 | Port | Default | Used by |
 |---|---|---|
-| PBC (Riak Protocol Buffers) | `127.0.0.1:8087` | `ping`, `status`, `ring-status`, `cluster-list` |
-| Stats / metrics HTTP | `127.0.0.1:22222` | `stats`, `metrics` (and `status`/`ring-status` augmentation) |
+| PBC (Riak Protocol Buffers) | `127.0.0.1:8087` | `ping`, `status`, `ring-status`, `cluster-list`, `cluster-join`, `cluster-leave`, `cluster-plan`, `cluster-commit`, `aae-status` |
+| Stats / metrics HTTP | `127.0.0.1:22222` | `stats`, `metrics`, `distribution-dump` (and `status`/`ring-status` augmentation) |
 
 Override the address with `--node <host:port>` (or `--seed` for
 `cluster-list`). `status` and `ring-status` accept `--stats-node`
@@ -179,6 +179,45 @@ no-op round-trip.
 
 See [`riak.md`](riak.md) for the bucket-property semantics and the
 locations in the registry where the values are stored.
+### `aae-status`
+
+Returns a snapshot of the AAE worker's state: per-peer
+last-exchange wall-clock time, per-peer divergent-key counts
+since the most recent full sweep, the configured snapshot path,
+last save / last load wall-clock times, and the local tree
+shape (time-buckets * segments) plus a memory estimate:
+
+```sh
+$ dyn-admin aae-status
+AAE status (node 127.0.0.1:8087)
+
+ peer  dc          rack             last_exchange    divergent    repaired
+-----  ----------  ----------  ----------------  -----------  ----------
+    0  dc1         rA               1700000000           12           9
+    1  dc1         rB                        0            0           0
+
+snapshot_path: /var/lib/dynomite/aae/tree.snapshot
+snapshot_last_save_unix: 1700000300
+snapshot_last_load_unix: 0
+snapshot_save_total: 5
+snapshot_load_total: 0
+snapshot_corruption_total: 0
+tree: 24 time-buckets * 1024 segments, window 3600s, ~4096 bytes
+2 peer(s)
+```
+
+The JSON form returns the same fields as a stable object suitable
+for `jq` filters and dashboard pipelines:
+
+```sh
+$ dyn-admin aae-status --json | jq .snapshot_save_total
+5
+```
+
+When the embedding has not wired an `AaeStatusProvider` (the
+default `dynomited` build does not), the response is an empty
+snapshot; the CLI prints `0 peer(s)` and zero values for every
+counter rather than failing.
 
 ## Output formats
 

@@ -95,6 +95,15 @@ pub struct ConfAae {
     /// snapshot file). Created on first save with mode
     /// `0700` on Unix.
     pub aae_state_dir: PathBuf,
+    /// When `true`, the scheduler emits one sweep tick per
+    /// `(peer, token, time_bucket)` triple instead of one per
+    /// `(peer, time_bucket)` pair. Operators with peers that
+    /// hold multiple tokens (vnode-style) get a finer sweep
+    /// cadence and a smaller per-tick working set.
+    ///
+    /// Default `false` (per-peer cadence) so existing
+    /// deployments are unaffected.
+    pub per_token_exchange: bool,
 }
 
 impl Default for ConfAae {
@@ -108,6 +117,7 @@ impl Default for ConfAae {
             time_window_seconds: DEFAULT_TIME_WINDOW_SECONDS,
             snapshot_interval_seconds: DEFAULT_SNAPSHOT_INTERVAL_SECONDS,
             aae_state_dir: PathBuf::from(DEFAULT_AAE_STATE_DIR),
+            per_token_exchange: false,
         }
     }
 }
