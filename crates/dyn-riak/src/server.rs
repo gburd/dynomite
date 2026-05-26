@@ -57,6 +57,7 @@ use futures_util::StreamExt;
 use prost::Message as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
 
 use dynomite::cluster::admin_rpc::{
@@ -67,6 +68,7 @@ use dynomite::embed::Datastore;
 use dynomite::msg::{Msg, MsgType};
 
 use crate::error::RiakError;
+use crate::mapreduce::{MrError, PhaseBatch};
 use crate::proto::pb::framer::{read_frame, write_frame, Frame};
 use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 use crate::proto::pb::messages::{
@@ -380,7 +382,7 @@ async fn process_frame(
         MessageCode::ListBucketsReq => handle_list_buckets(&frame.body, datastore)?,
         MessageCode::ListKeysReq => handle_list_keys(&frame.body, datastore)?,
         MessageCode::IndexReq => handle_index(&frame.body, datastore).await?,
-        MessageCode::MapRedReq => single_frame(handle_mapred(&frame.body).await?),
+        MessageCode::MapRedReq => handle_mapreduce(&frame.body),
         MessageCode::DynListPeersReq => single_frame(handle_list_peers(&frame.body, admin)?),
         MessageCode::DynClusterJoinReq => single_frame(handle_cluster_join(&frame.body, admin)?),
         MessageCode::DynClusterLeaveReq => single_frame(handle_cluster_leave(&frame.body, admin)?),
@@ -782,19 +784,41 @@ fn handle_set_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
     ))
 }
 
-/// Run a MapReduce job submitted via PBC.
+/// Run a MapReduce job submitted via PBC and stream the per-phase
+/// outputs back as a sequence of [`RpbMapRedResp`] frames.
 ///
-/// The single-response variant: the executor runs the entire job to
-/// completion and the server emits one [`RpbMapRedResp`] carrying
-/// the captured outputs as JSON, with `done = true`. Streaming
-/// (one frame per phase plus a body-less terminator) is documented
-/// in the journal as deferred.
-async fn handle_mapred(body: &[u8]) -> Result<Frame, RiakError> {
-    use std::sync::Arc;
+/// The wire shape mirrors Riak's documented streaming contract:
+///
+/// * One non-terminal `RpbMapRedResp` frame per phase batch produced
+///   by the executor, carrying `phase = Some(batch.phase)`,
+///   `response = Some(json_bytes)`, and `done = Some(false)`.
+/// * One body-less terminator `RpbMapRedResp` with
+///   `phase = None`, `response = None`, and `done = Some(true)`.
+/// * On any executor error, a single `RpbErrorResp` frame and the
+///   stream closes; no terminator is emitted because the error
+///   itself signals end-of-stream to the client.
+///
+/// The PBC framer rejects malformed requests up-front (decode error,
+/// non-JSON content type) by emitting a single `RpbErrorResp`. A
+/// client that reads only the first frame still observes a
+/// well-formed answer: either the first phase batch (a partial
+/// result) or a server error.
+fn handle_mapreduce(body: &[u8]) -> FrameStream {
+    use crate::mapreduce::{builtins::default_registry, run_job_streaming, MapReduceJob};
 
-    use crate::mapreduce::{builtins::default_registry, run_job, MapReduceJob};
-
-    let req = RpbMapRedReq::decode(body)?;
+    let req = match RpbMapRedReq::decode(body) {
+        Ok(r) => r,
+        Err(e) => {
+            let resp = RpbErrorResp {
+                errmsg: format!("MapReduce request decode: {e}").into_bytes(),
+                errcode: 1,
+            };
+            return single_frame(Frame::new(
+                MessageCode::ErrorResp.as_u8(),
+                resp.encode_to_vec(),
+            ));
+        }
+    };
     if req.content_type != b"application/json" {
         let resp = RpbErrorResp {
             errmsg: format!(
@@ -804,7 +828,7 @@ async fn handle_mapred(body: &[u8]) -> Result<Frame, RiakError> {
             .into_bytes(),
             errcode: 1,
         };
-        return Ok(Frame::new(
+        return single_frame(Frame::new(
             MessageCode::ErrorResp.as_u8(),
             resp.encode_to_vec(),
         ));
@@ -816,7 +840,7 @@ async fn handle_mapred(body: &[u8]) -> Result<Frame, RiakError> {
                 errmsg: format!("MapReduce job decode: {e}").into_bytes(),
                 errcode: 1,
             };
-            return Ok(Frame::new(
+            return single_frame(Frame::new(
                 MessageCode::ErrorResp.as_u8(),
                 resp.encode_to_vec(),
             ));
@@ -824,30 +848,78 @@ async fn handle_mapred(body: &[u8]) -> Result<Frame, RiakError> {
     };
 
     let registry = Arc::new(default_registry());
-    match run_job(job, registry).await {
-        Ok(outputs) => {
-            let body = serde_json::to_vec(&outputs).unwrap_or_else(|_| b"[]".to_vec());
-            let resp = RpbMapRedResp {
-                phase: Some(0),
-                response: Some(body),
-                done: Some(true),
-            };
-            Ok(Frame::new(
-                MessageCode::MapRedResp.as_u8(),
-                resp.encode_to_vec(),
-            ))
+    let rx = run_job_streaming(job, registry);
+    Box::pin(mapreduce_response_stream(rx))
+}
+
+/// Producer state for the streaming MapReduce path.
+enum MrStreamState {
+    /// Pump the next [`PhaseBatch`] from the executor.
+    Streaming(mpsc::Receiver<Result<PhaseBatch, MrError>>),
+    /// Stream complete (or aborted by an error frame); no further
+    /// items.
+    Done,
+}
+
+/// Build the [`FrameStream`] backing [`handle_mapreduce`].
+///
+/// The state machine fans the executor's `Receiver<Result<PhaseBatch,
+/// MrError>>` out to one `RpbMapRedResp`/`RpbErrorResp` frame per
+/// poll. End-of-stream is signalled with a body-less
+/// `RpbMapRedResp { done = Some(true) }` terminator. Executor
+/// errors short-circuit to a single `RpbErrorResp` and close the
+/// stream without a terminator: the error is the terminator.
+fn mapreduce_response_stream(
+    rx: mpsc::Receiver<Result<PhaseBatch, MrError>>,
+) -> impl Stream<Item = Result<Frame, RiakError>> + Send {
+    futures_util::stream::unfold(MrStreamState::Streaming(rx), |state| async move {
+        match state {
+            MrStreamState::Done => None,
+            MrStreamState::Streaming(mut rx) => match rx.recv().await {
+                None => {
+                    let resp = RpbMapRedResp {
+                        phase: None,
+                        response: None,
+                        done: Some(true),
+                    };
+                    let frame = Frame::new(MessageCode::MapRedResp.as_u8(), resp.encode_to_vec());
+                    Some((Ok(frame), MrStreamState::Done))
+                }
+                Some(Ok(batch)) => {
+                    // Each non-terminal frame mirrors the documented
+                    // wire shape `[{ "phase": N, "data": [...] }]`,
+                    // matching the HTTP `/mapred` multipart writer
+                    // so a client that bridges the two transports
+                    // sees byte-identical phase payloads.
+                    let payload = serde_json::json!([{
+                        "phase": batch.phase,
+                        "data": batch.data,
+                    }]);
+                    let body = serde_json::to_vec(&payload).unwrap_or_else(|_| b"[]".to_vec());
+                    let resp = RpbMapRedResp {
+                        phase: Some(batch.phase),
+                        response: Some(body),
+                        done: Some(false),
+                    };
+                    let frame = Frame::new(MessageCode::MapRedResp.as_u8(), resp.encode_to_vec());
+                    Some((Ok(frame), MrStreamState::Streaming(rx)))
+                }
+                Some(Err(e)) => {
+                    let resp = RpbErrorResp {
+                        errmsg: format!("MapReduce execution: {e}").into_bytes(),
+                        errcode: 1,
+                    };
+                    let frame = Frame::new(MessageCode::ErrorResp.as_u8(), resp.encode_to_vec());
+                    // No terminator: the error itself ends the
+                    // stream. Riak's reference server behaves the
+                    // same way; otherwise a peer that treats
+                    // `done = true` as success would silently
+                    // mask the failure.
+                    Some((Ok(frame), MrStreamState::Done))
+                }
+            },
         }
-        Err(e) => {
-            let resp = RpbErrorResp {
-                errmsg: format!("MapReduce execution: {e}").into_bytes(),
-                errcode: 1,
-            };
-            Ok(Frame::new(
-                MessageCode::ErrorResp.as_u8(),
-                resp.encode_to_vec(),
-            ))
-        }
-    }
+    })
 }
 
 // ------------------------------------------------------------------
@@ -1612,6 +1684,166 @@ mod tests {
             }
             .encode_to_vec(),
         );
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+            .await
+            .expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].code, MessageCode::ErrorResp.as_u8());
+    }
+
+    // ---- streaming map-reduce ----
+
+    /// Build the JSON body for a `RpbMapRedReq` describing a
+    /// two-phase map+reduce job over inline `KeyData` inputs.
+    fn mapred_req_two_phase(values: &[i64]) -> Vec<u8> {
+        let inputs: Vec<serde_json::Value> = values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                serde_json::json!({
+                    "bucket": "b",
+                    "key": format!("k{i}"),
+                    "value": *v,
+                })
+            })
+            .collect();
+        let job = serde_json::json!({
+            "inputs": inputs,
+            "query": [
+                { "map": { "language": "erlang",
+                           "name": "map_object_value",
+                           "keep": true } },
+                { "reduce": { "language": "erlang",
+                              "name": "reduce_sum",
+                              "keep": true } },
+            ]
+        });
+        let req = RpbMapRedReq {
+            request: serde_json::to_vec(&job).expect("job json"),
+            content_type: b"application/json".to_vec(),
+        };
+        req.encode_to_vec()
+    }
+
+    #[tokio::test]
+    async fn process_frame_streams_mapreduce_response_with_per_phase_frames() {
+        // Two kept phases (map + reduce) over three inputs. The
+        // streaming handler must emit one body-carrying response
+        // per phase batch, all with `done = false`, then a
+        // terminator with `done = true`.
+        let body = mapred_req_two_phase(&[1, 2, 3]);
+        let frame = Frame::new(MessageCode::MapRedReq.as_u8(), body);
+        let ds = MemoryDatastore::new();
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+            .await
+            .expect("ok");
+        let frames = collect_frames(stream).await;
+        assert_eq!(
+            frames.len(),
+            3,
+            "expected two per-phase frames plus one terminator",
+        );
+        for f in &frames {
+            assert_eq!(f.code, MessageCode::MapRedResp.as_u8());
+        }
+        let p0 = RpbMapRedResp::decode(frames[0].body.as_slice()).expect("decode 0");
+        assert_eq!(p0.phase, Some(0));
+        assert_eq!(p0.done, Some(false));
+        let p0_body = p0.response.as_ref().expect("phase 0 body");
+        let p0_json: serde_json::Value = serde_json::from_slice(p0_body).expect("phase 0 json");
+        assert_eq!(p0_json[0]["phase"], 0);
+        assert_eq!(p0_json[0]["data"].as_array().unwrap().len(), 3);
+
+        let p1 = RpbMapRedResp::decode(frames[1].body.as_slice()).expect("decode 1");
+        assert_eq!(p1.phase, Some(1));
+        assert_eq!(p1.done, Some(false));
+        let p1_body = p1.response.as_ref().expect("phase 1 body");
+        let p1_json: serde_json::Value = serde_json::from_slice(p1_body).expect("phase 1 json");
+        assert_eq!(p1_json[0]["phase"], 1);
+        assert_eq!(p1_json[0]["data"], serde_json::json!([6]));
+    }
+
+    #[tokio::test]
+    async fn process_frame_emits_terminator_frame_with_done_true() {
+        let body = mapred_req_two_phase(&[10, 20]);
+        let frame = Frame::new(MessageCode::MapRedReq.as_u8(), body);
+        let ds = MemoryDatastore::new();
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+            .await
+            .expect("ok");
+        let frames = collect_frames(stream).await;
+        let term = frames.last().expect("at least one frame");
+        assert_eq!(term.code, MessageCode::MapRedResp.as_u8());
+        let parsed = RpbMapRedResp::decode(term.body.as_slice()).expect("decode terminator");
+        assert_eq!(parsed.done, Some(true));
+        assert_eq!(parsed.phase, None);
+        assert!(parsed.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn mapreduce_first_frame_is_a_partial_phase_zero_answer() {
+        // Backwards-compatibility check: a one-frame consumer that
+        // reads only the first response observes phase-0 data.
+        // This mirrors the legacy single-frame contract and lets a
+        // pre-streaming PBC client continue to extract a useful
+        // result.
+        let body = mapred_req_two_phase(&[5, 6, 7, 8]);
+        let frame = Frame::new(MessageCode::MapRedReq.as_u8(), body);
+        let ds = MemoryDatastore::new();
+        let mut stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+            .await
+            .expect("ok");
+        let first = stream.next().await.expect("first").expect("frame");
+        assert_eq!(first.code, MessageCode::MapRedResp.as_u8());
+        let parsed = RpbMapRedResp::decode(first.body.as_slice()).expect("decode");
+        assert_eq!(parsed.phase, Some(0));
+        assert_eq!(parsed.done, Some(false));
+        let body = parsed.response.expect("first frame carries body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(json[0]["phase"], 0);
+        assert_eq!(json[0]["data"].as_array().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn mapreduce_unknown_function_emits_single_error_frame() {
+        let job = serde_json::json!({
+            "inputs": [{"bucket": "b", "key": "k"}],
+            "query": [
+                { "map": { "language": "erlang",
+                           "name": "no_such_function",
+                           "keep": true } }
+            ]
+        });
+        let req = RpbMapRedReq {
+            request: serde_json::to_vec(&job).expect("job json"),
+            content_type: b"application/json".to_vec(),
+        };
+        let frame = Frame::new(MessageCode::MapRedReq.as_u8(), req.encode_to_vec());
+        let ds = MemoryDatastore::new();
+        let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
+            .await
+            .expect("ok");
+        let frames = collect_frames(stream).await;
+        // Error stream: one error frame, no terminator.
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].code, MessageCode::ErrorResp.as_u8());
+        let parsed = RpbErrorResp::decode(frames[0].body.as_slice()).expect("decode");
+        let msg = String::from_utf8_lossy(&parsed.errmsg);
+        assert!(
+            msg.contains("no_such_function") || msg.contains("unknown"),
+            "errmsg: {msg}",
+        );
+    }
+
+    #[tokio::test]
+    async fn mapreduce_unsupported_content_type_yields_error_frame() {
+        let req = RpbMapRedReq {
+            request: b"<xml/>".to_vec(),
+            content_type: b"application/xml".to_vec(),
+        };
+        let frame = Frame::new(MessageCode::MapRedReq.as_u8(), req.encode_to_vec());
+        let ds = MemoryDatastore::new();
         let stream = process_frame(&frame, &ds, &NoopClusterAdmin, None)
             .await
             .expect("ok");
