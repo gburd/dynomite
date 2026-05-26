@@ -4,6 +4,7 @@
 //! [`crate::AdminError`] so a single match in `main` renders failures
 //! uniformly.
 
+pub mod aae_status;
 pub mod cluster_commit;
 pub mod cluster_join;
 pub mod cluster_leave;

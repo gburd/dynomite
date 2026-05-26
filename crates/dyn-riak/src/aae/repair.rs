@@ -37,6 +37,7 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use crate::aae::exchange::Divergence;
+use crate::aae::metrics::AaeMetrics;
 use crate::aae::tictac::KeyEntry;
 use crate::datatypes::dvv::{DvvOrder, DvvSet};
 
@@ -328,6 +329,9 @@ pub struct RepairScheduler {
     sink: Arc<dyn RepairSink>,
     order: Arc<dyn VClockOrder>,
     peer_idx: u32,
+    metrics: Option<Arc<AaeMetrics>>,
+    metrics_dc: String,
+    metrics_rack: String,
 }
 
 impl RepairScheduler {
@@ -338,7 +342,23 @@ impl RepairScheduler {
             sink,
             order,
             peer_idx,
+            metrics: None,
+            metrics_dc: String::new(),
+            metrics_rack: String::new(),
         }
+    }
+
+    /// Attach an [`AaeMetrics`] handle. Every successful
+    /// [`Outcome::Repaired`] this scheduler emits increments
+    /// `aae_repair_dispatched_total{peer_idx, dc, rack}` on
+    /// the supplied handle. The `dc` and `rack` labels are
+    /// stored once and re-used on every observation.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: Arc<AaeMetrics>, dc: &str, rack: &str) -> Self {
+        self.metrics = Some(metrics);
+        dc.clone_into(&mut self.metrics_dc);
+        rack.clone_into(&mut self.metrics_rack);
+        self
     }
 
     /// Resolve every divergence in the slice. Convenience
@@ -347,6 +367,20 @@ impl RepairScheduler {
         let mut out = Vec::new();
         for d in divergences {
             out.extend(self.resolve(d));
+        }
+        if let Some(m) = self.metrics.as_ref() {
+            let dispatched = u64::try_from(
+                out.iter()
+                    .filter(|o| matches!(o, Outcome::Repaired(_)))
+                    .count(),
+            )
+            .unwrap_or(u64::MAX);
+            m.record_repair_dispatched(
+                self.peer_idx,
+                &self.metrics_dc,
+                &self.metrics_rack,
+                dispatched,
+            );
         }
         out
     }
@@ -661,5 +695,44 @@ mod tests {
         let (value, dvv) = outcome.resolve_with_warn(b"k");
         assert_eq!(value, Bytes::from_static(b"only"));
         assert_eq!(dvv, v);
+    }
+
+    #[test]
+    fn resolve_all_records_dispatched_metric() {
+        let (tx, _rx) = mpsc::channel::<RepairTask>(8);
+        let sink: Arc<dyn RepairSink> = Arc::new(MpscRepairSink::new(tx));
+        let order: Arc<dyn VClockOrder> = Arc::new(LexicographicOrder);
+        let metrics = Arc::new(AaeMetrics::new());
+        let sched =
+            RepairScheduler::new(11, sink, order).with_metrics(Arc::clone(&metrics), "dc1", "rA");
+
+        let divs = vec![
+            Divergence {
+                time_bucket: 0,
+                segment: 1,
+                local_only: vec![KeyEntry {
+                    bucket: b"b".to_vec(),
+                    key: b"k1".to_vec(),
+                    vclock: b"vc".to_vec(),
+                }],
+                remote_only: vec![],
+            },
+            Divergence {
+                time_bucket: 0,
+                segment: 2,
+                local_only: vec![KeyEntry {
+                    bucket: b"b".to_vec(),
+                    key: b"k2".to_vec(),
+                    vclock: b"vc".to_vec(),
+                }],
+                remote_only: vec![],
+            },
+        ];
+        let outs = sched.resolve_all(&divs);
+        assert_eq!(outs.len(), 2);
+        let snap = metrics.snapshot();
+        assert_eq!(snap.repair_dispatched.len(), 1);
+        assert_eq!(snap.repair_dispatched[0].peer_idx, 11);
+        assert_eq!(snap.repair_dispatched[0].count, 2);
     }
 }

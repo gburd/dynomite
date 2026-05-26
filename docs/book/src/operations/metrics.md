@@ -94,6 +94,68 @@ precision while staying within the integer-gauge wire format. A
 suspicion threshold of `phi > 8.0` therefore corresponds to
 `gossip_phi_score_milli > 8000` in PromQL.
 
+## Active Anti-Entropy (AAE) counters
+
+The AAE worker (Tictac merkle-tree exchange + repair sink) ships
+its own family of counters and gauges. They start at zero and only
+become meaningful once the embedding wires the AAE handle into
+the scheduler and repair scheduler:
+
+* `dyn_riak::aae::Scheduler::install_metrics(handle)` plus
+  `Scheduler::observe_exchange_attempt` /
+  `observe_exchange_success` / `observe_divergent_keys` from the
+  per-tick hot path.
+* `dyn_riak::aae::RepairScheduler::with_metrics(handle, dc, rack)`
+  for the repair-dispatched count.
+* `dyn_riak::aae::metrics::save_snapshot_with_metrics(...)` /
+  `load_snapshot_with_metrics(...)` for the snapshot counters.
+
+The families and labels:
+
+| Name | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `aae_exchange_attempts_total` | counter | `peer_idx`, `dc`, `rack` | One increment per AAE sweep tick that selected this peer, regardless of outcome. |
+| `aae_exchange_success_total` | counter | `peer_idx`, `dc`, `rack` | One increment per exchange that completed without a transport error, regardless of whether divergences were found. |
+| `aae_exchange_divergent_keys_total` | counter | `peer_idx`, `dc`, `rack` | Cumulative count of divergent keys observed during exchanges with this peer. Sustained growth means the cluster is producing repair traffic. |
+| `aae_repair_dispatched_total` | counter | `peer_idx`, `dc`, `rack` | Cumulative count of repair tasks dispatched against this peer (winners + siblings). Outcomes that surfaced `AmbiguousVClock` or `PeerUnavailable` do NOT contribute. |
+| `aae_tree_segments_dirty_gauge` | gauge | `peer_idx` | Current count of segments needing a rebuild. Values that stay non-zero across sweep cycles indicate a stuck rebuild. |
+| `aae_full_sweep_last_completed_seconds_gauge` | gauge | `peer_idx` | Wall-clock seconds since the UNIX epoch when this peer's most recent full sweep completed. Subtract from `time()` to get "seconds since". Zero means "never". |
+| `aae_snapshot_save_total` | counter | (none) | Cumulative count of snapshot writes. |
+| `aae_snapshot_load_total` | counter | (none) | Cumulative count of snapshot loads at process start. |
+| `aae_snapshot_corruption_total` | counter | (none) | Cumulative count of snapshot rejections (`Corrupted`, `VersionSkew`, `BadShape`). A non-zero value is benign on a version bump but otherwise indicates filesystem damage. |
+
+### Sample PromQL queries
+
+Exchange success rate per peer (operators want this near 100%):
+
+```promql
+sum by (peer_idx) (rate(aae_exchange_success_total[5m]))
+  /
+sum by (peer_idx) (rate(aae_exchange_attempts_total[5m]))
+```
+
+Divergence rate per DC (a sustained non-zero rate is the signal
+that AAE is doing useful work):
+
+```promql
+sum by (dc) (rate(aae_exchange_divergent_keys_total[5m]))
+```
+
+Seconds since last full sweep on every peer (alert when this
+exceeds the configured `full_sweep_interval_seconds`):
+
+```promql
+time() - aae_full_sweep_last_completed_seconds_gauge
+```
+
+Snapshot health indicator (any non-zero corruption rate that is
+NOT immediately after a deploy is a paging condition):
+
+```promql
+rate(aae_snapshot_corruption_total[15m])
+```
+
+
 ### Sample PromQL queries
 
 Total `NoTargets` rate per consistency level (this is the metric to

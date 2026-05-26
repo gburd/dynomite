@@ -9,8 +9,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use dyn_admin::commands::{
-    cluster_commit, cluster_join, cluster_leave, cluster_list, cluster_plan, distribution_dump,
-    metrics, ping, ring, stats, status,
+    aae_status, cluster_commit, cluster_join, cluster_leave, cluster_list, cluster_plan,
+    distribution_dump, metrics, ping, ring, stats, status,
 };
 use dyn_admin::output::OutputFormat;
 
@@ -156,6 +156,16 @@ enum Cmd {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Print a snapshot of the AAE worker's state on the
+    /// targeted node.
+    AaeStatus {
+        /// PBC `host:port`.
+        #[arg(long = "node", default_value = DEFAULT_PBC_NODE)]
+        node: String,
+        /// Emit JSON instead of human text.
+        #[arg(long = "json")]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -247,6 +257,9 @@ async fn dispatch(cli: Cli) -> Result<(), dyn_admin::AdminError> {
         }
         Cmd::DistributionDump { node, json } => {
             distribution_dump::run(&node, OutputFormat::from_flag(json), &mut stdout).await
+        }
+        Cmd::AaeStatus { node, json } => {
+            aae_status::run(&node, OutputFormat::from_flag(json), &mut stdout).await
         }
     }
 }
