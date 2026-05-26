@@ -408,12 +408,23 @@ pick which faults to enable.  1 week.
 
 #### P3-3.9 Differential rig integration with chaos
 
-The differential rig (revived this session) compares Rust vs C
-output for a static corpus.  It does not yet drive a multi-host
-cluster.  Build a "differential chaos" mode where the same
-workload drives both a Rust dynomited cluster AND a C dynomite
-cluster on the same hosts; assert reply equivalence.  Requires
-the C build operational on all 3 hosts.  2 weeks.
+**Phase 1+2 (substrate): DONE 2026-05-26.**
+  See `docs/journal/2026-05-26-differential-chaos-substrate.md`.
+  `MODE=differential` in `coordinator.sh` and `start-host.sh`
+  brings up a Rust dynomited and a C `dynomite` side by side
+  on every chaos host; the C cluster listens on shifted
+  ports (Rust + 100) and shares the backend redis. The C
+  binary is built per host by
+  `scripts/chaos-multi-host/build_cref_remote.sh` (idempotent
+  against the submodule's git commit hash). Single-host
+  smoke at `scripts/chaos-multi-host/smoke-differential.sh`.
+
+**Phases 3-5 (still queued):** drive the same workload to
+both proxies (phase 3, ~3 days), compare replies with an
+allowlist for known semantic divergences (phase 4, ~2 days),
+apply chaos faults to both proxies in lockstep (phase 5,
+~3 days). The phase-1+2 journal entry has the full design
+breakdown and effort estimates.
 
 ### Random-slicing investigation (parallel to Tier 1)
 
