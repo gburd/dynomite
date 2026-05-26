@@ -110,6 +110,11 @@ pub enum MessageCode {
     DynClusterCommitReq = 208,
     /// `DynRpbClusterCommitResp` -- 209.
     DynClusterCommitResp = 209,
+    /// `DynRpbAaeStatusReq` -- 220. Dynomite admin extension:
+    /// fetch a snapshot of the AAE worker state.
+    DynAaeStatusReq = 220,
+    /// `DynRpbAaeStatusResp` -- 221.
+    DynAaeStatusResp = 221,
 }
 
 impl MessageCode {
@@ -149,6 +154,8 @@ impl MessageCode {
             207 => Self::DynClusterPlanResp,
             208 => Self::DynClusterCommitReq,
             209 => Self::DynClusterCommitResp,
+            220 => Self::DynAaeStatusReq,
+            221 => Self::DynAaeStatusResp,
             other => return Err(other),
         })
     }
@@ -1533,6 +1540,100 @@ impl WireValue for DynRpbClusterCommitResp {
     }
 }
 
+/// `DynRpbAaePeerStatus` -- per-peer slice of the AAE status
+/// snapshot returned by [`DynRpbAaeStatusResp`].
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbAaePeerStatus {
+    /// Peer index.
+    #[prost(uint32, tag = "1")]
+    pub peer_idx: u32,
+    /// Datacenter of the peer.
+    #[prost(bytes = "vec", tag = "2")]
+    pub dc: Vec<u8>,
+    /// Rack of the peer.
+    #[prost(bytes = "vec", tag = "3")]
+    pub rack: Vec<u8>,
+    /// Wall-clock seconds (UNIX epoch) when this peer's most
+    /// recent exchange completed. Zero means "never".
+    #[prost(uint64, tag = "4")]
+    pub last_exchange_unix: u64,
+    /// Cumulative count of divergent keys observed since the
+    /// last full sweep finished.
+    #[prost(uint64, tag = "5")]
+    pub divergent_keys_since_last_full_sweep: u64,
+    /// Cumulative count of repair tasks dispatched against
+    /// this peer.
+    #[prost(uint64, tag = "6")]
+    pub repair_dispatched_total: u64,
+}
+
+impl WireValue for DynRpbAaePeerStatus {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbAaePeerStatus")
+    }
+}
+
+/// `DynRpbAaeStatusReq` -- empty request body. Sent under
+/// message code 220.
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbAaeStatusReq {}
+
+impl WireValue for DynRpbAaeStatusReq {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbAaeStatusReq")
+    }
+}
+
+/// `DynRpbAaeStatusResp` -- snapshot of the AAE worker's
+/// state. Returned under message code 221 in response to
+/// [`DynRpbAaeStatusReq`].
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct DynRpbAaeStatusResp {
+    /// One row per peer the AAE worker exchanges with.
+    #[prost(message, repeated, tag = "1")]
+    pub peers: Vec<DynRpbAaePeerStatus>,
+    /// Path of the local snapshot file. Empty when the
+    /// embedding has not configured a snapshot path.
+    #[prost(bytes = "vec", tag = "2")]
+    pub snapshot_path: Vec<u8>,
+    /// Wall-clock seconds (UNIX epoch) of the most recent
+    /// successful snapshot save. Zero means "never".
+    #[prost(uint64, tag = "3")]
+    pub snapshot_last_save_unix: u64,
+    /// Wall-clock seconds (UNIX epoch) of the most recent
+    /// successful snapshot load. Zero means "never".
+    #[prost(uint64, tag = "4")]
+    pub snapshot_last_load_unix: u64,
+    /// Cumulative count of snapshot writes.
+    #[prost(uint64, tag = "5")]
+    pub snapshot_save_total: u64,
+    /// Cumulative count of snapshot loads.
+    #[prost(uint64, tag = "6")]
+    pub snapshot_load_total: u64,
+    /// Cumulative count of corrupted-snapshot rejections.
+    #[prost(uint64, tag = "7")]
+    pub snapshot_corruption_total: u64,
+    /// Number of top-level time buckets in the local tree.
+    #[prost(uint32, tag = "8")]
+    pub tree_n_time_buckets: u32,
+    /// Number of bottom-level segments per time bucket.
+    #[prost(uint32, tag = "9")]
+    pub tree_n_segments: u32,
+    /// Width of one time bucket, in seconds.
+    #[prost(uint64, tag = "10")]
+    pub tree_time_window_seconds: u64,
+    /// Rough estimate of the local tree's resident memory,
+    /// in bytes.
+    #[prost(uint64, tag = "11")]
+    pub tree_memory_estimate_bytes: u64,
+}
+
+impl WireValue for DynRpbAaeStatusResp {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("dynomite.DynRpbAaeStatusResp")
+    }
+}
+
 #[cfg(test)]
 mod admin_tests {
     use super::*;
@@ -1550,6 +1651,8 @@ mod admin_tests {
             MessageCode::DynClusterPlanResp,
             MessageCode::DynClusterCommitReq,
             MessageCode::DynClusterCommitResp,
+            MessageCode::DynAaeStatusReq,
+            MessageCode::DynAaeStatusResp,
         ] {
             let byte = code.as_u8();
             assert_eq!(MessageCode::from_u8(byte).expect("known"), code);
@@ -1696,6 +1799,49 @@ mod admin_tests {
         let resp = DynRpbClusterCommitResp { applied: 7 };
         let back =
             DynRpbClusterCommitResp::decode(resp.encode_to_vec().as_slice()).expect("decode");
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn aae_status_req_is_empty() {
+        let req = DynRpbAaeStatusReq::default();
+        assert!(req.encode_to_vec().is_empty());
+    }
+
+    #[test]
+    fn aae_status_resp_round_trips() {
+        let resp = DynRpbAaeStatusResp {
+            peers: vec![
+                DynRpbAaePeerStatus {
+                    peer_idx: 0,
+                    dc: b"dc1".to_vec(),
+                    rack: b"rA".to_vec(),
+                    last_exchange_unix: 1_700_000_000,
+                    divergent_keys_since_last_full_sweep: 12,
+                    repair_dispatched_total: 9,
+                },
+                DynRpbAaePeerStatus {
+                    peer_idx: 1,
+                    dc: b"dc1".to_vec(),
+                    rack: b"rB".to_vec(),
+                    last_exchange_unix: 0,
+                    divergent_keys_since_last_full_sweep: 0,
+                    repair_dispatched_total: 0,
+                },
+            ],
+            snapshot_path: b"/var/lib/dynomite/aae/tree.snapshot".to_vec(),
+            snapshot_last_save_unix: 1_700_000_300,
+            snapshot_last_load_unix: 1_700_000_100,
+            snapshot_save_total: 5,
+            snapshot_load_total: 1,
+            snapshot_corruption_total: 0,
+            tree_n_time_buckets: 24,
+            tree_n_segments: 1024,
+            tree_time_window_seconds: 3600,
+            tree_memory_estimate_bytes: 4096,
+        };
+        let bytes = resp.encode_to_vec();
+        let back = DynRpbAaeStatusResp::decode(bytes.as_slice()).expect("decode");
         assert_eq!(back, resp);
     }
 }

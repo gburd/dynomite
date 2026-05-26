@@ -360,6 +360,7 @@ pub trait PeerView {
 /// scheduler tests wrap the "remote" tree in this view so the
 /// exchange logic can be exercised without going through the
 /// wire codec.
+#[derive(Debug, Clone, Copy)]
 pub struct LocalPeerView<'a> {
     tree: &'a Tree,
 }

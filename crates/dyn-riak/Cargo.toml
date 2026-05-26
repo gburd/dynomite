@@ -28,6 +28,7 @@ wasm = ["dep:wasmtime", "dep:ciborium"]
 dynomite = { path = "../dynomite" }
 dyn-encoding = { path = "../dyn-encoding" }
 bytes = { workspace = true }
+parking_lot = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

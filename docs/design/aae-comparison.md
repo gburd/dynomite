@@ -221,9 +221,9 @@ caveat as Section 2.
 |---|---|---|---|---|---|
 | R1 | Persist tree across restart | `aae/tictac.rs` + new `aae/persist.rs` | 2 days | DONE (this branch) | none (auto-rebuild on missing snapshot) |
 | R2 | Native-fold path for `NoxuDatastore` | `aae/tictac.rs::Tree::build_from_noxu_fold`, `aae/noxu_fold.rs` | 3 days | DONE (this branch) | none (transparent perf win) |
-| R3 | Per-token (not per-peer) exchange | `aae/scheduler.rs`, `aae/exchange.rs` | 2 days | open | none (more granular) |
-| R4 | Operator metrics for AAE health | `stats/failure.rs` already has the slot; wire AAE counters | 1 day | open | none (new prometheus lines) |
-| R5 | `dyn-admin aae-status` command | `crates/dyn-admin/src/commands/aae_status.rs` | 1 day | open | new operator surface |
+| R3 | Per-token (not per-peer) exchange | `aae/scheduler.rs`, `aae/exchange.rs` | 2 days | DONE (`stage/aae-r3-r4-r5`) | opt-in via `ConfAae::per_token_exchange` |
+| R4 | Operator metrics for AAE health | new `aae/metrics.rs`, opt-in handles on `aae::Scheduler` and `aae::RepairScheduler` | 1 day | DONE (`stage/aae-r3-r4-r5`) | nine new prometheus families, all start at zero |
+| R5 | `dyn-admin aae-status` command | `aae/status.rs`, PBC ops 220/221, `dyn-admin/src/commands/aae_status.rs` | 1 day | DONE (`stage/aae-r3-r4-r5`) | new operator surface |
 
 Total: ~9 days for "the realistic gen-2 polish path."  None
 of these change the wire format or add a new dependency.

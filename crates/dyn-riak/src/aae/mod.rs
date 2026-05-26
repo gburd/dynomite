@@ -48,11 +48,13 @@
 
 pub mod config;
 pub mod exchange;
+pub mod metrics;
 #[cfg(feature = "noxu")]
 pub mod noxu_fold;
 pub mod persist;
 pub mod repair;
 pub mod scheduler;
+pub mod status;
 pub mod tictac;
 
 pub use crate::aae::config::ConfAae;
@@ -62,6 +64,10 @@ pub use crate::aae::exchange::{
     EXCHANGE_MAGIC, FRAME_HEADER_LEN, MAX_PAYLOAD_LEN, PHASE_KEY_SYNC, PHASE_ROOT_SYNC,
     PHASE_TREE_SYNC,
 };
+pub use crate::aae::metrics::{
+    load_snapshot_with_metrics, save_snapshot_with_metrics, AaeMetrics, AaeMetricsSnapshot,
+    PeerEntry as AaePeerEntry, SimplePeerEntry as AaeSimplePeerEntry,
+};
 #[cfg(feature = "noxu")]
 pub use crate::aae::noxu_fold::NoxuFoldError;
 pub use crate::aae::persist::{PersistError, MAX_FIELD_LEN, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
@@ -70,4 +76,7 @@ pub use crate::aae::repair::{
     RepairSink, RepairTask, VClockOrder,
 };
 pub use crate::aae::scheduler::{Clock, MockClock, Scheduler, SweepPlan, SweepTick, SystemClock};
+pub use crate::aae::status::{
+    AaePeerStatus, AaeStatusProvider, AaeStatusSnapshot, NoopAaeStatusProvider,
+};
 pub use crate::aae::tictac::{KeyEntry, Tree, TreeError, TreeShape};
