@@ -239,9 +239,23 @@ if [ "$ENABLE_RIAK_PBC" = "1" ]; then
 EOF
 fi
 
-# Start dynomited.
-echo "==> starting dynomited (DC=$DC_NAME, tokens=$TOKENS)"
-nohup "$DYNOMITED" \
+# Start dynomited. The chaos injector's clock-skew fault
+# may set the FAKETIME environment variable (or write the
+# offset to $RUN/clock-skew-active) to launch the binary under
+# faketime; both forms are honoured here. Without faketime
+# available the env knob is silently ignored so the launch
+# still succeeds with a real clock.
+FAKETIME_PREFIX=()
+if [ -z "${FAKETIME:-}" ] && [ -f "$RUN/clock-skew-active" ]; then
+    FAKETIME="$(cat "$RUN/clock-skew-active" 2>/dev/null || true)"
+fi
+if [ -n "${FAKETIME:-}" ] && command -v faketime >/dev/null 2>&1; then
+    FAKETIME_PREFIX=(faketime "$FAKETIME")
+    echo "==> starting dynomited under faketime offset=$FAKETIME (DC=$DC_NAME, tokens=$TOKENS)"
+else
+    echo "==> starting dynomited (DC=$DC_NAME, tokens=$TOKENS)"
+fi
+nohup "${FAKETIME_PREFIX[@]}" "$DYNOMITED" \
     -c "$CONF" \
     -p "$RUN/dynomited.pid" \
     -o "$LOGS/dynomited-$DC_NAME.log" \
