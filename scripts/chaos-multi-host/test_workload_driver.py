@@ -31,6 +31,10 @@ from pathlib import Path
 from unittest import mock
 
 
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE))
+
+
 def _load_driver():
     """Load ``workload-driver.py`` as a module despite the hyphen."""
     here = Path(__file__).resolve().parent
@@ -483,6 +487,257 @@ class BackoffSleepTests(unittest.TestCase):
         self.assertEqual(op, "SET")
         self.assertIsNone(err)
         self.assertEqual(retries, {"strings/Closed": 1})
+# --- differential mode (P3-3.9 phases 3+4) ---
+#
+# Each test wires a DualConn, swaps the live Rust + C sub-conns
+# for scripted fakes, drives a few ops, and inspects the
+# DualConn snapshot + comparator outcome. Going through the
+# real DualConn gives us coverage of the parallel-thread
+# dispatch, the snapshot contract, and the way the comparator
+# is keyed off ``last_op``.
+
+
+class _ScriptedRespConn:
+    """Stand-in for a single RespConn.
+
+    The script is a list of replies: each entry is either a
+    parsed RESP value to return, or an exception instance to
+    raise. Out-of-script calls raise AssertionError so a buggy
+    test cannot quietly succeed.
+    """
+
+    def __init__(self, script):
+        self._script = list(script)
+        self._i = 0
+        self.closed = 0
+
+    def call(self, *_parts):
+        if self._i >= len(self._script):
+            raise AssertionError(
+                "_ScriptedRespConn script exhausted at call %d" % self._i
+            )
+        item = self._script[self._i]
+        self._i += 1
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    def close(self):
+        self.closed += 1
+
+    def connect(self):
+        pass
+
+
+def _build_dual(rust_script, c_script):
+    """Build a DualConn with two scripted sub-conns.
+
+    The constructor takes hostnames, but we never let the inner
+    conns reach socket.connect() because we replace them in
+    place with the scripted fakes.
+    """
+    dc = _driver.DualConn("127.0.0.1", 1, "127.0.0.1", 2)
+    dc.rust = _ScriptedRespConn(rust_script)
+    dc.c = _ScriptedRespConn(c_script)
+    return dc
+
+
+class DifferentialModeDualFanoutReturnsAgreedWhenRepliesMatch(
+    unittest.TestCase
+):
+    """Both proxies return the same bytes -> bucket = agreed."""
+
+    def test_set_ok_on_both_sides_is_agreed(self) -> None:
+        dc = _build_dual(["OK"], ["OK"])
+        reply = dc.call("SET", "k", "v")
+        self.assertEqual(reply, "OK")
+        snap = dc.snapshot()
+        self.assertEqual(snap["op"], "SET")
+        self.assertEqual(snap["rust_reply"], "OK")
+        self.assertEqual(snap["c_reply"], "OK")
+        self.assertIsNone(snap["rust_exc"])
+        self.assertIsNone(snap["c_exc"])
+
+        from differential_allowlist import compare_replies
+
+        bucket, _ = compare_replies(
+            snap["rust_reply"], snap["c_reply"],
+            snap["rust_exc"], snap["c_exc"],
+            snap["op"],
+        )
+        self.assertEqual(bucket, "agreed")
+
+    def test_get_returns_same_bytes(self) -> None:
+        dc = _build_dual([b"hello"], [b"hello"])
+        dc.call("GET", "k")
+        snap = dc.snapshot()
+
+        from differential_allowlist import compare_replies
+
+        bucket, _ = compare_replies(
+            snap["rust_reply"], snap["c_reply"],
+            snap["rust_exc"], snap["c_exc"],
+            snap["op"],
+        )
+        self.assertEqual(bucket, "agreed")
+
+
+class DifferentialModeRecordsDivergentWhenByteDiffOutsideAllowlist(
+    unittest.TestCase
+):
+    """GET returning different bytes on each side -> divergent."""
+
+    def test_byte_diff_on_get_is_divergent(self) -> None:
+        dc = _build_dual([b"alpha"], [b"beta"])
+        dc.call("GET", "k")
+        snap = dc.snapshot()
+        self.assertEqual(snap["rust_reply"], b"alpha")
+        self.assertEqual(snap["c_reply"], b"beta")
+
+        from differential_allowlist import compare_replies
+
+        bucket, detail = compare_replies(
+            snap["rust_reply"], snap["c_reply"],
+            snap["rust_exc"], snap["c_exc"],
+            snap["op"],
+        )
+        self.assertEqual(bucket, "divergent")
+        self.assertEqual(detail.get("reason"), "byte_diff")
+        self.assertIn("alpha", detail["snippet_rust"])
+        self.assertIn("beta", detail["snippet_c"])
+
+    def test_int_reply_diff_is_divergent(self) -> None:
+        # INCR returns an int; mismatch must surface.
+        dc = _build_dual([42], [43])
+        dc.call("INCR", "counter")
+        snap = dc.snapshot()
+
+        from differential_allowlist import compare_replies
+
+        bucket, _ = compare_replies(
+            snap["rust_reply"], snap["c_reply"],
+            snap["rust_exc"], snap["c_exc"],
+            snap["op"],
+        )
+        self.assertEqual(bucket, "divergent")
+
+
+class DifferentialModeKeysCommandSortsBeforeCompare(unittest.TestCase):
+    """KEYS is on the allowlist with sort_array_response."""
+
+    def test_keys_in_two_orderings_agree(self) -> None:
+        dc = _build_dual(
+            [[b"alpha", b"beta", b"gamma"]],
+            [[b"gamma", b"alpha", b"beta"]],
+        )
+        dc.call("KEYS", "*")
+        snap = dc.snapshot()
+        self.assertEqual(snap["op"], "KEYS")
+
+        from differential_allowlist import compare_replies
+
+        bucket, detail = compare_replies(
+            snap["rust_reply"], snap["c_reply"],
+            snap["rust_exc"], snap["c_exc"],
+            snap["op"],
+        )
+        self.assertEqual(bucket, "agreed")
+        self.assertEqual(detail.get("rule"), "sort_array_response")
+
+    def test_keys_with_actual_diff_diverges_after_sort(self) -> None:
+        dc = _build_dual(
+            [[b"alpha", b"beta", b"gamma"]],
+            [[b"alpha", b"beta", b"DELTA"]],
+        )
+        dc.call("KEYS", "*")
+        snap = dc.snapshot()
+
+        from differential_allowlist import compare_replies
+
+        bucket, detail = compare_replies(
+            snap["rust_reply"], snap["c_reply"],
+            snap["rust_exc"], snap["c_exc"],
+            snap["op"],
+        )
+        self.assertEqual(bucket, "divergent")
+        self.assertEqual(detail.get("reason"), "sorted_diff")
+
+
+class DifferentialModeOneSideFailedClassification(unittest.TestCase):
+    """One side raises, the other succeeds -> one_side_failed."""
+
+    def test_c_timeout_rust_ok_records_one_side_failed(self) -> None:
+        # Rust returns OK; C raises a socket timeout.
+        dc = _build_dual(["OK"], [socket.timeout("read")])
+        # Rust succeeded so DualConn.call returns the rust
+        # reply; the C-side exception lives on the snapshot.
+        reply = dc.call("SET", "k", "v")
+        self.assertEqual(reply, "OK")
+        snap = dc.snapshot()
+        self.assertIsNone(snap["rust_exc"])
+        self.assertIsInstance(snap["c_exc"], socket.timeout)
+
+        from differential_allowlist import compare_replies
+
+        bucket, detail = compare_replies(
+            snap["rust_reply"], snap["c_reply"],
+            snap["rust_exc"], snap["c_exc"],
+            snap["op"],
+        )
+        self.assertEqual(bucket, "one_side_failed")
+        self.assertEqual(detail["which"], "c")
+        # Python 3.10+ aliased socket.timeout to TimeoutError;
+        # accept either type-name so the test runs unchanged on
+        # both vintages.
+        self.assertIn(detail["error_class"][0], ("timeout", "TimeoutError"))
+        self.assertEqual(detail["op"], "SET")
+
+    def test_rust_failed_c_ok_re_raises_and_records(self) -> None:
+        # Rust raises a -DYNOMITE error; C succeeds.
+        # DualConn.call re-raises the Rust exception so the
+        # retry layer sees it; the snapshot still carries the
+        # C-side success.
+        dc = _build_dual(
+            [_driver.RespError("DYNOMITE: no quorum")],
+            ["OK"],
+        )
+        with self.assertRaises(_driver.RespError):
+            dc.call("SET", "k", "v")
+        snap = dc.snapshot()
+        self.assertIsNotNone(snap["rust_exc"])
+        self.assertEqual(snap["c_reply"], "OK")
+
+        from differential_allowlist import compare_replies
+
+        bucket, detail = compare_replies(
+            snap["rust_reply"], snap["c_reply"],
+            snap["rust_exc"], snap["c_exc"],
+            snap["op"],
+        )
+        self.assertEqual(bucket, "one_side_failed")
+        self.assertEqual(detail["which"], "rust")
+        self.assertEqual(detail["error_class"], ("RespError", "DYNOMITE"))
+
+    def test_both_sides_raise_same_class_is_agreed(self) -> None:
+        # Both clusters return -DYNOMITE: ... -- different
+        # message text but same error class. The comparator
+        # treats this as agreement on the error.
+        dc = _build_dual(
+            [_driver.RespError("DYNOMITE: no quorum reached")],
+            [_driver.RespError("DYNOMITE: dispatcher refused request")],
+        )
+        with self.assertRaises(_driver.RespError):
+            dc.call("SET", "k", "v")
+        snap = dc.snapshot()
+
+        from differential_allowlist import compare_replies
+
+        bucket, _ = compare_replies(
+            snap["rust_reply"], snap["c_reply"],
+            snap["rust_exc"], snap["c_exc"],
+            snap["op"],
+        )
+        self.assertEqual(bucket, "agreed")
 
 
 if __name__ == "__main__":
