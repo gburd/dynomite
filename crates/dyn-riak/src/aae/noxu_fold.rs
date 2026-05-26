@@ -42,12 +42,12 @@
 //!
 //! # Noxu API gap
 //!
-//! Noxu does not expose a `fold(start_key, end_key, callback)`
-//! primitive directly; the closest is the public `Cursor`
-//! handle and the `Get::First` / `Get::Next` modes. The
-//! crate-private `scan_prefix` helper in
+//! Noxu does not expose a typed `fold(start_key, end_key,
+//! callback)` primitive directly; the closest is the public
+//! `Cursor` handle and the `Get::SearchGte` / `Get::Next`
+//! modes. The crate-private `scan_prefix` helper in
 //! `crate::datastore::noxu` already wraps that into a
-//! prefix-bounded walk, and the new
+//! prefix-bounded walk seeded with `SearchGte`, and the new
 //! [`NoxuDatastore::fold_primary`] surface delegates to it.
 //! If a future Noxu release ships a typed fold, the helper
 //! is the single switch point.
