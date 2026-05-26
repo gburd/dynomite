@@ -67,6 +67,19 @@ RIAK_PBC_PORT=21800
 MODE="${MODE:-redis}"
 export MODE
 
+# Mode validation. The coordinator dispatches to per-host
+# start-host.sh which knows redis|memcache|riak|differential.
+# Reject anything else early so the operator sees the typo on
+# the lead host instead of waiting for four parallel SSH
+# failures.
+case "$MODE" in
+    redis|memcache|riak|differential) ;;
+    *)
+        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential)" >&2
+        exit 2
+        ;;
+esac
+
 # Per-class retry budget passed through to workload-driver.py.
 # Operator-typical Dynomite client SDKs retry once on NoTargets
 # (transient gossip churn), never on Timeout (genuine
@@ -433,7 +446,7 @@ for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/in
     [ -f "$f" ] && pid=$(cat "$f") && kill -TERM "$pid" 2>/dev/null
 done
 sleep 2
-for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid /scratch/dynomite-chaos/run/dynomited.pid; do
+for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid /scratch/dynomite-chaos/run/dynomited.pid /scratch/dynomite-chaos/run/dynomite-c.pid; do
     [ -f "$f" ] && pid=$(cat "$f") && kill -KILL "$pid" 2>/dev/null
 done
 if [ -f /scratch/dynomite-chaos/run/redis.pid ]; then
@@ -610,6 +623,45 @@ fi
 if host_active meh; then
     bootstrap_remote_src dc-meh meh "$MEH_RSYNC_E" yes "${MEH_SSH[@]}" \
         || mark_host_failed meh "bootstrap_remote_src failed"
+fi
+
+# MODE=differential phase 1+2 substrate: ensure each active
+# host has the C `dynomite` reference binary built and cached
+# under /scratch/dynomite-chaos/cref-build/dynomite. The
+# helper is idempotent against the submodule's git commit
+# hash, so re-runs are cheap. A build failure on a single host
+# marks that host failed (and is excluded from the rest of
+# the run) but does not abort the coordinator -- the
+# coordinator-robustness work from the fault-library stage
+# already provides this behaviour.
+#
+# Phases 3-5 (workload fan-out, reply comparison, chaos
+# integration) are documented in
+# docs/journal/2026-05-26-differential-chaos-substrate.md and
+# are explicit follow-ups; this stage only stands the parallel
+# clusters up.
+if [ "$MODE" = "differential" ]; then
+    log "==> MODE=differential: ensuring C dynomite on each active host"
+    if host_active floki; then
+        bash "$REPO/scripts/chaos-multi-host/build_cref_remote.sh" floki \
+            >> "$LOCAL_LOGS/dc-floki-cref-build.log" 2>&1 \
+            || mark_host_failed floki "build_cref_remote.sh failed"
+    fi
+    if host_active arnold; then
+        bash "$REPO/scripts/chaos-multi-host/build_cref_remote.sh" arnold \
+            >> "$LOCAL_LOGS/dc-arnold-cref-build.log" 2>&1 \
+            || mark_host_failed arnold "build_cref_remote.sh failed"
+    fi
+    if host_active nuc; then
+        bash "$REPO/scripts/chaos-multi-host/build_cref_remote.sh" nuc \
+            >> "$LOCAL_LOGS/dc-nuc-cref-build.log" 2>&1 \
+            || mark_host_failed nuc "build_cref_remote.sh failed (FreeBSD; expected; see journal)"
+    fi
+    if host_active meh; then
+        bash "$REPO/scripts/chaos-multi-host/build_cref_remote.sh" meh \
+            >> "$LOCAL_LOGS/dc-meh-cref-build.log" 2>&1 \
+            || mark_host_failed meh "build_cref_remote.sh failed"
+    fi
 fi
 
 src_check() {
