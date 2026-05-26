@@ -918,18 +918,40 @@ RIAK_WORKLOADS = [
 #                      server errors). Never retried; always
 #                      counted as a failure.
 
-RETRY_DEFAULT = "NoTargets:1,Timeout:0"
+RETRY_DEFAULT = "NoTargets:1:50:200,Timeout:0,Closed:2:100:1000"
 
 RECOVERABLE_CLASSES = ("NoTargets", "Timeout", "Closed", "WrongConnection")
 
+# Default backoff window (in milliseconds) applied to a class
+# when the operator omits the ``:base_ms:max_ms`` suffixes.
+# Picked to match an operator-typical client SDK that wants
+# enough jitter to break thundering herds without delaying a
+# successful retry by more than a couple hundred ms.
+RETRY_DEFAULT_BASE_MS = 50
+RETRY_DEFAULT_MAX_MS = 200
+
+# Hard ceiling on per-op time spent in retry sleeps. Even if a
+# misconfigured policy has a high count and a high max, we will
+# not let a single op linger past this many ms of cumulative
+# backoff before counting it as a failure. Coordinated with
+# ``--retry-deadline-ms`` on the CLI.
+RETRY_DEADLINE_MS_DEFAULT = 5000
+
 
 def parse_retry_policy(spec: str) -> dict:
-    """Parse a ``--retry-on`` spec into a {class: budget} dict.
+    """Parse a ``--retry-on`` spec into a {class: (count, base_ms, max_ms)} dict.
 
-    The spec is a comma-separated list of ``Class[:N]`` entries.
-    A missing ``:N`` defaults to ``:1``. An empty spec disables
-    every retry. Unknown class names are rejected so a typo does
-    not silently turn off retries the operator expected.
+    Each comma-separated entry has the syntax
+    ``Class[:<count>[:<base_ms>[:<max_ms>]]]``. A missing
+    ``count`` defaults to ``1``. A missing ``base_ms`` defaults
+    to ``RETRY_DEFAULT_BASE_MS``; a missing ``max_ms`` defaults
+    to ``RETRY_DEFAULT_MAX_MS`` when ``base_ms`` is also missing,
+    otherwise to ``4 * base_ms`` so ``Class:N:200`` still keeps
+    an exponential-with-cap shape.
+
+    An empty spec disables every retry. Unknown class names are
+    rejected so a typo does not silently turn off retries the
+    operator expected.
     """
     out: dict = {}
     if not spec:
@@ -938,10 +960,17 @@ def parse_retry_policy(spec: str) -> dict:
         entry = raw.strip()
         if not entry:
             continue
-        if ":" in entry:
-            cls, n_str = entry.split(":", 1)
-            cls = cls.strip()
-            n_str = n_str.strip()
+        parts = [p.strip() for p in entry.split(":")]
+        if len(parts) > 4:
+            raise ValueError(
+                "too many ':' segments in retry spec entry: %r" % entry
+            )
+        cls = parts[0]
+        n = 1
+        base_ms = RETRY_DEFAULT_BASE_MS
+        max_ms = RETRY_DEFAULT_MAX_MS
+        if len(parts) >= 2:
+            n_str = parts[1]
             if not n_str:
                 raise ValueError(
                     "missing budget after ':' in retry spec entry: %r" % entry
@@ -956,15 +985,54 @@ def parse_retry_policy(spec: str) -> dict:
                 raise ValueError(
                     "negative retry budget in entry: %r" % entry
                 )
-        else:
-            cls = entry
-            n = 1
+        if len(parts) >= 3:
+            b_str = parts[2]
+            if not b_str:
+                raise ValueError(
+                    "missing base_ms after ':' in retry spec entry: %r"
+                    % entry
+                )
+            try:
+                base_ms = int(b_str)
+            except ValueError:
+                raise ValueError(
+                    "non-integer base_ms in retry spec entry: %r" % entry
+                )
+            if base_ms < 0:
+                raise ValueError(
+                    "negative base_ms in retry spec entry: %r" % entry
+                )
+            # When the operator gives base_ms but not max_ms,
+            # pick a sensible exponential-with-cap shape rather
+            # than collapsing the curve to a flat sleep.
+            max_ms = max(base_ms * 4, base_ms)
+        if len(parts) == 4:
+            m_str = parts[3]
+            if not m_str:
+                raise ValueError(
+                    "missing max_ms after ':' in retry spec entry: %r"
+                    % entry
+                )
+            try:
+                max_ms = int(m_str)
+            except ValueError:
+                raise ValueError(
+                    "non-integer max_ms in retry spec entry: %r" % entry
+                )
+            if max_ms < 0:
+                raise ValueError(
+                    "negative max_ms in retry spec entry: %r" % entry
+                )
+            if max_ms < base_ms:
+                raise ValueError(
+                    "max_ms < base_ms in retry spec entry: %r" % entry
+                )
         if cls not in RECOVERABLE_CLASSES:
             raise ValueError(
                 "unknown error class %r in retry spec; valid classes: %s"
                 % (cls, ",".join(RECOVERABLE_CLASSES))
             )
-        out[cls] = n
+        out[cls] = (n, base_ms, max_ms)
     return out
 
 
@@ -1037,6 +1105,9 @@ def run_with_retry(
     policy: dict,
     retries: dict,
     cls_name: str,
+    *,
+    retry_sleep_ms: dict | None = None,
+    retry_deadline_ms: int = RETRY_DEADLINE_MS_DEFAULT,
 ) -> tuple:
     """Execute one workload op, applying the configured retry policy.
 
@@ -1055,8 +1126,29 @@ def run_with_retry(
     NDJSON window picks them up. Each retry consumes 1 from the
     per-class budget; budgets are reset per call (i.e. each
     workload op gets a full fresh budget).
+
+    Between attempts the loop sleeps for an
+    exponentially-growing window with jitter, capped at the
+    per-class ``max_ms``. This breaks thundering-herd retries
+    when several drivers all observe the same recoverable
+    error at the same instant (e.g. a freshly-restarted
+    dynomited's listener). ``retry_sleep_ms``, when supplied,
+    accumulates the actual sleep durations (in ms) under the
+    same ``"<cls_name>/<err_class>"`` keys as ``retries`` so
+    the NDJSON window can surface the wallclock cost of
+    backoff to the operator.
+
+    ``retry_deadline_ms`` caps the total time a single op can
+    spend in retry sleeps. If a sleep would push the cumulative
+    backoff past the deadline, the loop gives up immediately
+    and reports the most recent error_class as a failure even
+    if budget remains. This prevents a misconfigured policy
+    (high count, high max) from making one op block for tens
+    of seconds.
     """
-    remaining = dict(policy)
+    remaining = {cls: spec[0] for cls, spec in policy.items()}
+    attempts: dict[str, int] = {}
+    sleep_used_ms = 0.0
     while True:
         try:
             op = workload_fn(conn)
@@ -1071,12 +1163,38 @@ def run_with_retry(
             with suppress(Exception):
                 conn.close()
             budget = remaining.get(err_class, 0)
-            if err_class in RECOVERABLE_CLASSES and budget > 0:
-                remaining[err_class] = budget - 1
-                key = cls_name + "/" + err_class
-                retries[key] = retries.get(key, 0) + 1
-                continue
-            return None, err_class
+            if err_class not in RECOVERABLE_CLASSES or budget <= 0:
+                return None, err_class
+            # Compute the next backoff window before checking
+            # the deadline so the deadline check sees the sleep
+            # we are about to perform and refuses to start it
+            # if it would overrun.
+            spec = policy[err_class]
+            base_ms, max_ms = spec[1], spec[2]
+            attempt = attempts.get(err_class, 0)
+            window_ms = min(base_ms * (2 ** attempt), max_ms)
+            jitter = 0.5 + random.random()
+            sleep_for_ms = window_ms * jitter
+            if sleep_used_ms + sleep_for_ms > retry_deadline_ms:
+                # Honour the deadline strictly: do not sleep,
+                # do not consume budget, surface the failure
+                # with the class of the attempt that triggered
+                # it so the operator sees what the cluster
+                # last reported.
+                return None, err_class
+            if sleep_for_ms > 0:
+                time.sleep(sleep_for_ms / 1000.0)
+            sleep_used_ms += sleep_for_ms
+            if retry_sleep_ms is not None:
+                key_s = cls_name + "/" + err_class
+                retry_sleep_ms[key_s] = (
+                    retry_sleep_ms.get(key_s, 0.0) + sleep_for_ms
+                )
+            attempts[err_class] = attempt + 1
+            remaining[err_class] = budget - 1
+            key = cls_name + "/" + err_class
+            retries[key] = retries.get(key, 0) + 1
+            continue
 
 
 # --- driver loop ---
@@ -1107,14 +1225,31 @@ def main() -> int:
                         "--mode riak); defaults to 21800")
     p.add_argument("--retry-on", default=RETRY_DEFAULT,
                    help="Comma-separated list of recoverable error "
-                        "classes with optional :N retry budget, e.g. "
-                        "'NoTargets:1,Timeout:0'. Empty string disables "
-                        "all retries (matches the pre-2026-05-25 "
-                        "behaviour where every error counted as a "
-                        "failure). Valid classes: "
+                        "classes with optional retry budget and "
+                        "backoff window: "
+                        "'<class>[:<count>[:<base_ms>[:<max_ms>]]]'. "
+                        "Missing count defaults to 1; missing "
+                        "base_ms/max_ms default to %d/%d ms. "
+                        "Empty string disables all retries (matches "
+                        "the pre-2026-05-25 behaviour where every "
+                        "error counted as a failure). Valid classes: "
+                        % (RETRY_DEFAULT_BASE_MS, RETRY_DEFAULT_MAX_MS)
                         + ",".join(RECOVERABLE_CLASSES)
                         + ". Default: " + RETRY_DEFAULT)
+    p.add_argument("--retry-deadline-ms", type=int,
+                   default=RETRY_DEADLINE_MS_DEFAULT,
+                   help="Hard cap on wallclock time (in ms) one "
+                        "workload op may spend in retry sleeps before "
+                        "surfacing as a failure even if per-class "
+                        "budget remains. Prevents a misconfigured "
+                        "high-count/high-max policy from blocking a "
+                        "single op for tens of seconds. "
+                        "Default: %d ms."
+                        % RETRY_DEADLINE_MS_DEFAULT)
     args = p.parse_args()
+    if args.retry_deadline_ms < 0:
+        print("invalid --retry-deadline-ms: must be >= 0", file=sys.stderr)
+        return 2
 
     try:
         retry_policy = parse_retry_policy(args.retry_on)
@@ -1134,6 +1269,7 @@ def main() -> int:
     counts: dict[tuple[str, str], int] = {}
     failures: dict[tuple[str, str], int] = {}
     retries: dict[str, int] = {}
+    retry_sleep_ms: dict[str, float] = {}
     last_flush = time.monotonic()
     started = time.monotonic()
 
@@ -1174,7 +1310,9 @@ def main() -> int:
         cls_name, fn, _ = chosen_class
         try:
             op, err_class = run_with_retry(
-                fn, conn, effective_mode, retry_policy, retries, cls_name
+                fn, conn, effective_mode, retry_policy, retries, cls_name,
+                retry_sleep_ms=retry_sleep_ms,
+                retry_deadline_ms=args.retry_deadline_ms,
             )
         except net_errors as exc:
             # ``run_with_retry`` traps every exception itself, but
@@ -1209,11 +1347,13 @@ def main() -> int:
                 "counts": {f"{c}/{o}": v for (c, o), v in counts.items()},
                 "failures": {f"{c}/{e}": v for (c, e), v in failures.items()},
                 "retries": dict(retries),
+                "retry_sleep_ms": {k: int(v) for k, v in retry_sleep_ms.items()},
             }
             f.write(json.dumps(row) + "\n")
             counts.clear()
             failures.clear()
             retries.clear()
+            retry_sleep_ms.clear()
             last_flush = now
 
     # final flush
@@ -1225,6 +1365,7 @@ def main() -> int:
         "counts": {f"{c}/{o}": v for (c, o), v in counts.items()},
         "failures": {f"{c}/{e}": v for (c, e), v in failures.items()},
         "retries": dict(retries),
+        "retry_sleep_ms": {k: int(v) for k, v in retry_sleep_ms.items()},
         "final": True,
     }
     f.write(json.dumps(row) + "\n")
@@ -1331,17 +1472,35 @@ class _RetryPolicyParseTests(unittest.TestCase):
 
     def test_default_spec_parses(self) -> None:
         got = parse_retry_policy(RETRY_DEFAULT)
-        self.assertEqual(got, {"NoTargets": 1, "Timeout": 0})
+        self.assertEqual(
+            got,
+            {
+                "NoTargets": (1, 50, 200),
+                "Timeout": (0, 50, 200),
+                "Closed": (2, 100, 1000),
+            },
+        )
 
     def test_missing_budget_defaults_to_one(self) -> None:
         got = parse_retry_policy("NoTargets,Timeout:2")
-        self.assertEqual(got, {"NoTargets": 1, "Timeout": 2})
+        self.assertEqual(
+            got,
+            {
+                "NoTargets": (1, 50, 200),
+                "Timeout": (2, 50, 200),
+            },
+        )
 
     def test_full_policy_parses(self) -> None:
         got = parse_retry_policy("NoTargets:3,Timeout:1,Closed:0,WrongConnection:2")
         self.assertEqual(
             got,
-            {"NoTargets": 3, "Timeout": 1, "Closed": 0, "WrongConnection": 2},
+            {
+                "NoTargets": (3, 50, 200),
+                "Timeout": (1, 50, 200),
+                "Closed": (0, 50, 200),
+                "WrongConnection": (2, 50, 200),
+            },
         )
 
     def test_unknown_class_rejected(self) -> None:
@@ -1358,7 +1517,13 @@ class _RetryPolicyParseTests(unittest.TestCase):
 
     def test_whitespace_tolerant(self) -> None:
         got = parse_retry_policy(" NoTargets : 2 ,  Timeout : 0 ")
-        self.assertEqual(got, {"NoTargets": 2, "Timeout": 0})
+        self.assertEqual(
+            got,
+            {
+                "NoTargets": (2, 50, 200),
+                "Timeout": (0, 50, 200),
+            },
+        )
 
 
 class _ClassifyErrorTests(unittest.TestCase):
