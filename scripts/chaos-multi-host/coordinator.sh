@@ -69,14 +69,22 @@ export MODE
 
 # Per-class retry budget passed through to workload-driver.py.
 # Operator-typical Dynomite client SDKs retry once on NoTargets
-# (transient gossip churn) and never on Timeout (genuine
-# unavailability), so the chaos rig adopts the same defaults
-# unless an operator overrides via the env. Set
+# (transient gossip churn), never on Timeout (genuine
+# unavailability), and twice on Closed (peer reset; the next
+# reconnect almost always succeeds). The chaos rig adopts the
+# same defaults unless an operator overrides via the env. Set
 # ``RETRY_POLICY=""`` to disable retries entirely (matches the
 # pre-2026-05-25 behaviour where every error counted as a
 # failure); see ``docs/operations/chaos.md`` for the wider
 # discussion.
-RETRY_POLICY="${RETRY_POLICY-NoTargets:1,Timeout:0}"
+#
+# Pass-4 redis-mode triage (2026-05-25) showed Closed dominating
+# the failure mix at >99.9% of failures during chaos cycles, with
+# zero retries firing because Closed was not in the default
+# policy. Two retries on Closed (vs one on NoTargets) reflects
+# both the higher base rate and the cheap per-attempt cost (a
+# single TCP reconnect against the local engine).
+RETRY_POLICY="${RETRY_POLICY-NoTargets:1,Timeout:0,Closed:2}"
 export RETRY_POLICY
 
 # Per-DC distinct tokens. Distinct token slices on the ring
@@ -143,6 +151,53 @@ host_enabled() {
     esac
 }
 
+# Failed-host tracking. A host enters FAILED_HOSTS when any of
+# its bootstrap / start / workload / injector steps return
+# non-zero. Downstream steps gate on host_active (which combines
+# host_enabled with "not failed"), so a single failure -- e.g.
+# memcached missing on nuc when MODE=memcache, or a stale
+# dynomited binary built without --features riak when MODE=riak
+# -- removes that host from the rest of the run instead of
+# bubbling up via set -e and aborting the whole pass before the
+# other hosts even start.
+#
+# Teardown and the post-run rsync skip hosts not in host_active,
+# so a failed host does not produce cascading SSH errors.
+FAILED_HOSTS=""
+
+mark_host_failed() {
+    local h="$1"; shift
+    local reason="$*"
+    case ",$FAILED_HOSTS," in
+        *",$h,"*) ;;
+        *) FAILED_HOSTS="${FAILED_HOSTS:+$FAILED_HOSTS,}$h" ;;
+    esac
+    log "  WARN host $h marked failed: $reason"
+}
+
+host_active() {
+    local h="$1"
+    host_enabled "$h" || return 1
+    case ",$FAILED_HOSTS," in
+        *",$h,"*) return 1 ;;
+    esac
+    return 0
+}
+
+# Per-run health flags inspected at coordinator exit.
+#
+# WORKLOAD_RUNNING: number of hosts whose start_workload returned
+# 0. The coordinator exits non-zero if zero workload drivers ever
+# launched (the run is genuinely broken; the duration sleep is
+# pointless).
+#
+# DURATION_REACHED: set to 1 when the duration sleep completes
+# without interrupt. Combined with WORKLOAD_RUNNING > 0 it
+# satisfies the "at least one host ran for the full workload
+# duration" exit criterion.
+WORKLOAD_RUNNING=0
+DURATION_REACHED=0
+
 # Each host's view of the cluster. Pass-3 has full 4-way
 # connectivity: floki and arnold see each other over Tailscale;
 # nuc/meh are LAN; arnold acts as the LAN gateway for cross-DC
@@ -184,6 +239,13 @@ SEEDS
 # via nested heredocs (literal-quoted to disable a second round
 # of expansion on the remote bash) and then invokes the
 # start-host.sh script. The runner is the SSH array.
+#
+# Returns the SSH/start-host.sh exit code. The caller is
+# responsible for marking the host failed when this returns
+# non-zero; we do not call mark_host_failed here so the helper
+# stays composable (start_floki, for example, has its own
+# bootstrap branch that needs to call us under the same
+# semantics).
 start_host() {
     local label="$1"; shift
     local tokens="$1"; shift
@@ -198,7 +260,8 @@ start_host() {
         dc-nuc) bash_path=/usr/local/bin/bash ;;
     esac
 
-    "${runner[@]}" bash -s <<EOF >> "$LOCAL_LOGS/$label-start.log" 2>&1
+    local rc=0
+    "${runner[@]}" bash -s <<EOF >> "$LOCAL_LOGS/$label-start.log" 2>&1 || rc=$?
 set -euo pipefail
 mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs
 
@@ -225,18 +288,35 @@ __CHAOS_ARGS_END__
 
 MODE='$MODE' $bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/start-host.sh $label '$tokens' "\$(cat /scratch/dynomite-chaos/run/seeds.yml)" $DATASTORE_PORT $DYN_LISTEN_PORT $CLIENT_LISTEN_PORT $STATS_LISTEN_PORT $RIAK_PBC_PORT
 EOF
+    if [ "$rc" -ne 0 ]; then
+        log "  $label start failed (rc=$rc); see $LOCAL_LOGS/$label-start.log"
+        return "$rc"
+    fi
     log "  $label dynomited up"
+    return 0
 }
 
 start_floki() {
     log "preparing floki tokens=$TOKENS_FLOKI"
-    mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs /scratch/dynomite-chaos/build/release
-    cp -f "$REPO/target/release/dynomited" /scratch/dynomite-chaos/build/release/dynomited
-    # rsync source so the injector can find scripts via the same
-    # /scratch/dynomite-chaos/src layout used on the remotes.
-    mkdir -p /scratch/dynomite-chaos/src
-    rsync -a --delete --exclude target/ --exclude .git/ --exclude _/dynomite/.git/ \
-        "$REPO"/ /scratch/dynomite-chaos/src/
+    local rc=0
+    mkdir -p /scratch/dynomite-chaos/run /scratch/dynomite-chaos/logs /scratch/dynomite-chaos/build/release || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        cp -f "$REPO/target/release/dynomited" /scratch/dynomite-chaos/build/release/dynomited || rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+        # rsync source so the injector can find scripts via the
+        # same /scratch/dynomite-chaos/src layout used on the
+        # remotes.
+        mkdir -p /scratch/dynomite-chaos/src || rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+        rsync -a --delete --exclude target/ --exclude .git/ --exclude _/dynomite/.git/ \
+            "$REPO"/ /scratch/dynomite-chaos/src/ || rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+        log "  dc-floki bootstrap failed (rc=$rc)"
+        return "$rc"
+    fi
     SEEDS_STR=$(floki_seeds)
     cat > /scratch/dynomite-chaos/run/seeds.yml <<EOF
 $SEEDS_STR
@@ -254,8 +334,13 @@ EOF
     bash "$REPO/scripts/chaos-multi-host/start-host.sh" \
         dc-floki "$TOKENS_FLOKI" "$SEEDS_STR" \
         "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" "$RIAK_PBC_PORT" \
-        >> "$LOCAL_LOGS/dc-floki-start.log" 2>&1
+        >> "$LOCAL_LOGS/dc-floki-start.log" 2>&1 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        log "  dc-floki start failed (rc=$rc); see $LOCAL_LOGS/dc-floki-start.log"
+        return "$rc"
+    fi
     log "  dc-floki dynomited up"
+    return 0
 }
 
 # ---- workload + injector ----
@@ -275,7 +360,8 @@ start_workload() {
     else
         mode_flags="--mode $MODE"
     fi
-    "${runner[@]}" bash -s <<EOF
+    local rc=0
+    "${runner[@]}" bash -s <<EOF || rc=$?
 nohup python3 /scratch/dynomite-chaos/src/scripts/chaos-multi-host/workload-driver.py \\
     --host 127.0.0.1 --port $CLIENT_LISTEN_PORT \\
     $mode_flags \\
@@ -287,6 +373,11 @@ nohup python3 /scratch/dynomite-chaos/src/scripts/chaos-multi-host/workload-driv
     > /scratch/dynomite-chaos/logs/workload-$label.stderr 2>&1 < /dev/null &
 echo \$! > /scratch/dynomite-chaos/run/workload.pid
 EOF
+    if [ "$rc" -ne 0 ]; then
+        log "  workload-driver start failed on $label (rc=$rc)"
+        return "$rc"
+    fi
+    return 0
 }
 
 start_injector() {
@@ -294,11 +385,17 @@ start_injector() {
     local bash_path="$1"; shift
     local runner=("$@")
     log "starting chaos-injector on $label"
-    "${runner[@]}" bash -s <<EOF
+    local rc=0
+    "${runner[@]}" bash -s <<EOF || rc=$?
 nohup $bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/chaos-injector.sh $label \\
     > /scratch/dynomite-chaos/logs/injector-$label.stderr 2>&1 < /dev/null &
 echo \$! > /scratch/dynomite-chaos/run/injector.pid
 EOF
+    if [ "$rc" -ne 0 ]; then
+        log "  chaos-injector start failed on $label (rc=$rc)"
+        return "$rc"
+    fi
+    return 0
 }
 
 # ---- teardown ----
@@ -350,21 +447,32 @@ true
 REMOTE_EOF
 )
 
-    if host_enabled floki; then
+    # Teardown only iterates ACTIVE hosts (host_enabled and not
+    # in FAILED_HOSTS). Hosts that never started never had their
+    # /scratch/dynomite-chaos/run pidfiles populated, so calling
+    # the per-host kill snippet against them would either no-op
+    # (best case) or hit a wedged SSH (worst case) -- skipping
+    # them avoids cascading errors that previously masked the
+    # original failure in the report.
+    if host_active floki; then
         log "  teardown dc-floki"
         timeout --signal=KILL 60s bash -s <<<"$remote_cmd" \
             >> "$LOCAL_LOGS/dc-floki-teardown.log" 2>&1 \
             || log "  WARN dc-floki teardown timed out after 60s; continuing"
+    elif host_enabled floki; then
+        log "  skip teardown dc-floki (host marked failed)"
     fi
 
-    if host_enabled arnold; then
+    if host_active arnold; then
         log "  teardown dc-arnold"
         timeout --signal=KILL 60s "${ARNOLD_SSH[@]}" bash -s <<<"$remote_cmd" \
             >> "$LOCAL_LOGS/dc-arnold-teardown.log" 2>&1 \
             || log "  WARN dc-arnold teardown timed out after 60s; continuing"
+    elif host_enabled arnold; then
+        log "  skip teardown dc-arnold (host marked failed)"
     fi
 
-    if host_enabled nuc; then
+    if host_active nuc; then
         # nuc: try LAN-direct first because the normal ProxyJump
         # route may be wedged when arnold is mid-chaos-restart.
         # Fall back to ProxyJump if the LAN is not reachable from
@@ -379,37 +487,41 @@ REMOTE_EOF
         else
             log "  WARN dc-nuc teardown timed out via both direct and ProxyJump; continuing"
         fi
+    elif host_enabled nuc; then
+        log "  skip teardown dc-nuc (host marked failed)"
     fi
 
-    if host_enabled meh; then
+    if host_active meh; then
         log "  teardown dc-meh"
         timeout --signal=KILL 60s "${MEH_SSH[@]}" bash -s <<<"$remote_cmd" \
             >> "$LOCAL_LOGS/dc-meh-teardown.log" 2>&1 \
             || log "  WARN dc-meh teardown timed out after 60s; continuing"
+    elif host_enabled meh; then
+        log "  skip teardown dc-meh (host marked failed)"
     fi
 
-    if host_enabled arnold; then
+    if host_active arnold; then
         log "  rsync arnold logs"
         timeout --signal=KILL 60s \
             rsync -az -e "$ARNOLD_RSYNC_E" \
                 arnold:/scratch/dynomite-chaos/logs/ "$LOCAL_LOGS/arnold-logs/" \
             || log "  WARN arnold log rsync timed out after 60s; continuing"
     fi
-    if host_enabled nuc; then
+    if host_active nuc; then
         log "  rsync nuc logs"
         timeout --signal=KILL 60s \
             rsync -az -e "$NUC_RSYNC_E" \
                 gburd@nuc:/scratch/dynomite-chaos/logs/ "$LOCAL_LOGS/nuc-logs/" \
             || log "  WARN nuc log rsync timed out after 60s; continuing"
     fi
-    if host_enabled meh; then
+    if host_active meh; then
         log "  rsync meh logs"
         timeout --signal=KILL 60s \
             rsync -az -e "$MEH_RSYNC_E" \
                 meh:/scratch/dynomite-chaos/logs/ "$LOCAL_LOGS/meh-logs/" \
             || log "  WARN meh log rsync timed out after 60s; continuing"
     fi
-    if host_enabled floki; then
+    if host_active floki; then
         log "  copy floki logs"
         cp -r /scratch/dynomite-chaos/logs "$LOCAL_LOGS/floki-logs" 2>/dev/null || true
     fi
@@ -439,6 +551,12 @@ log "================================================================"
 # /scratch/dynomite-chaos/src is missing, rsync the local
 # source there before the start step needs it. Fast no-op when
 # the tree is already present and up to date.
+#
+# Returns non-zero if any of the rsync / ssh steps fail; the
+# caller marks the host failed. Each step explicitly captures
+# its own exit code so the function still propagates errors
+# even when called from a `||` context (where bash disables
+# `set -e` for the entire function body).
 bootstrap_remote_src() {
     local label="$1"; shift
     local rsync_target="$1"; shift
@@ -446,16 +564,23 @@ bootstrap_remote_src() {
     local push_binary="${1:-yes}"; shift 2>/dev/null || true
     local mkdir_runner=("$@")
     log "bootstrap $label src (push_binary=$push_binary)"
-    "${mkdir_runner[@]}" bash -s <<'EOF'
+    local rc=0
+    "${mkdir_runner[@]}" bash -s <<'EOF' || rc=$?
 mkdir -p /scratch/dynomite-chaos/src \
          /scratch/dynomite-chaos/run \
          /scratch/dynomite-chaos/logs \
          /scratch/dynomite-chaos/build/release
 EOF
+    if [ "$rc" -ne 0 ]; then
+        return "$rc"
+    fi
     rsync -a --delete \
         --exclude target/ --exclude .git/ --exclude _/dynomite/.git/ \
         -e "$rsync_e" \
-        "$REPO/" "$rsync_target:/scratch/dynomite-chaos/src/"
+        "$REPO/" "$rsync_target:/scratch/dynomite-chaos/src/" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        return "$rc"
+    fi
     # Ship the locally-built dynomited binary when the remote
     # OS+arch matches the build host. nuc runs FreeBSD, so the
     # caller passes push_binary=no and the operator is
@@ -464,54 +589,143 @@ EOF
     if [ "$push_binary" = "yes" ] && [ -x "$REPO/target/release/dynomited" ]; then
         rsync -a -e "$rsync_e" \
             "$REPO/target/release/dynomited" \
-            "$rsync_target:/scratch/dynomite-chaos/build/release/dynomited"
+            "$rsync_target:/scratch/dynomite-chaos/build/release/dynomited" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            return "$rc"
+        fi
     fi
+    return 0
 }
 
-if host_enabled arnold; then
-    bootstrap_remote_src dc-arnold arnold "$ARNOLD_RSYNC_E" yes "${ARNOLD_SSH[@]}"
+# Per-host bootstrap. A failure here removes the host from the
+# rest of the run; downstream steps gate on host_active.
+if host_active arnold; then
+    bootstrap_remote_src dc-arnold arnold "$ARNOLD_RSYNC_E" yes "${ARNOLD_SSH[@]}" \
+        || mark_host_failed arnold "bootstrap_remote_src failed"
 fi
-if host_enabled nuc; then
-    bootstrap_remote_src dc-nuc gburd@nuc "$NUC_RSYNC_E" no "${NUC_SSH[@]}"
+if host_active nuc; then
+    bootstrap_remote_src dc-nuc gburd@nuc "$NUC_RSYNC_E" no "${NUC_SSH[@]}" \
+        || mark_host_failed nuc "bootstrap_remote_src failed"
 fi
-if host_enabled meh; then
-    bootstrap_remote_src dc-meh meh "$MEH_RSYNC_E" yes "${MEH_SSH[@]}"
+if host_active meh; then
+    bootstrap_remote_src dc-meh meh "$MEH_RSYNC_E" yes "${MEH_SSH[@]}" \
+        || mark_host_failed meh "bootstrap_remote_src failed"
 fi
 
 src_check() {
     local label="$1"; shift
     local runner=("$@")
-    "${runner[@]}" bash -s <<'EOF' || { log "$label:src missing"; exit 1; }
+    local rc=0
+    "${runner[@]}" bash -s <<'EOF' || rc=$?
 [ -d /scratch/dynomite-chaos/src ]
 EOF
+    if [ "$rc" -ne 0 ]; then
+        log "$label:src missing (rc=$rc)"
+        return "$rc"
+    fi
+    return 0
 }
 
-if host_enabled arnold; then src_check arnold "${ARNOLD_SSH[@]}"; fi
-if host_enabled nuc;    then src_check nuc    "${NUC_SSH[@]}";    fi
-if host_enabled meh;    then src_check meh    "${MEH_SSH[@]}";    fi
+if host_active arnold; then
+    src_check arnold "${ARNOLD_SSH[@]}" || mark_host_failed arnold "src_check failed"
+fi
+if host_active nuc; then
+    src_check nuc "${NUC_SSH[@]}" || mark_host_failed nuc "src_check failed"
+fi
+if host_active meh; then
+    src_check meh "${MEH_SSH[@]}" || mark_host_failed meh "src_check failed"
+fi
 
-if host_enabled floki;  then start_floki; fi
-if host_enabled arnold; then start_host dc-arnold "$TOKENS_ARNOLD" "$(arnold_seeds)" "${ARNOLD_SSH[@]}"; fi
-if host_enabled nuc;    then start_host dc-nuc    "$TOKENS_NUC"    "$(nuc_seeds)"    "${NUC_SSH[@]}";    fi
-if host_enabled meh;    then start_host dc-meh    "$TOKENS_MEH"    "$(meh_seeds)"    "${MEH_SSH[@]}";    fi
+if host_active floki; then
+    start_floki || mark_host_failed floki "start_floki failed"
+fi
+if host_active arnold; then
+    start_host dc-arnold "$TOKENS_ARNOLD" "$(arnold_seeds)" "${ARNOLD_SSH[@]}" \
+        || mark_host_failed arnold "start_host failed"
+fi
+if host_active nuc; then
+    start_host dc-nuc "$TOKENS_NUC" "$(nuc_seeds)" "${NUC_SSH[@]}" \
+        || mark_host_failed nuc "start_host failed"
+fi
+if host_active meh; then
+    start_host dc-meh "$TOKENS_MEH" "$(meh_seeds)" "${MEH_SSH[@]}" \
+        || mark_host_failed meh "start_host failed"
+fi
 
 # Brief settle so any deferred state is in place.
 sleep 5
 
-if host_enabled floki;  then start_workload dc-floki  /bin/bash           "${LOCAL_RUN[@]}"; fi
-if host_enabled arnold; then start_workload dc-arnold /bin/bash           "${ARNOLD_SSH[@]}"; fi
-if host_enabled nuc;    then start_workload dc-nuc    /usr/local/bin/bash "${NUC_SSH[@]}"; fi
-if host_enabled meh;    then start_workload dc-meh    /bin/bash           "${MEH_SSH[@]}"; fi
+if host_active floki; then
+    if start_workload dc-floki /bin/bash "${LOCAL_RUN[@]}"; then
+        WORKLOAD_RUNNING=$((WORKLOAD_RUNNING + 1))
+    else
+        mark_host_failed floki "start_workload failed"
+    fi
+fi
+if host_active arnold; then
+    if start_workload dc-arnold /bin/bash "${ARNOLD_SSH[@]}"; then
+        WORKLOAD_RUNNING=$((WORKLOAD_RUNNING + 1))
+    else
+        mark_host_failed arnold "start_workload failed"
+    fi
+fi
+if host_active nuc; then
+    if start_workload dc-nuc /usr/local/bin/bash "${NUC_SSH[@]}"; then
+        WORKLOAD_RUNNING=$((WORKLOAD_RUNNING + 1))
+    else
+        mark_host_failed nuc "start_workload failed"
+    fi
+fi
+if host_active meh; then
+    if start_workload dc-meh /bin/bash "${MEH_SSH[@]}"; then
+        WORKLOAD_RUNNING=$((WORKLOAD_RUNNING + 1))
+    else
+        mark_host_failed meh "start_workload failed"
+    fi
+fi
 
-if host_enabled floki;  then start_injector dc-floki  /bin/bash           "${LOCAL_RUN[@]}"; fi
-if host_enabled arnold; then start_injector dc-arnold /bin/bash           "${ARNOLD_SSH[@]}"; fi
-if host_enabled nuc;    then start_injector dc-nuc    /usr/local/bin/bash "${NUC_SSH[@]}"; fi
-if host_enabled meh;    then start_injector dc-meh    /bin/bash           "${MEH_SSH[@]}"; fi
+if host_active floki; then
+    start_injector dc-floki /bin/bash "${LOCAL_RUN[@]}" \
+        || mark_host_failed floki "start_injector failed"
+fi
+if host_active arnold; then
+    start_injector dc-arnold /bin/bash "${ARNOLD_SSH[@]}" \
+        || mark_host_failed arnold "start_injector failed"
+fi
+if host_active nuc; then
+    start_injector dc-nuc /usr/local/bin/bash "${NUC_SSH[@]}" \
+        || mark_host_failed nuc "start_injector failed"
+fi
+if host_active meh; then
+    start_injector dc-meh /bin/bash "${MEH_SSH[@]}" \
+        || mark_host_failed meh "start_injector failed"
+fi
 
-log "==> all components up; sleeping for $DURATION seconds"
+if [ -n "$FAILED_HOSTS" ]; then
+    log "  hosts failed during start: $FAILED_HOSTS"
+fi
+
+if [ "$WORKLOAD_RUNNING" -eq 0 ]; then
+    log "==> ERROR: zero workload-drivers launched; not sleeping for $DURATION s"
+    log "==> failed hosts: ${FAILED_HOSTS:-<none>}"
+    trap - EXIT INT TERM
+    teardown
+    log "==> coordinator done (no host completed the workload duration)"
+    exit 1
+fi
+
+log "==> $WORKLOAD_RUNNING workload-driver(s) up; sleeping for $DURATION seconds"
 sleep "$DURATION"
+DURATION_REACHED=1
 
 log "==> duration elapsed"
 trap - EXIT INT TERM
 teardown
 log "==> coordinator done"
+
+if [ "$WORKLOAD_RUNNING" -ge 1 ] && [ "$DURATION_REACHED" -eq 1 ]; then
+    log "==> exit 0 ($WORKLOAD_RUNNING host(s) completed the workload duration; failed: ${FAILED_HOSTS:-<none>})"
+    exit 0
+fi
+log "==> exit 1 (no host completed the workload duration)"
+exit 1
