@@ -281,7 +281,10 @@ References:
 
 Two operator-confirmed bucket-property knobs let Riak deployments
 match the upstream behaviour byte-for-byte without forcing every
-deployment onto the same defaults.
+deployment onto the same defaults. See
+[the `dyn-admin bucket-props` reference](admin.md#bucket-props)
+for the operator-facing CLI that fetches and edits these knobs over
+PBC.
 
 ### `chash_keyfun`: bucket-only hashing
 

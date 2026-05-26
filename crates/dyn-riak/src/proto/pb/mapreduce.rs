@@ -19,12 +19,13 @@
 //! # Streaming
 //!
 //! Riak emits one `RpbMapRedResp` per phase that has `keep: true`,
-//! plus a final body-less frame with `done: true`. This slice ships
-//! the single-response variant: the executor runs the job to
-//! completion and the server emits one `RpbMapRedResp` carrying the
-//! whole response body and `done: true`. The streaming variant is
-//! marked deferred in the journal and lands when the executor's
-//! mpsc-of-mpscs grows a streaming output sink.
+//! plus a final body-less frame with `done: true`. The PBC server
+//! ([`crate::server::serve_pbc`]) implements that contract: each
+//! per-phase batch produced by [`crate::mapreduce::run_job_streaming`]
+//! becomes one `RpbMapRedResp` carrying that phase's JSON payload
+//! and `done: false`, followed by a body-less terminator with
+//! `done: true`. Executor errors short-circuit to a single
+//! `RpbErrorResp` frame.
 
 use prost::Message;
 

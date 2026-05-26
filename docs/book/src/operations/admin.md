@@ -133,6 +133,53 @@ note: multi-peer discovery deferred: substrate does not yet expose a peer-list m
       over PBC; reporting only the contacted seed
 ```
 
+### `bucket-props`
+
+Inspects or updates a bucket's `RpbBucketProps` over PBC. Two
+actions:
+
+* `get <bucket>` issues an `RpbGetBucketReq` and pretty-prints the
+  reply.
+* `set <bucket> [flags]` reads the current properties first, applies
+  the named overrides on top, and submits an `RpbSetBucketReq`.
+  Fields the operator does not name are sent back unchanged so the
+  update is always a partial overlay.
+
+```sh
+$ dyn-admin bucket-props get users
+Bucket properties for users via 127.0.0.1:8087
+  n_val: 3
+  keyfun: std
+  replication_strategy: successors
+
+$ dyn-admin bucket-props set users --n-val 5 --keyfun bucketonly
+Updated bucket properties for users via 127.0.0.1:8087
+  n_val: 5
+  keyfun: bucketonly
+  replication_strategy: successors
+
+$ dyn-admin bucket-props get users --json | jq '.props.n_val'
+5
+```
+
+Flags accepted by `set`:
+
+| Flag | Values | Meaning |
+|---|---|---|
+| `--n-val N` | non-negative integer | Replication factor. |
+| `--read-consistency C` | `one`, `quorum`, `all`, `default`, integer | Default replica-read quorum (Riak `r`). |
+| `--write-consistency C` | same as `--read-consistency` | Default replica-write quorum (Riak `w`). |
+| `--keyfun KF` | `std`, `bucketonly` | Pre-hash strategy. |
+| `--replication-strategy STRAT` | `topology`, `successors` | Replica-target selection strategy. |
+
+The symbolic quorum names map to Riak's published magic uint32
+values so a Riak client and `dyn-admin` agree on the semantics.
+`set` rejects an empty flag list with a hard error rather than a
+no-op round-trip.
+
+See [`riak.md`](riak.md) for the bucket-property semantics and the
+locations in the registry where the values are stored.
+
 ## Output formats
 
 * Default: human-readable. One `key: value` pair per line for the
