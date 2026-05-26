@@ -64,6 +64,13 @@ CLIENT_LISTEN_PORT=18102
 STATS_LISTEN_PORT=22222
 RIAK_PBC_PORT=21800
 
+# Differential-mode (P3-3.9) port shifts. The C `dynomite`
+# reference proxy listens on Rust + 100 so a single host can
+# run both proxies without colliding. start-host.sh derives
+# the same shifts internally; this file pins the names used
+# by the workload-driver fan-out flags.
+CLIENT_LISTEN_PORT_C=$((CLIENT_LISTEN_PORT + 100))
+
 MODE="${MODE:-redis}"
 export MODE
 
@@ -375,13 +382,22 @@ start_workload() {
     local _bash_path="$1"; shift
     local runner=("$@")
     log "starting workload-driver on $label (mode=$MODE)"
-    # In riak mode the driver dials the PBC listener instead of
-    # the engine's client_listen, so swap the --port wiring for
-    # --riak-pbc-port. The redis/memcache modes keep using
-    # --port $CLIENT_LISTEN_PORT.
+    # Mode wiring varies per backend:
+    #  * riak: dial the PBC listener at $RIAK_PBC_PORT,
+    #    not the engine's client_listen.
+    #  * differential (P3-3.9 phases 3+4): the driver fans every
+    #    op out to both the Rust and C proxies and records
+    #    per-op agreed/divergent/one_side_failed verdicts. The
+    #    C-side defaults to ``--rust-host`` + 100 inside the
+    #    driver, but we pass the explicit flags so a future
+    #    re-shuffle of the port table only needs editing in
+    #    one place (here).
+    #  * redis|memcache: the existing single-port path.
     local mode_flags
     if [ "$MODE" = "riak" ]; then
         mode_flags="--mode riak --riak-pbc-port $RIAK_PBC_PORT"
+    elif [ "$MODE" = "differential" ]; then
+        mode_flags="--mode differential --rust-port $CLIENT_LISTEN_PORT --c-port $CLIENT_LISTEN_PORT_C"
     else
         mode_flags="--mode $MODE"
     fi
