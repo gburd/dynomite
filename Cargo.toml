@@ -36,15 +36,15 @@ missing_panics_doc = "allow"
 doc_markdown = "allow"
 
 [workspace.dependencies]
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
-bytes = "1.7"
+bytes = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
-thiserror = "1.0"
+thiserror = "2.0"
 anyhow = "1.0"
 # Cryptographic hash and binary codec used by the standalone
 # `hashtree` crate (the generic merkle/AAE primitive). BLAKE3 is
@@ -90,10 +90,10 @@ sha1 = "0.10"
 rand = "0.8"
 rand_core = { version = "0.6", features = ["std"] }
 base64 = "0.22"
-nix = { version = "0.29", features = ["signal", "process", "fs", "user", "net", "hostname"] }
-socket2 = "0.5"
-httparse = "1.9"
-prometheus = "0.13"
+nix = { version = "0.30", features = ["signal", "process", "fs", "user", "net", "hostname"] }
+socket2 = "0.6"
+httparse = "1.10"
+prometheus = "0.14"
 
 # Wire-format codecs (dyn-encoding crate). Pinned to track the
 # rest of the workspace; bumping requires a journal entry.
@@ -102,7 +102,7 @@ prometheus = "0.13"
 # implementation; we avoid `prost-build` by hand-deriving
 # `prost::Message` on Rust structs.
 ciborium = "0.2"
-prost = "0.13"
+prost = "0.14"
 
 # WebAssembly runtime for the optional dyn-riak MapReduce Wasm
 # fitting. Default features are kept off so the dependency is
@@ -121,8 +121,8 @@ wasmtime = { version = "26", default-features = false, features = ["cranelift", 
 # `bebop` is the upstream Rust runtime for the Bebop schema
 # format. `bson` is the MongoDB-shepherded BSON crate, used in
 # serde mode (no document-level API surface).
-flatbuffers = "25"
-capnp = "0.21"
+flatbuffers = "25.12"
+capnp = "0.25"
 bebop = "3.2"
 bson = { version = "3", features = ["serde"] }
 
@@ -160,9 +160,9 @@ serde_json = "1.0"
 criterion = { version = "0.5", features = ["html_reports"] }
 assert_cmd = "2.0"
 predicates = "3.1"
-tempfile = "3.13"
-clap_mangen = "0.2"
-rcgen = "0.13"
+tempfile = "3.27"
+clap_mangen = "0.3"
+rcgen = "0.14"
 
 # Distributed tracing (opt-in OTLP exporter; off by default).
 # Versions are pinned as a compatible 0.27/0.28 family: the
