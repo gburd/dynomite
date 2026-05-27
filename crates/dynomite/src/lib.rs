@@ -44,6 +44,7 @@ pub mod io;
 pub mod msg;
 pub mod net;
 pub mod proto;
+pub mod runtime;
 pub mod seeds;
 pub mod stats;
 pub mod util;
