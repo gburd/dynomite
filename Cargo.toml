@@ -8,6 +8,7 @@ members = [
     "crates/dyn-riak",
     "crates/dyn-admin",
     "crates/gen-fsm",
+    "crates/hashtree",
 ]
 exclude = [
     "crates/fuzz",
@@ -45,6 +46,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 thiserror = "1.0"
 anyhow = "1.0"
+# Cryptographic hash and binary codec used by the standalone
+# `hashtree` crate (the generic merkle/AAE primitive). BLAKE3 is
+# the per-segment digest function; bincode is the snapshot wire
+# format. Both are pinned to recent stable releases of their 1.x
+# trains.
+blake3 = "1.5"
+bincode = "1.3"
 # Stream trait + utilities for the streaming-list path on the
 # Datastore embed hook. `futures-core` carries the `Stream` trait
 # referenced by the Datastore trait signature; `futures-util`
