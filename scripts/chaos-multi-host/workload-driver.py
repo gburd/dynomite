@@ -34,6 +34,7 @@ exercise the framer, codec, and dispatcher under chaos.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import random
@@ -42,10 +43,46 @@ import socket
 import string
 import struct
 import sys
+import threading
 import time
 import unittest
 from contextlib import suppress
 from pathlib import Path
+
+# Lazily imported by ``_load_allowlist``; kept module-global so
+# tests can monkeypatch.
+_DAL = None
+
+
+def _load_allowlist():
+    """Load ``differential_allowlist`` lazily.
+
+    The module sits next to this script on disk. The driver is
+    invoked by file path under several different layouts (worktree,
+    chaos-host scratch tree, in-process unittest), so we resolve
+    the file relative to ``__file__`` and import it via
+    ``importlib`` rather than relying on ``sys.path`` already
+    containing our directory.
+    """
+    global _DAL
+    if _DAL is not None:
+        return _DAL
+    here = Path(__file__).resolve().parent
+    target = here / "differential_allowlist.py"
+    if not target.exists():
+        raise RuntimeError(
+            "differential_allowlist.py not found next to workload-driver.py"
+        )
+    spec = importlib.util.spec_from_file_location(
+        "differential_allowlist", target
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not build importlib spec for allowlist")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["differential_allowlist"] = module
+    spec.loader.exec_module(module)
+    _DAL = module
+    return module
 
 # --- minimal RESP-2 client (avoids redis-py dep on FreeBSD) ---
 
@@ -184,6 +221,123 @@ class RespConn:
         except (socket.timeout, ConnectionError, RespError):
             self.close()
             raise
+
+
+# --- dual-fanout connection (differential mode) ---
+
+
+class DualConn:
+    """Dual-fanout RESP connection for differential mode (P3-3.9 phase 3).
+
+    Every :meth:`call` dispatches the same RESP request to BOTH
+    a Rust dynomited proxy and a C ``dynomite`` reference proxy
+    in parallel via two short-lived threads. The retry layer
+    operates on the Rust side as the source of truth: when
+    Rust raises, :meth:`call` re-raises so :func:`run_with_retry`
+    can apply its per-class budget. The C-side outcome is
+    captured into ``last_*`` attributes for the comparison
+    layer to consume after each op.
+
+    The two clusters share one backend redis (per phase 2), so
+    every K/V op should produce identical replies. Known
+    semantic divergences (timing fields, unordered arrays,
+    error wording) are handled by
+    ``differential_allowlist.compare_replies``.
+
+    The per-op state lives on the connection because the retry
+    layer's contract is stable (return op or err class); we did
+    not want to bolt a new return-value shape onto every
+    workload function. The driver loop reads ``last_*`` once
+    per request, after :func:`run_with_retry` returns.
+    """
+
+    def __init__(
+        self,
+        rust_host: str,
+        rust_port: int,
+        c_host: str,
+        c_port: int,
+        timeout: float = 5.0,
+    ):
+        self.rust = RespConn(rust_host, rust_port, timeout)
+        self.c = RespConn(c_host, c_port, timeout)
+        self.last_op: str = ""
+        self.last_args: tuple = ()
+        self.last_rust_reply = None
+        self.last_c_reply = None
+        self.last_rust_exc: BaseException | None = None
+        self.last_c_exc: BaseException | None = None
+
+    def connect(self) -> None:
+        # Each side connects on demand inside its own thread the
+        # first time call() runs; this is provided for symmetry
+        # with RespConn so workload helpers that pre-connect (no
+        # current callers do) keep working.
+        self.rust.connect()
+        self.c.connect()
+
+    def close(self) -> None:
+        # Always close both halves; never let one side's failure
+        # leak a half-open socket on the other side.
+        with suppress(Exception):
+            self.rust.close()
+        with suppress(Exception):
+            self.c.close()
+
+    def call(self, *parts):
+        op_str = ""
+        if parts:
+            head = parts[0]
+            op_str = head if isinstance(head, str) else str(head)
+        results: list = [None, None]
+        excs: list[BaseException | None] = [None, None]
+
+        def _drive(idx: int, conn: "RespConn") -> None:
+            try:
+                results[idx] = conn.call(*parts)
+            except BaseException as exc:  # noqa: BLE001
+                excs[idx] = exc
+
+        t_rust = threading.Thread(
+            target=_drive, args=(0, self.rust), daemon=True
+        )
+        t_c = threading.Thread(
+            target=_drive, args=(1, self.c), daemon=True
+        )
+        t_rust.start()
+        t_c.start()
+        t_rust.join()
+        t_c.join()
+
+        self.last_op = op_str.upper()
+        self.last_args = parts
+        self.last_rust_reply = results[0]
+        self.last_c_reply = results[1]
+        self.last_rust_exc = excs[0]
+        self.last_c_exc = excs[1]
+
+        # Source-of-truth is the Rust side: re-raise on Rust
+        # failure so run_with_retry sees the exception and can
+        # consult its per-class retry budget. The C-side
+        # exception (if any) stays in last_c_exc for the
+        # comparison layer.
+        if excs[0] is not None:
+            raise excs[0]
+        return results[0]
+
+    def snapshot(self) -> dict:
+        """Return the last call's state as a dict for the comparator.
+
+        Cleared on every :meth:`call`, so the workload loop must
+        read it before issuing the next op.
+        """
+        return {
+            "op": self.last_op,
+            "rust_reply": self.last_rust_reply,
+            "c_reply": self.last_c_reply,
+            "rust_exc": self.last_rust_exc,
+            "c_exc": self.last_c_exc,
+        }
 
 
 # --- workload classes ---
@@ -1218,11 +1372,32 @@ def main() -> int:
     p.add_argument("--duration", type=int, default=7200,
                    help="seconds; 0 means until SIGTERM")
     p.add_argument("--mode", default="redis",
-                   choices=("redis", "memcache", "riak"),
+                   choices=("redis", "memcache", "riak", "differential"),
                    help="protocol to drive")
     p.add_argument("--riak-pbc-port", type=int, default=21800,
                    help="Riak PBC listener port (only used when "
                         "--mode riak); defaults to 21800")
+    # Differential-mode flags. When ``--mode differential`` is
+    # set, the driver fans every operation out to BOTH a Rust
+    # dynomited proxy and a C ``dynomite`` reference proxy and
+    # records a per-op comparison verdict alongside the
+    # existing counts/failures/retries streams. The flags fall
+    # back to ``--host`` / ``--port`` (Rust side) and
+    # ``--rust-host`` / ``--rust-port + 100`` (C side) so the
+    # coordinator can pass a minimal set of overrides.
+    p.add_argument("--rust-host", default=None,
+                   help="differential mode: Rust proxy host "
+                        "(default: --host)")
+    p.add_argument("--rust-port", type=int, default=None,
+                   help="differential mode: Rust proxy client port "
+                        "(default: --port)")
+    p.add_argument("--c-host", default=None,
+                   help="differential mode: C proxy host "
+                        "(default: --rust-host)")
+    p.add_argument("--c-port", type=int, default=None,
+                   help="differential mode: C proxy client port "
+                        "(default: --rust-port + 100, matching the "
+                        "phase-2 port shift)")
     p.add_argument("--retry-on", default=RETRY_DEFAULT,
                    help="Comma-separated list of recoverable error "
                         "classes with optional retry budget and "
@@ -1270,6 +1445,19 @@ def main() -> int:
     failures: dict[tuple[str, str], int] = {}
     retries: dict[str, int] = {}
     retry_sleep_ms: dict[str, float] = {}
+    # Differential-mode buckets. Cleared on every flush like
+    # ``counts`` / ``failures``. Empty in non-differential
+    # modes; the flush emits them only when populated so legacy
+    # ndjson consumers (the existing reporter) ignore the row
+    # shape unchanged.
+    agreed: dict[str, int] = {}
+    divergent: dict[str, int] = {}
+    one_side_failed: dict[str, int] = {}
+    # A small ring of recent divergence snippets (capped) so
+    # the operator can eyeball the actual byte difference
+    # without re-running the workload. Cleared on flush.
+    divergent_samples: list = []
+    DIVERGENT_SAMPLE_CAP = 16
     last_flush = time.monotonic()
     started = time.monotonic()
 
@@ -1286,6 +1474,24 @@ def main() -> int:
         # and dial --riak-pbc-port instead.
         conn = RiakPbcConn(args.host, args.riak_pbc_port)
         net_errors = (RiakPbcError, ConnectionError, socket.timeout, OSError)
+    elif effective_mode == "differential":
+        # Differential mode (P3-3.9 phases 3+4) drives the same
+        # RESP request to both proxies in parallel and records
+        # a per-op comparison verdict. The workload-class
+        # dispatch table is identical to plain ``redis`` mode
+        # because the C cluster speaks Redis to a shared
+        # backend.
+        workloads = WORKLOADS
+        rust_host = args.rust_host or args.host
+        rust_port = args.rust_port if args.rust_port is not None else args.port
+        c_host = args.c_host or rust_host
+        c_port = args.c_port if args.c_port is not None else rust_port + 100
+        conn = DualConn(rust_host, rust_port, c_host, c_port)
+        net_errors = (RespError, ConnectionError, socket.timeout, OSError)
+        # Pre-load the allowlist so a missing or syntactically
+        # broken module fails fast at startup, not on the first
+        # divergent op.
+        _load_allowlist()
     else:
         workloads = WORKLOADS
         conn = RespConn(args.host, args.port)
@@ -1334,6 +1540,56 @@ def main() -> int:
                     file=sys.stderr,
                     flush=True,
                 )
+        # Differential bookkeeping. Reads the last call's state
+        # off the DualConn snapshot regardless of whether the
+        # retry layer ultimately classified the op as a success
+        # or failure -- the LAST attempt's Rust + C outcomes
+        # are what we want to compare for this op.
+        if effective_mode == "differential" and isinstance(conn, DualConn):
+            snap = conn.snapshot()
+            if snap["op"]:
+                # Skip ops where the last DualConn call did not
+                # actually run (rare; only when run_with_retry
+                # bailed before the first attempt -- empty
+                # script in tests, never in production).
+                bucket, detail = _DAL.compare_replies(
+                    snap["rust_reply"],
+                    snap["c_reply"],
+                    snap["rust_exc"],
+                    snap["c_exc"],
+                    snap["op"],
+                )
+                if bucket == "agreed":
+                    agreed[snap["op"]] = agreed.get(snap["op"], 0) + 1
+                elif bucket == "divergent":
+                    key = snap["op"] + "/" + detail.get("reason", "unknown")
+                    divergent[key] = divergent.get(key, 0) + 1
+                    if len(divergent_samples) < DIVERGENT_SAMPLE_CAP:
+                        divergent_samples.append({
+                            "op": snap["op"],
+                            "reason": detail.get("reason"),
+                            "snippet_rust": detail.get("snippet_rust"),
+                            "snippet_c": detail.get("snippet_c"),
+                        })
+                elif bucket == "one_side_failed":
+                    err_cls = detail.get("error_class")
+                    err_str = (
+                        err_cls[0] + ":" + err_cls[1]
+                        if isinstance(err_cls, tuple) and len(err_cls) == 2
+                        else str(err_cls)
+                    )
+                    key = (
+                        snap["op"] + "/" + detail.get("which", "?")
+                        + "/" + err_str
+                    )
+                    one_side_failed[key] = one_side_failed.get(key, 0) + 1
+                else:
+                    # ``both_failed`` is folded into divergent
+                    # for accounting; neither side returned a
+                    # reply we can vouch for and the operator
+                    # still wants to see it.
+                    key = snap["op"] + "/both_failed"
+                    divergent[key] = divergent.get(key, 0) + 1
         if sleep_per_op > 0:
             time.sleep(sleep_per_op)
 
@@ -1349,11 +1605,21 @@ def main() -> int:
                 "retries": dict(retries),
                 "retry_sleep_ms": {k: int(v) for k, v in retry_sleep_ms.items()},
             }
+            if effective_mode == "differential":
+                row["agreed"] = dict(agreed)
+                row["divergent"] = dict(divergent)
+                row["one_side_failed"] = dict(one_side_failed)
+                if divergent_samples:
+                    row["divergent_samples"] = list(divergent_samples)
             f.write(json.dumps(row) + "\n")
             counts.clear()
             failures.clear()
             retries.clear()
             retry_sleep_ms.clear()
+            agreed.clear()
+            divergent.clear()
+            one_side_failed.clear()
+            divergent_samples.clear()
             last_flush = now
 
     # final flush
@@ -1368,6 +1634,12 @@ def main() -> int:
         "retry_sleep_ms": {k: int(v) for k, v in retry_sleep_ms.items()},
         "final": True,
     }
+    if effective_mode == "differential":
+        row["agreed"] = dict(agreed)
+        row["divergent"] = dict(divergent)
+        row["one_side_failed"] = dict(one_side_failed)
+        if divergent_samples:
+            row["divergent_samples"] = list(divergent_samples)
     f.write(json.dumps(row) + "\n")
     f.close()
     return 0

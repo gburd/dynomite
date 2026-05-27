@@ -419,12 +419,33 @@ pick which faults to enable.  1 week.
   against the submodule's git commit hash). Single-host
   smoke at `scripts/chaos-multi-host/smoke-differential.sh`.
 
-**Phases 3-5 (still queued):** drive the same workload to
-both proxies (phase 3, ~3 days), compare replies with an
-allowlist for known semantic divergences (phase 4, ~2 days),
-apply chaos faults to both proxies in lockstep (phase 5,
-~3 days). The phase-1+2 journal entry has the full design
-breakdown and effort estimates.
+**Phase 3+4 (workload fan-out + reply comparison): DONE 2026-05-26.**
+  See `docs/journal/2026-05-26-differential-phases-3-4.md`.
+  `workload-driver.py --mode differential` dispatches every
+  op to both proxies in parallel via a `DualConn` thread
+  pair, captures both replies, and consults
+  `scripts/chaos-multi-host/differential_allowlist.py`
+  (8 allowlist entries covering INFO/TIME timing fields,
+  CLIENT connection bookkeeping, and unordered
+  KEYS/SCAN/SMEMBERS/HKEYS/HVALS/HGETALL responses) to
+  classify each op as `agreed`, `divergent`, or
+  `one_side_failed`. The NDJSON output gains three new
+  buckets per row plus a capped `divergent_samples` list.
+  Existing `counts`/`failures`/`retries` are unchanged.
+  Coordinator wires `CLIENT_LISTEN_PORT_C` and passes the
+  fan-out flags. Smoke extended with a 30s differential
+  workload assertion (>0 `agreed`).
+
+**Phase 5 (chaos applied to both proxies in lockstep):**
+  still queued. `chaos-injector.sh` currently kills only
+  the Rust dynomited; phase 5 adds parallel pidfile lookup
+  for `dynomite-c.pid` so process-level faults
+  (SIGSTOP/SIGKILL, redis-bounce) hit both proxies on the
+  same schedule. Network/clock/disk faults are host-level
+  and already affect both processes. ~3 days. Design notes
+  live in
+  `docs/journal/2026-05-26-differential-chaos-substrate.md`
+  under "Phase 5".
 
 ### Random-slicing investigation (parallel to Tier 1)
 
