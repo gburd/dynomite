@@ -9,6 +9,7 @@ members = [
     "crates/dyn-admin",
     "crates/gen-fsm",
     "crates/hashtree",
+    "crates/sup",
 ]
 exclude = [
     "crates/fuzz",
