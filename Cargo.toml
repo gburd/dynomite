@@ -9,6 +9,7 @@ members = [
     "crates/dyn-admin",
     "crates/gen-fsm",
     "crates/hashtree",
+    "crates/loom-tests",
     "crates/sup",
 ]
 exclude = [
@@ -27,6 +28,12 @@ authors = ["The Dynomite Rust Port Authors"]
 unsafe_code = "forbid"
 missing_docs = "warn"
 rust_2018_idioms = { level = "warn", priority = -1 }
+# `loom` is a non-Cargo cfg gate that loom-specific tests use to
+# include themselves only when `RUSTFLAGS='--cfg loom'` is set.
+# Declare it here so the default build does not emit
+# `unexpected_cfgs` warnings (which would be promoted to errors
+# by `RUSTFLAGS=-D warnings`).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -156,6 +163,11 @@ noxu-util = { path = "../lamdb/crates/noxu-util" }
 # the in-process backend (rand + num-bigint + num-traits) so tests do
 # not need an external server.
 hegeltest = { version = "0.14", features = ["native"] }
+# Loom is a model checker for concurrent Rust. It only ships into
+# the build under `--cfg loom`; production code is unaffected. Tests
+# that depend on it live under `crates/<crate>/tests/loom_*.rs`,
+# each gated on `#![cfg(loom)]`.
+loom = { version = "0.7", features = ["futures"] }
 hex = "0.4"
 serde_json = "1.0"
 criterion = { version = "0.5", features = ["html_reports"] }
