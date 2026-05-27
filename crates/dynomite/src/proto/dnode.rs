@@ -943,6 +943,112 @@ pub fn flatten_chain(chain: &mut MbufQueue) -> Vec<u8> {
     out
 }
 
+/// Peer-handshake control payload exchanged on top of a
+/// [`DmsgType::GossipSyn`] frame.
+///
+/// Today the handshake carries the cluster-wide capability
+/// advertisement (see [`crate::cluster::capability`]). Future
+/// fields will be appended as new typed records; older peers
+/// ignore unknown trailing bytes.
+///
+/// # Wire format
+///
+/// ```text
+/// magic(4) = "DHS1"
+/// flags(2) = 0
+/// CapabilityAd (length-prefixed, see
+///                `CapabilityAd::encode` for the exact layout)
+/// ```
+///
+/// All multi-byte integers are little-endian. The encoding uses
+/// only the standard library; no external codec is pulled in.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::cluster::capability::{CapabilityAd, CapabilityAdEntry};
+/// use dynomite::proto::dnode::Handshake;
+/// let ad = CapabilityAd::from_entries(vec![
+///     CapabilityAdEntry::new("framing".into(), vec![vec![1, 0, 0, 0]]),
+/// ]);
+/// let hs = Handshake::new(ad.clone());
+/// let bytes = hs.encode();
+/// let back = Handshake::decode(&bytes).unwrap();
+/// assert_eq!(back.capabilities(), &ad);
+/// ```
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Handshake {
+    capabilities: crate::cluster::capability::CapabilityAd,
+}
+
+impl Handshake {
+    /// Magic literal that opens every handshake payload.
+    pub const MAGIC: [u8; 4] = *b"DHS1";
+
+    /// Build a handshake carrying `capabilities`.
+    #[must_use]
+    pub fn new(capabilities: crate::cluster::capability::CapabilityAd) -> Self {
+        Self { capabilities }
+    }
+
+    /// Borrow the embedded capability advertisement.
+    #[must_use]
+    pub fn capabilities(&self) -> &crate::cluster::capability::CapabilityAd {
+        &self.capabilities
+    }
+
+    /// Consume the handshake and return the embedded
+    /// advertisement.
+    #[must_use]
+    pub fn into_capabilities(self) -> crate::cluster::capability::CapabilityAd {
+        self.capabilities
+    }
+
+    /// Serialise the handshake to a length-prefixed byte
+    /// stream.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let cap_bytes = self.capabilities.encode();
+        let mut out = Vec::with_capacity(Self::MAGIC.len() + 2 + cap_bytes.len());
+        out.extend_from_slice(&Self::MAGIC);
+        out.extend_from_slice(&0u16.to_le_bytes()); // flags
+        out.extend_from_slice(&cap_bytes);
+        out
+    }
+
+    /// Inverse of [`Handshake::encode`]. Surfaces a typed error
+    /// when the magic / version is wrong or the embedded
+    /// advertisement is malformed.
+    pub fn decode(bytes: &[u8]) -> Result<Self, crate::cluster::capability::CapabilityCodecError> {
+        use crate::cluster::capability::CapabilityCodecError;
+        if bytes.len() < Self::MAGIC.len() + 2 {
+            return Err(CapabilityCodecError::Truncated);
+        }
+        if bytes[..Self::MAGIC.len()] != Self::MAGIC {
+            return Err(CapabilityCodecError::BadMagic);
+        }
+        // Flags are reserved; the only currently legal value is
+        // zero. Any non-zero value is reserved for future use
+        // and rejected here so older builds fail closed.
+        let flags_off = Self::MAGIC.len();
+        let flags = u16::from_le_bytes([bytes[flags_off], bytes[flags_off + 1]]);
+        if flags != 0 {
+            return Err(CapabilityCodecError::BadMagic);
+        }
+        let cap_bytes = &bytes[flags_off + 2..];
+        let capabilities = crate::cluster::capability::CapabilityAd::decode(cap_bytes)?;
+        Ok(Self { capabilities })
+    }
+
+    /// Number of bytes the handshake's fixed-size prefix
+    /// occupies before the embedded advertisement. Useful in
+    /// tests that assert the on-the-wire delta.
+    #[must_use]
+    pub const fn header_len() -> usize {
+        Self::MAGIC.len() + 2
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
