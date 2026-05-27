@@ -524,14 +524,17 @@ nix-shell -p libfaketime --run \
      bash scripts/chaos-multi-host/test_fault_smoke.sh'"
 ```
 
-## Differential mode (substrate; phase 1+2)
+## Differential mode (substrate; phase 1+2; phase 3+4)
 
 `MODE=differential` runs a Rust dynomited and a C `dynomite`
 side by side on every chaos host, both fronting the same
-backend redis. The substrate is in place; the workload-driver
-fan-out and reply-comparison logic are explicit follow-ups
-(see `docs/journal/2026-05-26-differential-chaos-substrate.md`
-sections "Phase 3" through "Phase 5").
+backend redis. Phases 1+2 brought up the parallel cluster;
+phases 3+4 (P3-3.9, 2026-05-26) added workload fan-out and
+reply comparison. Phase 5 (chaos-while-differential) is
+still queued; see
+`docs/journal/2026-05-26-differential-chaos-substrate.md`
+and
+`docs/journal/2026-05-26-differential-phases-3-4.md`.
 
 ### Port layout
 
@@ -548,6 +551,81 @@ ports + 100:
 The C cluster's seed list is derived from the Rust seed list
 by rewriting the dyn port; the two gossip meshes are
 independent.
+
+The coordinator exposes `CLIENT_LISTEN_PORT_C` (computed as
+`CLIENT_LISTEN_PORT + 100`) so the workload-driver fan-out
+flags reference a single source of truth for the shift.
+
+### Workload fan-out (phase 3)
+
+`workload-driver.py --mode differential` dispatches every
+operation to BOTH proxies in parallel via two short-lived
+threads. The Rust side is the source of truth for retries:
+when Rust raises, the existing per-class retry policy
+(`NoTargets:1,Timeout:0,Closed:2`) applies; the C-side
+exception lives on a per-call snapshot for the comparison
+layer.
+
+The NDJSON output gains three new buckets per flush:
+
+* `agreed` -- bytes-equal, allowlist-equal, or matching error
+  class on both sides. Keyed by op (`SET`, `GET`, ...).
+* `divergent` -- replies differ in a way the allowlist does
+  not permit. Keyed by `op/reason` (`GET/byte_diff`,
+  `KEYS/sorted_diff`, `INFO/timing_after_strip_diff`, ...).
+  A `divergent_samples` list (capped at 16 per flush) carries
+  short snippets of the actual mismatched bytes.
+* `one_side_failed` -- exactly one side raised. Keyed by
+  `op/which/error_class` (`SET/c/timeout`,
+  `GET/rust/RespError:DYNOMITE`, ...).
+
+Existing `counts` / `failures` / `retries` continue to reflect
+the Rust side as the source of truth (a Rust-side success
+still increments `counts` even if C timed out; the
+`one_side_failed` row carries the asymmetry separately).
+
+CLI shape:
+
+```bash
+python3 scripts/chaos-multi-host/workload-driver.py \
+    --mode differential \
+    --rust-host 127.0.0.1 --rust-port 18102 \
+    --c-host 127.0.0.1    --c-port 18202 \
+    --label dc-floki \
+    --out /scratch/dynomite-chaos/logs/workload-dc-floki.ndjson \
+    --duration 7200
+```
+
+Defaults:
+
+* `--rust-host` falls back to `--host` (`127.0.0.1`).
+* `--rust-port` falls back to `--port` (`18102`).
+* `--c-host` falls back to `--rust-host`.
+* `--c-port` falls back to `--rust-port + 100`.
+
+### Reply comparison + allowlist (phase 4)
+
+The two clusters share one backend, so every K/V command
+should produce identical bytes. Known semantic divergences
+live in `scripts/chaos-multi-host/differential_allowlist.py`:
+
+| op-class | rule | rationale |
+|---|---|---|
+| `INFO`, `TIME` | `ignore_timing_fields` | uptime, pid, version, byte counts; node identity differs per cluster |
+| `CLIENT` | `ignore_connection_ids` | per-cluster id/fd/addr bookkeeping |
+| `KEYS`, `SCAN`, `SMEMBERS`, `HKEYS`, `HVALS`, `HGETALL` | `sort_array_response` | unordered set/hash semantics |
+
+Error messages match by CLASS (the prefix before the first
+`:` or space), not by exact text. `-ERR no such key` and
+`-ERR key not found` both classify to `("RespError", "ERR")`
+and are treated as agreement when both sides emit them. A
+`-ERR` on one side and a `-WRONGTYPE` on the other counts as
+`both_failed` and is folded into `divergent`.
+
+Extending the allowlist is the documented next step when
+the operator observes a recurring divergence that turns out
+to be a known semantic difference (e.g. a future
+`CLUSTER NODES` divergence once gossip parity is verified).
 
 ### Host preparation
 
@@ -585,6 +663,13 @@ pass continues on the remaining hosts. nuc (FreeBSD) is the
 most likely host to fail the build; the rig copes with a
 3-host topology if necessary.
 
+When `MODE=differential` the coordinator passes
+`--mode differential --rust-port $CLIENT_LISTEN_PORT --c-port $CLIENT_LISTEN_PORT_C`
+to every host's workload-driver. The C-side host defaults to
+`127.0.0.1` (per the existing `--host` flag), matching the
+phase-2 layout where both proxies live on the same chaos
+host.
+
 ### Single-host smoke
 
 ```bash
@@ -592,19 +677,18 @@ bash scripts/chaos-multi-host/smoke-differential.sh
 ```
 
 Boots both proxies on floki, asserts each port answers a
-SET / GET round-trip inside a 60-second window, then tears
-down. Port defaults are env-overridable
+SET / GET round-trip inside a 60-second window, then drives
+a 30-second differential workload through `workload-driver.py`
+and asserts the resulting NDJSON contains a non-zero
+`agreed` count. Any `divergent` count surfaces as a WARN
+so the operator can extend the allowlist before merging.
+Port defaults are env-overridable
 (`DATASTORE_PORT`, `CLIENT_LISTEN_PORT`, ...).
 
-### Out of scope (phase 3+)
+### Out of scope (phase 5)
 
-The phase-1+2 substrate proves both clusters come up. It
-does NOT yet:
-
-* Drive the workload to both proxies in parallel (phase 3).
-* Compare replies byte-for-byte with an allowlist for
-  semantic divergences such as `INFO` and `TIME` (phase 4).
-* Apply chaos faults to both proxies in lockstep (phase 5).
-
-Effort estimates and design notes for phases 3 through 5 live
-in `docs/journal/2026-05-26-differential-chaos-substrate.md`.
+Phase 5 (chaos faults applied to both proxies in lockstep)
+is still queued. The current rig drives a clean differential
+workload but does not yet exercise both proxies under fault
+injection. Effort estimate ~3 days; design notes live in
+`docs/journal/2026-05-26-differential-chaos-substrate.md`.

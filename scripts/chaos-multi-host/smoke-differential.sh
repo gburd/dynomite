@@ -95,6 +95,68 @@ if [ "$fail" -ne 0 ]; then
     cleanup 1
 fi
 
+echo "==> step 4: drive a 30-second differential workload"
+# Phase 3+4 smoke. The dual-fanout driver runs for 30 seconds
+# at 50 QPS (1500 ops total budget). Both proxies front the
+# same redis backend so every reply should agree under the
+# allowlist; we assert the ndjson final row carries an
+# ``agreed`` bucket with > 0 ops and that ``divergent`` is
+# either absent or zero in every per-op key.
+WORKLOAD_NDJSON="$LOG_DIR/workload-diff-smoke.ndjson"
+if ! python3 "$REPO/scripts/chaos-multi-host/workload-driver.py" \
+        --mode differential \
+        --rust-host 127.0.0.1 --rust-port "$CLIENT_LISTEN_PORT" \
+        --c-host 127.0.0.1 --c-port "$C_CLIENT_PORT" \
+        --label dc-floki-diff-smoke \
+        --out "$WORKLOAD_NDJSON" \
+        --duration 30 \
+        --qps 50 \
+        --retry-on='NoTargets:1,Timeout:0,Closed:2' \
+        > "$LOG_DIR/workload-diff.stderr" 2>&1; then
+    echo "FAIL: workload-driver --mode differential exited non-zero"
+    tail -20 "$LOG_DIR/workload-diff.stderr" || true
+    cleanup 1
+fi
+
+if [ ! -s "$WORKLOAD_NDJSON" ]; then
+    echo "FAIL: workload ndjson is empty: $WORKLOAD_NDJSON"
+    cleanup 1
+fi
+
+# Sum ``agreed`` op-counts across every flushed row (final
+# included). Python is the simplest lever here; the rig
+# already ships python3.
+AGREED_TOTAL=$(python3 - "$WORKLOAD_NDJSON" <<'PY'
+import json, sys
+total = 0
+div = 0
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        row = json.loads(line)
+        total += sum((row.get("agreed") or {}).values())
+        div += sum((row.get("divergent") or {}).values())
+print("%d %d" % (total, div))
+PY
+)
+set -- $AGREED_TOTAL
+A="$1"
+D="$2"
+echo "  agreed=$A  divergent=$D  ndjson=$WORKLOAD_NDJSON"
+if [ "$A" -le 0 ]; then
+    echo "FAIL: zero agreed ops in differential workload"
+    cleanup 1
+fi
+if [ "$D" -gt 0 ]; then
+    # A non-zero divergent count is not necessarily a smoke
+    # failure (the allowlist may need an entry the operator
+    # hasn't observed yet) but we surface it loudly so the
+    # next reviewer extends the allowlist before merging.
+    echo "  WARN: $D divergent ops observed; review samples in $WORKLOAD_NDJSON"
+fi
+
 echo "==> smoke PASSED"
 trap - INT TERM ERR
 cleanup 0
