@@ -31,6 +31,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use dynomite::events::{ClusterEvent, EventManager, TokenRange};
 use dynomite::hashkit::DynToken;
 
 use crate::aae::config::ConfAae;
@@ -263,6 +264,7 @@ pub struct Scheduler<C: Clock> {
     plan: Mutex<Option<SweepPlan>>,
     next_snapshot_due: Mutex<Instant>,
     metrics: Mutex<Option<Arc<AaeMetrics>>>,
+    events: Mutex<Option<Arc<EventManager>>>,
 }
 
 impl<C: Clock> Scheduler<C> {
@@ -282,6 +284,7 @@ impl<C: Clock> Scheduler<C> {
             plan: Mutex::new(None),
             next_snapshot_due: Mutex::new(snapshot_due),
             metrics: Mutex::new(None),
+            events: Mutex::new(None),
         }
     }
 
@@ -301,6 +304,49 @@ impl<C: Clock> Scheduler<C> {
     #[must_use]
     pub fn metrics(&self) -> Option<Arc<AaeMetrics>> {
         self.metrics.lock().expect("metrics mutex poisoned").clone()
+    }
+
+    /// Attach an [`EventManager`] handle.
+    ///
+    /// When set, [`Self::notify_exchange_started`] and
+    /// [`Self::notify_exchange_completed`] surface
+    /// [`ClusterEvent::AaeExchangeStarted`] /
+    /// [`ClusterEvent::AaeExchangeCompleted`] payloads on the
+    /// manager's broadcast.
+    pub fn install_events(&self, events: Arc<EventManager>) {
+        let mut g = self.events.lock().expect("events mutex poisoned");
+        *g = Some(events);
+    }
+
+    /// Borrow the installed event manager handle.
+    #[must_use]
+    pub fn events(&self) -> Option<Arc<EventManager>> {
+        self.events.lock().expect("events mutex poisoned").clone()
+    }
+
+    /// Publish a [`ClusterEvent::AaeExchangeStarted`] payload.
+    /// No-op when no event manager is installed.
+    pub fn notify_exchange_started(&self, with_peer: u32, partition: TokenRange) {
+        if let Some(ev) = self.events() {
+            ev.publish(ClusterEvent::AaeExchangeStarted {
+                with_peer,
+                partition,
+                ts: std::time::SystemTime::now(),
+            });
+        }
+    }
+
+    /// Publish a [`ClusterEvent::AaeExchangeCompleted`] payload.
+    /// No-op when no event manager is installed.
+    pub fn notify_exchange_completed(&self, with_peer: u32, partition: TokenRange, repaired: u64) {
+        if let Some(ev) = self.events() {
+            ev.publish(ClusterEvent::AaeExchangeCompleted {
+                with_peer,
+                partition,
+                repaired,
+                ts: std::time::SystemTime::now(),
+            });
+        }
     }
 
     /// Increment `aae_exchange_attempts_total` for the given
