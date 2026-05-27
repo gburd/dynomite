@@ -41,6 +41,7 @@
 //! ```
 
 pub mod admin_rpc;
+pub mod apl;
 pub mod capability;
 pub mod coverage;
 pub mod datacenter;
@@ -57,6 +58,7 @@ pub use self::admin_rpc::{
     ClusterAdmin, ClusterChange, ClusterChangeKind, ClusterError, JoinPlan, NoopClusterAdmin,
     PeerSnapshot, PeerSpec, PoolClusterAdmin,
 };
+pub use self::apl::{get_apl_ann, AnnotatedPeer, NodeRole};
 
 pub use self::datacenter::{Continuum, Datacenter, Rack};
 pub use self::dispatch::{ClusterDispatcher, DispatchPlan, ReplicaTarget};
