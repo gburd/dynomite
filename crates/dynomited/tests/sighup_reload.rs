@@ -20,7 +20,7 @@ fn write_self_signed(dir: &TempDir, name: &str) -> (PathBuf, PathBuf) {
     let cert_path = dir.path().join(format!("{name}-cert.pem"));
     let key_path = dir.path().join(format!("{name}-key.pem"));
     std::fs::write(&cert_path, cert.cert.pem()).unwrap();
-    std::fs::write(&key_path, cert.key_pair.serialize_pem()).unwrap();
+    std::fs::write(&key_path, cert.signing_key.serialize_pem()).unwrap();
     (cert_path, key_path)
 }
 
@@ -150,7 +150,7 @@ fn reload_from_path_swaps_tls_material_on_disk_change() {
     // Replace cert / key files with fresh material.
     let (cert_b_pem, key_b_pem) = {
         let new = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-        (new.cert.pem(), new.key_pair.serialize_pem())
+        (new.cert.pem(), new.signing_key.serialize_pem())
     };
     std::fs::write(&cert_path, &cert_b_pem).unwrap();
     std::fs::write(&key_path, &key_b_pem).unwrap();
