@@ -787,6 +787,7 @@ dependencies = [
  "clap",
  "dyn-riak",
  "dynomite",
+ "parking_lot",
  "predicates",
  "prost",
  "serde",
