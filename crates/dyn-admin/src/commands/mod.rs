@@ -7,6 +7,7 @@
 pub mod aae_status;
 pub mod bucket_props;
 pub mod cluster_commit;
+pub mod cluster_info;
 pub mod cluster_join;
 pub mod cluster_leave;
 pub mod cluster_list;

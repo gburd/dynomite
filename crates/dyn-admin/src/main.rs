@@ -4,13 +4,14 @@
 //! overview and `README.md` for usage examples.
 
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
 use dyn_admin::commands::{
-    aae_status, bucket_props, cluster_commit, cluster_join, cluster_leave, cluster_list,
-    cluster_plan, distribution_dump, metrics, ping, ring, stats, status,
+    aae_status, bucket_props, cluster_commit, cluster_info, cluster_join, cluster_leave,
+    cluster_list, cluster_plan, distribution_dump, metrics, ping, ring, stats, status,
 };
 use dyn_admin::output::OutputFormat;
 
@@ -172,6 +173,21 @@ enum Cmd {
         #[arg(long = "json")]
         json: bool,
     },
+    /// Fetch the structured plaintext diagnostic dump.
+    ///
+    /// Mirrors `riak-admin cluster_info`. The node serves the
+    /// dump on `GET /cluster-info.txt`; this subcommand writes
+    /// the response to stdout, or to a file when `--output` is
+    /// supplied.
+    ClusterInfo {
+        /// Stats HTTP `host:port` of the node.
+        #[arg(long = "node", default_value = DEFAULT_STATS_NODE)]
+        node: String,
+        /// Optional output path. When unset, the dump is
+        /// written to stdout.
+        #[arg(long = "output", short = 'o')]
+        output: Option<PathBuf>,
+    },
 }
 
 /// `bucket-props` subcommand parser.
@@ -315,6 +331,9 @@ async fn dispatch(cli: Cli) -> Result<(), dyn_admin::AdminError> {
         Cmd::BucketProps { action } => dispatch_bucket_props(action, &mut stdout).await,
         Cmd::AaeStatus { node, json } => {
             aae_status::run(&node, OutputFormat::from_flag(json), &mut stdout).await
+        }
+        Cmd::ClusterInfo { node, output } => {
+            cluster_info::run(&node, output.as_deref(), &mut stdout).await
         }
     }
 }

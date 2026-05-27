@@ -17,8 +17,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::Instrument as _;
 
+use crate::admin::cluster_info::{format_text, ClusterInfoSnapshot};
 use crate::stats::prometheus::render_prometheus;
 use crate::stats::snapshot::Snapshot;
+
+/// Type alias for a closure that produces a fresh
+/// [`ClusterInfoSnapshot`] every time the `/cluster-info.txt`
+/// route is hit.
+///
+/// The closure must be `Send + Sync` so a clone can be moved
+/// into each accept-handler task. The runtime owns the closure;
+/// embedders set it via
+/// [`StatsServer::with_cluster_info_provider`].
+pub type ClusterInfoProvider = Arc<dyn Fn() -> ClusterInfoSnapshot + Send + Sync>;
 
 /// Maximum number of bytes the server will read for an HTTP request
 /// line plus headers. Requests larger than this are rejected.
@@ -68,6 +79,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct StatsServer {
     listener: TcpListener,
     source: Arc<Mutex<Snapshot>>,
+    cluster_info: Option<ClusterInfoProvider>,
 }
 
 impl StatsServer {
@@ -89,7 +101,39 @@ impl StatsServer {
     /// ```
     pub async fn bind(addr: SocketAddr, source: Arc<Mutex<Snapshot>>) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
-        Ok(Self { listener, source })
+        Ok(Self {
+            listener,
+            source,
+            cluster_info: None,
+        })
+    }
+
+    /// Attach a [`ClusterInfoProvider`] so the server answers
+    /// `GET /cluster-info.txt` with a freshly assembled
+    /// snapshot. When no provider is registered the route
+    /// returns `503 Service Unavailable`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use dynomite::admin::cluster_info::ClusterInfoSnapshot;
+    /// use dynomite::stats::{Snapshot, StatsServer};
+    /// use parking_lot::Mutex;
+    ///
+    /// # async fn _example() -> std::io::Result<()> {
+    /// let sink = Arc::new(Mutex::new(Snapshot::default()));
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)
+    ///     .await?
+    ///     .with_cluster_info_provider(Arc::new(ClusterInfoSnapshot::synthetic));
+    /// drop(server);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_cluster_info_provider(mut self, provider: ClusterInfoProvider) -> Self {
+        self.cluster_info = Some(provider);
+        self
     }
 
     /// Returns the local socket address the server is listening on.
@@ -133,7 +177,8 @@ impl StatsServer {
     pub async fn accept_one(&self) -> io::Result<()> {
         let (sock, _peer) = self.listener.accept().await?;
         let snapshot = self.source.lock().clone();
-        serve_connection(sock, snapshot).await
+        let cluster_info = self.cluster_info.clone();
+        serve_connection(sock, snapshot, cluster_info).await
     }
 
     /// Run the accept loop until cancelled. Each connection is handled
@@ -160,12 +205,14 @@ impl StatsServer {
         );
         let listener = self.listener;
         let source = self.source;
+        let cluster_info = self.cluster_info;
         async move {
             loop {
                 let (sock, _peer) = listener.accept().await?;
                 let snapshot = source.lock().clone();
+                let ci = cluster_info.clone();
                 tokio::spawn(async move {
-                    let _ = serve_connection(sock, snapshot).await;
+                    let _ = serve_connection(sock, snapshot, ci).await;
                 });
             }
         }
@@ -174,7 +221,11 @@ impl StatsServer {
     }
 }
 
-async fn serve_connection(mut sock: TcpStream, snapshot: Snapshot) -> io::Result<()> {
+async fn serve_connection(
+    mut sock: TcpStream,
+    snapshot: Snapshot,
+    cluster_info: Option<ClusterInfoProvider>,
+) -> io::Result<()> {
     let mut buf = vec![0u8; MAX_REQUEST_BYTES];
     let mut filled = 0usize;
     loop {
@@ -197,7 +248,7 @@ async fn serve_connection(mut sock: TcpStream, snapshot: Snapshot) -> io::Result
         let mut req = httparse::Request::new(&mut headers);
         match req.parse(&buf[..filled]) {
             Ok(httparse::Status::Complete(_)) => {
-                return handle_parsed(&mut sock, &req, snapshot).await;
+                return handle_parsed(&mut sock, &req, snapshot, cluster_info).await;
             }
             Ok(httparse::Status::Partial) => continue,
             Err(_) => {
@@ -212,6 +263,7 @@ async fn handle_parsed(
     sock: &mut TcpStream,
     req: &httparse::Request<'_, '_>,
     snapshot: Snapshot,
+    cluster_info: Option<ClusterInfoProvider>,
 ) -> io::Result<()> {
     let path = req.path.unwrap_or("/");
     if !matches!(req.method, Some("GET")) {
@@ -226,8 +278,31 @@ async fn handle_parsed(
             let body = render_prometheus(&snapshot);
             write_metrics_response(sock, body.as_bytes()).await
         }
+        "/cluster-info.txt" => match cluster_info {
+            Some(provider) => {
+                let snap = provider();
+                let mut body: Vec<u8> = Vec::with_capacity(4096);
+                if format_text(&snap, &mut body).is_err() {
+                    return write_response(sock, 500, "Internal Server Error", b"").await;
+                }
+                write_text_response(sock, &body).await
+            }
+            None => write_response(sock, 503, "Service Unavailable", b"").await,
+        },
         _ => write_response(sock, 200, "OK", b"OK\r\n").await,
     }
+}
+
+async fn write_text_response(sock: &mut TcpStream, body: &[u8]) -> io::Result<()> {
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=us-ascii\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    sock.write_all(header.as_bytes()).await?;
+    sock.write_all(body).await?;
+    sock.shutdown().await?;
+    Ok(())
 }
 
 async fn write_response(
