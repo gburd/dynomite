@@ -41,6 +41,7 @@
 //! ```
 
 pub mod admin_rpc;
+pub mod capability;
 pub mod coverage;
 pub mod datacenter;
 pub mod dispatch;
