@@ -810,7 +810,7 @@ mod tests {
 
     fn issue_self_signed() -> (String, String) {
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-        (cert.cert.pem(), cert.key_pair.serialize_pem())
+        (cert.cert.pem(), cert.signing_key.serialize_pem())
     }
 
     #[test]

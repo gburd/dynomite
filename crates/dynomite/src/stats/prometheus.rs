@@ -112,7 +112,7 @@ fn register_uptime(registry: &Registry, snap: &Snapshot) {
         "Seconds elapsed since the engine started.",
     );
     let gauge = IntGaugeVec::new(opts, &[]).expect("invariant: uptime descriptor is valid");
-    gauge.with_label_values(&[]).set(snap.uptime);
+    gauge.with_label_values::<&str>(&[]).set(snap.uptime);
     registry
         .register(Box::new(gauge))
         .expect("invariant: uptime registers cleanly");
@@ -122,7 +122,7 @@ fn register_uptime(registry: &Registry, snap: &Snapshot) {
         "Wall-clock seconds since the UNIX epoch at snapshot time.",
     );
     let gauge = IntGaugeVec::new(opts, &[]).expect("invariant: timestamp descriptor is valid");
-    gauge.with_label_values(&[]).set(snap.timestamp);
+    gauge.with_label_values::<&str>(&[]).set(snap.timestamp);
     registry
         .register(Box::new(gauge))
         .expect("invariant: timestamp registers cleanly");
@@ -159,7 +159,7 @@ fn register_resource_usage(registry: &Registry, snap: &Snapshot) {
     for (name, help, value) in entries {
         let gauge = IntGaugeVec::new(Opts::new(name, help), &[])
             .expect("invariant: resource gauge descriptor is valid");
-        gauge.with_label_values(&[]).set(value);
+        gauge.with_label_values::<&str>(&[]).set(value);
         registry
             .register(Box::new(gauge))
             .expect("invariant: resource gauge registers cleanly");
@@ -269,7 +269,11 @@ fn register_failure_no_targets(registry: &Registry, failure: &FailureSnapshot) {
         .expect("invariant: dispatch_no_targets descriptor is valid");
     for entry in &failure.no_targets {
         counter
-            .with_label_values(&[&entry.dc, &entry.rack, entry.consistency.name()])
+            .with_label_values(&[
+                entry.dc.as_str(),
+                entry.rack.as_str(),
+                entry.consistency.name(),
+            ])
             .inc_by(entry.count);
     }
     registry
@@ -322,10 +326,10 @@ fn register_failure_backend_send(registry: &Registry, failure: &FailureSnapshot)
     )
     .expect("invariant: dispatch_backend_send_full descriptor is valid");
     if failure.backend_send_full > 0 {
-        full.with_label_values(&[])
+        full.with_label_values::<&str>(&[])
             .inc_by(failure.backend_send_full);
     } else {
-        let _ = full.with_label_values(&[]);
+        let _ = full.with_label_values::<&str>(&[]);
     }
     registry
         .register(Box::new(full))
@@ -341,10 +345,10 @@ fn register_failure_backend_send(registry: &Registry, failure: &FailureSnapshot)
     .expect("invariant: dispatch_backend_send_closed descriptor is valid");
     if failure.backend_send_closed > 0 {
         closed
-            .with_label_values(&[])
+            .with_label_values::<&str>(&[])
             .inc_by(failure.backend_send_closed);
     } else {
-        let _ = closed.with_label_values(&[]);
+        let _ = closed.with_label_values::<&str>(&[]);
     }
     registry
         .register(Box::new(closed))
@@ -380,12 +384,9 @@ fn register_failure_peer_state(registry: &Registry, failure: &FailureSnapshot) {
     )
     .expect("invariant: peer_state_transitions descriptor is valid");
     for entry in &failure.peer_state_transitions {
+        let peer_idx = entry.peer_idx.to_string();
         trans
-            .with_label_values(&[
-                &entry.peer_idx.to_string(),
-                entry.from.name(),
-                entry.to.name(),
-            ])
+            .with_label_values(&[peer_idx.as_str(), entry.from.name(), entry.to.name()])
             .inc_by(entry.count);
     }
     registry
@@ -588,7 +589,7 @@ fn register_queue_p99s(registry: &Registry, snap: &Snapshot) {
         let gauge = IntGaugeVec::new(Opts::new(name, help), &[])
             .expect("invariant: queue p99 gauge descriptor is valid");
         let value_i64 = i64::try_from(value).unwrap_or(i64::MAX);
-        gauge.with_label_values(&[]).set(value_i64);
+        gauge.with_label_values::<&str>(&[]).set(value_i64);
         registry
             .register(Box::new(gauge))
             .expect("invariant: queue p99 gauge registers cleanly");

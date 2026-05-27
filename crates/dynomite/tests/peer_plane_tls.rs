@@ -61,7 +61,7 @@ fn issue_cert(san: &str) -> CertFiles {
     let cert_path = dir.path().join("cert.pem");
     let key_path = dir.path().join("key.pem");
     std::fs::write(&cert_path, cert.cert.pem()).unwrap();
-    std::fs::write(&key_path, cert.key_pair.serialize_pem()).unwrap();
+    std::fs::write(&key_path, cert.signing_key.serialize_pem()).unwrap();
     CertFiles {
         _dir: dir,
         cert: cert_path,
@@ -264,7 +264,7 @@ fn issue_dc_cert(dc: &str) -> CertFiles {
     let cert_path = dir.path().join("cert.pem");
     let key_path = dir.path().join("key.pem");
     std::fs::write(&cert_path, cert.cert.pem()).unwrap();
-    std::fs::write(&key_path, cert.key_pair.serialize_pem()).unwrap();
+    std::fs::write(&key_path, cert.signing_key.serialize_pem()).unwrap();
     CertFiles {
         _dir: dir,
         cert: cert_path,

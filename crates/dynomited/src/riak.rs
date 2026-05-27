@@ -494,7 +494,7 @@ mod tests {
         let cert_path = dir.path().join("cert.pem");
         let key_path = dir.path().join("key.pem");
         std::fs::write(&cert_path, cert.cert.pem()).unwrap();
-        std::fs::write(&key_path, cert.key_pair.serialize_pem()).unwrap();
+        std::fs::write(&key_path, cert.signing_key.serialize_pem()).unwrap();
         let cfg = ConfRiak {
             pbc_listen: Some("127.0.0.1:0".into()),
             tls_cert: Some(cert_path),

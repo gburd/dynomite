@@ -33,11 +33,10 @@
 #![allow(unsafe_code)]
 
 use std::io;
-use std::os::fd::AsRawFd;
 use std::path::Path;
 
 use nix::sys::stat::{umask, Mode};
-use nix::unistd::{chdir, dup2, fork, setsid, ForkResult};
+use nix::unistd::{chdir, dup2_stderr, dup2_stdin, dup2_stdout, fork, setsid, ForkResult};
 
 /// Outcome of [`daemonize`].
 #[derive(Debug, Eq, PartialEq)]
@@ -111,21 +110,10 @@ fn redirect_stdio_to_devnull() -> io::Result<()> {
         .read(true)
         .write(true)
         .open("/dev/null")?;
-    let raw = dev_null.as_raw_fd();
-    dup2(raw, libc_stdin()).map_err(io_err)?;
-    dup2(raw, libc_stdout()).map_err(io_err)?;
-    dup2(raw, libc_stderr()).map_err(io_err)?;
+    dup2_stdin(&dev_null).map_err(io_err)?;
+    dup2_stdout(&dev_null).map_err(io_err)?;
+    dup2_stderr(&dev_null).map_err(io_err)?;
     Ok(())
-}
-
-fn libc_stdin() -> std::os::fd::RawFd {
-    0
-}
-fn libc_stdout() -> std::os::fd::RawFd {
-    1
-}
-fn libc_stderr() -> std::os::fd::RawFd {
-    2
 }
 
 fn io_err(e: nix::errno::Errno) -> io::Error {
