@@ -1343,6 +1343,28 @@ async fn redis_auth_handshake(
 /// backoff whenever a `ServerConn` driver returns. Exits when
 /// the receiver half is closed (the dispatcher is dropped).
 ///
+/// Backoff is exponential with multiplicative jitter:
+///
+/// * Initial delay: 50 ms.
+/// * Cap: 5 000 ms.
+/// * Doubling factor on every failure.
+/// * Per-sleep jitter uniform in `[0.5x, 1.5x]` so concurrent
+///   supervisors do not synchronise on the same retry instant.
+///
+/// The backoff resets to its initial value only after a run
+/// during which the inner driver successfully parsed at least
+/// one frame. A connection that opens, fails its first parse,
+/// and disconnects therefore does not earn a free reset: the
+/// pass-6 chaos run caught the previous flat-50 ms reconnect
+/// loop spinning at ~18 cores against a misconfigured backend
+/// that returned a parse error on every probe (see
+/// `docs/journal/2026-05-27-busy-loop-investigation.md`).
+///
+/// Every reconnect attempt increments
+/// `backend_reconnect_total{backend, reason}` so the same shape
+/// is detectable from metrics scrapes alone, even when the
+/// per-attempt `WARN` line is suppressed by tracing rate limiting.
+///
 /// When `requirepass` is set, every freshly-opened TCP connection
 /// performs a Redis `AUTH <password>` handshake before being
 /// handed to `run_one_backend_conn`. A rejected AUTH is treated
@@ -1361,8 +1383,9 @@ async fn backend_supervisor(
     data_store: dynomite::conf::DataStore,
     requirepass: Option<String>,
 ) -> Result<(), NetError> {
-    let mut backoff_ms: u64 = 100;
-    let backoff_max_ms: u64 = 5_000;
+    let backend_label = addr.to_string();
+    let mut backoff_ms: u64 = BACKEND_BACKOFF_INIT_MS;
+    let mut consecutive_failures: u64 = 0;
     loop {
         // Bail out if the channel is empty AND the sender side has
         // been dropped (proxy/dispatcher gone). `is_closed` is the
@@ -1375,27 +1398,31 @@ async fn backend_supervisor(
             tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(addr))
                 .await;
         let mut stream = match connect {
-            Ok(Ok(s)) => {
-                backoff_ms = 100;
-                s
-            }
+            Ok(Ok(s)) => s,
             Ok(Err(e)) => {
-                tracing::warn!(
-                    backend = %addr,
-                    error = %e,
-                    "backend connect failed; retrying"
-                );
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                record_reconnect_and_back_off(
+                    &backend_label,
+                    addr,
+                    "connect_refused",
+                    Some(&e.to_string()),
+                    "backend connect failed; retrying",
+                    &mut consecutive_failures,
+                    &mut backoff_ms,
+                )
+                .await;
                 continue;
             }
             Err(_) => {
-                tracing::warn!(
-                    backend = %addr,
-                    "backend connect timed out; retrying"
-                );
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                record_reconnect_and_back_off(
+                    &backend_label,
+                    addr,
+                    "connect_timeout",
+                    None,
+                    "backend connect timed out; retrying",
+                    &mut consecutive_failures,
+                    &mut backoff_ms,
+                )
+                .await;
                 continue;
             }
         };
@@ -1408,14 +1435,17 @@ async fn backend_supervisor(
             if let Some(pw) = requirepass.as_deref() {
                 if let Err(e) = redis_auth_handshake(&mut stream, pw, Duration::from_secs(5)).await
                 {
-                    tracing::error!(
-                        backend = %addr,
-                        error = %e,
-                        "backend AUTH failed; reconnecting after backoff"
-                    );
                     drop(stream);
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                    backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                    record_reconnect_and_back_off(
+                        &backend_label,
+                        addr,
+                        "auth_failed",
+                        Some(&e.to_string()),
+                        "backend AUTH failed; reconnecting after backoff",
+                        &mut consecutive_failures,
+                        &mut backoff_ms,
+                    )
+                    .await;
                     continue;
                 }
             }
@@ -1431,18 +1461,156 @@ async fn backend_supervisor(
         // and out of an owned struct cleanly, so we drive the
         // ServerConn loop manually here, owning the receiver
         // ourselves and forwarding requests / responses.
-        if let Err(e) = run_one_backend_conn(conn, &mut rx, data_store).await {
+        let mut frames_ok: u64 = 0;
+        let driver_res = run_one_backend_conn(conn, &mut rx, data_store, &mut frames_ok).await;
+        match driver_res {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if frames_ok > 0 {
+                    // The connection produced real work before it
+                    // tore down; treat the next attempt as a fresh
+                    // start so a long-lived but eventually-dropped
+                    // link does not pay the previous run's backoff.
+                    backoff_ms = BACKEND_BACKOFF_INIT_MS;
+                    consecutive_failures = 0;
+                }
+                let reason = classify_reconnect_reason(&e);
+                record_reconnect_and_back_off(
+                    &backend_label,
+                    addr,
+                    reason,
+                    Some(&e.to_string()),
+                    "backend connection ended; reconnecting",
+                    &mut consecutive_failures,
+                    &mut backoff_ms,
+                )
+                .await;
+            }
+        }
+    }
+}
+
+/// Increment `backend_reconnect_total{backend, reason}`, log
+/// the supplied message subject to the throttle returned by
+/// [`should_log_reconnect`], and `tokio::time::sleep` for the
+/// next jittered backoff slot.
+///
+/// Mutates `consecutive_failures` (incremented, saturating) and
+/// `backoff_ms` (advanced through [`next_backoff_ms`]) in place
+/// so callers see the same schedule the supervisor itself
+/// observes on the next iteration.
+async fn record_reconnect_and_back_off(
+    backend_label: &str,
+    addr: SocketAddr,
+    reason: &str,
+    error: Option<&str>,
+    message: &'static str,
+    consecutive_failures: &mut u64,
+    backoff_ms: &mut u64,
+) {
+    *consecutive_failures = consecutive_failures.saturating_add(1);
+    crate::metrics::backend_reconnect()
+        .with_label_values(&[backend_label, reason])
+        .inc();
+    if should_log_reconnect(*consecutive_failures) {
+        if let Some(err) = error {
             tracing::warn!(
                 backend = %addr,
-                error = %e,
-                "backend connection ended; reconnecting"
+                reason,
+                error = %err,
+                consecutive_failures = *consecutive_failures,
+                "{}", message,
             );
         } else {
-            // Clean exit only when the channel closed.
-            return Ok(());
+            tracing::warn!(
+                backend = %addr,
+                reason,
+                consecutive_failures = *consecutive_failures,
+                "{}", message,
+            );
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    tokio::time::sleep(jittered_backoff(*backoff_ms)).await;
+    *backoff_ms = next_backoff_ms(*backoff_ms);
+}
+
+/// Initial reconnect delay (50 ms) and ceiling (5 000 ms) used
+/// by the [`backend_supervisor`] backoff schedule. Exposed at
+/// module scope so the regression test in
+/// `tests/regression_busy_loop.rs` can reason about the
+/// expected wall-clock spread.
+pub const BACKEND_BACKOFF_INIT_MS: u64 = 50;
+/// Ceiling on the per-attempt sleep imposed by the
+/// [`backend_supervisor`] backoff schedule.
+pub const BACKEND_BACKOFF_MAX_MS: u64 = 5_000;
+
+/// Compute the next non-jittered backoff value: double the
+/// previous one, saturating at the ceiling. The jittered sleep
+/// uses [`jittered_backoff`].
+#[must_use]
+pub fn next_backoff_ms(prev: u64) -> u64 {
+    prev.saturating_mul(2).min(BACKEND_BACKOFF_MAX_MS)
+}
+
+/// Apply uniform multiplicative jitter in `[0.5, 1.5]` to the
+/// supplied backoff in ms and return a [`Duration`]. Jitter is
+/// computed in integer arithmetic so the function never panics
+/// and never depends on floating-point determinism.
+///
+/// The minimum sleep is 1 ms: a zero-duration sleep would
+/// degrade to a yield, which is precisely what we are guarding
+/// against here.
+#[must_use]
+pub fn jittered_backoff(ms: u64) -> Duration {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    // Multiplicative jitter in [50, 150] / 100 == [0.5, 1.5].
+    let scale: u64 = rng.gen_range(50..=150);
+    let scaled = ms.saturating_mul(scale) / 100;
+    Duration::from_millis(scaled.max(1))
+}
+
+/// Translate a [`NetError`] into the `reason` label for the
+/// `backend_reconnect_total` counter.
+#[must_use]
+pub fn classify_reconnect_reason(err: &NetError) -> &'static str {
+    match err {
+        NetError::Parse(_) => "parse",
+        NetError::Io(_) => "io",
+        NetError::Closed => "closed",
+        NetError::Tls(_) => "tls",
+        NetError::Dnode(_) => "dnode",
+        NetError::Ejected | NetError::PoolExhausted | NetError::PoolShutdown => "other",
+    }
+}
+
+/// Decide whether to emit the per-reconnect `WARN` line.
+///
+/// The first three reconnects after a healthy run are always
+/// logged so operators see the start of the storm; after that
+/// the supervisor logs every tenth attempt to keep journald and
+/// disk usage bounded under sustained failure. The Prometheus
+/// counter is incremented unconditionally.
+#[must_use]
+pub fn should_log_reconnect(consecutive_failures: u64) -> bool {
+    consecutive_failures <= 3 || consecutive_failures.is_multiple_of(10)
+}
+
+/// Spawn a [`backend_supervisor`] task wired to the supplied
+/// outbound-request channel and backend address.
+///
+/// This is the supervisor entry point used by [`Server::run`] and
+/// re-exported here so the regression suite can drive it directly
+/// against a synthetic backend. The returned [`tokio::task::JoinHandle`]
+/// resolves once the channel is closed and drained.
+#[doc(hidden)]
+pub fn spawn_backend_supervisor_for_testing(
+    addr: SocketAddr,
+    rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
+    data_store: dynomite::conf::DataStore,
+    requirepass: Option<String>,
+) -> tokio::task::JoinHandle<Result<(), NetError>> {
+    tokio::spawn(backend_supervisor(addr, rx, data_store, requirepass))
 }
 
 /// Drive one TCP connection to the backend. Reads requests from
@@ -1463,6 +1631,7 @@ async fn run_one_backend_conn(
     mut conn: Conn,
     rx: &mut tokio::sync::mpsc::Receiver<OutboundRequest>,
     data_store: dynomite::conf::DataStore,
+    frames_ok: &mut u64,
 ) -> Result<(), NetError> {
     use dynomite::msg::{Msg, MsgParseResult, MsgType};
     use dynomite::net::OutboundEnvelope;
@@ -1536,6 +1705,7 @@ async fn run_one_backend_conn(
                             }
                             let bytes = accumulated[..consumed].to_vec();
                             accumulated.drain(0..consumed);
+                            *frames_ok = frames_ok.saturating_add(1);
                             if let Some((req_id, responder, req_span)) = pending.pop_front() {
                                 let parse_span = tracing::info_span!(
                                     parent: &req_span,

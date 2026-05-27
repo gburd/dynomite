@@ -302,15 +302,29 @@ __CHAOS_SEEDS_END__
 # MODE / TOKENS / port values into the file at write time so
 # the chaos-injector's source of start-args sees the
 # operator-selected mode rather than defaulting to 'redis'
-# when MODE is unset in its environment. The SEEDS line
-# stays deferred (\$(cat ...) is intentionally literal in
-# the file) because the seeds payload is multi-line and is
-# easier to source from the canonical seeds.yml on the
-# remote host than to embed inline here.
+# when MODE is unset in its environment.
+#
+# The SEEDS line is the tricky one: this whole heredoc is
+# itself inside the outer SSH-payload heredoc, so escape
+# levels matter. We need the FILE to contain literally:
+#
+#     SEEDS="$(cat /scratch/dynomite-chaos/run/seeds.yml)"
+#
+# - The DOUBLE QUOTES are mandatory: an unquoted multi-line
+#   command substitution word-splits at source time and
+#   bash interprets seed lines starting with '-' as commands.
+#   Pass-6 hit exactly this on host meh: chaos-injector died
+#   with 'SEEDS: unbound variable' at line 310.
+# - The \$ on this side becomes $ after the OUTER heredoc
+#   evaluates. The inner heredoc is unquoted on the remote
+#   so it then evaluates $(cat seeds.yml) at write time,
+#   baking the multi-line YAML into the file. The chaos
+#   injector sources start-args; the quoted assignment
+#   preserves newlines.
 cat > /scratch/dynomite-chaos/run/start-args <<__CHAOS_ARGS_END__
 MODE='$MODE'
 TOKENS='$tokens'
-SEEDS=\$(cat /scratch/dynomite-chaos/run/seeds.yml)
+SEEDS="\$(cat /scratch/dynomite-chaos/run/seeds.yml)"
 DATASTORE_PORT=$DATASTORE_PORT
 DYN_LISTEN_PORT=$DYN_LISTEN_PORT
 CLIENT_LISTEN_PORT=$CLIENT_LISTEN_PORT
