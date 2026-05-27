@@ -162,7 +162,7 @@ mod tests {
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("c.pem"), cert.cert.pem()).unwrap();
-        std::fs::write(dir.path().join("k.pem"), cert.key_pair.serialize_pem()).unwrap();
+        std::fs::write(dir.path().join("k.pem"), cert.signing_key.serialize_pem()).unwrap();
         let cfg = crate::net::tls::load_server_config(
             &dir.path().join("c.pem"),
             &dir.path().join("k.pem"),

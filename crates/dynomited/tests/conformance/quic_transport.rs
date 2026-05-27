@@ -27,7 +27,7 @@ fn make_cert_pair() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBu
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into(), "127.0.0.1".into()])
         .expect("rcgen");
     std::fs::write(&cert_path, cert.cert.pem()).expect("write cert");
-    std::fs::write(&key_path, cert.key_pair.serialize_pem()).expect("write key");
+    std::fs::write(&key_path, cert.signing_key.serialize_pem()).expect("write key");
     (dir, cert_path, key_path)
 }
 

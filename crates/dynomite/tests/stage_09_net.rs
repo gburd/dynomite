@@ -500,7 +500,7 @@ async fn proxy_run_sets_tcp_nodelay() {
         .expect("set_nodelay must succeed on a fresh accepted stream");
     let socket_ref = SockRef::from(&server_side);
     assert!(
-        socket_ref.nodelay().unwrap_or(false),
+        socket_ref.tcp_nodelay().unwrap_or(false),
         "TCP_NODELAY must be observable as true after set_nodelay(true)"
     );
 }
