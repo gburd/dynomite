@@ -1,0 +1,20 @@
+[package]
+name = "gen-fsm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "State-functions-style finite state machine driver. Modeled on OTP gen_statem in state_functions callback mode; named gen_fsm for familiarity to non-Erlang readers."
+
+[dependencies]
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+
+[lints]
+workspace = true
