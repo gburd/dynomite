@@ -1821,7 +1821,7 @@ checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
 
 [[package]]
 name = "noxu-cleaner"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -1836,7 +1836,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-config"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -1846,7 +1846,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-db"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "bytes",
  "hashbrown 0.15.5",
@@ -1865,7 +1865,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-dbi"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "byteorder",
  "bytes",
@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-engine"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -1908,7 +1908,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-evictor"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "bytes",
  "hashbrown 0.15.5",
@@ -1926,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-latch"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "log",
  "noxu-sync",
@@ -1935,7 +1935,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-log"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "byteorder",
  "bytes",
@@ -1954,7 +1954,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-recovery"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "byteorder",
  "bytes",
@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-sync"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "libc",
  "lock_api",
@@ -1980,7 +1980,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-tree"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "byteorder",
  "bytes",
@@ -1996,7 +1996,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-txn"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "byteorder",
  "hashbrown 0.15.5",
@@ -2011,7 +2011,7 @@ dependencies = [
 
 [[package]]
 name = "noxu-util"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "byteorder",
  "hashbrown 0.15.5",
@@ -3123,6 +3123,15 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "sup"
+version = "0.0.1"
+dependencies = [
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "syn"
