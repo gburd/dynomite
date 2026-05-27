@@ -1,0 +1,35 @@
+[package]
+name = "loom-tests"
+description = "Loom model-check harness for the Dynomite Rust port's concurrency primitives"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# Loom is the model checker. The crate is in the dependency graph
+# unconditionally so that `cargo metadata` / `cargo build` see it
+# under both default and `--cfg loom` builds; `loom::model` itself
+# is only invoked from tests gated on `#![cfg(loom)]`. Without
+# `--cfg loom` set the test bodies elide entirely and the binary
+# becomes a no-op.
+#
+# This crate does NOT depend on `dynomite` because tokio (a transitive
+# dep of dynomite) is itself gated on `cfg(not(loom))`: under loom
+# the network/signal modules vanish and dynomite cannot link.
+# Loom tests are model tests by design, so we model the relevant
+# primitives in this crate's source rather than re-using the
+# production types.
+[target.'cfg(loom)'.dependencies]
+loom = { workspace = true }
+
+[dev-dependencies]
+loom = { workspace = true }
