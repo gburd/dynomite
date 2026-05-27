@@ -106,6 +106,13 @@ tokio-rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
 webpki-roots = { workspace = true }
 
+# Prometheus is used to register the backend-reconnect counter
+# emitted by the backend supervisor (see `metrics.rs`); `rand` is
+# used to add uniform jitter to the supervisor's exponential
+# reconnect backoff.
+prometheus = { workspace = true }
+rand = { workspace = true }
+
 [dev-dependencies]
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
