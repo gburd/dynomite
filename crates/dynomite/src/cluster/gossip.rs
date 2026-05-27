@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 use crate::cluster::failure_detector::DEFAULT_THRESHOLD;
 use crate::cluster::peer::PeerState;
 use crate::cluster::pool::ServerPool;
+use crate::events::{ClusterEvent, EventManager};
 use crate::hashkit::{token::parse_token, DynToken};
 
 /// Default gossip period (ms) - mirrors `CONF_DEFAULT_GOS_INTERVAL`
@@ -402,6 +403,13 @@ pub struct GossipHandler {
     /// `peer_state_transitions_total` counter and updates the
     /// `peer_state_current` and `gossip_phi_score` gauges.
     failure_metrics: Option<Arc<crate::stats::FailureMetrics>>,
+    /// Optional structured-event publisher. When wired, every
+    /// peer-state transition observed by [`Self::evaluate`] or
+    /// [`Self::record_heartbeat_pname`] /
+    /// [`Self::record_heartbeat_idx`] surfaces a
+    /// [`ClusterEvent::PeerUp`] / [`ClusterEvent::PeerDown`]
+    /// payload on the manager's broadcast.
+    events: Option<Arc<EventManager>>,
 }
 
 impl GossipHandler {
@@ -414,6 +422,7 @@ impl GossipHandler {
             threshold: DEFAULT_THRESHOLD,
             interval: Duration::from_millis(DEFAULT_GOSSIP_INTERVAL_MS),
             failure_metrics: None,
+            events: None,
         }
     }
 
@@ -430,6 +439,25 @@ impl GossipHandler {
     pub fn with_failure_metrics(mut self, metrics: Arc<crate::stats::FailureMetrics>) -> Self {
         self.failure_metrics = Some(metrics);
         self
+    }
+
+    /// Attach an [`EventManager`] handle.
+    ///
+    /// When set, every peer-state transition the handler
+    /// applies surfaces a [`ClusterEvent::PeerUp`] or
+    /// [`ClusterEvent::PeerDown`] payload on the manager's
+    /// broadcast. Default behaviour is unchanged when no event
+    /// manager is supplied.
+    #[must_use]
+    pub fn with_events(mut self, events: Arc<EventManager>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    /// Borrow the installed event manager, if any.
+    #[must_use]
+    pub fn events(&self) -> Option<&Arc<EventManager>> {
+        self.events.as_ref()
     }
 
     /// Override the phi threshold (default 8.0).
@@ -498,6 +526,13 @@ impl GossipHandler {
                             PeerState::Normal,
                         );
                     }
+                    if let Some(ev) = self.events.as_ref() {
+                        ev.publish(ClusterEvent::PeerUp {
+                            peer_id: p.idx(),
+                            dc: p.dc().to_string(),
+                            ts: std::time::SystemTime::now(),
+                        });
+                    }
                 }
                 return;
             }
@@ -525,6 +560,13 @@ impl GossipHandler {
                         prev,
                         PeerState::Normal,
                     );
+                }
+                if let Some(ev) = self.events.as_ref() {
+                    ev.publish(ClusterEvent::PeerUp {
+                        peer_id: p.idx(),
+                        dc: p.dc().to_string(),
+                        ts: std::time::SystemTime::now(),
+                    });
                 }
             }
         }
@@ -562,6 +604,23 @@ impl GossipHandler {
                 if let Some(m) = self.failure_metrics.as_ref() {
                     m.record_peer_state_transition(p.idx(), p.dc(), p.rack(), prev, target);
                 }
+                if let Some(ev) = self.events.as_ref() {
+                    let ts = std::time::SystemTime::now();
+                    match target {
+                        PeerState::Normal => ev.publish(ClusterEvent::PeerUp {
+                            peer_id: p.idx(),
+                            dc: p.dc().to_string(),
+                            ts,
+                        }),
+                        PeerState::Down => ev.publish(ClusterEvent::PeerDown {
+                            peer_id: p.idx(),
+                            dc: p.dc().to_string(),
+                            phi,
+                            ts,
+                        }),
+                        _ => {}
+                    }
+                }
             } else if let Some(m) = self.failure_metrics.as_ref() {
                 m.observe_peer_state(p.idx(), p.dc(), p.rack(), target);
             }
@@ -590,6 +649,14 @@ impl GossipHandler {
                         prev,
                         PeerState::Down,
                     );
+                }
+                if let Some(ev) = self.events.as_ref() {
+                    ev.publish(ClusterEvent::PeerDown {
+                        peer_id: p.idx(),
+                        dc: p.dc().to_string(),
+                        phi: p.failure_detector().phi(Instant::now()),
+                        ts: std::time::SystemTime::now(),
+                    });
                 }
                 return;
             }
