@@ -1,0 +1,21 @@
+[package]
+name = "hashtree"
+description = "Generic merkle/hashtree primitive for active anti-entropy and content-addressed comparison"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+blake3 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+bincode = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+hegeltest = { workspace = true }

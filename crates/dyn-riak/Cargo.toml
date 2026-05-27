@@ -27,6 +27,7 @@ wasm = ["dep:wasmtime", "dep:ciborium"]
 [dependencies]
 dynomite = { path = "../dynomite" }
 dyn-encoding = { path = "../dyn-encoding" }
+hashtree = { path = "../hashtree" }
 bytes = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true }
