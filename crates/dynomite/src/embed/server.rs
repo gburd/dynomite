@@ -33,6 +33,7 @@ use crate::embed::hooks::{
     CryptoProvider, Datastore, LoggingMetricsSink, MetricsSink, SeedsProvider,
 };
 use crate::embed::snapshots::{DatacenterSnapshot, PeerSnapshot, RingSnapshot};
+use crate::events::EventManager;
 use crate::hashkit::DynToken;
 use crate::msg::Msg;
 use crate::stats::{
@@ -142,6 +143,7 @@ pub(crate) struct ServerInner {
     stats: Arc<Stats>,
     snapshot_cache: Arc<Mutex<Snapshot>>,
     bus: EventBus,
+    events: Arc<EventManager>,
     datastore: Box<dyn Datastore>,
     seeds: Box<dyn SeedsProvider>,
     metrics: Box<dyn MetricsSink>,
@@ -279,6 +281,7 @@ impl Server {
 
         let dispatcher = ClusterDispatcher::new(cluster.clone());
         let bus = EventBus::new(64);
+        let events = Arc::new(EventManager::new(64));
         let cancel = CancellationToken::new();
         let snapshot_cache = Arc::new(Mutex::new(Snapshot::default()));
 
@@ -304,6 +307,7 @@ impl Server {
             stats: stats.clone(),
             snapshot_cache: snapshot_cache.clone(),
             bus: bus.clone(),
+            events: events.clone(),
             datastore,
             seeds,
             metrics,
@@ -425,6 +429,18 @@ impl ServerHandle {
     #[must_use]
     pub fn subscribe_events(&self) -> EventStream {
         self.inner.bus.subscribe()
+    }
+
+    /// Borrow the [`EventManager`] handle that publishes
+    /// structured cluster-event payloads (`PeerUp`, `PeerDown`,
+    /// `GossipRoundComplete`, etc.).
+    ///
+    /// Returned as `Arc` so embedders can hold a long-lived
+    /// reference and pass it across crate boundaries (notably to
+    /// `dyn-riak`, which publishes AAE start/complete events).
+    #[must_use]
+    pub fn events(&self) -> Arc<EventManager> {
+        Arc::clone(&self.inner.events)
     }
 
     /// Latest stats snapshot.
@@ -809,6 +825,8 @@ async fn gossip_loop(inner: Arc<ServerInner>, interval: Duration) {
             biased;
             () = inner.cancel.cancelled() => return,
             _ = ticker.tick() => {
+                let round_started = std::time::Instant::now();
+                let round_ts = std::time::SystemTime::now();
                 round += 1;
                 let seeds = inner.seeds.fetch().unwrap_or_default();
                 let mut added: u32 = 0;
@@ -860,10 +878,24 @@ async fn gossip_loop(inner: Arc<ServerInner>, interval: Duration) {
                     for (idx, p) in peers_now.iter().enumerate().rev().take(added as usize) {
                         let _ = idx;
                         inner.bus.send(ServerEvent::PeerUp(p.idx()));
+                        inner.events.publish(crate::events::ClusterEvent::PeerUp {
+                            peer_id: p.idx(),
+                            dc: p.dc().to_string(),
+                            ts: round_ts,
+                        });
                     }
+                    inner.events.publish(crate::events::ClusterEvent::RingChanged {
+                        tag: "seed-discovery".to_string(),
+                        ts: round_ts,
+                    });
                 }
                 let count = u32::try_from(inner.pool.peers().read().len()).unwrap_or(u32::MAX);
                 inner.bus.send(ServerEvent::GossipRound { round, peers: count });
+                inner.events.publish(crate::events::ClusterEvent::GossipRoundComplete {
+                    duration: round_started.elapsed(),
+                    peers_seen: count as usize,
+                    ts: round_ts,
+                });
                 inner.stats.pool_incr(PoolField::StatsCount);
             }
         }

@@ -38,6 +38,7 @@ pub mod core;
 pub mod crypto;
 pub mod embed;
 pub mod entropy;
+pub mod events;
 pub mod hashkit;
 pub mod io;
 pub mod msg;
