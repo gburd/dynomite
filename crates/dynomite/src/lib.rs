@@ -31,6 +31,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod admin;
 pub mod cluster;
 pub mod conf;
 pub mod core;
