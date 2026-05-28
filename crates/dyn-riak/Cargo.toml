@@ -28,6 +28,7 @@ wasm = ["dep:wasmtime", "dep:ciborium"]
 dynomite = { path = "../dynomite" }
 dyn-encoding = { path = "../dyn-encoding" }
 hashtree = { path = "../hashtree" }
+gen-fsm = { path = "../gen-fsm" }
 bytes = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true }
