@@ -66,6 +66,11 @@ opentelemetry = { workspace = true }
 # formats.
 time = { workspace = true }
 
+# Tokio-free token-bucket primitive. The dynomite-side wrapper in
+# `runtime::throttle` adds the tokio-async `acquire` and the
+# Prometheus histogram on top of the algorithm in this crate.
+throttle-core = { path = "../throttle-core" }
+
 [dev-dependencies]
 hegeltest = { workspace = true }
 criterion = { workspace = true }
