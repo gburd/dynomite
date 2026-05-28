@@ -6,6 +6,8 @@
 //! durations are short enough to keep total test runtime under a
 //! few seconds.
 
+#![cfg(not(loom))]
+
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

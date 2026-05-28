@@ -8,6 +8,11 @@
 #     bash scripts/loom.sh
 #
 # Pinned to release mode because loom builds are slow.
+#
+# Doctests are excluded (`--tests`): the `sup` crate's library-level
+# doctest exercises the tokio-backed `Supervisor`, which is gated
+# out under `--cfg loom`. Loom-relevant invariants in `sup` live
+# under `crates/sup/tests/loom.rs`.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -25,5 +30,11 @@ export LOOM_MAX_BRANCHES
 # hashtree both gate their doctest bodies on `cfg(not(loom))`
 # so they don't drive loom-shadowed atomics from outside a
 # `loom::model` closure).
+#
+# `--tests` excludes doctests for crates that don't gate them
+# (sup's atomics module has internal items only; nothing public
+# reaches the doctest harness). Other loom-bearing crates with
+# gated doctests (throttle-core, hashtree) pass --cfg loom
+# through RUSTDOCFLAGS so their bodies elide.
 RUSTFLAGS='--cfg loom' RUSTDOCFLAGS='--cfg loom' \
-    cargo test -p loom-tests -p throttle-core -p hashtree --release "$@"
+    cargo test -p loom-tests -p throttle-core -p hashtree -p sup --release "$@"

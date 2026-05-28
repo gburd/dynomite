@@ -76,15 +76,16 @@ impl BackoffSpec {
         Duration::from_secs_f64(capped)
     }
 
-    /// Compute the actual delay for the given consecutive-failure
-    /// count, applying jitter using `prng_state` (a small in-place
-    /// xorshift PRNG; the caller threads it through repeated calls).
-    pub(crate) fn jittered_delay(&self, failures: u32, prng_state: &mut u64) -> Duration {
-        let base = self.base_delay(failures);
+    /// Apply jitter to `base` using an already-advanced xorshift64
+    /// state value. Pure function: callers are responsible for
+    /// advancing the PRNG (sequentially via
+    /// [`xorshift64`] or atomically via
+    /// [`crate::atomics::BackoffState`]).
+    pub(crate) fn apply_jitter(&self, base: Duration, prng_value: u64) -> Duration {
         if self.jitter <= 0.0 {
             return base;
         }
-        let r = next_unit(prng_state); // -1.0 ..= 1.0
+        let r = unit_from_state(prng_value);
         let secs = base.as_secs_f64() * (1.0 + r * self.jitter);
         let max_secs = self.max.as_secs_f64();
         let bounded = if secs.is_finite() {
@@ -96,21 +97,30 @@ impl BackoffSpec {
     }
 }
 
-/// Advance `state` (xorshift64) and return a value in `[-1.0, 1.0)`.
-fn next_unit(state: &mut u64) -> f64 {
-    if *state == 0 {
-        *state = 0x9E37_79B9_7F4A_7C15;
-    }
-    let mut x = *state;
+/// Advance an xorshift64 PRNG state. Pure function returning the
+/// next state. A zero input is replaced with a fixed non-zero seed
+/// so the sequence cannot collapse to all-zeros.
+pub(crate) fn xorshift64(state: u64) -> u64 {
+    let s = if state == 0 {
+        0x9E37_79B9_7F4A_7C15
+    } else {
+        state
+    };
+    let mut x = s;
     x ^= x << 13;
     x ^= x >> 7;
     x ^= x << 17;
-    *state = x;
+    x
+}
+
+/// Map a 64-bit pseudo-random value to a uniform sample in
+/// `[-1.0, 1.0)`.
+pub(crate) fn unit_from_state(state: u64) -> f64 {
     // Construct an f64 in [1.0, 2.0) from random bits using the
     // well-known IEEE 754 trick: set sign = 0, exponent = 1023
     // (the bias for 2^0), and stuff 52 random bits into the
     // mantissa. This avoids any narrowing cast.
-    let mantissa = (x >> 12) & 0x000F_FFFF_FFFF_FFFF;
+    let mantissa = (state >> 12) & 0x000F_FFFF_FFFF_FFFF;
     let bits = 0x3FF0_0000_0000_0000_u64 | mantissa;
     let f = f64::from_bits(bits); // f in [1.0, 2.0)
     let unit = f - 1.0; // [0.0, 1.0)
@@ -142,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn jitter_stays_within_bounds() {
+    fn apply_jitter_stays_within_bounds() {
         let b = BackoffSpec {
             start: Duration::from_millis(100),
             max: Duration::from_secs(60),
@@ -152,18 +162,29 @@ mod tests {
         let mut state = 0xdead_beef_u64;
         let base = b.base_delay(3);
         for _ in 0..1024 {
-            let d = b.jittered_delay(3, &mut state);
+            state = xorshift64(state);
+            let d = b.apply_jitter(base, state);
             assert!(d <= Duration::from_secs_f64(base.as_secs_f64() * 1.5));
             assert!(d.as_secs_f64() >= 0.0);
         }
     }
 
     #[test]
-    fn jitter_is_disabled_when_zero() {
+    fn apply_jitter_is_a_noop_when_jitter_is_zero() {
         let b = BackoffSpec::fixed(Duration::from_millis(123), Duration::from_secs(10), 1.5);
-        let mut state = 1;
+        let mut state = 1_u64;
         for f in 0..5 {
-            assert_eq!(b.jittered_delay(f, &mut state), b.base_delay(f));
+            state = xorshift64(state);
+            let base = b.base_delay(f);
+            assert_eq!(b.apply_jitter(base, state), base);
         }
+    }
+
+    #[test]
+    fn xorshift64_is_pure() {
+        // Same input -> same output; zero is mapped to a fixed seed.
+        assert_eq!(xorshift64(0), xorshift64(0));
+        assert_ne!(xorshift64(0), 0);
+        assert_eq!(xorshift64(42), xorshift64(42));
     }
 }

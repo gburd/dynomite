@@ -8,14 +8,14 @@
 use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::AbortHandle;
 
-use crate::backoff::BackoffSpec;
+use crate::atomics::{BackoffState, ChildIdAllocator};
 use crate::error::SupError;
 use crate::types::{
     ChildExit, ChildId, ChildSpec, RestartPolicy, RestartStrategy, SupExit, Supervised,
@@ -36,10 +36,10 @@ struct ChildEntry {
     name: String,
     factory: Factory,
     restart: RestartPolicy,
-    backoff: BackoffSpec,
-    /// Number of consecutive abnormal exits since the last successful
-    /// run. Reset to zero on `Ok`.
-    consecutive_failures: u32,
+    /// Backoff bookkeeping: spec, consecutive-failure counter, and
+    /// per-child PRNG. Atomic-backed so the same primitive can be
+    /// model-checked under loom.
+    backoff: BackoffState,
     /// Monotonically increasing per-spawn generation. Used to discard
     /// stale exit events (e.g. from a child we already aborted as part
     /// of a OneForAll cascade).
@@ -160,10 +160,10 @@ impl SupervisorHandle {
 pub struct Supervisor {
     strategy: RestartStrategy,
     children: Vec<ChildEntry>,
-    next_id: AtomicU64,
+    next_id: ChildIdAllocator,
     shutdown: Arc<ShutdownState>,
     shutdown_timeout: Duration,
-    prng_state: u64,
+    seed_source: u64,
 }
 
 impl Supervisor {
@@ -173,10 +173,10 @@ impl Supervisor {
         Self {
             strategy,
             children: Vec::new(),
-            next_id: AtomicU64::new(1),
+            next_id: ChildIdAllocator::new(),
             shutdown: Arc::new(ShutdownState::new()),
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
-            prng_state: seed_prng(),
+            seed_source: seed_prng(),
         }
     }
 
@@ -223,7 +223,7 @@ impl Supervisor {
                 return Err(SupError::ChildLimitReached);
             }
         }
-        let id = ChildId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        let id = ChildId(self.next_id.next());
         let ChildSpec {
             spec,
             restart,
@@ -231,13 +231,13 @@ impl Supervisor {
         } = spec;
         let name = spec.name().to_string();
         let factory = make_factory(spec);
+        let backoff_seed = mix_seed(self.seed_source, id.0);
         self.children.push(ChildEntry {
             id,
             name,
             factory,
             restart,
-            backoff,
-            consecutive_failures: 0,
+            backoff: BackoffState::new(backoff, backoff_seed),
             generation: 0,
             abort: None,
             state: ChildState::Idle,
@@ -418,10 +418,9 @@ impl Supervisor {
             return;
         }
         if was_abnormal {
-            self.children[idx].consecutive_failures =
-                self.children[idx].consecutive_failures.saturating_add(1);
+            self.children[idx].backoff.observe_failure();
         } else {
-            self.children[idx].consecutive_failures = 0;
+            self.children[idx].backoff.observe_success();
         }
         let restart_self = match self.children[idx].restart {
             RestartPolicy::Permanent => true,
@@ -560,10 +559,8 @@ impl Supervisor {
 
     fn schedule_restart(&mut self, idx: usize, tx: &mpsc::UnboundedSender<SupEvent>) {
         let child = &mut self.children[idx];
-        let delay = child.backoff.jittered_delay(
-            child.consecutive_failures.saturating_sub(1),
-            &mut self.prng_state,
-        );
+        let delay = child.backoff.next_delay();
+        let failures = child.backoff.failures();
         child.generation = child.generation.wrapping_add(1);
         let generation = child.generation;
         let id = child.id;
@@ -574,7 +571,7 @@ impl Supervisor {
             child = %child.name,
             id = %id,
             ?delay,
-            failures = child.consecutive_failures,
+            failures,
             "scheduling restart with backoff",
         );
         tokio::spawn(async move {
@@ -681,4 +678,15 @@ fn seed_prng() -> u64 {
                 lo ^ hi
             });
     nanos ^ 0xC0FF_EEDE_CAFB_AD55_u64
+}
+
+/// Combine the supervisor's seed source with a child id to derive a
+/// per-child PRNG seed. Uses the SplitMix64 finaliser so adjacent
+/// child ids produce well-separated seeds even if the seed source
+/// has poor entropy in its low bits.
+fn mix_seed(source: u64, id: u64) -> u64 {
+    let mut z = source.wrapping_add(id).wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }

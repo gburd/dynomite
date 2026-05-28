@@ -13,8 +13,21 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 
+# Loom is the model checker. It is only pulled into the build under
+# `RUSTFLAGS='--cfg loom'`; production builds are unaffected. The
+# `crate::atomics` submodule shadows its `std::sync::atomic` imports
+# with `loom::sync::atomic` under that flag so the bookkeeping
+# primitives can be exercised by `loom::model`. The supervisor
+# runtime itself is gated on `cfg(not(loom))` because tokio's
+# networking modules do not link under loom.
+[target.'cfg(loom)'.dependencies]
+loom = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = { workspace = true }
 
 [lints]
 workspace = true
