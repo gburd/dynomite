@@ -57,6 +57,13 @@
 //! # Example
 //!
 //! ```no_run
+//! # // Doctest is `cfg(not(loom))`-gated because under
+//! # // `--cfg loom` the `Supervisor` type is hidden (the
+//! # // tokio runtime hooks it depends on don't link under
+//! # // loom). Behavioural correctness is verified by the
+//! # // `tests/supervisor.rs` integration tests.
+//! # #[cfg(not(loom))]
+//! # mod example {
 //! use std::time::Duration;
 //! use sup::{
 //!     BackoffSpec, ChildSpec, RestartPolicy, RestartStrategy, SupError, Supervised,
@@ -90,6 +97,7 @@
 //! // ... later ...
 //! handle.shutdown().await.unwrap();
 //! let _exit = runner.await.unwrap();
+//! # }
 //! # }
 //! ```
 //!
