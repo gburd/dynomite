@@ -151,6 +151,45 @@ fi
 
 # Start the datastore in the background.
 echo "==> starting $BACKEND_LABEL on $DATASTORE_PORT (mode=$EFFECTIVE_MODE)"
+
+# Bug C fix (port-side): kill any process or container bound
+# to $DATASTORE_PORT before starting the new backend. The
+# chaos coordinator's all-modes wrapper rotates redis ->
+# memcache -> riak; if a prior mode's teardown timed out,
+# the prior container or native backend survives. Without
+# this step, the new backend fails to bind silently and
+# dynomited talks the wrong protocol to whatever's still
+# there.
+#
+# We kill in two passes:
+#   1. Containers via the container tool, both the
+#      same-label name (which the start path also rms below
+#      but earlier here for the native-backend path which
+#      doesn't) and the sibling-label name (e.g., we are
+#      bringing up memcached so kill any leftover redis).
+#   2. Native processes bound to the port via fuser or lsof.
+for stale_label in redis memcached; do
+    stale_name="dyn-chaos-$stale_label-$DC_NAME"
+    if command -v podman >/dev/null 2>&1; then
+        podman rm -f "$stale_name" >/dev/null 2>&1 || true
+    fi
+    if command -v docker >/dev/null 2>&1; then
+        docker rm -f "$stale_name" >/dev/null 2>&1 || true
+    fi
+done
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k -TERM "$DATASTORE_PORT/tcp" >/dev/null 2>&1 || true
+    sleep 0.5
+    fuser -k -KILL "$DATASTORE_PORT/tcp" >/dev/null 2>&1 || true
+elif command -v lsof >/dev/null 2>&1; then
+    pids=$(lsof -ti ":$DATASTORE_PORT" -sTCP:LISTEN 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "$pids" | xargs -r kill -TERM 2>/dev/null || true
+        sleep 0.5
+        echo "$pids" | xargs -r kill -KILL 2>/dev/null || true
+    fi
+fi
+
 if [ -n "$BACKEND_BIN" ]; then
     if [ "$EFFECTIVE_MODE" = "redis" ]; then
         nohup "$BACKEND_BIN" \
@@ -178,6 +217,10 @@ if [ -n "$BACKEND_BIN" ]; then
     echo "$BACKEND_PID" > "$RUN/redis.pid"
 else
     CONTAINER_NAME="dyn-chaos-$BACKEND_LABEL-$DC_NAME"
+    # Container with our exact name was already killed by
+    # the prefix sweep above; this rm -f is belt-and-braces
+    # to handle the case where the sweep raced a fresh
+    # podman/docker create.
     "$BACKEND_CONTAINER_TOOL" rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
     if [ "$EFFECTIVE_MODE" = "redis" ]; then
         "$BACKEND_CONTAINER_TOOL" run -d \
@@ -211,19 +254,33 @@ else
     echo "container:$CONTAINER_NAME" > "$RUN/redis.pid"
 fi
 
-# Wait for the backend to accept connections.
+# Bug C fix companion: wait for the backend to accept
+# connections AND speak the expected protocol. The probe
+# is the load-bearing check: without it, a stale backend on
+# $DATASTORE_PORT (wrong protocol) would happily accept TCP
+# but reply garbage to every probe; before this fix
+# dynomited would then enter a tight reconnect loop
+# (Bug A's parent symptom).
+PROBE_OK=0
 for i in $(seq 1 30); do
     if [ "$EFFECTIVE_MODE" = "redis" ]; then
         if printf 'PING\r\n' | timeout 1 bash -c "exec 9<>/dev/tcp/127.0.0.1/$DATASTORE_PORT && cat >&9 && head -c4 <&9" 2>/dev/null | grep -q PONG; then
+            PROBE_OK=1
             break
         fi
     else
         if printf 'version\r\n' | timeout 1 bash -c "exec 9<>/dev/tcp/127.0.0.1/$DATASTORE_PORT && cat >&9 && head -c8 <&9" 2>/dev/null | grep -q VERSION; then
+            PROBE_OK=1
             break
         fi
     fi
     sleep 0.2
 done
+if [ "$PROBE_OK" -ne 1 ]; then
+    echo "==> ERROR: backend on $DATASTORE_PORT did not respond to $EFFECTIVE_MODE protocol probe within 6 seconds" >&2
+    echo "==>        the port may be bound by a stale process from a prior mode; refusing to start dynomited" >&2
+    exit 1
+fi
 
 # Write the dynomited config.
 CONF="$RUN/dynomite.yml"
