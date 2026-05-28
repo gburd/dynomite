@@ -955,6 +955,7 @@ dependencies = [
  "dynomite",
  "futures-core",
  "futures-util",
+ "gen-fsm",
  "hashtree",
  "hegeltest",
  "http-body-util",
