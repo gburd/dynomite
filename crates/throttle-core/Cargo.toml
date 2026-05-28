@@ -1,0 +1,29 @@
+[package]
+name = "throttle-core"
+description = "Tokio-free token-bucket admission control with loom-checkable atomics."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# std-only by design; thiserror is the single non-std dep so the
+# blocking acquire can return a typed error.
+thiserror = { workspace = true }
+
+# Loom shadows std's atomics and Mutex with model-recording
+# variants. The crate is only pulled in under `--cfg loom`; the
+# default build is unaffected.
+[target.'cfg(loom)'.dependencies]
+loom = { workspace = true }
+
+[dev-dependencies]
+hegeltest = { workspace = true }
+
+[target.'cfg(loom)'.dev-dependencies]
+loom = { workspace = true }

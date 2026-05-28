@@ -29,4 +29,4 @@ mod sidejob;
 mod throttle;
 
 pub use sidejob::{Sidejob, SidejobError};
-pub use throttle::Throttle;
+pub use throttle::{Throttle, ThrottleError};

@@ -1013,6 +1013,7 @@ dependencies = [
  "socket2 0.6.3",
  "tempfile",
  "thiserror 2.0.18",
+ "throttle-core",
  "time",
  "tokio",
  "tokio-rustls",
@@ -3298,6 +3299,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "throttle-core"
+version = "0.0.1"
+dependencies = [
+ "hegeltest",
+ "loom",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

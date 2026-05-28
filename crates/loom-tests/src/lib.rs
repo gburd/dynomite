@@ -12,12 +12,27 @@
 //!
 //! Tokio gates large swathes of its API behind `cfg(not(loom))`,
 //! so a crate that depends on tokio (such as `dynomite`) does not
-//! link under `--cfg loom`. The standard workaround, used by
-//! tokio's own loom tests, is to **re-model the primitives** in a
-//! crate that does not transitively pull in tokio, then exercise
-//! the model under loom. The model's invariants must match the
-//! production code's, so the responsibility is on the test author
-//! to keep them in sync.
+//! link under `--cfg loom`. There are two ways to work around
+//! that:
+//!
+//! 1. **Re-model the primitive in a tokio-free crate.** This crate
+//!    holds those starter models: a hint-store enqueue/drain
+//!    primitive, a phi-accrual sample-record/observe primitive,
+//!    and an mbuf alloc/free primitive. Each is a hand-rolled
+//!    miniature of its production cousin -- the algorithm matches
+//!    by inspection, not by sharing source. Use this pattern for
+//!    fresh primitives whose production home still has heavy
+//!    runtime dependencies.
+//! 2. **Lift the primitive into a tokio-free crate.** When the
+//!    algorithm is small enough to stand alone, lift it into a
+//!    sibling crate that depends only on `std` (and `loom` under
+//!    `--cfg loom`). The production embed becomes a thin wrapper
+//!    that adds runtime ergonomics on top. The
+//!    [`throttle-core`](../throttle_core/index.html) crate is the
+//!    reference example of this pattern: it owns the AtomicU64 +
+//!    `Mutex<Instant>` token-bucket algorithm, and
+//!    `dynomite::runtime::throttle` reduces to a tokio-async
+//!    wrapper plus the Prometheus metric.
 //!
 //! # What is modeled here
 //!
@@ -29,10 +44,22 @@
 //! 3. A simplified mbuf alloc/free primitive (mirrors
 //!    [`dynomite::io::mbuf::MbufPool`]'s free list).
 //!
+//! The token-bucket throttle is NOT modeled here: it is exercised
+//! directly under loom in `crates/throttle-core/tests/loom.rs`,
+//! against the production type. Lifted-and-tested beats
+//! re-modeled when the algorithm fits in a standalone crate.
+//!
 //! # Running the tests
 //!
 //! ```text
-//! RUSTFLAGS='--cfg loom' cargo test -p loom-tests --release
+//! bash scripts/loom.sh
+//! ```
+//!
+//! which is shorthand for
+//!
+//! ```text
+//! RUSTFLAGS='--cfg loom' RUSTDOCFLAGS='--cfg loom' \
+//!     cargo test -p loom-tests -p throttle-core --release
 //! ```
 //!
 //! Without the `--cfg loom` flag the tests compile to no-ops; the

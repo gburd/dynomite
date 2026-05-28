@@ -11,6 +11,7 @@ members = [
     "crates/hashtree",
     "crates/loom-tests",
     "crates/sup",
+    "crates/throttle-core",
 ]
 exclude = [
     "crates/fuzz",
