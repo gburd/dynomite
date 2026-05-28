@@ -103,14 +103,20 @@
 #![doc(html_root_url = "https://docs.rs/sup/0.0.1")]
 #![forbid(unsafe_code)]
 
+pub mod atomics;
 mod backoff;
 mod error;
-mod supervisor;
 mod types;
 
+#[cfg(not(loom))]
+mod supervisor;
+
+pub use atomics::{BackoffState, ChildIdAllocator, FailureCounter};
 pub use backoff::BackoffSpec;
 pub use error::SupError;
-pub use supervisor::{Supervisor, SupervisorHandle};
 pub use types::{
     ChildExit, ChildId, ChildSpec, RestartPolicy, RestartStrategy, SupExit, Supervised,
 };
+
+#[cfg(not(loom))]
+pub use supervisor::{Supervisor, SupervisorHandle};
