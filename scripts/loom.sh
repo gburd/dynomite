@@ -19,4 +19,10 @@ cd "$(dirname "$0")/.."
 : "${LOOM_MAX_BRANCHES:=1000}"
 export LOOM_MAX_BRANCHES
 
-RUSTFLAGS='--cfg loom' cargo test -p loom-tests --release "$@"
+# `RUSTDOCFLAGS` gets the same `--cfg loom` so the doctest
+# binaries see the gate. The `throttle-core` doctest examples
+# wrap their bodies in `#[cfg(not(loom))]` so that under loom
+# they compile to a no-op `fn main() {}` rather than driving
+# loom-instrumented atomics from outside `loom::model`.
+RUSTFLAGS='--cfg loom' RUSTDOCFLAGS='--cfg loom' \
+    cargo test -p loom-tests -p throttle-core --release "$@"
