@@ -48,6 +48,7 @@
 
 pub mod config;
 pub mod exchange;
+pub mod exchange_fsm;
 pub mod metrics;
 #[cfg(feature = "noxu")]
 pub mod noxu_fold;
@@ -63,6 +64,11 @@ pub use crate::aae::exchange::{
     encode_tree_sync, Divergence, Exchange, ExchangeError, ExchangeFrame, LocalPeerView, PeerView,
     EXCHANGE_MAGIC, FRAME_HEADER_LEN, MAX_PAYLOAD_LEN, PHASE_KEY_SYNC, PHASE_ROOT_SYNC,
     PHASE_TREE_SYNC,
+};
+pub use crate::aae::exchange_fsm::{
+    exchange_with_peer, spawn_exchange, Event as ExchangeFsmEvent, ExchangeHandler,
+    ExchangeOutcome, FsmRequest as ExchangeFsmRequest, PeerViewAsync, State as ExchangeFsmState,
+    SyncPeerViewAdapter, DEFAULT_STATE_TIMEOUT,
 };
 pub use crate::aae::metrics::{
     load_snapshot_with_metrics, save_snapshot_with_metrics, AaeMetrics, AaeMetricsSnapshot,
