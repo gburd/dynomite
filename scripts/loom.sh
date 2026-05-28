@@ -19,10 +19,11 @@ cd "$(dirname "$0")/.."
 : "${LOOM_MAX_BRANCHES:=1000}"
 export LOOM_MAX_BRANCHES
 
-# `RUSTDOCFLAGS` gets the same `--cfg loom` so the doctest
-# binaries see the gate. The `throttle-core` doctest examples
-# wrap their bodies in `#[cfg(not(loom))]` so that under loom
-# they compile to a no-op `fn main() {}` rather than driving
-# loom-instrumented atomics from outside `loom::model`.
+# Pass `--cfg loom` to both the compiler and rustdoc so that
+# doctests that gate themselves on `cfg(loom)` see the flag and
+# compile to the no-op branch under loom (throttle-core +
+# hashtree both gate their doctest bodies on `cfg(not(loom))`
+# so they don't drive loom-shadowed atomics from outside a
+# `loom::model` closure).
 RUSTFLAGS='--cfg loom' RUSTDOCFLAGS='--cfg loom' \
-    cargo test -p loom-tests -p throttle-core --release "$@"
+    cargo test -p loom-tests -p throttle-core -p hashtree --release "$@"
