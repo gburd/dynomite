@@ -1392,6 +1392,7 @@ dependencies = [
  "bincode",
  "blake3",
  "hegeltest",
+ "loom",
  "serde",
  "thiserror 2.0.18",
 ]
