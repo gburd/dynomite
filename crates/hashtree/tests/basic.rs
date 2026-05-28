@@ -1,4 +1,11 @@
 //! Integration tests for the public `hashtree::HashTree` API.
+//!
+//! Disabled under `--cfg loom`: these tests do not run inside
+//! a `loom::model` closure, but the production lazy-init path
+//! shadows in loom's `Mutex` under that flag. Loom coverage
+//! for the lazy-init contract lives in `tests/loom.rs`.
+
+#![cfg(not(loom))]
 
 use hashtree::{Hash, HashTree};
 

@@ -2,6 +2,13 @@
 //!
 //! Each `#[hegel::test]` runs at least 256 generated cases
 //! under the default profile.
+//!
+//! Disabled under `--cfg loom`: hegel's randomised cases do
+//! not run inside a `loom::model` closure, and the
+//! production lazy-init path uses loom-shadowed primitives
+//! under that flag.
+
+#![cfg(not(loom))]
 
 use std::collections::BTreeMap;
 

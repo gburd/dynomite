@@ -19,3 +19,11 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 hegeltest = { workspace = true }
+
+# Loom is wired in only under `RUSTFLAGS='--cfg loom'`. The
+# default build is unaffected; the production lazy-init path
+# uses `std::sync::OnceLock` from the standard library and
+# pulls no extra dependencies. See `src/lazy_hash.rs` and
+# `tests/loom.rs` for the model-checked alternative.
+[target.'cfg(loom)'.dependencies]
+loom = { workspace = true }

@@ -12,7 +12,7 @@
 //! power of two) and a `depth`. The leaf level holds
 //! `fanout.pow(depth as u32)` segments; each segment is a
 //! [`BTreeMap`] of `key -> value_hash` whose [BLAKE3] digest is
-//! cached lazily via [`OnceCell`]. The interior levels are
+//! cached lazily via [`OnceLock`]. The interior levels are
 //! reduced bottom-up by hashing chunks of `fanout` child
 //! digests at a time, giving a true merkle reduction whose
 //! intermediate nodes are not materialised but whose root is
@@ -37,6 +37,9 @@
 //! # Example
 //!
 //! ```
+//! # #[cfg(loom)] fn main() {}
+//! # #[cfg(not(loom))]
+//! # fn main() {
 //! use hashtree::HashTree;
 //!
 //! let mut a = HashTree::new(64, 1);
@@ -48,18 +51,21 @@
 //! assert_ne!(a.root(), b.root());
 //! let diverging = a.diff(&b);
 //! assert_eq!(diverging.len(), 1);
+//! # }
 //! ```
 //!
 //! [BLAKE3]: https://github.com/BLAKE3-team/BLAKE3
-//! [`OnceCell`]: std::cell::OnceCell
+//! [`OnceLock`]: std::sync::OnceLock
 
 #![forbid(unsafe_code)]
 
-use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
 use serde::{Deserialize, Serialize};
+
+mod lazy_hash;
+use lazy_hash::LazyHash;
 
 /// 32-byte BLAKE3 digest. Used both as the per-key value-side
 /// hash supplied by the caller and as the internal segment /
@@ -103,8 +109,13 @@ pub struct Segment {
     /// regardless of insertion order.
     keys: BTreeMap<Vec<u8>, Hash>,
     /// Lazily-computed segment digest. Invalidated to `None`
-    /// on any mutation.
-    hash: OnceCell<Hash>,
+    /// on any mutation. The cell is thread-safe so that
+    /// concurrent readers calling [`HashTree::segment_hash`]
+    /// or [`HashTree::root`] race only on the first observer
+    /// to publish; subsequent observers reuse the cached
+    /// digest. See [`lazy_hash`] for the model-checked
+    /// implementation details.
+    hash: LazyHash,
 }
 
 impl Segment {
@@ -126,7 +137,7 @@ impl Segment {
     /// peers agree on the digest of "this segment is empty"
     /// without serialising any bytes.
     fn digest(&self) -> Hash {
-        *self.hash.get_or_init(|| {
+        self.hash.get_or_init(|| {
             if self.keys.is_empty() {
                 return ZERO_HASH;
             }
@@ -143,13 +154,13 @@ impl Segment {
 
     /// Drop the cached digest. Called by every mutator.
     fn invalidate(&mut self) {
-        self.hash = OnceCell::new();
+        self.hash = LazyHash::new();
     }
 }
 
 /// On-disk / on-wire shape of a [`Segment`]. Used by the
 /// bincode codec only; the runtime representation keeps the
-/// `OnceCell` cache.
+/// `LazyHash` cache.
 #[derive(Serialize, Deserialize)]
 struct SegmentDto {
     /// Owned `(key, value_hash)` pairs, sorted in the same
@@ -170,7 +181,7 @@ impl From<SegmentDto> for Segment {
         let keys: BTreeMap<Vec<u8>, Hash> = d.keys.into_iter().collect();
         Self {
             keys,
-            hash: OnceCell::new(),
+            hash: LazyHash::new(),
         }
     }
 }
@@ -495,7 +506,11 @@ fn checked_segment_count(fanout: usize, depth: usize) -> Option<usize> {
     Some(count)
 }
 
-#[cfg(test)]
+// Gated against `loom`: the standard unit tests do not run
+// inside a `loom::model` closure and would panic if they
+// touched the loom-shadowed `Mutex` in `LazyHash`. Loom
+// coverage for `Segment::hash` lives in `tests/loom.rs`.
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
 
