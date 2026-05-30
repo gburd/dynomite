@@ -222,7 +222,7 @@ fn reap_max_per_cycle_caps_batch_size() {
     // truthful about workload size).
     assert_eq!(h.batch_len() as u64, cfg.reap_max_per_cycle);
     assert_eq!(h.scanned_this_cycle(), 10);
-    // March to Reaping. Outstanding count matches the cap.
+    // March to Reaping. Outstanding count equals the configured cap.
     let _ = h.handle(State::Scanning, EventType::Cast, Event::NextSegmentDone);
     let _ = h.handle(State::Scanning, EventType::Cast, Event::NextSegmentDone);
     let t = h.handle(State::Scanning, EventType::Cast, Event::NextSegmentDone);
