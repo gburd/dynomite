@@ -264,7 +264,7 @@ fi
 PROBE_OK=0
 for i in $(seq 1 30); do
     if [ "$EFFECTIVE_MODE" = "redis" ]; then
-        if printf 'PING\r\n' | timeout 1 bash -c "exec 9<>/dev/tcp/127.0.0.1/$DATASTORE_PORT && cat >&9 && head -c4 <&9" 2>/dev/null | grep -q PONG; then
+        if printf 'PING\r\n' | timeout 1 bash -c "exec 9<>/dev/tcp/127.0.0.1/$DATASTORE_PORT && cat >&9 && head -c5 <&9" 2>/dev/null | grep -q PONG; then
             PROBE_OK=1
             break
         fi
