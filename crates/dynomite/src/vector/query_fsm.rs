@@ -1,9 +1,10 @@
 //! Distributed k-NN coordinator.
 //!
-//! When a search request lands on any node, the query is broadcast
-//! to every primary peer covering the table's key range, each peer
-//! runs the search against its local HNSW index, and the
-//! coordinator merges the per-peer top-K results.
+//! When an FT.SEARCH command lands on any node, the query is
+//! broadcast to every primary peer covering the index's key
+//! range, each peer runs the search against its local HNSW
+//! index, and the coordinator merges the per-peer top-K
+//! results.
 //!
 //! The coordinator is shaped as a [`gen_fsm::FsmHandler`] state
 //! machine with four states:
@@ -23,13 +24,20 @@
 //!   either every peer has replied or the deadline elapses, it
 //!   moves to [`State::Merge`].
 //! * [`State::Merge`]: collapses the per-peer hits down to a
-//!   global top-K and replies on the original `Call` reply
-//!   handle.
+//!   global top-K and stashes the result on the response cell
+//!   the caller holds.
 //!
 //! The coordinator does not perform any I/O on its own; the
 //! [`PeerProbe`] callback is supplied by the caller and is
-//! responsible for actually contacting peers. This keeps the FSM
-//! testable in-process without standing up a real cluster.
+//! responsible for actually contacting peers. This keeps the
+//! FSM testable in-process without standing up a real cluster.
+//!
+//! Phase B (this commit) places the FSM under
+//! `dynomite::vector` so the future Phase C wiring can connect
+//! it to the existing [`crate::cluster::apl`] preference-list
+//! walker and [`crate::cluster::vnode::dispatch`] without a
+//! cross-crate dependency. The [`PeerProbe`] callback remains
+//! the integration seam.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,7 +47,7 @@ use gen_fsm::{Action, EventType, FsmHandler, Transition};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::index::SearchResult;
+use dynvec::SearchResult;
 
 /// One per-peer reply.
 #[derive(Clone, Debug, PartialEq)]
@@ -56,7 +64,7 @@ pub struct PeerHits {
 /// [`PeerProbe`] receives the entire request unchanged).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SearchRequest {
-    /// Table name.
+    /// Index name (the FT.CREATE first argument).
     pub table: String,
     /// Query vector in `f32`.
     pub vector: Vec<f32>,
@@ -320,7 +328,7 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::SearchResult;
+    use dynvec::SearchResult;
 
     fn req() -> SearchRequest {
         SearchRequest {

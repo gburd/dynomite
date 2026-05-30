@@ -1,6 +1,6 @@
 //! Distance metric correctness tests.
 
-use dynvecdb::distance::Distance;
+use dynvec::distance::Distance;
 
 fn approx(a: f32, b: f32, eps: f32) -> bool {
     (a - b).abs() <= eps

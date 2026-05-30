@@ -1,7 +1,7 @@
 //! Encoding round-trip and accuracy tests.
 
-use dynvecdb::encoding::{Codec, EncodingError, Fp16, Int8Quantized};
-use dynvecdb::Encoder;
+use dynvec::encoding::{Codec, EncodingError, Fp16, Int8Quantized};
+use dynvec::Encoder;
 
 fn rand_vec(seed: u64, dim: usize, span: f32) -> Vec<f32> {
     let mut x = seed;

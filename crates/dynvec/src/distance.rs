@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```
-//! use dynvecdb::distance::Distance;
+//! use dynvec::distance::Distance;
 //! let a = [1.0, 0.0, 0.0];
 //! let b = [0.0, 1.0, 0.0];
 //! assert!((Distance::Euclidean.score(&a, &b) - 2.0_f32.sqrt()).abs() < 1e-6);

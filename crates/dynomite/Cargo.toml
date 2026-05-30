@@ -71,6 +71,16 @@ time = { workspace = true }
 # Prometheus histogram on top of the algorithm in this crate.
 throttle-core = { path = "../throttle-core" }
 
+# Vector storage + HNSW ANN index. Hosts the per-table
+# `Engine` handle that `crate::vector` registers and serves
+# through Redis-Stack-style RediSearch FT.* commands.
+dynvec = { path = "../dynvec" }
+
+# State-functions FSM driver used by
+# `crate::vector::query_fsm` to fan out a k-NN search across
+# the cluster and merge the per-peer hit lists.
+gen-fsm = { path = "../gen-fsm" }
+
 [dev-dependencies]
 hegeltest = { workspace = true }
 criterion = { workspace = true }
