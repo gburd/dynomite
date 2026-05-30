@@ -29,6 +29,7 @@ dynomite = { path = "../dynomite" }
 dyn-encoding = { path = "../dyn-encoding" }
 hashtree = { path = "../hashtree" }
 gen-fsm = { path = "../gen-fsm" }
+throttle-core = { path = "../throttle-core" }
 bytes = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true }

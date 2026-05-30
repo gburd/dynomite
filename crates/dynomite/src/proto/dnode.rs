@@ -142,6 +142,14 @@ pub enum DmsgType {
     GossipDigestAck2 = 12,
     /// Gossip shutdown notice.
     GossipShutdown = 13,
+    /// Explicit handoff chunk frame.
+    ///
+    /// Carries one chunk of a token-range handoff stream from the
+    /// previous owner of the range to the new owner. Distinct from
+    /// the AAE exchange variants so the receiver can route handoff
+    /// frames to the dedicated handoff coordinator without parsing
+    /// the payload first.
+    HandoffChunk = 14,
 }
 
 impl DmsgType {
@@ -171,6 +179,7 @@ impl DmsgType {
             11 => DmsgType::GossipDigestAck,
             12 => DmsgType::GossipDigestAck2,
             13 => DmsgType::GossipShutdown,
+            14 => DmsgType::HandoffChunk,
             _ => return None,
         })
     }
@@ -923,11 +932,14 @@ pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
     // gossip variants (ACK, DIGEST_SYN, DIGEST_ACK, DIGEST_ACK2,
     // SHUTDOWN) fall through to the default branch and are
     // forwarded to the cluster handlers (which Stage 10 will wire
-    // up).
+    // up). HANDOFF_CHUNK frames are control-plane traffic for
+    // the explicit handoff coordinator and bypass the data-plane
+    // stack alongside the crypto / gossip handshake variants.
     match dmsg.ty {
-        DmsgType::CryptoHandshake | DmsgType::GossipSyn | DmsgType::GossipSynReply => {
-            DmsgDispatch::Bypass
-        }
+        DmsgType::CryptoHandshake
+        | DmsgType::GossipSyn
+        | DmsgType::GossipSynReply
+        | DmsgType::HandoffChunk => DmsgDispatch::Bypass,
         _ => DmsgDispatch::Forward,
     }
 }
@@ -1231,5 +1243,10 @@ mod tests {
             d.ty = ty;
             assert_eq!(dmsg_process(&d), DmsgDispatch::Forward);
         }
+        // HandoffChunk routes to the explicit handoff coordinator
+        // and is therefore bypassed alongside the handshake
+        // variants.
+        d.ty = DmsgType::HandoffChunk;
+        assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
     }
 }
