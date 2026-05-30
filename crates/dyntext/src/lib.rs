@@ -1,0 +1,60 @@
+//! Trigram + bloom-filter text index.
+//!
+//! `dyntext` is the algorithmic core of the dynomite text-search
+//! surface. It ports the inverted-index pipeline from
+//! [pg_tre](https://codeberg.org/gregburd/pg_tre) -- a
+//! PostgreSQL access method for approximate-regex matching --
+//! into pure Rust, so the same trigram + bloom funnel can sit
+//! behind dynomite's Redis FT.* command surface.
+//!
+//! # Phase 1 scope
+//!
+//! This crate currently implements:
+//!
+//! * Three-byte n-gram extraction with padding so the input's
+//!   boundary bytes get full coverage (see [`trigram`]).
+//! * A roaring-bitmap-backed inverted index keyed by trigram
+//!   hash (see [`postings::Postings`]).
+//! * A standard bloom filter with configurable bit count and
+//!   hash count (see [`bloom::BloomFilter`]).
+//! * A combined [`index::TextIndex`] that ties the three
+//!   together and serves exact-substring queries through the
+//!   four-tier filter funnel from the design doc.
+//!
+//! # Out of scope (planned follow-up phases)
+//!
+//! * Phase 2: regex AST + prefix extraction (compute the
+//!   trigrams a regex MUST contain).
+//! * Phase 3: TRE C library FFI for approximate-regex recheck.
+//! * Phase 4: Redis FT.SEARCH / FT.REGEX command parser
+//!   integration on top of the dynvec fold.
+//! * Phase 5: persistence into the Noxu storage backend.
+//!
+//! # Quick start
+//!
+//! ```
+//! use dyntext::index::TextIndex;
+//!
+//! let mut idx = TextIndex::new();
+//! let id_a = idx.insert(b"the quick brown fox".to_vec());
+//! let id_b = idx.insert(b"jumped over a lazy dog".to_vec());
+//! let id_c = idx.insert(b"another brown fox here".to_vec());
+//!
+//! let hits = idx.search_substring(b"brown fox");
+//! assert!(hits.contains(&id_a));
+//! assert!(hits.contains(&id_c));
+//! assert!(!hits.contains(&id_b));
+//! ```
+
+pub mod bloom;
+pub mod index;
+pub mod postings;
+pub mod trigram;
+
+pub use bloom::BloomFilter;
+pub use index::{IndexedDoc, TextIndex, MIN_TRIGRAM_QUERY_LEN};
+pub use postings::Postings;
+pub use trigram::{
+    extract_query_trigram_set, extract_query_trigrams, extract_trigram_set, extract_trigrams,
+    hash_trigram,
+};
