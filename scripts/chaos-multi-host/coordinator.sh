@@ -612,6 +612,23 @@ log "================================================================"
 # its own exit code so the function still propagates errors
 # even when called from a `||` context (where bash disables
 # `set -e` for the entire function body).
+#
+# Issue B (Pass-7 nuc bootstrap failure): the rsync transport
+# (`-e ssh ... -o ProxyJump=arnold`) fails on nuc with
+# `rsync: connection unexpectedly closed` even though plain
+# `ssh -J arnold nuc` works. The ProxyJump hop tunnels small
+# command streams happily but tears down rsync's bandwidth-
+# heavy stream when nuc's Tailscale-to-floki path is degraded.
+# As a defensive fallback we now:
+#   1. probe the runner with a `bash -c 'echo alive'` first;
+#      if even that fails, skip rsync and surface the SSH
+#      breakage clearly;
+#   2. attempt rsync as before;
+#   3. if rsync fails but the runner probe succeeded, fall
+#      back to a `tar | ssh tar -x` pipe. tar over a single
+#      ssh channel is more tolerant of flaky ProxyJump
+#      tunnels than rsync's protocol negotiation, at the
+#      cost of always sending a full tree (no delta).
 bootstrap_remote_src() {
     local label="$1"; shift
     local rsync_target="$1"; shift
@@ -619,6 +636,19 @@ bootstrap_remote_src() {
     local push_binary="${1:-yes}"; shift 2>/dev/null || true
     local mkdir_runner=("$@")
     log "bootstrap $label src (push_binary=$push_binary)"
+
+    # Probe the SSH runner first. If we can't even shell out
+    # to the host, neither rsync nor tar will work; mark
+    # failed without burning the rsync timeout budget.
+    local probe_rc=0
+    timeout --signal=KILL 30s "${mkdir_runner[@]}" bash -s <<'EOF' >/dev/null 2>&1 || probe_rc=$?
+echo alive
+EOF
+    if [ "$probe_rc" -ne 0 ]; then
+        log "  $label: ssh probe failed (rc=$probe_rc); host unreachable"
+        return "$probe_rc"
+    fi
+
     local rc=0
     "${mkdir_runner[@]}" bash -s <<'EOF' || rc=$?
 mkdir -p /scratch/dynomite-chaos/src \
@@ -629,24 +659,58 @@ EOF
     if [ "$rc" -ne 0 ]; then
         return "$rc"
     fi
+
+    # Source-tree push. rsync first; tar pipe on failure.
+    local src_rc=0
     rsync -a --delete \
         --exclude target/ --exclude .git/ --exclude _/dynomite/.git/ \
         -e "$rsync_e" \
-        "$REPO/" "$rsync_target:/scratch/dynomite-chaos/src/" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        return "$rc"
+        "$REPO/" "$rsync_target:/scratch/dynomite-chaos/src/" || src_rc=$?
+    if [ "$src_rc" -ne 0 ]; then
+        log "  $label: rsync src failed (rc=$src_rc); falling back to tar | ssh"
+        # tar-pipe fallback: stream a tarball through the
+        # already-proven SSH channel. The runner array is
+        # the SSH command; we append a remote `bash -c` that
+        # extracts into the destination. We do NOT ship
+        # --delete semantics (tar can only add/overwrite),
+        # but the destination dir was created above with
+        # mkdir -p so a pre-existing partial src tree is
+        # acceptable -- the operator's source tree is
+        # additive over a session anyway.
+        if ! tar -cf - -C "$REPO" \
+                --exclude=target \
+                --exclude=.git \
+                --exclude=_/dynomite/.git \
+                . \
+            | "${mkdir_runner[@]}" bash -c 'tar -xf - -C /scratch/dynomite-chaos/src/'; then
+            log "  $label: tar | ssh fallback also failed"
+            return 1
+        fi
+        log "  $label: tar | ssh fallback succeeded"
     fi
+
     # Ship the locally-built dynomited binary when the remote
     # OS+arch matches the build host. nuc runs FreeBSD, so the
     # caller passes push_binary=no and the operator is
     # expected to maintain a FreeBSD-native binary at
     # /scratch/dynomite-chaos/build/release/dynomited.
     if [ "$push_binary" = "yes" ] && [ -x "$REPO/target/release/dynomited" ]; then
+        local bin_rc=0
         rsync -a -e "$rsync_e" \
             "$REPO/target/release/dynomited" \
-            "$rsync_target:/scratch/dynomite-chaos/build/release/dynomited" || rc=$?
-        if [ "$rc" -ne 0 ]; then
-            return "$rc"
+            "$rsync_target:/scratch/dynomite-chaos/build/release/dynomited" || bin_rc=$?
+        if [ "$bin_rc" -ne 0 ]; then
+            log "  $label: rsync binary failed (rc=$bin_rc); falling back to ssh cat"
+            # Smaller payload than the source tree, but the
+            # same channel-quality issue applies. cat-pipe
+            # is the smallest reasonable fallback.
+            if ! "${mkdir_runner[@]}" bash -c \
+                    'cat > /scratch/dynomite-chaos/build/release/dynomited && chmod +x /scratch/dynomite-chaos/build/release/dynomited' \
+                    < "$REPO/target/release/dynomited"; then
+                log "  $label: ssh cat binary fallback also failed"
+                return 1
+            fi
+            log "  $label: ssh cat binary fallback succeeded"
         fi
     fi
     return 0
