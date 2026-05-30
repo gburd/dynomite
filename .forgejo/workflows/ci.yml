@@ -34,7 +34,7 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
               build-essential pkg-config libssl-dev curl ca-certificates \
-              redis-server
+              redis-server libopenblas-dev
       - uses: actions/checkout@v4
       - name: clone lamdb (noxu) sibling-checkout
         run: |
