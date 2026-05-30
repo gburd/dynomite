@@ -1,6 +1,6 @@
 [package]
-name = "dynvecdb"
-description = "Distributed vector database engine: dynomite distribution + Noxu node-local storage + HNSW ANN index"
+name = "dynvec"
+description = "Vector storage + HNSW ANN index engine for the Dynomite Rust port"
 version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
@@ -17,17 +17,15 @@ default = []
 # Build the on-disk Noxu storage backend. Off by default so the
 # crate compiles in a workspace that does not have the lamdb
 # checkout next door; a `MemoryStore` is shipped for that case.
-noxu = ["dep:noxu-db", "dyn-riak/noxu"]
-# Enable the optional hyper-based HTTP API. On by default for the
-# binary-style builds; can be disabled by an embedder that prefers
-# to wire its own transport on top of the engine.
+noxu = ["dep:noxu-db"]
+# Enable the optional hyper-based HTTP API. The HTTP surface is
+# retained as a debug / inspection facility; the primary
+# protocol surface is the Redis-Stack RediSearch FT.* commands
+# served by `dynomite::vector` over the existing Redis
+# listener.
 http = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]
 
 [dependencies]
-dynomite = { path = "../dynomite" }
-dyn-riak = { path = "../dyn-riak" }
-gen-fsm = { path = "../gen-fsm" }
-hashtree = { path = "../hashtree" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

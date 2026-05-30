@@ -1,6 +1,7 @@
-# dynvecdb
+# dynvec
 
-Distributed vector database engine for the Dynomite Rust port.
+Vector storage + HNSW ANN index engine for the Dynomite Rust
+port.
 
 * Node-local persistence via Noxu DB (or an in-memory backend for
   tests / embedded use).
@@ -11,19 +12,22 @@ Distributed vector database engine for the Dynomite Rust port.
   product.
 * HNSW approximate-nearest-neighbour index, hand-rolled in this
   crate -- see `docs/dynvecdb/architecture.md` for the rationale.
-* Distributed k-NN search via a `gen-fsm`-driven coordinator.
-* HTTP API (gated on the `http` feature) for clients.
+* Per-table `Engine` handle for embedders.
 
-The MVP runs single-node; the pieces for cluster-wide fanout
-(routing, broadcast, merge) are wired up but not exposed through
-the HTTP API yet. See `docs/dynvecdb/architecture.md` for the
-full picture and `docs/dynvecdb/cql-stretch.md` for the CQL
-native-protocol stretch goal.
+This crate is the engine layer. The primary protocol surface
+lives in `dynomite::vector`, which exposes the engine through
+the existing Redis listener using Redis-Stack-style RediSearch
+FT.* commands. See `docs/dynvec/fold-into-redis-path.md` for the
+architecture.
+
+The standalone HTTP API is retained as a debug / inspection
+facility and is gated behind the `http` feature; it is not the
+primary protocol.
 
 ## Example
 
 ```bash
-cargo run -p dynvecdb --example quickstart --features http
+cargo run -p dynvec --example quickstart --features http
 ```
 
 In another terminal:

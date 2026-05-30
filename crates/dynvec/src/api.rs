@@ -22,7 +22,7 @@
 //!
 //! The CQL native protocol is the canonical wire surface for a
 //! ScyllaDB-shaped client. It is not implemented in this MVP;
-//! see `docs/dynvecdb/cql-stretch.md` for the protocol shape
+//! see `docs/dynvec/cql-stretch.md` for the protocol shape
 //! and how a future implementation would integrate. Every
 //! decision point that a CQL surface would need to reach into
 //! is annotated with `// CQL future:` in the code.
@@ -156,7 +156,7 @@ pub async fn serve(listener: TcpListener, store: Arc<VectorStore>) -> std::io::R
                 }
             });
             if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
-                tracing::warn!(%peer, error = %e, "dynvecdb http connection error");
+                tracing::warn!(%peer, error = %e, "dynvec http connection error");
             }
         });
     }

@@ -17,7 +17,7 @@
 //! dimension count, the codec identifier, and any per-vector
 //! parameters (the int8 minimum and scale, for instance) are
 //! captured on the [`EncodedVector`] struct so an operator can
-//! `dynvecdb-cli inspect <id>` and see the human-readable form
+//! `dynvec-cli inspect <id>` and see the human-readable form
 //! without re-running the codec.
 
 use half::f16;

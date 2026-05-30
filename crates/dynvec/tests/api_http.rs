@@ -1,12 +1,12 @@
-//! HTTP API integration test. Drives the dynvecdb HTTP surface
+//! HTTP API integration test. Drives the dynvec HTTP surface
 //! against an in-process server using `hyper`'s legacy client.
 
 #![cfg(feature = "http")]
 
 use std::sync::Arc;
 
-use dynvecdb::api::serve;
-use dynvecdb::storage::VectorStore;
+use dynvec::api::serve;
+use dynvec::storage::VectorStore;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::header::{HeaderValue, CONTENT_TYPE};
