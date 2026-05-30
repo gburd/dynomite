@@ -82,6 +82,7 @@ pub use crate::server::{handle_conn_with_aae_status, serve_pbc_with_aae_status};
 
 pub mod aae;
 pub mod datatypes;
+pub mod handoff;
 
 // MapReduce framework added by the v0.0.3 slice. The module owns
 // its own public surface; see `crate::mapreduce` for entry points.
