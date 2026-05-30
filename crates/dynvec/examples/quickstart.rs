@@ -1,24 +1,24 @@
-//! Quickstart demo: bring up a single-node `dynvecdb` HTTP
+//! Quickstart demo: bring up a single-node `dynvec` HTTP
 //! server, populate it with a handful of vectors, and run a
 //! search.
 //!
 //! Run with:
 //!
 //! ```bash
-//! cargo run -p dynvecdb --example quickstart --features http
+//! cargo run -p dynvec --example quickstart --features http
 //! ```
 //!
 //! The example listens on `127.0.0.1:21900` by default; set
-//! `DYNVECDB_LISTEN` to override.
+//! `DYNVEC_LISTEN` to override.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use dynvecdb::api::serve;
-use dynvecdb::distance::Distance;
-use dynvecdb::encoding::Codec;
-use dynvecdb::index::HnswParams;
-use dynvecdb::storage::{TableSchema, VectorStore};
+use dynvec::api::serve;
+use dynvec::distance::Distance;
+use dynvec::encoding::Codec;
+use dynvec::index::HnswParams;
+use dynvec::storage::{TableSchema, VectorStore};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -45,9 +45,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store.upsert("demo", key.to_vec(), vec, md)?;
     }
 
-    let addr = std::env::var("DYNVECDB_LISTEN").unwrap_or_else(|_| "127.0.0.1:21900".to_string());
+    let addr = std::env::var("DYNVEC_LISTEN").unwrap_or_else(|_| "127.0.0.1:21900".to_string());
     let listener = TcpListener::bind(&addr).await?;
-    eprintln!("dynvecdb listening on http://{addr}");
+    eprintln!("dynvec listening on http://{addr}");
     eprintln!("try: curl -s {addr}/tables");
     serve(listener, store).await?;
     Ok(())

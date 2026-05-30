@@ -965,7 +965,9 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "crossbeam-queue",
+ "dynvec",
  "futures-core",
+ "gen-fsm",
  "hegeltest",
  "hex",
  "httparse",
@@ -1035,16 +1037,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynvecdb"
+name = "dynvec"
 version = "0.0.1"
 dependencies = [
  "bytes",
  "criterion",
- "dyn-riak",
- "dynomite",
- "gen-fsm",
  "half",
- "hashtree",
  "hegeltest",
  "http-body-util",
  "hyper",
