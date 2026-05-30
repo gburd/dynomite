@@ -97,6 +97,7 @@ hex = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 rcgen = { workspace = true }
 regex = { workspace = true }
+dyntext = { path = "../dyntext" }
 
 [features]
 default = ["tcp", "tls"]
