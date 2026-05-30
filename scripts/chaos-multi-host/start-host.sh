@@ -366,8 +366,28 @@ echo "$DYN_PID" > "$RUN/dynomited.spawn-pid"
 # caller can move on. Use curl when present, else /dev/tcp.
 # In MODE=differential we do not exit on the Rust side; the
 # C proxy still needs to come up below.
+#
+# Issue A (Pass-7 arnold redis-mode failure): the prior budget
+# was 60 attempts at 0.5s = 30s wall-clock. arnold has more
+# contended I/O than floki/meh (Tailscale relay + podman +
+# co-tenant workloads) and dynomited's stats listener takes
+# longer than 30s to bind on a hot host. We now budget the
+# poll loop in seconds and tick at 0.2s for finer-grained
+# detection of readiness; the default of 30s preserves the
+# previous wall-clock while operators can extend it via
+# START_HOST_STATS_TIMEOUT_SECS for known-slow hosts.
+# 30s / 0.2s = 150 attempts is the default.
+STATS_TIMEOUT_SECS="${START_HOST_STATS_TIMEOUT_SECS:-30}"
+STATS_TICK_SECS="0.2"
+# bash arithmetic is integer-only; compute attempts assuming
+# the tick is 200ms.
+STATS_MAX_ATTEMPTS=$(( STATS_TIMEOUT_SECS * 5 ))
+if [ "$STATS_MAX_ATTEMPTS" -lt 1 ]; then
+    STATS_MAX_ATTEMPTS=1
+fi
+
 rust_ready=0
-for i in $(seq 1 60); do
+for i in $(seq 1 "$STATS_MAX_ATTEMPTS"); do
     if command -v curl >/dev/null 2>&1; then
         if curl -s --max-time 1 "http://127.0.0.1:$STATS_LISTEN_PORT/" 2>/dev/null | grep -q '"service"'; then
             rust_ready=1
@@ -379,15 +399,46 @@ for i in $(seq 1 60); do
             break
         fi
     fi
-    sleep 0.5
+    sleep "$STATS_TICK_SECS"
 done
 
 if [ "$rust_ready" -ne 1 ]; then
-    echo "==> dynomited never listened on stats:$STATS_LISTEN_PORT" >&2
-    tail -50 "$LOGS/dynomited-$DC_NAME.stderr" "$LOGS/dynomited-$DC_NAME.log" 2>/dev/null >&2 || true
+    # Distinguish three failure modes so the operator can tell
+    # them apart in the per-host start log:
+    #   1. dynomited never started (spawn pid is gone, no
+    #      pidfile from -p);
+    #   2. dynomited started but never bound the stats port
+    #      (process is alive, port is silent -- the contended-
+    #      I/O case Pass-7 hit on arnold);
+    #   3. dynomited crashed mid-startup (process gone, log
+    #      shows fatal error).
+    echo "==> dynomited never listened on stats:$STATS_LISTEN_PORT after ${STATS_TIMEOUT_SECS}s (${STATS_MAX_ATTEMPTS} attempts at ${STATS_TICK_SECS}s)" >&2
+    dyn_alive=0
+    dyn_pid=""
+    if [ -f "$RUN/dynomited.pid" ]; then
+        dyn_pid=$(cat "$RUN/dynomited.pid" 2>/dev/null || true)
+    fi
+    if [ -z "$dyn_pid" ] && [ -f "$RUN/dynomited.spawn-pid" ]; then
+        dyn_pid=$(cat "$RUN/dynomited.spawn-pid" 2>/dev/null || true)
+    fi
+    if [ -n "$dyn_pid" ] && kill -0 "$dyn_pid" 2>/dev/null; then
+        dyn_alive=1
+    fi
+    if [ "$dyn_alive" = "1" ]; then
+        echo "==> failure mode: dynomited (pid=$dyn_pid) is RUNNING but did not bind stats; likely contended I/O during startup" >&2
+        echo "==> raise START_HOST_STATS_TIMEOUT_SECS (currently ${STATS_TIMEOUT_SECS}s) for this host" >&2
+    elif [ -n "$dyn_pid" ]; then
+        echo "==> failure mode: dynomited (pid=$dyn_pid) CRASHED mid-startup; see stderr/log tail below" >&2
+    else
+        echo "==> failure mode: dynomited never produced a pid; spawn likely failed before exec" >&2
+    fi
+    echo "==> dynomited stderr tail (last 50 lines):" >&2
+    tail -50 "$LOGS/dynomited-$DC_NAME.stderr" 2>/dev/null >&2 || echo "    (no stderr log)" >&2
+    echo "==> dynomited log tail (last 50 lines):" >&2
+    tail -50 "$LOGS/dynomited-$DC_NAME.log" 2>/dev/null >&2 || echo "    (no log file)" >&2
     exit 1
 fi
-echo "==> dynomited up on $DC_NAME"
+echo "==> dynomited up on $DC_NAME (stats:$STATS_LISTEN_PORT bound after $i tick(s) of ${STATS_TICK_SECS}s)"
 
 if [ "$MODE" != "differential" ]; then
     exit 0
@@ -473,17 +524,37 @@ CCONF
     # prove the C proxy bound and listened. The C binary's
     # stats page is plain-text rather than JSON, so we don't
     # require a `"service"` substring.
+    #
+    # Same Issue-A budget knob as the Rust path: 0.2s ticks,
+    # default 30s, override via START_HOST_STATS_TIMEOUT_SECS.
     local i
-    for i in $(seq 1 60); do
+    for i in $(seq 1 "$STATS_MAX_ATTEMPTS"); do
         if printf '' | timeout 1 bash -c "exec 9<>/dev/tcp/127.0.0.1/$C_CLIENT_LISTEN_PORT" 2>/dev/null; then
             echo "==> C dynomite up on $DC_NAME (client port $C_CLIENT_LISTEN_PORT)"
             return 0
         fi
-        sleep 0.5
+        sleep "$STATS_TICK_SECS"
     done
 
-    echo "==> C dynomite never listened on client:$C_CLIENT_LISTEN_PORT" >&2
-    tail -50 "$LOGS/dynomite-c-$DC_NAME.stderr" "$LOGS/dynomite-c-$DC_NAME.log" 2>/dev/null >&2 || true
+    echo "==> C dynomite never listened on client:$C_CLIENT_LISTEN_PORT after ${STATS_TIMEOUT_SECS}s" >&2
+    local c_pid=""
+    if [ -f "$RUN/dynomite-c.pid" ]; then
+        c_pid=$(cat "$RUN/dynomite-c.pid" 2>/dev/null || true)
+    fi
+    if [ -z "$c_pid" ] && [ -f "$RUN/dynomite-c.spawn-pid" ]; then
+        c_pid=$(cat "$RUN/dynomite-c.spawn-pid" 2>/dev/null || true)
+    fi
+    if [ -n "$c_pid" ] && kill -0 "$c_pid" 2>/dev/null; then
+        echo "==> failure mode: C dynomite (pid=$c_pid) is RUNNING but did not bind; raise START_HOST_STATS_TIMEOUT_SECS" >&2
+    elif [ -n "$c_pid" ]; then
+        echo "==> failure mode: C dynomite (pid=$c_pid) CRASHED mid-startup" >&2
+    else
+        echo "==> failure mode: C dynomite never produced a pid" >&2
+    fi
+    echo "==> C dynomite stderr tail (last 50 lines):" >&2
+    tail -50 "$LOGS/dynomite-c-$DC_NAME.stderr" 2>/dev/null >&2 || echo "    (no stderr log)" >&2
+    echo "==> C dynomite log tail (last 50 lines):" >&2
+    tail -50 "$LOGS/dynomite-c-$DC_NAME.log" 2>/dev/null >&2 || echo "    (no log file)" >&2
     return 1
 }
 
