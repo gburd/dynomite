@@ -1040,6 +1040,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "crossbeam-queue",
+ "dyntext",
  "dynvec",
  "futures-core",
  "gen-fsm",

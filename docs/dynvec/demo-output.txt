@@ -1,0 +1,110 @@
+
+============================================================
+ dynomite demo: vector + text search through the library API
+============================================================
+
+This program exercises both surfaces in-process via the
+public Rust API. The same primitives sit behind the wire
+FT.* commands once Phase D wiring lands; the demo's
+dispatch points are exactly the ones the Redis parser will
+call.
+
+============================================================
+ Vector index + KNN search (dynomite::vector + ft::*)
+============================================================
+
+>> FT.CREATE myidx ON HASH PREFIX 1 docs: SCHEMA \
+              title TEXT \
+              vec VECTOR HNSW 6 TYPE FLOAT32 DIM 4 \
+              DISTANCE_METRIC COSINE
+           response: +OK\r\n
+
+>> Insert 5 documents (HSET docs:N title "..." vec <bytes>)
+   inserted docs:1 title="the quick brown fox" -> myidx
+   inserted docs:2 title="jumps over the lazy dog" -> myidx
+   inserted docs:3 title="the rain in spain" -> myidx
+   inserted docs:4 title="stays mainly on the plain" -> myidx
+   inserted docs:5 title="all your base are belong to us" -> myidx
+
+>> FT.INFO myidx
+   index_name          = myidx
+   algorithm           = HNSW
+   distance_metric     = COSINE
+   vector_field        = vec
+   vector_type         = FLOAT32
+   dim                 = 4
+   prefixes            = [String("docs:")]
+   schema_fields       = [Array([String("title"), String("TEXT")])]
+   num_docs            = 5
+   tracked_rows        = 5
+
+>> FT.SEARCH myidx "*=>[KNN 3 @vec $blob]" \
+    PARAMS 2 blob <bytes>
+   query vector: [0.12, 0.22, 0.32, 0.42]
+   total candidates returned: 3
+   rank 0: id="docs:1" score=0.000390 title=the quick brown fox
+   rank 1: id="docs:2" score=0.000643 title=jumps over the lazy dog
+   rank 2: id="docs:4" score=0.756108 title=stays mainly on the plain
+
+>> FT.LIST
+           response: *1\r\n$5\r\nmyidx\r\n
+
+>> FT.DROPINDEX myidx
+           response: +OK\r\n
+
+============================================================
+ Text index + substring search (dyntext + pg_tre-like trigrams)
+============================================================
+
+>> Insert 8 documents
+   doc_id=0: "the quick brown fox jumps over the lazy dog"
+   doc_id=1: "errno: connection refused"
+   doc_id=2: "errno: no route to host"
+   doc_id=3: "the rain in spain stays mainly on the plain"
+   doc_id=4: "she sells seashells by the seashore"
+   doc_id=5: "regex: error: missing closing brace"
+   doc_id=6: "trigram extraction with byte-level padding"
+   doc_id=7: "all happy families are alike"
+
+>> search_substring("errno") -- tier-2 trigram intersect, tier-3 bloom, tier-4 substring recheck
+   doc_id=1: errno: connection refused
+   doc_id=2: errno: no route to host
+
+>> search_substring("rain") -- tier-2 trigram intersect, tier-3 bloom, tier-4 substring recheck
+   doc_id=3: the rain in spain stays mainly on the plain
+
+>> search_substring("trigram") -- tier-2 trigram intersect, tier-3 bloom, tier-4 substring recheck
+   doc_id=6: trigram extraction with byte-level padding
+
+>> search_substring("missing closing") -- tier-2 trigram intersect, tier-3 bloom, tier-4 substring recheck
+   doc_id=5: regex: error: missing closing brace
+
+>> search_substring("happy") -- tier-2 trigram intersect, tier-3 bloom, tier-4 substring recheck
+   doc_id=7: all happy families are alike
+
+>> search_substring("x") -- tier-2 trigram intersect, tier-3 bloom, tier-4 substring recheck
+   doc_id=0: the quick brown fox jumps over the lazy dog
+   doc_id=5: regex: error: missing closing brace
+   doc_id=6: trigram extraction with byte-level padding
+
+>> Index statistics
+   docs   : 8
+   trigrams in postings: 237
+
+============================================================
+ Stand-in regex search via dyntext + std regex
+============================================================
+
+>> Two-stage approximate-regex: \
+    1. trigrams the regex MUST contain narrow the candidate set;\
+    2. std `regex` crate runs the full match against survivors.
+   query regex: '^errno: \w+ refused'
+   doc_id=1: errno: connection refused
+
+   (Phase 2 will replace the std `regex` recheck with TRE-backed approximate-regex,
+    letting the user say (error){~1}.*(42[0-9]){~0} and tolerate up to k typos.)
+
+============================================================
+ demo complete
+============================================================
+
