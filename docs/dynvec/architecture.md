@@ -55,7 +55,7 @@ per registered table. Each `TableState` carries:
 
 ## Encodings
 
-Two codecs ship in `encoding`:
+Three codecs ship in `encoding`:
 
 * `Int8Quantized` (default). Stores per-vector `min` and `scale`
   alongside `dim` `u8`s. Compression: 4x vs raw `f32`.
@@ -64,12 +64,58 @@ Two codecs ship in `encoding`:
 * `Fp16`. IEEE 754 half-precision; 2x compression, ~0.05%
   reconstruction error. Used when an embedder cares more about
   decode latency than disk footprint.
+* `Turbovec2Bit`, `Turbovec3Bit`, `Turbovec4Bit` -- 2/3/4-bit
+  data-oblivious quantisation backed by the `turbovec` crate's
+  TurboQuant codec. The compressed packed codes (16x / 10.6x /
+  8x compression) live inside a per-table SIMD index
+  (`crate::turbo_index::TurboTable`); the per-row
+  `EncodedVector` holds the original `f32` bytes so round-trip
+  and rehydration paths stay exact. The headline win is
+  search-time SIMD throughput, not row-storage footprint.
 
-Both encoders reject non-finite input components so the index
-guarantees finite distance scores. The encoded bytes are
-self-describing: `EncodedVector { codec, dim, bytes, params }`.
-A future `dynvecdb-cli inspect <id>` command renders the params
+The scalar codecs (`Int8Quantized`, `Fp16`) reject non-finite
+input components so the index guarantees finite distance
+scores. Their encoded bytes are self-describing:
+`EncodedVector { codec, dim, bytes, params }`.  A future
+`dynvecdb-cli inspect <id>` command renders the params
 without rerunning the codec.
+
+### Picking an encoding
+
+| Encoding       | Compression | Search speed     | Recall@10 (typical) | When to pick |
+|----------------|-------------|------------------|---------------------|--------------|
+| `Fp32` (raw)   | 1x          | scalar baseline  | 100%                | tiny tables; debugging; no compression need |
+| `Fp16`         | 2x          | ~1.2x baseline   | ~99.95%             | low-loss memory tradeoff |
+| `Int8Quantized`| 4x          | ~1.5x baseline   | ~99%                | balanced default |
+| `Turbovec4Bit` | 8x          | ~3-5x baseline   | ~88-95%             | large tables (>=1M rows) where some recall loss is acceptable |
+| `Turbovec2Bit` | 16x         | ~5-8x baseline   | ~85-90%             | very large tables; pair with a re-rank pass against the f32 row bytes |
+
+The Turbovec speed ratios are head-to-head against the HNSW +
+scalar `f32` baseline at 64-dim; the speedup grows on higher
+dims because the SIMD lanes amortise more decoding work per
+candidate. The recall numbers come from the
+`recall_at_10_with_turbovec_4bit_above_85pct` integration test
+on 1024 uniformly random 64-dim vectors with
+`Distance::Cosine`; a representative run measured 0.8844.
+
+### Distance semantics with Turbovec
+
+The Turbovec path is inner-product-native. To honour all three
+`Distance` metrics, `TurboTable`:
+
+* L2-normalises queries and stored vectors at ingest time when
+  the metric is `Cosine` or `Euclidean`, so turbovec's
+  inner-product surrogate doubles as a `cos(theta)` estimate.
+* Maps the resulting similarity score to dynvecdb's
+  smaller-is-closer convention via `1 - similarity` (Cosine),
+  `sqrt(max(0, 2 - 2 * similarity))` (Euclidean), or
+  `-similarity` (DotProduct).
+
+For `Euclidean`, the cosine surrogate orders identically to L2
+distance on the unit-normalised inputs but is not bit-equal to
+a true L2 score. Embedders that need exact L2 should pick the
+HNSW path or run a post-search re-rank against the row-stored
+`f32` bytes.
 
 ## Distance metrics
 

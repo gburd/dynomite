@@ -34,6 +34,11 @@ tokio = { workspace = true }
 parking_lot = { workspace = true }
 bytes = { workspace = true }
 half = "2.4"
+# Turbovec quantizer for 2/3/4-bit codebook compression with
+# SIMD-accelerated similarity search. New dep added in this
+# crate only; rationale and scope are recorded in
+# docs/journal/2026-05-30-turbovec.md.
+turbovec = "0.8"
 hyper = { version = "1.9", features = ["http1", "server"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 http-body-util = { version = "0.1", optional = true }
