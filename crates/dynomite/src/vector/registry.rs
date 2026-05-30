@@ -18,10 +18,10 @@
 //!   itself an [`Arc`]-wrapped storage handle; read paths
 //!   (FT.SEARCH) do not block write paths (HSET / FT.ADD).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 
 use crate::vector::schema::{IndexAlgorithm, VectorSchema};
@@ -53,6 +53,12 @@ pub enum RegistryError {
 /// [`Engine`] (what is actually persisted). The pair is
 /// immutable for the lifetime of the index; rebuilding a
 /// schema means dropping and recreating the table.
+///
+/// Alongside the schema and engine, the table tracks the set
+/// of document keys that the FT.* surface has indexed via
+/// HSET interception. The set is used by
+/// [`VectorRegistry::drop_with_dd`] to enumerate the
+/// underlying hash documents that should also be removed.
 #[derive(Debug)]
 pub struct VectorTable {
     /// Index name (the FT.CREATE first argument).
@@ -61,6 +67,21 @@ pub struct VectorTable {
     pub schema: VectorSchema,
     /// Storage + index engine.
     pub engine: Engine,
+    /// Document keys observed by the HSET interception path.
+    indexed_keys: Mutex<BTreeSet<Vec<u8>>>,
+}
+
+impl VectorTable {
+    /// Record `key` as having been indexed. Idempotent.
+    pub fn record_indexed_key(&self, key: Vec<u8>) {
+        self.indexed_keys.lock().insert(key);
+    }
+
+    /// Snapshot the set of indexed keys.
+    #[must_use]
+    pub fn indexed_keys(&self) -> Vec<Vec<u8>> {
+        self.indexed_keys.lock().iter().cloned().collect()
+    }
 }
 
 /// Snapshot view of one registered index.
@@ -133,6 +154,7 @@ impl VectorRegistry {
             name: name.clone(),
             schema,
             engine,
+            indexed_keys: Mutex::new(BTreeSet::new()),
         };
         guard.insert(name, Arc::new(table));
         Ok(())
@@ -153,6 +175,22 @@ impl VectorRegistry {
         guard
             .remove(name)
             .ok_or_else(|| RegistryError::NotFound(name.to_string()))
+    }
+
+    /// Drop the index `name` and return the set of document
+    /// keys that the FT.* surface had observed under it.
+    ///
+    /// Used by `FT.DROPINDEX ... DD` to enumerate the hash
+    /// documents the caller should also delete from the
+    /// underlying datastore.
+    ///
+    /// # Errors
+    ///
+    /// [`RegistryError::NotFound`] when no index is registered
+    /// under `name`.
+    pub fn drop_with_dd(&self, name: &str) -> Result<Vec<Vec<u8>>, RegistryError> {
+        let table = self.drop(name)?;
+        Ok(table.indexed_keys())
     }
 
     /// Look up a registered table by name.
@@ -199,6 +237,7 @@ mod tests {
             dim: 4,
             distance: DistanceMetric::Cosine,
             algorithm,
+            prefixes: Vec::new(),
             metadata_fields: Vec::new(),
         }
     }
