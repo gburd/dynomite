@@ -93,4 +93,37 @@ impl Server {
     pub fn builder(pool_name: impl Into<String>) -> ServerBuilder {
         ServerBuilder::new(pool_name)
     }
+
+    /// One-shot "validate, build, and start" helper.
+    ///
+    /// Equivalent to calling `builder.build()?.start().await`. The
+    /// chained-call form remains available for embedders that
+    /// want to inspect the [`Server`] before spawning tasks; this
+    /// helper exists because most embedders only ever build then
+    /// immediately start.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same [`EmbedError`] variants that
+    /// [`ServerBuilder::build`] and [`Server::start`] surface.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use dynomite::embed::{Server, ServerBuilder};
+    /// use dynomite::conf::DataStore;
+    /// # tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async {
+    /// let builder = ServerBuilder::new("dyn_o_mite")
+    ///     .listen("127.0.0.1:0".parse().unwrap())
+    ///     .dyn_listen("127.0.0.1:0".parse().unwrap())
+    ///     .data_store(DataStore::Redis)
+    ///     .servers(vec![dynomite::conf::ConfServer::parse("127.0.0.1:6379:1").unwrap()])
+    ///     .tokens_str("0");
+    /// let handle = Server::start_with(builder).await.unwrap();
+    /// handle.shutdown().await.unwrap();
+    /// # });
+    /// ```
+    pub async fn start_with(builder: ServerBuilder) -> Result<ServerHandle, EmbedError> {
+        builder.build()?.start().await
+    }
 }

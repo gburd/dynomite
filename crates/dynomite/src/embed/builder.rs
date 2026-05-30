@@ -149,23 +149,38 @@ impl ServerBuilder {
     // ---- YAML-mirroring setters ------------------------------------------
 
     /// `listen:` - client-facing listener address.
+    ///
+    /// Accepts port `0` (kernel-assigned ephemeral port). The
+    /// post-bind address is reported via
+    /// [`ServerHandle::listen_addr`](crate::embed::ServerHandle::listen_addr).
     #[must_use]
     pub fn listen(mut self, addr: SocketAddr) -> Self {
-        self.pool.listen = Some(socket_to_listen("listen", addr));
+        self.pool.listen = Some(ConfListen::from_socket_addr(addr));
         self
     }
 
     /// `dyn_listen:` - peer-facing listener address.
+    ///
+    /// Accepts port `0` (kernel-assigned ephemeral port). The
+    /// post-bind address is reported via
+    /// [`ServerHandle::dyn_listen_addr`](crate::embed::ServerHandle::dyn_listen_addr).
     #[must_use]
     pub fn dyn_listen(mut self, addr: SocketAddr) -> Self {
-        self.pool.dyn_listen = Some(socket_to_listen("dyn_listen", addr));
+        self.pool.dyn_listen = Some(ConfListen::from_socket_addr(addr));
         self
     }
 
     /// `stats_listen:` - HTTP stats listener address.
+    ///
+    /// Accepts port `0` for ephemeral-port semantics. Note that
+    /// the embedded server does not currently bind the stats
+    /// listener; the `dynomited` binary does. Embedders that want
+    /// a Prometheus-style scrape endpoint should plug a
+    /// [`MetricsSink`](crate::embed::MetricsSink) implementation
+    /// instead.
     #[must_use]
     pub fn stats_listen(mut self, addr: SocketAddr) -> Self {
-        self.pool.stats_listen = Some(socket_to_listen("stats_listen", addr));
+        self.pool.stats_listen = Some(ConfListen::from_socket_addr(addr));
         self
     }
 
@@ -488,15 +503,11 @@ impl ServerBuilder {
     }
 }
 
-fn socket_to_listen(field: &'static str, addr: SocketAddr) -> ConfListen {
-    let raw = format!("{addr}");
-    ConfListen::parse(field, &raw).unwrap_or_else(|_| {
-        // SocketAddr always renders as "host:port"; if the parser
-        // ever rejects it, the surrounding validation will catch
-        // it via the missing field path.
-        ConfListen::parse(field, "127.0.0.1:1").expect("invariant: literal pname is valid")
-    })
-}
+// `socket_to_listen` was the YAML-validating helper for the
+// `listen:` / `dyn_listen:` / `stats_listen:` setters. The
+// builder now calls `ConfListen::from_socket_addr` directly so
+// that port `0` (kernel-assigned ephemeral) round-trips
+// unchanged through the embed API.
 
 // (synthetic_config helper removed; ConfPool drives validation directly.)
 

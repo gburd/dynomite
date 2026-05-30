@@ -26,5 +26,6 @@
 - [Embedding API](./embedding/index.md)
   - [Server lifecycle](./embedding/server.md)
   - [Hooks and traits](./embedding/hooks.md)
+  - [Cookbook](./embedding/cookbook.md)
   - [Examples](./embedding/examples.md)
 - [Internals](./internals/index.md)
