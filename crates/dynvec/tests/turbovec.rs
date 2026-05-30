@@ -13,9 +13,7 @@
 use std::collections::HashMap;
 
 use dynvec::distance::Distance;
-use dynvec::encoding::{
-    decode_turbovec, distance_turbovec, encode_turbovec, Codec, EncodedVector,
-};
+use dynvec::encoding::{decode_turbovec, distance_turbovec, encode_turbovec, Codec, EncodedVector};
 use dynvec::index::HnswParams;
 use dynvec::storage::{TableSchema, VectorStore};
 
