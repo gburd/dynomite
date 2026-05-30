@@ -12,9 +12,9 @@
 
 #![allow(missing_docs)]
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
-};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use dynomite::io::mbuf::MbufPool;
 
 const PAYLOAD_SIZES: [usize; 4] = [16, 64, 1024, 8192];
