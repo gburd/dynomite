@@ -21,6 +21,7 @@ fn schema_with(algorithm: IndexAlgorithm, dim: u16) -> VectorSchema {
         dim,
         distance: DistanceMetric::Cosine,
         algorithm,
+        prefixes: Vec::new(),
         metadata_fields: vec![MetadataField {
             name: "title".to_string(),
             field_type: MetadataFieldType::Text,

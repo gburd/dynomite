@@ -129,7 +129,8 @@ pub struct MetadataField {
 ///
 /// One [`VectorSchema`] describes one index: the vector field,
 /// its dimension and codec, the distance metric, the chosen
-/// algorithm, and the set of non-vector metadata fields.
+/// algorithm, the prefix set (FT.CREATE `PREFIX <n> ...`), and
+/// the set of non-vector metadata fields.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct VectorSchema {
     /// Name of the document field that carries the vector.
@@ -142,6 +143,10 @@ pub struct VectorSchema {
     pub distance: DistanceMetric,
     /// Index algorithm.
     pub algorithm: IndexAlgorithm,
+    /// Document key prefixes (`FT.CREATE ... PREFIX <n>
+    /// <prefix>...`). HSET commands whose key starts with any
+    /// of these prefixes get intercepted and indexed.
+    pub prefixes: Vec<Vec<u8>>,
     /// Non-vector schema fields.
     pub metadata_fields: Vec<MetadataField>,
 }
@@ -199,6 +204,7 @@ mod tests {
             dim: 16,
             distance: DistanceMetric::Cosine,
             algorithm: IndexAlgorithm::Hnsw,
+            prefixes: Vec::new(),
             metadata_fields: vec![MetadataField {
                 name: "title".to_string(),
                 field_type: MetadataFieldType::Text,
