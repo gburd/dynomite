@@ -1,0 +1,59 @@
+[package]
+name = "dynvecdb"
+description = "Distributed vector database engine: dynomite distribution + Noxu node-local storage + HNSW ANN index"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Build the on-disk Noxu storage backend. Off by default so the
+# crate compiles in a workspace that does not have the lamdb
+# checkout next door; a `MemoryStore` is shipped for that case.
+noxu = ["dep:noxu-db", "dyn-riak/noxu"]
+# Enable the optional hyper-based HTTP API. On by default for the
+# binary-style builds; can be disabled by an embedder that prefers
+# to wire its own transport on top of the engine.
+http = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]
+
+[dependencies]
+dynomite = { path = "../dynomite" }
+dyn-riak = { path = "../dyn-riak" }
+gen-fsm = { path = "../gen-fsm" }
+hashtree = { path = "../hashtree" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+parking_lot = { workspace = true }
+bytes = { workspace = true }
+half = "2.4"
+hyper = { version = "1.9", features = ["http1", "server"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+http-body-util = { version = "0.1", optional = true }
+noxu-db = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }
+hegeltest = { workspace = true }
+criterion = { workspace = true }
+hyper = { version = "1.9", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }
+http-body-util = "0.1"
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[example]]
+name = "quickstart"
+required-features = ["http"]

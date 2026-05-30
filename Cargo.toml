@@ -7,6 +7,7 @@ members = [
     "crates/dyn-encoding",
     "crates/dyn-riak",
     "crates/dyn-admin",
+    "crates/dynvecdb",
     "crates/gen-fsm",
     "crates/hashtree",
     "crates/loom-tests",
