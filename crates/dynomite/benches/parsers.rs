@@ -15,9 +15,9 @@
 
 #![allow(missing_docs)]
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
-};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use dynomite::msg::{Msg, MsgType};
 use dynomite::proto::memcache::{memcache_parse_req, memcache_parse_rsp};
 use dynomite::proto::redis::{redis_parse_req, redis_parse_rsp};

@@ -15,7 +15,9 @@
 
 use std::path::PathBuf;
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use dynomite::crypto::aes::{decrypt_to_vec, encrypt_to_vec};
 use dynomite::crypto::Crypto;
 
