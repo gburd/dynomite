@@ -1,6 +1,6 @@
 //! Vector encodings.
 //!
-//! Two compression schemes are available:
+//! Three compression schemes are available:
 //!
 //! * [`Int8Quantized`] -- per-vector scalar quantisation to `u8`,
 //!   storing the per-vector minimum and scale alongside. Roughly 4x
@@ -8,9 +8,23 @@
 //!   0.5-1.0 percent range for typical embedding distributions.
 //! * [`Fp16`] -- IEEE 754 half-precision floats. 2x compression;
 //!   reconstruction error around 0.05 percent.
+//! * [`Turbovec`] -- 2/3/4-bit data-oblivious quantisation backed
+//!   by the `turbovec` crate's TurboQuant codec. The compressed
+//!   payload is held in a per-table SIMD-friendly index; the
+//!   per-row [`EncodedVector`] holds the original `f32` bytes so
+//!   round-trip and rehydration paths remain exact while the
+//!   in-memory ANN index uses the 8x to 16x compressed packed
+//!   representation. See [`turbovec`] for the on-disk packed
+//!   layout and the SIMD search kernels.
 //!
-//! Both encodings round-trip every vector to within their
-//! respective error budgets and preserve dimension count exactly.
+//! The `Int8Quantized` and `Fp16` encodings round-trip every
+//! vector to within their respective error budgets and preserve
+//! dimension count exactly. `Turbovec` round-trips losslessly at
+//! the row layer because the compressed representation lives in
+//! the table's [`crate::index::TurboTable`] alongside the row
+//! store, not in the row payload itself; quantisation loss is
+//! exposed through the search-path scoring (see
+//! [`distance_turbovec`]).
 //!
 //! The encoded byte stream produced by [`encode`](Encoder::encode)
 //! is self-describing in the [`EncodedVector`] wrapper: the
@@ -24,6 +38,8 @@ use half::f16;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::distance::Distance;
+
 /// Codec identifier.
 ///
 /// Persisted on every [`EncodedVector`] so a reader can pick the
@@ -36,6 +52,12 @@ pub enum Codec {
     Int8Quantized,
     /// IEEE 754 half-precision floats.
     Fp16,
+    /// `turbovec` 2-bit TurboQuant codec, 16x nominal compression.
+    Turbovec2Bit,
+    /// `turbovec` 3-bit TurboQuant codec, 10.6x nominal compression.
+    Turbovec3Bit,
+    /// `turbovec` 4-bit TurboQuant codec, 8x nominal compression.
+    Turbovec4Bit,
 }
 
 impl Codec {
@@ -45,6 +67,9 @@ impl Codec {
         match self {
             Self::Int8Quantized => Box::new(Int8Quantized),
             Self::Fp16 => Box::new(Fp16),
+            Self::Turbovec2Bit => Box::new(Turbovec::new(2)),
+            Self::Turbovec3Bit => Box::new(Turbovec::new(3)),
+            Self::Turbovec4Bit => Box::new(Turbovec::new(4)),
         }
     }
 
@@ -54,6 +79,22 @@ impl Codec {
         match self {
             Self::Int8Quantized => "int8q",
             Self::Fp16 => "fp16",
+            Self::Turbovec2Bit => "turbovec2",
+            Self::Turbovec3Bit => "turbovec3",
+            Self::Turbovec4Bit => "turbovec4",
+        }
+    }
+
+    /// `Some(bit_width)` for the turbovec codecs, `None`
+    /// otherwise. Used by the storage layer to dispatch to the
+    /// SIMD-backed table state.
+    #[must_use]
+    pub fn turbovec_bits(self) -> Option<u8> {
+        match self {
+            Self::Turbovec2Bit => Some(2),
+            Self::Turbovec3Bit => Some(3),
+            Self::Turbovec4Bit => Some(4),
+            _ => None,
         }
     }
 }
@@ -124,6 +165,15 @@ pub enum EncodingError {
     /// is well-defined.
     #[error("vector contains non-finite component")]
     NonFinite,
+    /// `bit_width` parameter outside the supported range. The
+    /// turbovec codec accepts only 2, 3, or 4.
+    #[error("turbovec bit width must be 2, 3, or 4, got {0}")]
+    UnsupportedBitWidth(u8),
+    /// Vector dimension is incompatible with the requested
+    /// codec. The turbovec codec requires `dim` to be a positive
+    /// multiple of 8.
+    #[error("turbovec requires dim to be a positive multiple of 8, got {0}")]
+    UnsupportedDim(u16),
 }
 
 /// Encoder trait. Each codec ships exactly one impl.
@@ -309,6 +359,233 @@ impl Encoder for Fp16 {
     }
 }
 
+/// `turbovec` 2/3/4-bit TurboQuant encoder.
+///
+/// The on-row payload is the original vector's `f32`
+/// little-endian bytes. Compression and SIMD scoring happen at
+/// the per-table layer (see [`crate::index::TurboTable`]) where
+/// a [`turbovec::TurboQuantIndex`] holds every vector in its
+/// 2/3/4-bit packed form. Per-row storage stays at 4 * `dim`
+/// bytes; the in-memory ANN index achieves the headline 8x
+/// (4-bit) or 16x (2-bit) compression on the slot table.
+///
+/// The on-row passthrough is deliberate: turbovec's public API
+/// does not expose per-vector reconstruction, so a faithful
+/// `decode` implementation requires keeping the source bytes.
+/// The trade-off (no row-layer compression) is documented in
+/// `docs/dynvecdb/architecture.md`.
+#[derive(Clone, Copy, Debug)]
+pub struct Turbovec {
+    /// Bit width: 2, 3, or 4.
+    bits: u8,
+}
+
+impl Turbovec {
+    /// Build a turbovec encoder for the given bit width.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a bit width outside `{2, 3, 4}`. Use
+    /// [`Codec::encoder`] in the dynamic-dispatch path to keep
+    /// the panic out of caller code; the codec variants are
+    /// pre-validated.
+    #[must_use]
+    pub fn new(bits: u8) -> Self {
+        assert!(
+            (2..=4).contains(&bits),
+            "turbovec bit width must be 2, 3, or 4"
+        );
+        Self { bits }
+    }
+
+    /// Bit width this encoder was built with.
+    #[must_use]
+    pub fn bits(self) -> u8 {
+        self.bits
+    }
+
+    fn codec_for(bits: u8) -> Codec {
+        match bits {
+            2 => Codec::Turbovec2Bit,
+            3 => Codec::Turbovec3Bit,
+            4 => Codec::Turbovec4Bit,
+            _ => unreachable!("turbovec bits validated in Turbovec::new"),
+        }
+    }
+}
+
+impl Encoder for Turbovec {
+    fn codec(&self) -> Codec {
+        Self::codec_for(self.bits)
+    }
+
+    fn encode(&self, values: &[f32]) -> Result<EncodedVector, EncodingError> {
+        if values.is_empty() {
+            return Err(EncodingError::EmptyVector);
+        }
+        let dim = u16::try_from(values.len())
+            .map_err(|_| EncodingError::DimensionTooLarge(values.len()))?;
+        for v in values {
+            if !v.is_finite() {
+                return Err(EncodingError::NonFinite);
+            }
+        }
+        if dim == 0 || !dim.is_multiple_of(8) {
+            return Err(EncodingError::UnsupportedDim(dim));
+        }
+        let mut bytes = Vec::with_capacity(values.len() * 4);
+        for &v in values {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        Ok(EncodedVector {
+            codec: Self::codec_for(self.bits),
+            dim,
+            bytes,
+            params: vec![f32::from(self.bits)],
+        })
+    }
+
+    fn decode(&self, ev: &EncodedVector) -> Result<Vec<f32>, EncodingError> {
+        let expected = Self::codec_for(self.bits);
+        if ev.codec != expected {
+            return Err(EncodingError::CodecMismatch {
+                expected,
+                got: ev.codec,
+            });
+        }
+        if ev.bytes.len() != usize::from(ev.dim) * 4 {
+            return Err(EncodingError::Malformed {
+                dim: ev.dim,
+                bytes: ev.bytes.len(),
+            });
+        }
+        let mut out = Vec::with_capacity(usize::from(ev.dim));
+        for chunk in ev.bytes.chunks_exact(4) {
+            let arr: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+            out.push(f32::from_le_bytes(arr));
+        }
+        Ok(out)
+    }
+}
+
+/// Encode a single `f32` vector under the turbovec codec at
+/// `bits` bit-width.
+///
+/// The returned [`EncodedVector`] holds the source vector's
+/// `f32` little-endian bytes; the codec marker on the
+/// [`EncodedVector`] indicates that the table-level SIMD index
+/// owns the compressed representation. See module docs for the
+/// rationale.
+///
+/// # Errors
+///
+/// [`EncodingError::UnsupportedBitWidth`] for `bits` outside
+/// `{2, 3, 4}`; [`EncodingError::EmptyVector`] for a zero-dim
+/// input; [`EncodingError::UnsupportedDim`] when `dim` is not a
+/// positive multiple of 8; [`EncodingError::DimensionTooLarge`]
+/// for >65535 dimensions; [`EncodingError::NonFinite`] for any
+/// non-finite component.
+pub fn encode_turbovec(vector: &[f32], bits: u8) -> Result<EncodedVector, EncodingError> {
+    if !(2..=4).contains(&bits) {
+        return Err(EncodingError::UnsupportedBitWidth(bits));
+    }
+    Turbovec::new(bits).encode(vector)
+}
+
+/// Decode a turbovec-encoded blob back to `Vec<f32>`.
+///
+/// Round-trips losslessly because the row-level payload holds
+/// the source `f32` bytes; quantisation loss is a property of
+/// the search-time scoring path, not of the row.
+///
+/// # Errors
+///
+/// [`EncodingError::UnsupportedBitWidth`] for `bits` outside
+/// `{2, 3, 4}`; [`EncodingError::CodecMismatch`] when the
+/// [`EncodedVector`] was produced under a different bit width;
+/// [`EncodingError::Malformed`] when the payload size does not
+/// match the recorded dimension.
+pub fn decode_turbovec(ev: &EncodedVector, bits: u8) -> Result<Vec<f32>, EncodingError> {
+    if !(2..=4).contains(&bits) {
+        return Err(EncodingError::UnsupportedBitWidth(bits));
+    }
+    Turbovec::new(bits).decode(ev)
+}
+
+/// Score `query` against a single turbovec-stored vector at the
+/// given [`Distance`] metric, using turbovec's SIMD-accelerated
+/// search path against an ephemeral one-element index.
+///
+/// Returns `f32::INFINITY` if `stored` is not a turbovec
+/// payload, if the stored vector cannot be added to the
+/// ephemeral index (e.g. a coordinate magnitude trips
+/// turbovec's input validation), or if the dimension is not a
+/// supported turbovec dim. Smaller scores are closer; cosine
+/// and dot-product are mapped from turbovec's similarity score
+/// by negation, and euclidean is approximated through the
+/// inner-product surrogate after L2 normalisation.
+///
+/// This is a single-pair surrogate; the bulk-search path used
+/// by the table layer issues one batched call to
+/// [`turbovec::TurboQuantIndex::search`] across all rows and
+/// avoids the ephemeral-index cost.
+#[must_use]
+pub fn distance_turbovec(query: &[f32], stored: &EncodedVector, metric: Distance) -> f32 {
+    let Some(bits) = stored.codec.turbovec_bits() else {
+        return f32::INFINITY;
+    };
+    if usize::from(stored.dim) != query.len() {
+        return f32::INFINITY;
+    }
+    let dim = usize::from(stored.dim);
+    if dim == 0 || !dim.is_multiple_of(8) {
+        return f32::INFINITY;
+    }
+    let Ok(stored_vec) = decode_turbovec(stored, bits) else {
+        return f32::INFINITY;
+    };
+    let Ok(mut index) = turbovec::TurboQuantIndex::new(dim, usize::from(bits)) else {
+        return f32::INFINITY;
+    };
+    // Cosine and Euclidean both decompose into an inner
+    // product on the L2-normalised inputs; we hand turbovec
+    // the normalised forms so its inner-product surrogate
+    // produces the right ordering.
+    let (q_input, s_input) = match metric {
+        Distance::DotProduct => (query.to_vec(), stored_vec.clone()),
+        Distance::Cosine | Distance::Euclidean => (l2_normalise(query), l2_normalise(&stored_vec)),
+    };
+    if index.add_2d(&s_input, dim).is_err() {
+        return f32::INFINITY;
+    }
+    let results = index.search(&q_input, 1);
+    if results.scores.is_empty() {
+        return f32::INFINITY;
+    }
+    let similarity = results.scores[0];
+    match metric {
+        Distance::DotProduct => -similarity,
+        // For the L2-normalised inputs, similarity is an
+        // estimate of cos(theta); cosine distance is `1 - cos`.
+        Distance::Cosine => 1.0 - similarity,
+        // sqrt(2 - 2 cos(theta)) for unit vectors. Clamp the
+        // inside of the sqrt at 0 to absorb rounding noise on
+        // identical inputs.
+        Distance::Euclidean => (2.0 - 2.0 * similarity).max(0.0).sqrt(),
+    }
+}
+
+/// L2-normalise a vector. Zero-norm input is returned
+/// unchanged so callers do not produce NaN.
+fn l2_normalise(v: &[f32]) -> Vec<f32> {
+    let n2: f32 = v.iter().map(|x| x * x).sum();
+    let n = n2.sqrt();
+    if n <= 0.0 {
+        return v.to_vec();
+    }
+    v.iter().map(|x| x / n).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,5 +658,34 @@ mod tests {
         let enc = Fp16.encode(&v).unwrap();
         // sqrt(9 + 16 + 0) = 5
         assert!((enc.l2_norm() - 5.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn turbovec_encode_round_trips_at_row_layer() {
+        let v: Vec<f32> = (0_i16..64).map(|i| f32::from(i) * 0.05 - 1.6).collect();
+        let enc = encode_turbovec(&v, 4).unwrap();
+        assert_eq!(enc.codec, Codec::Turbovec4Bit);
+        assert_eq!(enc.dim as usize, v.len());
+        let dec = decode_turbovec(&enc, 4).unwrap();
+        // Row-layer round-trip is exact (passthrough).
+        assert_eq!(dec, v);
+    }
+
+    #[test]
+    fn turbovec_rejects_unsupported_bit_width() {
+        let v = vec![0.1_f32; 8];
+        assert!(matches!(
+            encode_turbovec(&v, 5),
+            Err(EncodingError::UnsupportedBitWidth(5))
+        ));
+    }
+
+    #[test]
+    fn turbovec_rejects_non_multiple_of_eight_dim() {
+        let v = vec![0.1_f32; 7];
+        assert!(matches!(
+            encode_turbovec(&v, 4),
+            Err(EncodingError::UnsupportedDim(7))
+        ));
     }
 }
