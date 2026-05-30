@@ -84,6 +84,11 @@ pub mod aae;
 pub mod datatypes;
 pub mod handoff;
 
+// TTL-driven sibling and tombstone garbage-collection FSM.
+// Re-exported below the prior block so parallel branches do
+// not conflict.
+pub mod reaper;
+
 // MapReduce framework added by the v0.0.3 slice. The module owns
 // its own public surface; see `crate::mapreduce` for entry points.
 pub mod mapreduce;
