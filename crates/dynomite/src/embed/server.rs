@@ -449,6 +449,25 @@ impl ServerHandle {
         self.inner.stats.snapshot()
     }
 
+    /// Borrow the live [`Stats`] aggregator as a shared handle.
+    ///
+    /// Returns the same `Arc<Stats>` the runtime publishes to,
+    /// so an embedder can read counters as they update without
+    /// going through the periodic snapshot path. Useful for
+    /// in-process metrics integrations that prefer a pull model
+    /// (Prometheus scrape, OpenTelemetry pull readers) over the
+    /// push-on-flush path exposed by [`MetricsSink`].
+    ///
+    /// The returned handle is `Clone`; callers may share it
+    /// across threads. The aggregator outlives the handle for as
+    /// long as the [`ServerHandle`] tree is alive.
+    ///
+    /// [`MetricsSink`]: crate::embed::MetricsSink
+    #[must_use]
+    pub fn stats_handle(&self) -> Arc<Stats> {
+        Arc::clone(&self.inner.stats)
+    }
+
     /// Manifest of every metric the engine emits.
     #[must_use]
     pub fn describe_stats(&self) -> Vec<MetricSpec> {
@@ -611,7 +630,9 @@ impl ServerHandle {
     ///
     /// Cancels every background task, deregisters from the
     /// in-process peer registry, drains the join set, and
-    /// returns. Idempotent.
+    /// returns. Idempotent: calling `shutdown` after a previous
+    /// `shutdown` (or after [`ServerHandle::join`] returned)
+    /// completes successfully without doing any work.
     pub async fn shutdown(&self) -> Result<(), EmbedError> {
         self.inner.cancel.cancel();
         if let Some(addr) = self.inner.dyn_listen_addr {
@@ -623,6 +644,48 @@ impl ServerHandle {
             let _ = t.await;
         }
         Ok(())
+    }
+
+    /// Wait for every background task to complete.
+    ///
+    /// Unlike [`ServerHandle::shutdown`], `join` does not request
+    /// cancellation: it parks the caller until the runtime tasks
+    /// (gossip, stats aggregator, accept loops, metrics flusher)
+    /// finish on their own. The intended use is the
+    /// "start-then-park" pattern in long-running embedders that
+    /// drive shutdown from a separate signal handler:
+    ///
+    /// ```no_run
+    /// # use dynomite::embed::ServerBuilder;
+    /// # use dynomite::conf::DataStore;
+    /// # tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap().block_on(async {
+    /// let handle = ServerBuilder::new("p")
+    ///     .listen("127.0.0.1:0".parse().unwrap())
+    ///     .dyn_listen("127.0.0.1:0".parse().unwrap())
+    ///     .data_store(DataStore::Redis)
+    ///     .servers(vec![dynomite::conf::ConfServer::parse("127.0.0.1:6379:1").unwrap()])
+    ///     .tokens_str("0")
+    ///     .build().unwrap()
+    ///     .start().await.unwrap();
+    /// let shutdown = handle.clone();
+    /// tokio::spawn(async move {
+    ///     // Replace with `tokio::signal::ctrl_c().await.unwrap();`
+    ///     // in a real embedder.
+    ///     shutdown.shutdown().await.unwrap();
+    /// });
+    /// handle.join().await;
+    /// # });
+    /// ```
+    ///
+    /// `join` resolves once every task spawned by
+    /// [`Server::start`] has returned. Calling `join` repeatedly
+    /// is safe; the second call returns immediately because the
+    /// task set is drained on the first.
+    pub async fn join(&self) {
+        let drained: Vec<JoinHandle<()>> = std::mem::take(&mut *self.tasks.lock());
+        for t in drained {
+            let _ = t.await;
+        }
     }
 }
 
