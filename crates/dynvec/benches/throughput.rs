@@ -57,6 +57,20 @@ fn schema(name: &str, dim: u16) -> TableSchema {
     }
 }
 
+fn schema_turbovec(name: &str, dim: u16) -> TableSchema {
+    TableSchema {
+        name: name.to_string(),
+        dim,
+        codec: Codec::Turbovec4Bit,
+        // Turbovec's SIMD scoring is inner-product-style; the
+        // table layer normalises queries and stored vectors
+        // when the metric is Cosine, which is the production
+        // default for embedding workloads.
+        distance: Distance::Cosine,
+        hnsw: HnswParams::default(),
+    }
+}
+
 fn bench_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("insert");
     group.throughput(Throughput::Elements(1));
@@ -99,5 +113,34 @@ fn bench_search(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_insert, bench_search);
+/// Turbovec-backed search benchmark. Same fixture as
+/// [`bench_search`] but the table's codec is `Turbovec4Bit`,
+/// so the SIMD search kernel and 4-bit packed code layout are
+/// on the hot path. Compare the two `topk10_64d_10k` rows to
+/// quantify the SIMD speedup over the HNSW + scalar `f32`
+/// distance baseline.
+fn bench_search_turbovec(c: &mut Criterion) {
+    let store = VectorStore::in_memory();
+    store.create_table(schema_turbovec("t", 64)).unwrap();
+    for i in 0..10_000_u64 {
+        let v = rand_vec(i.wrapping_mul(0x9E37_79B9_7F4A_7C15), 64);
+        let key = format!("k{i}").into_bytes();
+        store.upsert("t", key, &v, HashMap::new()).unwrap();
+    }
+
+    let mut group = c.benchmark_group("search_turbovec_4bit");
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("topk10_64d_10k", |b| {
+        let mut q = 0_u64;
+        b.iter(|| {
+            let qv = rand_vec(q.wrapping_mul(0x517C_C1B7_2722_0A95), 64);
+            let hits = store.search("t", &qv, 10, None).unwrap();
+            q += 1;
+            black_box(hits);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(benches, bench_insert, bench_search, bench_search_turbovec);
 criterion_main!(benches);

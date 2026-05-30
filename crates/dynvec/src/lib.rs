@@ -61,14 +61,19 @@ pub mod encoding;
 pub mod engine;
 pub mod index;
 pub mod storage;
+pub mod turbo_index;
 
 #[cfg(feature = "http")]
 pub mod api;
 
 pub use crate::distance::Distance;
-pub use crate::encoding::{Codec, EncodedVector, Encoder, Fp16, Int8Quantized};
+pub use crate::encoding::{
+    decode_turbovec, distance_turbovec, encode_turbovec, Codec, EncodedVector, Encoder, Fp16,
+    Int8Quantized, Turbovec,
+};
 pub use crate::engine::Engine;
 pub use crate::index::{HnswIndex, HnswParams, NodeId, SearchResult};
 pub use crate::storage::{
     Backend, MemoryBackend, RowKey, StoreError, TableSchema, TableStats, VectorRow, VectorStore,
 };
+pub use crate::turbo_index::TurboTable;
