@@ -177,6 +177,31 @@ impl ConfListen {
     pub fn kind(&self) -> EndpointKind {
         self.kind
     }
+
+    /// Build a [`ConfListen`] from an already-typed [`std::net::SocketAddr`].
+    ///
+    /// The embed `ServerBuilder` calls this for the `listen:` /
+    /// `dyn_listen:` / `stats_listen:` setters because
+    /// [`ConfListen::parse`] (which drives the YAML pathway) rejects
+    /// port zero, while the embed surface accepts port zero with the
+    /// kernel-ephemeral-port semantics. Crate-private to keep the
+    /// public YAML invariant intact.
+    pub(crate) fn from_socket_addr(addr: std::net::SocketAddr) -> Self {
+        let (host, kind) = match addr {
+            std::net::SocketAddr::V4(v4) => (v4.ip().to_string(), EndpointKind::V4),
+            std::net::SocketAddr::V6(v6) => (v6.ip().to_string(), EndpointKind::V6),
+        };
+        let pname = match addr {
+            std::net::SocketAddr::V4(_) => format!("{host}:{}", addr.port()),
+            std::net::SocketAddr::V6(_) => format!("[{host}]:{}", addr.port()),
+        };
+        Self {
+            pname,
+            name: host,
+            port: addr.port(),
+            kind,
+        }
+    }
 }
 
 impl fmt::Display for ConfListen {
