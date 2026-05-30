@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: clone lamdb (noxu) sibling-checkout
         run: |
-          git clone --depth 1 https://codeberg.org/gregburd/noxu.git ../lamdb
+          git clone --depth 1 --recurse-submodules https://codeberg.org/gregburd/noxu.git ../lamdb
       - name: install build prerequisites
         run: |
           sudo apt-get update

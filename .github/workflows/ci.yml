@@ -27,8 +27,11 @@ jobs:
         # disabled. The Codeberg `gregburd/noxu` repo is
         # public; we clone it sibling-style as `lamdb` to
         # match the local development layout.
+        # --recurse-submodules pulls in the quoracle
+        # submodule that noxu-rep depends on.
         run: |
-          git clone --depth 1 https://codeberg.org/gregburd/noxu.git ../lamdb
+          git clone --depth 1 --recurse-submodules \
+            https://codeberg.org/gregburd/noxu.git ../lamdb
       - name: install build prerequisites
         run: |
           sudo apt-get update
