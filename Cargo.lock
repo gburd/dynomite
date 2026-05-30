@@ -1119,6 +1119,8 @@ dependencies = [
  "blake3",
  "criterion",
  "hegeltest",
+ "regex",
+ "regex-syntax",
  "roaring",
  "serde",
  "thiserror 2.0.18",
