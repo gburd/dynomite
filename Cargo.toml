@@ -77,7 +77,7 @@ crossbeam-channel = "0.5"
 crossbeam-queue = "0.3"
 parking_lot = "0.12"
 ahash = "0.8"
-quiche = "0.22"
+quiche = "0.28"
 
 # TLS for the peer plane and the Riak gateways. Pinned to the
 # 0.26 family of `tokio-rustls` (which re-exports `rustls` 0.23)
@@ -100,7 +100,7 @@ sha1 = "0.10"
 rand = "0.8"
 rand_core = { version = "0.6", features = ["std"] }
 base64 = "0.22"
-nix = { version = "0.30", features = ["signal", "process", "fs", "user", "net", "hostname"] }
+nix = { version = "0.31", features = ["signal", "process", "fs", "user", "net", "hostname"] }
 socket2 = "0.6"
 httparse = "1.10"
 prometheus = "0.14"
@@ -120,7 +120,7 @@ prost = "0.14"
 # in-process runtime, plus WAT support so tests can ship modules
 # as text. Pinned at the 26.x series; bumping requires a journal
 # entry.
-wasmtime = { version = "26", default-features = false, features = ["cranelift", "runtime", "wat"] }
+wasmtime = { version = "36.0.8", default-features = false, features = ["cranelift", "runtime", "wat"] }
 
 # Schema-first wire codecs (dyn-encoding crate). Pinned to track
 # the rest of the workspace; bumping requires a journal entry.
@@ -172,7 +172,7 @@ hegeltest = { version = "0.14", features = ["native"] }
 loom = { version = "0.7", features = ["futures"] }
 hex = "0.4"
 serde_json = "1.0"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 assert_cmd = "2.0"
 predicates = "3.1"
 tempfile = "3.27"
@@ -187,16 +187,16 @@ rcgen = "0.14"
 # processor on the existing tokio runtime; `grpc-tonic` is the
 # default OTLP wire format the brief requires (Jaeger, Tempo,
 # Honeycomb, OTel-Collector all accept it).
-opentelemetry = "0.27"
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "logs"] }
-opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "logs"] }
-tracing-opentelemetry = "0.28"
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["logs"] }
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "logs"] }
+tracing-opentelemetry = "0.33"
 
 # OTLP log appender: bridges `tracing` events to OpenTelemetry
 # log records so the binary can export logs over OTLP/gRPC to
 # the same collector that receives the trace stream. Tracks the
-# 0.27 family of the rest of the OTel stack.
-opentelemetry-appender-tracing = "0.27"
+# 0.32 family of the rest of the OTel stack.
+opentelemetry-appender-tracing = "0.32"
 
 # Log-format support: `time` for the syslog timestamps; `regex`
 # is dev-only (used by the format-shape tests).

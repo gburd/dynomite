@@ -43,8 +43,8 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::logs::LoggerProvider;
-use opentelemetry_sdk::trace::{Sampler, TracerProvider};
+use opentelemetry_sdk::logs::SdkLoggerProvider;
+use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use opentelemetry_sdk::Resource;
 use thiserror::Error;
 use tracing_subscriber::layer::SubscriberExt;
@@ -76,8 +76,8 @@ pub enum ObservabilityError {
 /// [`Self::shutdown`] is preferred because it can surface
 /// failures via the binary's `tracing::warn!` path.
 pub struct ObservabilityGuard {
-    tracer: Option<TracerProvider>,
-    logger: Option<LoggerProvider>,
+    tracer: Option<SdkTracerProvider>,
+    logger: Option<SdkLoggerProvider>,
 }
 
 impl ObservabilityGuard {
@@ -293,7 +293,9 @@ pub fn install_global(
 /// let _provider = init_otlp_tracer(&cfg).expect("build provider");
 /// # }
 /// ```
-pub fn init_otlp_tracer(cfg: &ObservabilityConfig) -> Result<TracerProvider, ObservabilityError> {
+pub fn init_otlp_tracer(
+    cfg: &ObservabilityConfig,
+) -> Result<SdkTracerProvider, ObservabilityError> {
     let endpoint = cfg
         .otlp_traces_endpoint
         .as_deref()
@@ -329,7 +331,7 @@ pub fn init_otlp_tracer(cfg: &ObservabilityConfig) -> Result<TracerProvider, Obs
 /// ```
 pub fn init_otlp_logger(
     cfg: &ObservabilityConfig,
-) -> Result<Option<LoggerProvider>, ObservabilityError> {
+) -> Result<Option<SdkLoggerProvider>, ObservabilityError> {
     let Some(endpoint) = cfg.otlp_logs_endpoint.as_deref().filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
@@ -339,7 +341,7 @@ pub fn init_otlp_logger(
 fn build_tracer_provider(
     endpoint: &str,
     cfg: &ObservabilityConfig,
-) -> Result<TracerProvider, ObservabilityError> {
+) -> Result<SdkTracerProvider, ObservabilityError> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.to_string())
@@ -354,8 +356,8 @@ fn build_tracer_provider(
         _ => Sampler::AlwaysOn,
     };
 
-    let provider = TracerProvider::builder()
-        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .with_sampler(sampler)
         .with_resource(resource)
         .build();
@@ -365,7 +367,7 @@ fn build_tracer_provider(
 fn build_logger_provider(
     endpoint: &str,
     cfg: &ObservabilityConfig,
-) -> Result<LoggerProvider, ObservabilityError> {
+) -> Result<SdkLoggerProvider, ObservabilityError> {
     let exporter = opentelemetry_otlp::LogExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.to_string())
@@ -375,8 +377,8 @@ fn build_logger_provider(
 
     let resource = build_resource(cfg);
 
-    let provider = LoggerProvider::builder()
-        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+    let provider = SdkLoggerProvider::builder()
+        .with_batch_exporter(exporter)
         .with_resource(resource)
         .build();
     Ok(provider)
@@ -387,7 +389,9 @@ fn build_resource(cfg: &ObservabilityConfig) -> Resource {
         .service_name
         .clone()
         .unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string());
-    Resource::new(vec![KeyValue::new("service.name", service_name)])
+    Resource::builder()
+        .with_attribute(KeyValue::new("service.name", service_name))
+        .build()
 }
 
 #[cfg(test)]
