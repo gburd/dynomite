@@ -225,6 +225,11 @@ define_msg_types![
     (RspRedisErrorNoreplicas, "RSP_REDIS_ERROR_NOREPLICAS"),
     (HackSettingConnConsistency, "HACK_SETTING_CONN_CONSISTENCY"),
     (Sentinel, "SENTINEL"),
+    (ReqRedisFtCreate, "REQ_REDIS_FT_CREATE"),
+    (ReqRedisFtSearch, "REQ_REDIS_FT_SEARCH"),
+    (ReqRedisFtInfo, "REQ_REDIS_FT_INFO"),
+    (ReqRedisFtList, "REQ_REDIS_FT_LIST"),
+    (ReqRedisFtDropindex, "REQ_REDIS_FT_DROPINDEX"),
     (EndIdx, "END_IDX"),
 ];
 
