@@ -19,6 +19,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: clone lamdb (noxu) sibling-checkout
+        # The workspace's [workspace.dependencies] declares
+        # noxu-* path-deps at ../lamdb/crates/<crate>. Cargo
+        # validates these paths during `cargo metadata`, so
+        # we need them present even when noxu features are
+        # disabled. The Codeberg `gregburd/noxu` repo is
+        # public; we clone it sibling-style as `lamdb` to
+        # match the local development layout.
+        run: |
+          git clone --depth 1 https://codeberg.org/gregburd/noxu.git ../lamdb
       - name: install build prerequisites
         run: |
           sudo apt-get update

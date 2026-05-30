@@ -40,6 +40,9 @@ jobs:
               build-essential pkg-config libssl-dev curl ca-certificates \
               redis-server
       - uses: actions/checkout@v4
+      - name: clone lamdb (noxu) sibling-checkout
+        run: |
+          git clone --depth 1 https://codeberg.org/gregburd/noxu.git ../lamdb
       - uses: dtolnay/rust-toolchain@1.90.0
         with:
           components: rustfmt, clippy
