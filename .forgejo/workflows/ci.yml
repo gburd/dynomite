@@ -36,6 +36,15 @@ jobs:
               build-essential pkg-config libssl-dev curl ca-certificates \
               redis-server
       - uses: actions/checkout@v4
+      - name: clone lamdb (noxu) sibling-checkout
+        run: |
+          # On Codeberg this clones a sibling repo from the same
+          # owner. The workspace's [workspace.dependencies]
+          # declares noxu-* path-deps at ../lamdb/crates/<crate>;
+          # cargo validates these paths during `cargo metadata`
+          # so they must exist even when noxu features are
+          # disabled.
+          git clone --depth 1 https://codeberg.org/gregburd/noxu.git ../lamdb
       - uses: dtolnay/rust-toolchain@1.90.0
         with:
           components: rustfmt, clippy
