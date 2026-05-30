@@ -41,7 +41,7 @@ tokio = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 http-body-util = "0.1"
-hyper = { version = "1.9", features = ["http1", "server"] }
+hyper = { version = "1.10", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }
