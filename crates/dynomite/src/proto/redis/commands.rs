@@ -237,6 +237,14 @@ pub fn classify(ty: MsgType) -> CommandClass {
         // argeval
         M::ReqRedisEval | M::ReqRedisEvalsha => CommandClass::ArgEval,
 
+        // RediSearch FT.* commands. CREATE / SEARCH / DROPINDEX
+        // take the index name as the lone key and a variadic
+        // payload; INFO takes only the index name; LIST takes
+        // no key.
+        M::ReqRedisFtCreate | M::ReqRedisFtSearch | M::ReqRedisFtDropindex => CommandClass::ArgN,
+        M::ReqRedisFtInfo => CommandClass::Arg0,
+        M::ReqRedisFtList => CommandClass::Argz,
+
         _ => CommandClass::Arg0,
     }
 }
@@ -771,6 +779,40 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
             true,
             false,
             RoutingOverride::None,
+        ),
+        // RediSearch FT.* surface. The index name is carried as
+        // the first key (or there is no key for FT.LIST), so the
+        // standard parser key/arg machinery picks them up
+        // directly.
+        b"ft.create" => (
+            MsgType::ReqRedisFtCreate,
+            false,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
+        b"ft.search" => (
+            MsgType::ReqRedisFtSearch,
+            true,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
+        b"ft.info" => (
+            MsgType::ReqRedisFtInfo,
+            true,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
+        b"ft.list" | b"ft._list" => (
+            MsgType::ReqRedisFtList,
+            true,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
+        b"ft.dropindex" => (
+            MsgType::ReqRedisFtDropindex,
+            false,
+            false,
+            RoutingOverride::LocalNodeOnly,
         ),
         // length 28: dynomite config
         b"dyno_config:conn_consistency" => (

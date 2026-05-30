@@ -76,6 +76,14 @@ throttle-core = { path = "../throttle-core" }
 # through Redis-Stack-style RediSearch FT.* commands.
 dynvec = { path = "../dynvec" }
 
+# Used to construct the per-row metadata payload that the
+# `dynvec::Engine::upsert` API requires when the Redis FT.*
+# surface intercepts an HSET into an indexed prefix. Already
+# pulled in transitively by `dynvec`; promoting it to a direct
+# dependency keeps the import path on `crate::vector::ft`
+# explicit.
+serde_json = { workspace = true }
+
 # State-functions FSM driver used by
 # `crate::vector::query_fsm` to fan out a k-NN search across
 # the cluster and merge the per-peer hit lists.
@@ -86,7 +94,6 @@ hegeltest = { workspace = true }
 criterion = { workspace = true }
 tempfile = { workspace = true }
 hex = { workspace = true }
-serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 rcgen = { workspace = true }
 regex = { workspace = true }
