@@ -28,6 +28,7 @@ use thiserror::Error;
 use crate::distance::Distance;
 use crate::encoding::{Codec, EncodedVector, EncodingError};
 use crate::index::{HnswIndex, HnswParams, IndexError, NodeId, SearchResult};
+use crate::turbo_index::TurboTable;
 
 /// Bucket key: an opaque byte string supplied by the client.
 pub type RowKey = Vec<u8>;
@@ -193,12 +194,13 @@ impl Backend for MemoryBackend {
     }
 }
 
-/// In-process state for one table: its schema, its index, and
-/// the mapping from row keys to internal node ids.
+/// In-process state for one table: its schema, its ANN
+/// container, and the mapping from row keys to internal node
+/// ids.
 struct TableState {
     schema: TableSchema,
-    index: HnswIndex,
-    /// Maps a row key to its `NodeId` in the HNSW index.
+    ann: AnnContainer,
+    /// Maps a row key to its `NodeId` in the ANN container.
     key_to_node: HashMap<RowKey, NodeId>,
     /// Inverse: NodeId to key. Allows search results to be
     /// hydrated without round-tripping through the row map.
@@ -207,6 +209,61 @@ struct TableState {
     /// the row key so that re-inserting after a delete does not
     /// collide with the soft-deleted index node.
     next_node_id: NodeId,
+}
+
+/// Per-table ANN container. The HNSW path is the default; the
+/// turbovec path is selected when the table's codec is one of
+/// the `Turbovec*` variants. Both shapes expose the same
+/// {insert, delete, search, len} surface so [`VectorStore`] can
+/// dispatch on codec without sprinkling enum matches across the
+/// hot paths.
+enum AnnContainer {
+    Hnsw(HnswIndex),
+    Turbo(TurboTable),
+}
+
+impl AnnContainer {
+    fn new(schema: &TableSchema) -> Result<Self, StoreError> {
+        if let Some(bits) = schema.codec.turbovec_bits() {
+            let table = TurboTable::new(schema.distance, schema.dim, bits)?;
+            Ok(Self::Turbo(table))
+        } else {
+            Ok(Self::Hnsw(HnswIndex::new(schema.distance, schema.hnsw)))
+        }
+    }
+
+    fn insert(&mut self, id: NodeId, vector: Vec<f32>) -> Result<(), IndexError> {
+        match self {
+            Self::Hnsw(idx) => idx.insert(id, vector),
+            Self::Turbo(t) => t.insert(id, vector),
+        }
+    }
+
+    fn delete(&mut self, id: NodeId) -> bool {
+        match self {
+            Self::Hnsw(idx) => idx.delete(id),
+            Self::Turbo(t) => t.delete(id),
+        }
+    }
+
+    fn search(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef: Option<usize>,
+    ) -> Result<Vec<SearchResult>, IndexError> {
+        match self {
+            Self::Hnsw(idx) => idx.search(query, k, ef),
+            Self::Turbo(t) => t.search(query, k, ef),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Hnsw(idx) => idx.len(),
+            Self::Turbo(t) => t.len(),
+        }
+    }
 }
 
 /// Per-table store front.
@@ -261,7 +318,7 @@ impl VectorStore {
         }
         let state = TableState {
             schema: schema.clone(),
-            index: HnswIndex::new(schema.distance, schema.hnsw),
+            ann: AnnContainer::new(&schema)?,
             key_to_node: HashMap::new(),
             node_to_key: HashMap::new(),
             next_node_id: 1,
@@ -327,12 +384,12 @@ impl VectorStore {
         };
         self.backend.put_row(table, &key, &row)?;
         if let Some(&old_node) = state.key_to_node.get(&key) {
-            state.index.delete(old_node);
+            state.ann.delete(old_node);
             state.node_to_key.remove(&old_node);
         }
         let node_id = state.next_node_id;
         state.next_node_id += 1;
-        state.index.insert(node_id, vector.to_vec())?;
+        state.ann.insert(node_id, vector.to_vec())?;
         state.key_to_node.insert(key.clone(), node_id);
         state.node_to_key.insert(node_id, key);
         Ok(())
@@ -361,7 +418,7 @@ impl VectorStore {
         let mut state = state.lock();
         let removed = self.backend.delete_row(table, key)?;
         if let Some(node_id) = state.key_to_node.remove(key) {
-            state.index.delete(node_id);
+            state.ann.delete(node_id);
             state.node_to_key.remove(&node_id);
         }
         Ok(removed)
@@ -393,7 +450,7 @@ impl VectorStore {
                 got: dim,
             });
         }
-        let hits: Vec<SearchResult> = state.index.search(query, k, ef)?;
+        let hits: Vec<SearchResult> = state.ann.search(query, k, ef)?;
         let mut out = Vec::with_capacity(hits.len());
         for hit in hits {
             if let Some(key) = state.node_to_key.get(&hit.id) {
@@ -419,7 +476,7 @@ impl VectorStore {
             dim: state.schema.dim,
             codec: state.schema.codec,
             distance: state.schema.distance,
-            live_rows: state.index.len(),
+            live_rows: state.ann.len(),
             tracked_rows: state.key_to_node.len(),
         })
     }
@@ -435,7 +492,7 @@ impl VectorStore {
     fn rehydrate_table(&self, schema: &TableSchema) -> Result<(), StoreError> {
         let state = TableState {
             schema: schema.clone(),
-            index: HnswIndex::new(schema.distance, schema.hnsw),
+            ann: AnnContainer::new(schema)?,
             key_to_node: HashMap::new(),
             node_to_key: HashMap::new(),
             next_node_id: 1,
@@ -456,7 +513,7 @@ impl VectorStore {
             Ok(())
         })?;
         for (node, key, v) in to_insert {
-            guard.index.insert(node, v)?;
+            guard.ann.insert(node, v)?;
             guard.key_to_node.insert(key.clone(), node);
             guard.node_to_key.insert(node, key);
             guard.next_node_id = node + 1;
