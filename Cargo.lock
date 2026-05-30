@@ -1061,6 +1061,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynvecdb"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "criterion",
+ "dyn-riak",
+ "dynomite",
+ "gen-fsm",
+ "half",
+ "hashtree",
+ "hegeltest",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "noxu-db",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
