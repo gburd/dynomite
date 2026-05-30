@@ -13,6 +13,12 @@ workspace = true
 
 [dependencies]
 blake3 = { workspace = true }
+# Phase 2 regex prefix-extraction. `regex-syntax` parses the
+# pattern into an HIR without compiling a matcher; the actual
+# match runs via `regex::bytes::Regex` until Phase 3 swaps in
+# the TRE FFI for approximate-regex semantics.
+regex = { workspace = true }
+regex-syntax = "0.8"
 roaring = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
