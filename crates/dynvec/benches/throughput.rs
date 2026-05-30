@@ -9,7 +9,7 @@
 //!   searches/sec at p50/p95/p99 via Criterion's built-in
 //!   reporters.
 //!
-//! Run with `cargo bench -p dynvecdb --bench throughput`.
+//! Run with `cargo bench -p dynvec --bench throughput`.
 
 // Bench harness; criterion's `criterion_group!` expands to an
 // undocumented function which lints as `missing_docs` under the
@@ -23,10 +23,10 @@ use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 
-use dynvecdb::distance::Distance;
-use dynvecdb::encoding::Codec;
-use dynvecdb::index::HnswParams;
-use dynvecdb::storage::{TableSchema, VectorStore};
+use dynvec::distance::Distance;
+use dynvec::encoding::Codec;
+use dynvec::index::HnswParams;
+use dynvec::storage::{TableSchema, VectorStore};
 
 fn rand_vec(seed: u64, dim: usize) -> Vec<f32> {
     let mut x = seed;

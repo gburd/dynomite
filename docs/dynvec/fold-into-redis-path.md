@@ -43,7 +43,7 @@ one-line config change for downstream apps.
 
 ## Wire-protocol mapping
 
-Today's RediSearch commands → dynomite implementation:
+Today's RediSearch commands -> dynomite implementation:
 
 ```text
 FT.CREATE idx

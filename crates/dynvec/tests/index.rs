@@ -4,8 +4,8 @@
 //! queries, and compares against brute-force ground truth.
 //! Asserts recall@10 > 0.85.
 
-use dynvecdb::distance::Distance;
-use dynvecdb::index::{HnswIndex, HnswParams, NodeId};
+use dynvec::distance::Distance;
+use dynvec::index::{HnswIndex, HnswParams, NodeId};
 
 const N: u64 = 1000;
 const DIM: usize = 64;
