@@ -11,6 +11,16 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# Enable the `dyntext::persist` module, which serialises a
+# `TextIndex` to an embedded Noxu DB environment so the
+# trigram postings, per-doc bloom filters, and raw text
+# survive a process restart. Off by default so the crate
+# compiles cleanly without the `lamdb` checkout next door,
+# matching the pattern used by `dyn-riak::datastore::noxu`.
+noxu = ["dep:noxu-db", "dep:bincode"]
+
 [dependencies]
 blake3 = { workspace = true }
 # Phase 2 regex prefix-extraction. `regex-syntax` parses the
@@ -22,11 +32,19 @@ regex-syntax = "0.8"
 roaring = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
+noxu-db = { workspace = true, optional = true }
+bincode = { workspace = true, optional = true }
 
 [dev-dependencies]
 hegeltest = { workspace = true }
 criterion = { workspace = true }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "index_throughput"
 harness = false
+
+[[test]]
+name = "persist_round_trip"
+path = "tests/persist_round_trip.rs"
+required-features = ["noxu"]

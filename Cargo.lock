@@ -1116,13 +1116,14 @@ dependencies = [
 name = "dyntext"
 version = "0.0.1"
 dependencies = [
+ "bincode",
  "blake3",
  "criterion",
  "hegeltest",
- "regex",
- "regex-syntax",
+ "noxu-db",
  "roaring",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
