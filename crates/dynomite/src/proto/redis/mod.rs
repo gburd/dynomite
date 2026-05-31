@@ -25,6 +25,7 @@ pub mod coalesce;
 pub mod commands;
 pub mod fragment;
 pub mod ft;
+pub mod ft_filter;
 pub mod multikey;
 pub mod parser;
 pub mod repair;
