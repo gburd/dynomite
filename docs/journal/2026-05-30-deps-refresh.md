@@ -25,14 +25,14 @@ automatically, but no manifest pin changes.
 | ------------------------------ | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | nix                            | 0.30   | 0.31     | No drift. Patch lands transparently against the existing `dup2_*` / `Flock` call sites.                                                                                                                                                                     |
 | quiche                         | 0.22   | 0.28     | Six minor releases applied without API drift in our usage. The 0.29 release pulled in the BoringSSL-based `boring` dependency chain, which needs `libclang` at build time and is not currently provisioned in this dev shell; held at 0.28. |
-| wasmtime                       | 26     | 36.0.8   | Cleared the entire stack of 12 wasmtime advisories that were live on `main`. The fix windows for RUSTSEC-2026-0085..0096 and RUSTSEC-2026-0114 are `>=36.0.7,<37 OR >=42.0.2,<43 OR >=43.0.1`; 36.0.x is the only fix train compatible with our pinned rustc 1.90 toolchain (42.x and 43.x require rustc 1.91; 44+ require 1.92; 45 requires 1.93). The lockfile resolves to 36.0.10 via the `^36.0.8` caret. The `dyn-riak::mapreduce::wasm` module compiles cleanly without code changes; the `Engine` / `Module` / `Store` API surface we lean on is stable across 26 -> 36. |
+| wasmtime                       | 26     | 36.0.8   | Cleared the entire stack of 12 wasmtime advisories that were live on `main`. The fix windows for RUSTSEC-2026-0085..0096 and RUSTSEC-2026-0114 are `>=36.0.7,<37 OR >=42.0.2,<43 OR >=43.0.1`; 36.0.x is the only fix train compatible with our pinned rustc 1.90 toolchain (42.x and 43.x require rustc 1.91; 44+ require 1.92; 45 requires 1.93). The lockfile resolves to 36.0.10 via the `^36.0.8` caret. The `dyniak::mapreduce::wasm` module compiles cleanly without code changes; the `Engine` / `Module` / `Store` API surface we lean on is stable across 26 -> 36. |
 | criterion                      | 0.5    | 0.8      | API drift: `criterion::black_box` was deprecated in 0.6 and the replacement is `std::hint::black_box`. Updated the imports across all eight bench files (`benches/{crypto,dnode,hashkit,mbuf,parsers,quorum,random_slicing,tokens}.rs`) to import `black_box` from `std::hint` instead. No call-site behaviour changes; `std::hint::black_box` is a drop-in replacement.                                                                                                                                       |
 | opentelemetry                  | 0.27   | 0.32     | API drift: see "OpenTelemetry 0.27 -> 0.32" below.                                                                                                                                                                                                          |
 | opentelemetry_sdk              | 0.27   | 0.32     | API drift: see "OpenTelemetry 0.27 -> 0.32" below. The `rt-tokio` feature is no longer required for our `with_batch_exporter(exporter)` call site; dropped from the feature list.                                                                          |
 | opentelemetry-otlp             | 0.27   | 0.32     | API drift: see "OpenTelemetry 0.27 -> 0.32" below. No call-site changes beyond the type renames.                                                                                                                                                            |
 | tracing-opentelemetry          | 0.28   | 0.33     | Tracks the OTel stack. No drift in our usage (`tracing_opentelemetry::layer().with_tracer(tracer)`).                                                                                                                                                        |
 | opentelemetry-appender-tracing | 0.27   | 0.32     | Tracks the OTel stack. No drift in our usage (`OpenTelemetryTracingBridge::new(provider)`).                                                                                                                                                                 |
-| hyper (dyn-riak)               | 1.9    | 1.10     | Lockfile-side bump only since `^1.9` already accepts 1.10.x; manifest pin updated for clarity. No drift.                                                                                                                                                    |
+| hyper (dyniak)               | 1.9    | 1.10     | Lockfile-side bump only since `^1.9` already accepts 1.10.x; manifest pin updated for clarity. No drift.                                                                                                                                                    |
 
 Total: **9** workspace deps bumped at the manifest level (counting the OTel
 family as five entries, since each pin is independent), plus `hyper` as a
@@ -102,7 +102,7 @@ change on either x86_64 or aarch64. Eight bench files updated.
 ### Wasmtime 26 -> 36
 
 No source-level drift in our usage. The `Engine`, `Module`,
-`Store`, and `Linker` API surface our `dyn-riak::mapreduce::wasm`
+`Store`, and `Linker` API surface our `dyniak::mapreduce::wasm`
 fitting depends on is stable across the 26 -> 36 train.
 
 ### Hyper 1.9 -> 1.10
@@ -138,7 +138,7 @@ the deferred list this pass; rustls-pki-types is now a separate item).
 | `cargo nextest run --workspace --all-features` (1608 tests, 4 skipped)                              | green  |
 | `cargo test --doc --workspace`                                                                      | green  |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings`                              | green  |
-| `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyn-riak -p dyn-admin -- --check` | green  |
+| `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyniak -p dyn-admin -- --check` | green  |
 | `scripts/check_no_todos.sh` / `check_no_port_comments.sh` / `check_ascii.sh`                        | green  |
 | `cargo deny check`                                                                                  | unchanged from `main` (pre-existing license + wildcard issues; no new diagnostics introduced). |
 | `cargo audit --deny warnings --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436`                 | reduced; **all 12 wasmtime advisories cleared** (RUSTSEC-2026-0085, -0086, -0087, -0088, -0089, -0091, -0092, -0093, -0094, -0095, -0096, -0114). The `bincode 1.3` (RUSTSEC-2025-0141, unmaintained), `rustls-pemfile 2.2` (RUSTSEC-2025-0134, unmaintained), and `lru` (RUSTSEC-2026-0002, transitive via tonic) advisories remain and are deferred per the table above. |

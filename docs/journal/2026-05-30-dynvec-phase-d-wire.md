@@ -141,7 +141,7 @@ cargo test --doc -p dynomite                                             OK (668
 
 `cargo build --locked` fails with a pre-existing Cargo.lock
 drift coming from an external path-dep
-(`/home/gburd/ws/lamdb/crates/noxu-db` versions bumped); the
+(`/home/gburd/ws/noxu/crates/noxu-db` versions bumped); the
 same failure reproduces on `main` before this branch.
 
 ## New deps

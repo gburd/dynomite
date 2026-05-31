@@ -109,7 +109,7 @@ slots in. Common targets:
   RESP / Memcache wire format.
 * HTTP-fronted KV stores - call out via `reqwest` or `hyper`.
 * The Riak K/V protocol - the workspace ships
-  [`crates/dyn-riak`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dyn-riak)
+  [`crates/dyniak`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dyniak)
   on top of the same trait.
 
 The trait surface (verbatim from
@@ -394,7 +394,7 @@ across all four supported backends:
 
 * TCP + Redis;
 * TCP + Memcache;
-* TCP + Riak (via `dyn-riak`);
+* TCP + Riak (via `dyniak`);
 * peer-plane TLS variants of each.
 
 The committed reports under

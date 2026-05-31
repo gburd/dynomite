@@ -5,7 +5,7 @@
 User asked for a single-session push covering:
 
 1. New `gen-fsm` crate (gen_statem-style FSM driver, named for non-Erlang readers).
-2. Refactor AAE exchange + dyn-riak get/put coordinators onto gen-fsm.
+2. Refactor AAE exchange + dyniak get/put coordinators onto gen-fsm.
 3. Tier-1 Riak idioms: capability negotiation (#1), APL annotations (#2),
    handoff FSM (#3), cluster_info dump (#4).
 4. Tier-2 Riak idioms: supervisor-tree (#7), sidejob+throttle (#5+#6),
@@ -46,7 +46,7 @@ workers via pi's `Agent(isolation: "worktree")`.
 ## Wave 2B (after wave 2A merges; not yet dispatched):
 
 - [ ] AAE refactor onto gen-fsm + new hashtree crate
-- [ ] dyn-riak get_fsm + put_fsm onto gen-fsm
+- [ ] dyniak get_fsm + put_fsm onto gen-fsm
 - [ ] Handoff FSM (#3)
 - [ ] Reaper FSM (#12)
 

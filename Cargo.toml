@@ -5,7 +5,7 @@ members = [
     "crates/dynomited",
     "crates/dyn-hash-tool",
     "crates/dyn-encoding",
-    "crates/dyn-riak",
+    "crates/dyniak",
     "crates/dyn-admin",
     "crates/dyntext",
     "crates/dynvec",
@@ -69,7 +69,7 @@ bincode = "1.3"
 # Datastore embed hook. `futures-core` carries the `Stream` trait
 # referenced by the Datastore trait signature; `futures-util`
 # provides `unfold`, `StreamExt::next`, and the
-# `MapErr`/`BoxBody` glue used by the dyn-riak HTTP and PBC
+# `MapErr`/`BoxBody` glue used by the dyniak HTTP and PBC
 # transports. Both crates are already pulled in transitively;
 # making the dependency explicit lets the streaming list paths
 # import them without relying on transitive resolution.
@@ -116,7 +116,7 @@ prometheus = "0.14"
 ciborium = "0.2"
 prost = "0.14"
 
-# WebAssembly runtime for the optional dyn-riak MapReduce Wasm
+# WebAssembly runtime for the optional dyniak MapReduce Wasm
 # fitting. Default features are kept off so the dependency is
 # minimal: we only want module compilation (cranelift) and the
 # in-process runtime, plus WAT support so tests can ship modules
@@ -138,27 +138,11 @@ capnp = "0.25"
 bebop = "3.2"
 bson = { version = "3", features = ["serde"] }
 
-# Storage backend (Noxu DB) for the planned Riak-compatible API
-# and multi-engine storage substrate. Path deps for now; flip to
-# git or crates.io versions once Noxu publishes a fully versioned
-# release. These workspace.dependencies entries plus the gated
-# `riak-storage` feature on the `dynomite` crate force cargo to
-# walk the Noxu dep graph today, before any Riak-protocol code
-# lands. Source-level imports are deferred. See
-# docs/riak-compat-plan.md.
-noxu-db = { path = "../lamdb/crates/noxu-db" }
-noxu-cleaner = { path = "../lamdb/crates/noxu-cleaner" }
-noxu-config = { path = "../lamdb/crates/noxu-config" }
-noxu-dbi = { path = "../lamdb/crates/noxu-dbi" }
-noxu-engine = { path = "../lamdb/crates/noxu-engine" }
-noxu-evictor = { path = "../lamdb/crates/noxu-evictor" }
-noxu-latch = { path = "../lamdb/crates/noxu-latch" }
-noxu-log = { path = "../lamdb/crates/noxu-log" }
-noxu-recovery = { path = "../lamdb/crates/noxu-recovery" }
-noxu-sync = { path = "../lamdb/crates/noxu-sync" }
-noxu-tree = { path = "../lamdb/crates/noxu-tree" }
-noxu-txn = { path = "../lamdb/crates/noxu-txn" }
-noxu-util = { path = "../lamdb/crates/noxu-util" }
+# Storage backend (Noxu DB) for the Riak-compatible API and
+# multi-engine storage substrate. We depend on the `noxu`
+# umbrella crate (published on crates.io), which re-exports the
+# full engine public API behind a single name + version.
+noxu = "3.0.2"
 
 # Dev / test
 # `hegeltest` (re-exported as `hegel`) is the property-testing crate

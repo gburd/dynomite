@@ -6,7 +6,7 @@ Extract a generic merkle / hash-tree primitive into a standalone
 `crates/hashtree/` workspace member so non-Riak consumers (e.g.
 the dnode entropy reconciliation path under
 `crates/dynomite/src/entropy/`) can reuse the same data
-structure that today is locked inside `crates/dyn-riak/src/aae/`.
+structure that today is locked inside `crates/dyniak/src/aae/`.
 
 ## What changed
 
@@ -42,24 +42,24 @@ structure that today is locked inside `crates/dyn-riak/src/aae/`.
 
 * **Workspace members**: appended `crates/hashtree`.
 
-* **dyn-riak**: added `hashtree = { path = "../hashtree" }`
+* **dyniak**: added `hashtree = { path = "../hashtree" }`
   as a regular dependency so future code in this crate can
   consume the new primitive without a separate edit.
 
 ## What deliberately did NOT change
 
-The dyn-riak AAE module's existing `Tree`, `KeyEntry`, and
-`TreeShape` (in `crates/dyn-riak/src/aae/tictac.rs`) and the
+The dyniak AAE module's existing `Tree`, `KeyEntry`, and
+`TreeShape` (in `crates/dyniak/src/aae/tictac.rs`) and the
 `Tree::save_snapshot` / `Tree::load_snapshot` codec (in
-`crates/dyn-riak/src/aae/persist.rs`) were left in place. The
-brief's migration step 4 ("Replace dyn-riak's local types with
+`crates/dyniak/src/aae/persist.rs`) were left in place. The
+brief's migration step 4 ("Replace dyniak's local types with
 re-exports or imports from `hashtree`") is not directly
 satisfiable: the two APIs have incompatible semantics that
 cannot be expressed by a re-export.
 
 Concretely:
 
-| Aspect             | dyn-riak TicTac `Tree`                        | new generic `HashTree`                       |
+| Aspect             | dyniak TicTac `Tree`                        | new generic `HashTree`                       |
 |--------------------|-----------------------------------------------|----------------------------------------------|
 | Tree shape         | 2-level: `n_time_buckets x n_segments`        | N-level: `fanout.pow(depth)` segments        |
 | Per-key entry      | `(bucket, key, vclock)` triple                | `(key, value_hash)` pair                     |
@@ -72,19 +72,19 @@ XOR-self-inverse for in-place updates) are required by the
 Riak AAE exchange protocol that lives next door (see
 `exchange.rs` / `repair.rs`). The brief explicitly carved that
 protocol layer out of scope ("the exchange code stays in
-dyn-riak and consumes the library"), so converting the
+dyniak and consumes the library"), so converting the
 TicTac tree to use `HashTree` internally would mean rewriting
 the exchange protocol too -- out of scope for this single
 commit.
 
-The hard constraint "All existing dyn-riak AAE tests must
+The hard constraint "All existing dyniak AAE tests must
 still pass after the migration" is satisfied: the existing
-68 AAE unit tests in dyn-riak run green unchanged, because the
+68 AAE unit tests in dyniak run green unchanged, because the
 TicTac tree was not touched.
 
 The `hashtree` crate is now available for the dnode entropy
 reconciliation path and any other non-Riak consumer; the
-dyn-riak code carries the dep so future work can swap pieces
+dyniak code carries the dep so future work can swap pieces
 of TicTac over once a unified design lands.
 
 ## Tests
@@ -114,14 +114,14 @@ of TicTac over once a unified design lands.
 ```
 cargo build -p hashtree                  # OK
 cargo test  -p hashtree                  # 7 + 4 + 8 + 1 = 20 OK
-cargo test  -p dyn-riak --lib aae        # 68 OK (unchanged)
+cargo test  -p dyniak --lib aae        # 68 OK (unchanged)
 cargo test  --workspace                  # all green
 cargo clippy --workspace --all-targets -- -D warnings   # OK
 cargo fmt --all -- --check               # OK
 ```
 
-The brief mentioned `cargo nextest run -p dyn-riak --features riak`,
-but `dyn-riak` does not declare a `riak` feature; the default
+The brief mentioned `cargo nextest run -p dyniak --features riak`,
+but `dyniak` does not declare a `riak` feature; the default
 test run is the equivalent gate.
 
 ## Notes
@@ -129,7 +129,7 @@ test run is the equivalent gate.
 * Used `std::cell::OnceCell` per the spec's literal API.
   Consequence: `HashTree` is `!Sync`. Callers that want to
   share a tree across threads should wrap it in a `Mutex` /
-  `RwLock`, which is the same pattern dyn-riak's `Tree` uses
+  `RwLock`, which is the same pattern dyniak's `Tree` uses
   via `Arc<Mutex<Tree>>` in the scheduler.
 * `segment_for` reduces the 64 most-significant bits of the
   BLAKE3 digest mod `segment_count`. Since `segment_count` is

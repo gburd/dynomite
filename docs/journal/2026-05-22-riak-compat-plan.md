@@ -66,7 +66,7 @@ imports `noxu_db` yet.
 
 ## Toolchain note
 
-lamdb pins `1.95` in `rust-toolchain.toml`; dynomite pins `1.90`.
+noxu pins `1.95` in `rust-toolchain.toml`; dynomite pins `1.90`.
 Both build under `1.90` today (edition 2024 needs only 1.85+). I did
 not bump the dynomite toolchain in this branch because no actual
 1.95 feature is in use; the bump becomes mandatory at M1 when we
@@ -98,12 +98,12 @@ as a Section 7 cross-team item.
 6. **Five Noxu cross-team items** (compaction throttle, live DB
    open/close, Sequence durability, cursor pagination across
    commits, memory-budget controls) need to be filed against the
-   lamdb tracker before M1 lands.
+   noxu tracker before M1 lands.
 
 ## Risks identified
 
 * Lamdb edition 2024 + 1.95 pin (mitigation in Section 7 / 8.5).
-* Path deps block crates.io publishing of dynomite until lamdb
+* Path deps block crates.io publishing of dynomite until noxu
   publishes; we are pre-0.1, no immediate risk (Section 6.4).
 * MapReduce is the longest-tail item and naturally lives at the end
   of the schedule; if we end up time-pressed, M8 is the right place
@@ -125,5 +125,5 @@ STATUS: READY_FOR_REVIEW
 BRANCH: feat/riak-compat-plan
 JOURNAL: docs/journal/2026-05-22-riak-compat-plan.md
 DOC: docs/riak-compat-plan.md
-NEW_DEPS: noxu-db plus closure (path = ../lamdb/crates/...)
+NEW_DEPS: noxu-db plus closure (path = ../noxu/crates/...)
 ```

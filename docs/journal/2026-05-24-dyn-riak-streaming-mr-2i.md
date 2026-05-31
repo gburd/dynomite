@@ -1,7 +1,7 @@
-# dyn-riak streaming: HTTP `/mapred` (multipart) and PBC `RpbIndexResp`
+# dyniak streaming: HTTP `/mapred` (multipart) and PBC `RpbIndexResp`
 
 Date: 2026-05-24
-Branch: `stage/dyn-riak-streaming-mr-2i`
+Branch: `stage/dyniak-streaming-mr-2i`
 Status: READY_FOR_REVIEW
 
 ## Scope
@@ -25,9 +25,9 @@ The route now produces:
 
 ```text
 HTTP/1.1 200 OK
-Content-Type: multipart/mixed; boundary=dyn-riak-mr-<nanos16>-<counter16>
+Content-Type: multipart/mixed; boundary=dyniak-mr-<nanos16>-<counter16>
 Transfer-Encoding: chunked
-Server: dyn-riak
+Server: dyniak
 
 --{boundary}
 Content-Type: application/json
@@ -51,7 +51,7 @@ strings are unique per request.
 A monotonic process-local `AtomicU64` is combined with the current
 system-time nanoseconds, both encoded as fixed-width hex. The
 result is a 33-byte ASCII boundary like
-`dyn-riak-mr-1865b7c92ab10000-0000000000000023`. Collision
+`dyniak-mr-1865b7c92ab10000-0000000000000023`. Collision
 probability inside a single request body is negligible. This avoids
 adding a `uuid` workspace dependency.
 
@@ -128,7 +128,7 @@ asserts this contract.
 
 ### Tests
 
-In `crates/dyn-riak/src/server.rs`:
+In `crates/dyniak/src/server.rs`:
 
 * `index_eq_streams_chunks_of_chunk_size` -- 1000 mock keys
   produces 4 key chunks (3x256 + 232) plus a terminator.
@@ -139,7 +139,7 @@ In `crates/dyn-riak/src/server.rs`:
   still flows through chunking correctly.
 * `index_unsupported_datastore_yields_error_frame`.
 
-In `crates/dyn-riak/tests/pbc_round_trip.rs`:
+In `crates/dyniak/tests/pbc_round_trip.rs`:
 
 * `pbc_index_streams_chunks_against_scripted_datastore` -- end-to-end
   through `serve_pbc` with a `ScriptedIndex` mock returning 1000
@@ -147,7 +147,7 @@ In `crates/dyn-riak/tests/pbc_round_trip.rs`:
 * `pbc_index_first_frame_decodes_for_old_clients` -- end-to-end
   backwards compat.
 
-In `crates/dyn-riak/tests/noxu_pbc_round_trip.rs`:
+In `crates/dyniak/tests/noxu_pbc_round_trip.rs`:
 
 * `index_eq` / `index_range` helpers updated to drain frames until
   `done = Some(true)`; existing `pbc_index_*` tests now exercise
@@ -157,34 +157,34 @@ In `crates/dyn-riak/tests/noxu_pbc_round_trip.rs`:
 
 Modified:
 
-* `crates/dyn-riak/src/mapreduce/executor.rs` (added `PhaseBatch`,
+* `crates/dyniak/src/mapreduce/executor.rs` (added `PhaseBatch`,
   `run_job_streaming`, `run_job_streaming_with_wasm`,
   `stream_job_inner`, four streaming unit tests).
-* `crates/dyn-riak/src/mapreduce/mod.rs` (re-exported the
+* `crates/dyniak/src/mapreduce/mod.rs` (re-exported the
   streaming entry points).
-* `crates/dyn-riak/src/proto/http/routes.rs` (rewrote
+* `crates/dyniak/src/proto/http/routes.rs` (rewrote
   `mapred_response`; added `mapred_boundary`,
   `mapred_multipart_body`, `mapred_phase_part_body`; added two new
   unit tests; updated the existing one).
-* `crates/dyn-riak/src/server.rs` (rewrote `handle_index` to
+* `crates/dyniak/src/server.rs` (rewrote `handle_index` to
   return a `FrameStream`; added `index_keys_to_frames`,
   `IndexChunkState`; added five streaming unit tests).
-* `crates/dyn-riak/tests/mapreduce_round_trip.rs` (updated
+* `crates/dyniak/tests/mapreduce_round_trip.rs` (updated
   `mapred_via_http`, added a chunked-decode helper, added
   `mapred_via_http_phase_failure_emits_text_part`).
-* `crates/dyn-riak/tests/pbc_round_trip.rs` (added
+* `crates/dyniak/tests/pbc_round_trip.rs` (added
   `pbc_index_streams_chunks_against_scripted_datastore`,
   `pbc_index_first_frame_decodes_for_old_clients`; added
   `RpbIndexResp` to the imports).
-* `crates/dyn-riak/tests/noxu_pbc_round_trip.rs` (drain helper +
+* `crates/dyniak/tests/noxu_pbc_round_trip.rs` (drain helper +
   updated `index_eq` / `index_range`).
-* `docs/journal/2026-05-24-dyn-riak-streaming-mr-2i.md` (this
+* `docs/journal/2026-05-24-dyniak-streaming-mr-2i.md` (this
   file).
 
 No changes to `crates/dynomite/`, `crates/dynomited/`,
 `crates/dyn-encoding/`, `crates/dyn-hash-tool/`,
-`crates/dyn-admin/`, `crates/dyn-riak/src/datatypes/`,
-`crates/dyn-riak/src/aae/`, `crates/dyn-riak/src/datastore/`, or
+`crates/dyn-admin/`, `crates/dyniak/src/datatypes/`,
+`crates/dyniak/src/aae/`, `crates/dyniak/src/datastore/`, or
 `scripts/`.
 
 ## Allowances
@@ -196,7 +196,7 @@ None. No new `#[allow]` annotations.
 ```
 cargo build --workspace --all-targets --locked          OK
 cargo fmt -p dynomite -p dynomited -p dyn-hash-tool \
-          -p dyn-encoding -p dyn-riak -p dyn-admin \
+          -p dyn-encoding -p dyniak -p dyn-admin \
           -- --check                                    OK
 cargo clippy --workspace --all-targets --all-features \
           -- -D warnings                                OK

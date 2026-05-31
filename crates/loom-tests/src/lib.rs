@@ -37,7 +37,7 @@
 //! # What is modeled here
 //!
 //! 1. A simplified hint-store enqueue/drain primitive (mirrors
-//!    [`dyn_riak::handoff::HintStore`]'s contended path).
+//!    [`dyniak::handoff::HintStore`]'s contended path).
 //! 2. A simplified phi-accrual sample-record/observe primitive
 //!    (mirrors [`dynomite::cluster::failure_detector`]'s running
 //!    statistics).

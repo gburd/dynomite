@@ -56,7 +56,7 @@ Token allocation when the operator does not supply a value is
 deterministic per `(host, port)` via FNV-1a. Token rebalancing
 is left to a follow-up slice.
 
-## PBC ops (`crates/dyn-riak/src/proto/pb/messages.rs`)
+## PBC ops (`crates/dyniak/src/proto/pb/messages.rs`)
 
 Five request/response pairs added under codes 200-209:
 
@@ -81,7 +81,7 @@ change) and `DynRpbStagedChange` (the wire shape of a
 the `from_u8` match. Both `proto/pb/mod.rs` and the crate root
 `lib.rs` got append-only `pub use` re-exports.
 
-## Server wiring (`crates/dyn-riak/src/server.rs`)
+## Server wiring (`crates/dyniak/src/server.rs`)
 
 `process_frame` now takes `(frame, datastore, admin)`. New
 public functions `serve_pbc_with_admin`,
@@ -122,7 +122,7 @@ New test surfaces:
   covering list/join/leave/plan/commit, duplicate detection,
   local-peer guard, mixed-batch commit, and the post-commit
   ring rebuild.
-* `crates/dyn-riak/src/proto/pb/messages.rs` -- 7 prost
+* `crates/dyniak/src/proto/pb/messages.rs` -- 7 prost
   round-trip tests for the new admin codes and structs.
 * `crates/dyn-admin/src/output.rs` -- 2 tests for
   `render_change_human` (add / remove).
@@ -166,11 +166,11 @@ bash scripts/check_ascii.sh                              OK
   `crates/dynomite/src/embed/`, `conf/`, `net/`, the
   `dynomited` binary, `dyn-encoding`, `dyn-hash-tool`, the
   `datatypes`/`aae`/`mapreduce`/`http`/`datastore`
-  subdirectories of `dyn-riak`, and `scripts/` were not
+  subdirectories of `dyniak`, and `scripts/` were not
   touched.
-* `crates/dyn-riak/src/lib.rs`,
-  `crates/dyn-riak/src/proto/pb/mod.rs`, and
-  `crates/dyn-riak/src/proto/pb/messages.rs` were
+* `crates/dyniak/src/lib.rs`,
+  `crates/dyniak/src/proto/pb/mod.rs`, and
+  `crates/dyniak/src/proto/pb/messages.rs` were
   append-only: new variants and `pub use` items were added at
   the end of the enum / file; no existing line was modified.
 

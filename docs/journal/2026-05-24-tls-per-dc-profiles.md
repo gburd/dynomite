@@ -115,7 +115,7 @@ slice and continue to consume `riak.tls_*` exclusively. The
 brief calls out that Riak gateways could draw from the local
 DC's profile in a follow-up; that re-use is straightforward
 once a `local_dc` argument threads through `build_handles`,
-but would have meant touching `crates/dyn-riak` (out-of-scope
+but would have meant touching `crates/dyniak` (out-of-scope
 per the brief's hard constraints) and is deferred. The
 existing `riak.tls_*` knobs stay backward-compatible.
 
@@ -187,7 +187,7 @@ log line.
 cargo build --workspace --all-targets --locked       # OK
 cargo build -p dynomited --features riak --all-targets --locked  # OK
 cargo fmt -p dynomite -p dynomited -p dyn-hash-tool \
-         -p dyn-encoding -p dyn-riak -p dyn-admin -- --check  # OK
+         -p dyn-encoding -p dyniak -p dyn-admin -- --check  # OK
 cargo clippy --workspace --all-targets --all-features -- -D warnings  # OK
 cargo nextest run --workspace            # 1205 / 1205 passed
 cargo nextest run --workspace --all-features  # 1254 / 1254 passed
@@ -201,7 +201,7 @@ bash scripts/check_ascii.sh              # OK
 
 1. Wire Riak gateways to draw from the local DC's profile
    when `riak.tls_*` is unset (requires touching
-   `crates/dyn-riak`; out-of-scope here).
+   `crates/dyniak`; out-of-scope here).
 2. Reload-on-SIGHUP for cert rotation (still deferred from
    the original peer-plane TLS slice).
 3. Per-profile mTLS scopes: today the listener's mTLS root

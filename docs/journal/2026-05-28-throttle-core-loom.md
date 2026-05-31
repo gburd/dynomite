@@ -85,7 +85,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 cargo fmt --all -- --check
 # Clean (in-repo files; pre-existing fmt diffs in path-dep
-# `../lamdb/crates/noxu-*` are upstream and out of scope).
+# `../noxu/crates/noxu-*` are upstream and out of scope).
 ```
 
 ## Notes / decisions

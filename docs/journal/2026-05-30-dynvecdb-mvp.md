@@ -55,7 +55,7 @@ CQL is documented as a 2-3 week stretch goal.
     correctness) and takes top-K.
 * HTTP API (`src/api.rs`, gated on `http` feature):
   * Routes: tables, vectors, search, stats, healthz.
-  * Built directly on `hyper`, mirroring the dyn-riak shape
+  * Built directly on `hyper`, mirroring the dyniak shape
     so the workspace does not pick up a new HTTP framework.
 * Quickstart example (`examples/quickstart.rs`).
 * Throughput bench (`benches/throughput.rs`).
@@ -91,7 +91,7 @@ stack). No new third-party crate is added at the workspace
 level.
 
 `hyper`, `hyper-util`, `http-body-util` are referenced via the
-`http` feature; all already used by `dyn-riak`.
+`http` feature; all already used by `dyniak`.
 
 ## Tests
 
@@ -169,7 +169,7 @@ full Scylla wire-compatible surface.
   call sites that need to switch from local to coordinator.
 * No Noxu-backed `Backend` impl yet; the `noxu` feature is
   declared but only enables the `noxu` feature on the
-  `dyn-riak` dependency. The full impl needs a small wrapper
+  `dyniak` dependency. The full impl needs a small wrapper
   around `NoxuDatastore::put_object` / `get_object` that
   serialises a `VectorRow` via bincode. Out of MVP scope.
 

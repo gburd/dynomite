@@ -64,7 +64,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The engine ships with the flag off; the `dynomited` binary
 /// flips it to `true` at startup when compiled with
 /// `--features riak` (which is the gate that pulls in the
-/// `dyn-riak::NoxuDatastore` type). Pool validation rejects
+/// `dyniak::NoxuDatastore` type). Pool validation rejects
 /// `data_store: noxu` with [`ConfError::BadNoxuConfig`] when
 /// the flag is `false`.
 ///

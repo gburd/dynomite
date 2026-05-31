@@ -474,7 +474,7 @@ pub struct ConfPool {
 /// independent: setting one without the other is supported.
 /// When `aae_enabled` is `true` the active anti-entropy
 /// scheduler is spawned; the cadence knobs default to the
-/// values shipped by `dyn_riak::aae::config`.
+/// values shipped by `dyniak::aae::config`.
 ///
 /// # Examples
 ///
@@ -508,11 +508,11 @@ pub struct ConfRiak {
     /// spawned alongside the listeners. Default: `false`.
     pub aae_enabled: Option<bool>,
     /// Override for the AAE full-sweep cadence, in seconds.
-    /// When unset, `dyn_riak::aae::config::DEFAULT_FULL_SWEEP_SECONDS`
+    /// When unset, `dyniak::aae::config::DEFAULT_FULL_SWEEP_SECONDS`
     /// (24h) is used.
     pub aae_full_sweep_interval_seconds: Option<u64>,
     /// Override for the AAE per-segment exchange cadence, in
-    /// seconds. When unset, `dyn_riak::aae::config::DEFAULT_SEGMENT_SECONDS`
+    /// seconds. When unset, `dyniak::aae::config::DEFAULT_SEGMENT_SECONDS`
     /// (60s) is used.
     pub aae_segment_interval_seconds: Option<u64>,
     /// `tls_cert:` - PEM certificate path for the Riak PBC and
@@ -540,7 +540,7 @@ pub struct ConfRiak {
     /// Wasm binary (`.wasm`) or WAT text (`.wat`) file. When
     /// `dynomited` is built with the `wasm` Cargo feature it
     /// loads every entry through
-    /// [`dyn_riak::mapreduce::wasm::load_modules_from_config`]
+    /// [`dyniak::mapreduce::wasm::load_modules_from_config`]
     /// and exposes the resulting store on the executor; without
     /// the feature the field is parsed and validated but the
     /// loader is never called (the runtime returns the typed
@@ -1356,7 +1356,7 @@ impl ConfPool {
     /// Selecting `data_store: noxu` is permitted only when the
     /// binary was built with `--features riak`; without it,
     /// `dynomited` cannot construct a `NoxuDatastore` because
-    /// the `dyn-riak` crate (which owns the type) is not
+    /// the `dyniak` crate (which owns the type) is not
     /// linked. The check is gated on a `cfg!(feature = ...)`
     /// expression that the parent crate threads through via
     /// the [`crate::conf::set_noxu_supported`] toggle: the

@@ -7,11 +7,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 echo "==> rustfmt"
-# Restrict to our crates so the lamdb path-deps pulled in by the
+# Restrict to our crates so the noxu path-deps pulled in by the
 # `riak-storage` feature do not leak into the format check.
 cargo fmt \
     -p dynomite -p dynomited -p dyn-hash-tool \
-    -p dyn-encoding -p dyn-riak -p dyn-admin \
+    -p dyn-encoding -p dyniak -p dyn-admin \
     -p dyntext -p dynvec -p gen-fsm -p hashtree \
     -p loom-tests -p sup -p throttle-core \
     -- --check

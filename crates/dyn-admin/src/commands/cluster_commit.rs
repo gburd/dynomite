@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use dyn_riak::proto::pb::{DynRpbClusterCommitReq, DynRpbClusterCommitResp, MessageCode};
+use dyniak::proto::pb::{DynRpbClusterCommitReq, DynRpbClusterCommitResp, MessageCode};
 use serde::Serialize;
 
 use crate::client::PbcClient;

@@ -75,7 +75,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use noxu_db::{
+use noxu::{
     Database, DatabaseConfig, DatabaseEntry, Environment, EnvironmentConfig, Get, NoxuError,
     OperationStatus, Transaction, TransactionConfig,
 };

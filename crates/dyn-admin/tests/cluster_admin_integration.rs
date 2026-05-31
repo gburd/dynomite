@@ -1,7 +1,7 @@
 //! End-to-end integration tests for the dyn-admin cluster-*
 //! subcommands.
 //!
-//! Each test spins up a real `dyn_riak::serve_pbc_with_admin`
+//! Each test spins up a real `dyniak::serve_pbc_with_admin`
 //! listener bound to a random localhost port with a
 //! `PoolClusterAdmin` wired into the dispatch path, drives the
 //! relevant `dyn-admin` subcommand via `assert_cmd`, and asserts
@@ -14,7 +14,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tokio::net::TcpListener;
 
-use dyn_riak::serve_pbc_with_admin;
+use dyniak::serve_pbc_with_admin;
 use dynomite::cluster::admin_rpc::{ClusterAdmin, PoolClusterAdmin};
 use dynomite::cluster::peer::{Peer, PeerEndpoint};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};

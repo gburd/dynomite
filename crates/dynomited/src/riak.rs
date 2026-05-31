@@ -8,7 +8,7 @@
 //!   the existing client / dnode / stats listeners.
 //! * [`build_handles`] -- the eager-bind constructor invoked from
 //!   [`crate::server::Server::build`] when a `riak:` block is set.
-//! * [`PeerChannelRepairSink`] -- a [`dyn_riak::aae::RepairSink`]
+//! * [`PeerChannelRepairSink`] -- a [`dyniak::aae::RepairSink`]
 //!   adapter that trampolines repair tasks onto the dispatcher's
 //!   per-peer outbound channels (the same `mpsc::Sender<OutboundRequest>`
 //!   map the data-plane uses).
@@ -31,13 +31,13 @@ use dynomite::conf::ConfRiak;
 use dynomite::embed::Datastore;
 use dynomite::net::server::OutboundRequest;
 
-use dyn_riak::aae::config::{ConfAae, DEFAULT_FULL_SWEEP_SECONDS, DEFAULT_SEGMENT_SECONDS};
-use dyn_riak::aae::repair::{RepairSink, RepairTask};
-use dyn_riak::aae::scheduler::{Scheduler, SweepPlan, SystemClock};
-use dyn_riak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls};
+use dyniak::aae::config::{ConfAae, DEFAULT_FULL_SWEEP_SECONDS, DEFAULT_SEGMENT_SECONDS};
+use dyniak::aae::repair::{RepairSink, RepairTask};
+use dyniak::aae::scheduler::{Scheduler, SweepPlan, SystemClock};
+use dyniak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls};
 
 #[cfg(feature = "wasm")]
-use dyn_riak::mapreduce::wasm::{load_modules_from_config, WasmLimits, WasmModuleStore};
+use dyniak::mapreduce::wasm::{load_modules_from_config, WasmLimits, WasmModuleStore};
 
 /// Errors produced while binding the Riak listeners.
 #[derive(Debug, thiserror::Error)]
@@ -98,7 +98,7 @@ pub struct RiakHandles {
     /// is built with the `wasm` Cargo feature and the YAML
     /// list is non-empty; otherwise `None`. The MapReduce
     /// executor uses the store via
-    /// [`dyn_riak::mapreduce::run_job_with_wasm`] when a job
+    /// [`dyniak::mapreduce::run_job_with_wasm`] when a job
     /// references a `Phase::WasmModule`.
     #[cfg(feature = "wasm")]
     pub wasm: Option<Arc<WasmModuleStore>>,
@@ -359,7 +359,7 @@ pub fn spawn_aae(
 ///
 /// ```
 /// use dynomite::net::server::OutboundRequest;
-/// use dyn_riak::aae::repair::{RepairDirection, RepairSink, RepairTask};
+/// use dyniak::aae::repair::{RepairDirection, RepairSink, RepairTask};
 /// use dynomited::riak::PeerChannelRepairSink;
 ///
 /// let rt = tokio::runtime::Builder::new_current_thread()
@@ -562,7 +562,7 @@ mod tests {
             bucket: b"b".to_vec(),
             key: b"k".to_vec(),
             vclock: b"vc".to_vec(),
-            direction: dyn_riak::aae::repair::RepairDirection::PushToRemote,
+            direction: dyniak::aae::repair::RepairDirection::PushToRemote,
         };
         let res = sink.submit(task);
         assert!(res.is_err());
@@ -577,7 +577,7 @@ mod tests {
             bucket: b"users".to_vec(),
             key: b"alice".to_vec(),
             vclock: b"vc1".to_vec(),
-            direction: dyn_riak::aae::repair::RepairDirection::PushToRemote,
+            direction: dyniak::aae::repair::RepairDirection::PushToRemote,
         })
         .unwrap();
         let req = rx.recv().await.expect("one outbound");

@@ -1,11 +1,11 @@
-# 2026-05-24 -- dyn-riak deferred items #4 + #5
+# 2026-05-24 -- dyniak deferred items #4 + #5
 
-Branch: `stage/dyn-riak-deferred-items-4-5`
+Branch: `stage/dyniak-deferred-items-4-5`
 Base: `main` at `87c3dc4` (`chore(deps): pull latest Noxu`).
 
 ## Scope
 
-Two small deferred items in `dyn-riak`:
+Two small deferred items in `dyniak`:
 
 * Item 4: wire
   [`mapreduce::wasm::load_modules_from_config`] into `ConfRiak`
@@ -47,15 +47,15 @@ PathBuf }`. Validation at config-parse time catches:
 ### dynomited wiring
 
 `dynomited` grew a new Cargo feature `wasm` that implies
-`riak` and forwards to `dyn-riak/wasm`. With the feature on,
+`riak` and forwards to `dyniak/wasm`. With the feature on,
 `dynomited::riak::build_handles` populates a new
 `RiakHandles::wasm: Option<Arc<WasmModuleStore>>` field by
 calling the new `build_wasm_store_from_config` helper. The
 helper trampolines through
-`dyn_riak::mapreduce::wasm::load_modules_from_config` so the
+`dyniak::mapreduce::wasm::load_modules_from_config` so the
 loader code path is shared with the existing in-tree tests.
 
-The Riak HTTP `/mapred` route handler (`crates/dyn-riak/src/proto/`)
+The Riak HTTP `/mapred` route handler (`crates/dyniak/src/proto/`)
 is owned by another worker stream and is on the do-not-touch
 list; plumbing the loaded `WasmModuleStore` into the
 HTTP-driven executor lives behind that handoff. The
@@ -121,7 +121,7 @@ divergences without losing forward progress.
 
 ### Tests
 
-`crates/dyn-riak/src/aae/repair.rs` (6 new unit tests):
+`crates/dyniak/src/aae/repair.rs` (6 new unit tests):
 
 * `evaluate_winner_when_one_dominates_others` -- A's clock
   dominates B's and C's; outcome is `Winner(A)`.
@@ -138,7 +138,7 @@ divergences without losing forward progress.
 * `resolve_with_warn_passes_winner_through` -- the
   `Winner(_)` outcome is returned unchanged.
 
-The journal entry `2026-05-24-dyn-riak-aae.md` got a sibling-
+The journal entry `2026-05-24-dyniak-aae.md` got a sibling-
 aware-merge update note appended.
 
 ## Verification
@@ -146,14 +146,14 @@ aware-merge update note appended.
 * `cargo build --workspace --all-targets --locked` -- clean.
 * `cargo build -p dynomited --features riak --all-targets --locked` -- clean.
 * `cargo build -p dynomited --features wasm --all-targets --locked` -- clean.
-* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyn-riak -p dyn-admin -- --check` -- clean.
+* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyniak -p dyn-admin -- --check` -- clean.
 * `cargo clippy --workspace --all-targets --all-features -- -D warnings` -- clean.
 * `cargo nextest run --workspace`: 1111 -> 1121 (+10 new
   tests; 5 in `dynomite::conf::pool::tests`, 6 in
-  `dyn-riak::aae::repair::tests`, the existing
+  `dyniak::aae::repair::tests`, the existing
   `repair_for_divergent_key_reaches_channel` was preserved
   rather than counted as new).
-* `cargo nextest run -p dyn-riak --features wasm`: 302 passed.
+* `cargo nextest run -p dyniak --features wasm`: 302 passed.
 * `cargo nextest run -p dynomited --features wasm`: 65 passed
   including the two new integration tests.
 * `cargo test --doc --workspace` -- clean.
@@ -162,7 +162,7 @@ aware-merge update note appended.
 ## Deferred follow-ups
 
 * **HTTP /mapred wasm wiring**: the route handler in
-  `crates/dyn-riak/src/proto/http/routes.rs` currently calls
+  `crates/dyniak/src/proto/http/routes.rs` currently calls
   `run_job` (no WasmHook). Plumbing the loaded
   `WasmModuleStore` through to `run_job_with_wasm` is
   straightforward (extend `serve_http` / `serve_pbc` with an

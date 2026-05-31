@@ -10,7 +10,7 @@
 
 use std::io::Write;
 
-use dyn_riak::proto::pb::{DynRpbAaeStatusReq, DynRpbAaeStatusResp, MessageCode};
+use dyniak::proto::pb::{DynRpbAaeStatusReq, DynRpbAaeStatusResp, MessageCode};
 use serde::Serialize;
 
 use crate::client::PbcClient;
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn report_from_pb_maps_every_field() {
         let pb = DynRpbAaeStatusResp {
-            peers: vec![dyn_riak::proto::pb::DynRpbAaePeerStatus {
+            peers: vec![dyniak::proto::pb::DynRpbAaePeerStatus {
                 peer_idx: 3,
                 dc: b"dc2".to_vec(),
                 rack: b"rZ".to_vec(),

@@ -1,11 +1,11 @@
-# 2026-05-24 -- dyn-riak PBC ops slice (v0.0.2)
+# 2026-05-24 -- dyniak PBC ops slice (v0.0.2)
 
-Branch: `stage/dyn-riak-pbc-ops-v1`
-Commit base: `0b08494` (main: "merge: stage/dyn-riak-scaffold into main")
+Branch: `stage/dyniak-pbc-ops-v1`
+Commit base: `0b08494` (main: "merge: stage/dyniak-scaffold into main")
 
 ## What landed
 
-The second usable slice of `crates/dyn-riak`. Six new Riak Protocol
+The second usable slice of `crates/dyniak`. Six new Riak Protocol
 Buffers operations join the four shipped in the v0.0.1 scaffold.
 
 | Code | Direction | Operation |
@@ -76,17 +76,17 @@ follow-up here.
 
 ## File map
 
-* `crates/dyn-riak/src/proto/pb/messages.rs` -- new struct
+* `crates/dyniak/src/proto/pb/messages.rs` -- new struct
   definitions, expanded `MessageCode`, and seven new round-trip
   tests.
-* `crates/dyn-riak/src/proto/pb/codec.rs` -- registers the new
+* `crates/dyniak/src/proto/pb/codec.rs` -- registers the new
   message types into the protobuf codec.
-* `crates/dyn-riak/src/proto/pb/mod.rs` -- new `pub use` block
+* `crates/dyniak/src/proto/pb/mod.rs` -- new `pub use` block
   appended below the existing one (no rearrangement).
-* `crates/dyn-riak/src/server.rs` -- new per-op handler functions
+* `crates/dyniak/src/server.rs` -- new per-op handler functions
   plus a `handle_unsupported<T>` helper. `process_frame` keeps a
   flat match.
-* `crates/dyn-riak/tests/pbc_round_trip.rs` -- the original
+* `crates/dyniak/tests/pbc_round_trip.rs` -- the original
   `pbc_ping_put_get_del_round_trip` test stays; a new
   `pbc_new_ops_round_trip` test drives the v0.0.2 surface. Both
   share a `Harness` helper.
@@ -96,11 +96,11 @@ follow-up here.
 * `cargo build --workspace --all-targets --locked` -- clean.
 * `cargo build --workspace --all-targets --all-features --locked`
   -- clean.
-* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyn-riak -- --check` -- clean.
+* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyniak -- --check` -- clean.
 * `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   -- clean.
 * `cargo nextest run --workspace`: 774 -> 782 (+8 tests). The
-  dyn-riak crate's count went from 25 to 33.
+  dyniak crate's count went from 25 to 33.
 * `cargo test --doc --workspace`: 608 doctests, all passing
   (no doctest count change; the doctest on `MessageCode` was
   updated in place to use an unused byte instead of byte 7,
@@ -134,4 +134,4 @@ follow-up here.
 * The new `pub use` block in `proto/pb/mod.rs` is appended below
   the existing one. Parallel branches that touch the existing
   block will merge cleanly with this one.
-* No changes to `crates/dyn-riak/src/lib.rs` were needed.
+* No changes to `crates/dyniak/src/lib.rs` were needed.

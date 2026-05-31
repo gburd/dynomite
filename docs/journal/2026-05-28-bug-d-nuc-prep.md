@@ -1,4 +1,4 @@
-# 2026-05-28 - Bug D: nuc operational prep + lamdb v2.3.0
+# 2026-05-28 - Bug D: nuc operational prep + noxu v2.3.0
 
 ## Bug D recap
 
@@ -29,16 +29,16 @@ ssh -J arnold nuc 'sudo pkg install -y memcached'
 # memcached 1.6.41 now in /usr/local/bin/memcached
 ```
 
-For the riak binary, lamdb is at v2.3.0 GA on local; the lamdb
-path-dep makes the version transparent. nuc didn't have lamdb at
-`/scratch/dynomite-chaos/lamdb/`, so the rebuild failed with
-`failed to read .../noxu-db/Cargo.toml`. Pushed lamdb to nuc:
+For the riak binary, noxu is at v2.3.0 GA on local; the noxu
+path-dep makes the version transparent. nuc didn't have noxu at
+`/scratch/dynomite-chaos/noxu/`, so the rebuild failed with
+`failed to read .../noxu-db/Cargo.toml`. Pushed noxu to nuc:
 
 ```sh
 rsync -az --delete --exclude=target --exclude=.git \
     -e 'ssh -J arnold' \
-    ~/ws/lamdb/ \
-    nuc:/scratch/dynomite-chaos/lamdb/
+    ~/ws/noxu/ \
+    nuc:/scratch/dynomite-chaos/noxu/
 ```
 
 Then rebuilt natively on nuc:
@@ -82,8 +82,8 @@ That's a 1-2 hour follow-up; deferred so we can run pass-7 first.
 
 ## Lamdb v2.3.0 note
 
-While probing nuc, observed lamdb is at `4bd2bd7 merge: v2.3.0
--- Wave 10 polish`. Local ws/lamdb is also at 2.3.0. Path-deps
+While probing nuc, observed noxu is at `4bd2bd7 merge: v2.3.0
+-- Wave 10 polish`. Local ws/noxu is also at 2.3.0. Path-deps
 make this transparent; the workspace Cargo.lock will track the
 version label on the next commit that touches it.
 
@@ -91,5 +91,5 @@ dynomite tests under v2.3.0:
 - 1591 nextest workspace passing
 - All loom tests passing (throttle-core, hashtree, sup,
   loom-tests)
-- dyn-riak: 444 tests
+- dyniak: 444 tests
 - dynomited (riak feature): 90 tests

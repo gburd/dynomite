@@ -12,13 +12,13 @@ agent having to rederive the architecture.
 
 > **2026-05-24 update**: per operator direction, the Riak protocol
 > modules and the `NoxuDatastore` bridge live in a dedicated workspace
-> member at `crates/dyn-riak/` rather than under `crate::dynomite`.
+> member at `crates/dyniak/` rather than under `crate::dynomite`.
 > The dynomite engine remains a pure substrate. Where this document
 > uses paths like `crate::proto::riak::*` or `crate::storage::*`,
-> read them as `dyn_riak::proto::*` and `dyn_riak::datastore::*`.
-> The `crates/dyn-riak/` v0.0.1 slice (Ping + Get + Put + Del PBC
+> read them as `dyniak::proto::*` and `dyniak::datastore::*`.
+> The `crates/dyniak/` v0.0.1 slice (Ping + Get + Put + Del PBC
 > surface, plus the `noxu`-gated `NoxuDatastore`) landed under
-> `docs/journal/2026-05-24-dyn-riak-scaffold.md`.
+> `docs/journal/2026-05-24-dyniak-scaffold.md`.
 
 ---
 
@@ -230,7 +230,7 @@ the `riak-storage` feature gate in M1).
 
 ### 3.1 Noxu surface we use
 
-From `crates/noxu-db/src/lib.rs` (`/home/gburd/ws/lamdb`):
+From `crates/noxu-db/src/lib.rs` (`/home/gburd/ws/noxu`):
 
 * `Environment::open(EnvironmentConfig)` - the per-data-directory ACID
   transactional environment.
@@ -483,7 +483,7 @@ focused worker agent.
 ### 4.9 Authentication
 
 * **HTTP basic + cert auth**: `tokio-rustls` for TLS termination
-  (already in lamdb's dep graph as `rustls`; we promote it to
+  (already in noxu's dep graph as `rustls`; we promote it to
   workspace dep behind the `riak-storage` feature). HTTP basic is a
   trivial header parse. Cert auth uses the rustls peer cert chain
   passed into a configured `AuthProvider` trait.
@@ -626,27 +626,27 @@ Two files:
 
 **Workspace `Cargo.toml`**: added 13 path entries under
 `[workspace.dependencies]`, all pointing at
-`../lamdb/crates/noxu-*`. The complete set is the closure required
+`../noxu/crates/noxu-*`. The complete set is the closure required
 to compile `noxu-db`:
 
 ```toml
-noxu-db = { path = "../lamdb/crates/noxu-db" }
-noxu-cleaner = { path = "../lamdb/crates/noxu-cleaner" }
-noxu-config = { path = "../lamdb/crates/noxu-config" }
-noxu-dbi = { path = "../lamdb/crates/noxu-dbi" }
-noxu-engine = { path = "../lamdb/crates/noxu-engine" }
-noxu-evictor = { path = "../lamdb/crates/noxu-evictor" }
-noxu-latch = { path = "../lamdb/crates/noxu-latch" }
-noxu-log = { path = "../lamdb/crates/noxu-log" }
-noxu-recovery = { path = "../lamdb/crates/noxu-recovery" }
-noxu-sync = { path = "../lamdb/crates/noxu-sync" }
-noxu-tree = { path = "../lamdb/crates/noxu-tree" }
-noxu-txn = { path = "../lamdb/crates/noxu-txn" }
-noxu-util = { path = "../lamdb/crates/noxu-util" }
+noxu-db = { path = "../noxu/crates/noxu-db" }
+noxu-cleaner = { path = "../noxu/crates/noxu-cleaner" }
+noxu-config = { path = "../noxu/crates/noxu-config" }
+noxu-dbi = { path = "../noxu/crates/noxu-dbi" }
+noxu-engine = { path = "../noxu/crates/noxu-engine" }
+noxu-evictor = { path = "../noxu/crates/noxu-evictor" }
+noxu-latch = { path = "../noxu/crates/noxu-latch" }
+noxu-log = { path = "../noxu/crates/noxu-log" }
+noxu-recovery = { path = "../noxu/crates/noxu-recovery" }
+noxu-sync = { path = "../noxu/crates/noxu-sync" }
+noxu-tree = { path = "../noxu/crates/noxu-tree" }
+noxu-txn = { path = "../noxu/crates/noxu-txn" }
+noxu-util = { path = "../noxu/crates/noxu-util" }
 ```
 
-The user clarified that Noxu lives at `../lamdb/crates/noxu-*`, not at
-`../noxu/`; the actual lamdb checkout was inspected to determine the
+The user clarified that Noxu lives at `../noxu/crates/noxu-*`, not at
+`../noxu/`; the actual noxu checkout was inspected to determine the
 crate set. `noxu-bind`, `noxu-collections`, `noxu-persist`,
 `noxu-rep`, `noxu-xa`, and `noxu-observe` are intentionally
 **excluded**: they are higher-level conveniences that we do not need
@@ -699,10 +699,10 @@ contains the minimal diff and the verification log.
 
 ### 6.4 Risks
 
-* The lamdb checkout pins `rust-toolchain.toml = 1.95`; our pin is
+* The noxu checkout pins `rust-toolchain.toml = 1.95`; our pin is
   `1.90`. The noxu-* crates use edition 2024, which is fine on
   rustc 1.85+. This is **not** a build break today (1.90 > 1.85),
-  but the lamdb tree may add 1.95-only language features at any
+  but the noxu tree may add 1.95-only language features at any
   time. Mitigation: track the upstream pin and bump our toolchain
   to match when M1 starts (open question 8.5).
 * Path deps mean a `cargo publish` of the dynomite crate would
@@ -819,7 +819,7 @@ parallel workers and the parallelism noted above: ~10-14 weeks.
 ### Cross-team coordination items
 
 These are Noxu features Dynomite needs that may not exist yet; each
-needs an issue filed against the lamdb tracker:
+needs an issue filed against the noxu tracker:
 
 1. **Compaction throttle knob** (Section 3.5 / Section 8 #3).
 2. **Per-database open / close from a long-lived process under
@@ -881,7 +881,7 @@ confidence label and the smallest decision unit needed to resolve it.
 
 * Section 3.5 references a `compaction_throttle_mb_per_sec` knob.
   We have not confirmed Noxu exposes one.
-* **Confidence**: medium. The lamdb engine appears log-structured
+* **Confidence**: medium. The noxu engine appears log-structured
   and self-managing; the knob may not exist.
 * **Recommendation**: M1 worker files a Noxu issue and either
   surfaces the existing knob or requests one. Until then, document
@@ -899,14 +899,14 @@ confidence label and the smallest decision unit needed to resolve it.
 * **Recommendation**: Rust closures + named built-ins for v0;
   WASM-fitting-host as a deferred follow-on (out of scope here).
 
-### 8.5 Toolchain alignment with lamdb
+### 8.5 Toolchain alignment with noxu
 
-* lamdb pins `1.95`, dynomite pins `1.90`. Today both build under
-  `1.90` because nothing in lamdb actually requires `1.95`. Tomorrow
+* noxu pins `1.95`, dynomite pins `1.90`. Today both build under
+  `1.90` because nothing in noxu actually requires `1.95`. Tomorrow
   they might.
 * **Confidence**: high (the risk is real; the timing is unknown).
 * **Recommendation**: when M1 starts, bump dynomite's
-  `rust-toolchain.toml` to match lamdb's. AGENTS.md gets an entry
+  `rust-toolchain.toml` to match noxu's. AGENTS.md gets an entry
   noting the rationale.
 
 ### 8.6 Dual-protocol ports

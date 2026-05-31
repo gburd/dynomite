@@ -333,13 +333,13 @@ impl Server {
         // so re-opening it would fail with
         // `Environment locked`.
         #[cfg(feature = "riak")]
-        let noxu_shared: Option<Arc<dyn_riak::datastore::NoxuDatastore>> =
+        let noxu_shared: Option<Arc<dyniak::datastore::NoxuDatastore>> =
             if backend_data_store == dynomite::conf::DataStore::Noxu {
                 let path = conf_pool.noxu_path.clone().ok_or(ServerError::BadConfig {
                     field: "noxu_path",
                     reason: "data_store: noxu requires a non-empty 'noxu_path:' directive".into(),
                 })?;
-                match dyn_riak::datastore::NoxuDatastore::open_in(&path) {
+                match dyniak::datastore::NoxuDatastore::open_in(&path) {
                     Ok(ds) => Some(Arc::new(ds)),
                     Err(e) => {
                         return Err(ServerError::BadConfig {

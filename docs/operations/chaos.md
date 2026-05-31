@@ -52,8 +52,8 @@ cluster should serve:
 
 `riak` mode is a deliberate placeholder: the driver and host
 launcher both emit a clear warning ("Riak mode requires the
-dyn-riak crate, not yet available; falling back to redis") and
-then run as `redis`. When the `dyn-riak` crate lands and
+dyniak crate, not yet available; falling back to redis") and
+then run as `redis`. When the `dyniak` crate lands and
 dynomited grows native Riak protocol support, this mode will
 start `riak-kv` and emit Riak-protobuf traffic; until then the
 flag exists so callers can wire `MODE=riak` into their tooling

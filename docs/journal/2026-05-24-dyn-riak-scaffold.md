@@ -1,11 +1,11 @@
-# 2026-05-24 -- dyn-riak crate scaffold (v0.0.1)
+# 2026-05-24 -- dyniak crate scaffold (v0.0.1)
 
-Branch: `stage/dyn-riak-scaffold`
+Branch: `stage/dyniak-scaffold`
 Commit base: `97e9c9d` (main: "merge: stage/encoding-scaffold into main")
 
 ## What landed
 
-The first usable slice of `crates/dyn-riak`. The crate is the home for
+The first usable slice of `crates/dyniak`. The crate is the home for
 the Riak-compatible protocol surface called out in
 `docs/riak-compat-plan.md` and the architectural follow-up in
 `docs/riak-comparison.md`. Operator direction (recorded in the brief
@@ -15,7 +15,7 @@ dynomite engine remains a pure substrate.
 
 The slice ships:
 
-* `crates/dyn-riak/Cargo.toml` -- workspace member, version 0.0.1.
+* `crates/dyniak/Cargo.toml` -- workspace member, version 0.0.1.
   Depends on `dynomite`, `dyn-encoding`, `prost`, `bytes`,
   `serde`, `serde_json`, `thiserror`, `tracing`, and `tokio`. The
   `noxu` feature (off by default) pulls in `noxu-db`.
@@ -53,7 +53,7 @@ The slice ships:
 ### Embedded vs sidecar
 
 The default deployment posture is **in-process**: `dynomited` will
-(in a follow-up slice) link `dyn-riak` behind a `--features riak`
+(in a follow-up slice) link `dyniak` behind a `--features riak`
 switch and instantiate the Riak listener alongside the existing
 Redis/Memcached listeners. Trade-offs considered:
 
@@ -71,7 +71,7 @@ support that requires no additional code in this crate.
 ### Where Riak code lives
 
 Per operator direction, the brief explicitly moves the Riak protocol
-modules out of `crate::dynomite` and into `crates/dyn-riak/`. The
+modules out of `crate::dynomite` and into `crates/dyniak/`. The
 `dynomite` engine stays a pure substrate that knows nothing about
 Riak. Cross-cutting hooks already exposed by `dynomite::embed`
 (`Datastore`, `Protocol::Custom`, `Server`, `ServerBuilder`) are
@@ -123,7 +123,7 @@ across PBC (which always uses `application/x-protobuf`) and HTTP
 ### Noxu feature gate
 
 `noxu` is off by default. The crate compiles cleanly without the
-`lamdb` checkout next door. Enabling the feature pulls in `noxu-db`
+`noxu` checkout next door. Enabling the feature pulls in `noxu-db`
 through the workspace dep entries the previous Cargo plumbing stage
 added (`docs/riak-compat-plan.md` Section 6). The `NoxuDatastore`
 unit tests exercise an in-environment `tempfile::TempDir`, so they
@@ -132,8 +132,8 @@ run against a real Noxu environment but leave nothing on disk.
 ## Verification
 
 * `cargo build --workspace --all-targets --locked` -- clean.
-* `cargo build --workspace --features dyn-riak/noxu --all-targets --locked` -- clean.
-* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyn-riak -- --check` -- clean.
+* `cargo build --workspace --features dyniak/noxu --all-targets --locked` -- clean.
+* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyniak -- --check` -- clean.
 * `cargo clippy --workspace --all-targets --all-features -- -D warnings` -- clean.
 * `cargo nextest run --workspace` (no-fail-fast): 749 -> 774
   (+25 tests). With `--all-features`: 782 (+33 over baseline).
@@ -153,7 +153,7 @@ run against a real Noxu environment but leave nothing on disk.
 * CRDT semantics (counters, sets, maps, registers, HLL).
 * MapReduce pipes.
 * Tictac AAE.
-* Wiring `dyn-riak` into `dynomited` behind a `--features riak`
+* Wiring `dyniak` into `dynomited` behind a `--features riak`
   switch. The crate is intentionally not yet a default workspace
   dep of `dynomited`; operators opt in.
 * Full `RiakObject` schema (vector clocks, siblings, content-type,
@@ -168,7 +168,7 @@ run against a real Noxu environment but leave nothing on disk.
 * `docs/riak-compat-plan.md` Section 1 still lists the protocol
   modules as living inside `crate::dynomite`. Section 14 (a small
   pointer note) was added in this commit; the older sections should
-  be reviewed and updated when the next dyn-riak slice lands.
+  be reviewed and updated when the next dyniak slice lands.
 * No `dynomite::embed::Datastore` extension was made. If a future
   slice wants Riak K/V methods on the trait itself, that requires a
   journal entry under `api-change:` per AGENTS.md Section 13.

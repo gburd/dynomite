@@ -21,22 +21,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: clone lamdb (noxu) sibling-checkout
-        # The workspace's [workspace.dependencies] declares
-        # noxu-* path-deps at ../lamdb/crates/<crate>. Cargo
-        # validates these paths during `cargo metadata`, so
-        # we need them present even when noxu features are
-        # disabled. The Codeberg `gregburd/noxu` repo is
-        # public; we clone it sibling-style as `lamdb` to
-        # match the local development layout.
-        # --recurse-submodules pulls in the quoracle
-        # submodule that noxu-rep depends on.
-        run: |
-          git clone --depth 1 https://codeberg.org/gregburd/noxu.git ../lamdb
-          # Quoracle has its own nested submodule reference
-          # that .gitmodules omits; init only the top-level
-          # submodule we need without recursing.
-          ( cd ../lamdb && git submodule update --init --depth 1 crates/noxu-rep/quoracle )
       - name: install build prerequisites
         run: |
           sudo apt-get update
@@ -50,10 +34,10 @@ jobs:
       - name: rustfmt
         run: |
           # Explicit -p list because `cargo fmt --all` reaches
-          # into the lamdb path-deps under some workspace shapes.
+          # into the noxu path-deps under some workspace shapes.
           cargo fmt \
               -p dynomite -p dynomited -p dyn-hash-tool \
-              -p dyn-encoding -p dyn-riak -p dyn-admin \
+              -p dyn-encoding -p dyniak -p dyn-admin \
               -p dyntext -p dynvec -p gen-fsm -p hashtree \
               -p loom-tests -p sup -p throttle-core \
               -- --check

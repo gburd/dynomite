@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use dyn_riak::proto::pb::{MessageCode, RpbPingReq, RpbPingResp};
+use dyniak::proto::pb::{MessageCode, RpbPingReq, RpbPingResp};
 
 use crate::client::PbcClient;
 use crate::error::AdminError;

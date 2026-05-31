@@ -467,7 +467,7 @@ impl ServerHandle {
     ///
     /// Returned as `Arc` so embedders can hold a long-lived
     /// reference and pass it across crate boundaries (notably to
-    /// `dyn-riak`, which publishes AAE start/complete events).
+    /// `dyniak`, which publishes AAE start/complete events).
     #[must_use]
     pub fn events(&self) -> Arc<EventManager> {
         Arc::clone(&self.inner.events)

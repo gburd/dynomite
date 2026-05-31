@@ -1,8 +1,8 @@
-# dyn-riak: streaming list-buckets / list-keys (PBC + HTTP)
+# dyniak: streaming list-buckets / list-keys (PBC + HTTP)
 
 Date: 2026-05-24
-Branch: `stage/dyn-riak-streaming-lists`
-Scope: `crates/dyn-riak`, `crates/dynomite/src/embed/hooks.rs`, root
+Branch: `stage/dyniak-streaming-lists`
+Scope: `crates/dyniak`, `crates/dynomite/src/embed/hooks.rs`, root
 `Cargo.toml`.
 
 ## Problem
@@ -136,9 +136,9 @@ Two crates added at the workspace level:
 
 - `futures-core = "0.3"` -- consumed by `dynomite` for the
   `Stream` trait referenced in `DatastoreByteStream` and by
-  `dyn-riak` to type-annotate the boxed stream returns.
+  `dyniak` to type-annotate the boxed stream returns.
 - `futures-util = { version = "0.3", default-features = false,
-  features = ["std"] }` -- consumed by `dyn-riak` for the
+  features = ["std"] }` -- consumed by `dyniak` for the
   `unfold` and `once` stream constructors and the `StreamExt::next`
   method. Both crates are already pulled in transitively (via
   `opentelemetry`, `http-body-util`, `tokio-util`); making the
@@ -151,43 +151,43 @@ Two crates added at the workspace level:
 - `crates/dynomite/Cargo.toml` -- + `futures-core`.
 - `crates/dynomite/src/embed/hooks.rs` -- trait additions and
   `MemoryDatastore` listing index.
-- `crates/dyn-riak/Cargo.toml` -- + `futures-core`,
+- `crates/dyniak/Cargo.toml` -- + `futures-core`,
   `futures-util`.
-- `crates/dyn-riak/src/server.rs` -- `process_frame` returns a
+- `crates/dyniak/src/server.rs` -- `process_frame` returns a
   `FrameStream`; new `handle_list_buckets`, `handle_list_keys`,
   `buckets_to_frames`, `keys_to_frames`. Connection driver pumps
   the stream.
-- `crates/dyn-riak/src/proto/http/routes.rs` -- `ResponseBody` is
+- `crates/dyniak/src/proto/http/routes.rs` -- `ResponseBody` is
   now `UnsyncBoxBody<Bytes, Infallible>`; new
   `list_buckets_response`, `list_keys_response`,
   `streaming_list_response`, `json_array_chunks`,
   `length_prefixed_chunks`. `not_implemented_response` removed
   (no callers).
-- `crates/dyn-riak/src/proto/http/mod.rs` -- updated module-level
+- `crates/dyniak/src/proto/http/mod.rs` -- updated module-level
   docs.
-- `crates/dyn-riak/tests/pbc_round_trip.rs` -- migrated
+- `crates/dyniak/tests/pbc_round_trip.rs` -- migrated
   `exchange_list_*_unsupported` to `exchange_list_*_empty`; added
   `pbc_list_keys_streams_multiple_frames`.
-- `crates/dyn-riak/tests/http_round_trip.rs` -- listing branch
+- `crates/dyniak/tests/http_round_trip.rs` -- listing branch
   now seeds the index, asserts chunked encoding, and parses the
   decoded array.
 
 ## Tests
 
-New unit tests on `dyn-riak::server`:
+New unit tests on `dyniak::server`:
 
 - `list_buckets_empty_yields_one_terminator_frame`
 - `list_keys_chunks_at_chunk_size` (1000 keys -> 5 frames)
 - `list_buckets_streams_multiple_buckets` (512 -> 3 frames)
 - `list_keys_against_unsupported_datastore_yields_error_frame`
 
-New unit tests on `dyn-riak::proto::http::routes`:
+New unit tests on `dyniak::proto::http::routes`:
 
 - `list_keys_streams_chunked_json_array`
 - `list_buckets_streams_chunked_json_array`
 - `list_buckets_empty_streams_empty_json_array`
 
-Migrated unit tests on `dyn-riak::proto::http::routes`:
+Migrated unit tests on `dyniak::proto::http::routes`:
 
 - `list_keys_returns_501` -> deleted (route now streams).
 - `list_buckets_returns_501` -> deleted.
@@ -215,7 +215,7 @@ cargo build --workspace --all-targets        # clean
 cargo clippy --workspace --all-targets --all-features -- -D warnings  # clean
 cargo nextest run --workspace                # 1012 passed, 4 skipped
 cargo test --doc -p dynomite                 # all hooks doctests pass
-cargo test --doc -p dyn-riak                 # 14 passed
+cargo test --doc -p dyniak                 # 14 passed
 ```
 
 Pre-change baseline (HEAD~1): nextest reported 1004 tests, all

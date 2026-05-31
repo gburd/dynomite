@@ -132,10 +132,10 @@ Reuse what dynomite already has. No new code:
 - k-NN queries: BROADCAST to all primary peers covering the
   table's partition set, gather top-K from each, merge
   (the gen-fsm coordinator we already have in
-  dyn-riak::handoff::fsm pattern, but new in
+  dyniak::handoff::fsm pattern, but new in
   dynomite::vector::query_fsm)
 - AAE: vector tables participate in AAE just like any other
-  data; the existing dyn-riak AAE handles them.
+  data; the existing dyniak AAE handles them.
 
 ## What to delete vs keep in the existing crates/dynvecdb/
 
@@ -208,15 +208,15 @@ The fold is the right call. Schedule:
 ## Note on Noxu crate publication
 
 `noxu-*` is on crates.io but at `0.0.0` placeholder versions
-(name squats from the lamdb maintainer). Only
+(name squats from the noxu maintainer). Only
 `noxu-persist-derive` has a real published version (3.0.0).
-Real Noxu is at v2.4.2 in the lamdb workspace; we use it via
-path-deps from `~/ws/lamdb/crates/noxu-*`. CI clones lamdb
+Real Noxu is at v2.4.2 in the noxu workspace; we use it via
+path-deps from `~/ws/noxu/crates/noxu-*`. CI clones noxu
 sibling-checkout to make path-deps work.
 
 If/when noxu-* gets real crates.io releases, switching from
 path-deps to versioned deps is a one-line `Cargo.toml` change.
-The CI lamdb-clone step can then be removed.
+The CI noxu-clone step can then be removed.
 
 For now: status quo on Noxu. The vector fold doesn't depend
 on Noxu being on crates.io.

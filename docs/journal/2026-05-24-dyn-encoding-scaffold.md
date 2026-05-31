@@ -3,7 +3,7 @@
 ## Task
 
 Stand up a new `dyn-encoding` crate to host the per-request wire-format
-codec abstraction the (forthcoming) `dyn-riak` crate will consume.
+codec abstraction the (forthcoming) `dyniak` crate will consume.
 Ship the trait surface plus three baseline implementations: protobuf,
 JSON, and CBOR. Defer FlatBuffers, Cap'n Proto, Bebop, and BSON.
 
@@ -163,7 +163,7 @@ follow.
 * Backend: `capnp` + `capnpc` (BSD-2-Clause).
 * Generated code: `capnpc` produces `*_capnp.rs` from `.capnp`
   schemas. Same separation as FlatBuffers: the build-script lives
-  in `dyn-riak`.
+  in `dyniak`.
 * Bound on `register::<T>()`: `T: WireValue` plus
   `capnp::traits::Owned` and a pair of converter functions
   (`from_capnp_reader: <reader> -> T`,
@@ -206,7 +206,7 @@ follow.
 
 * The codec trait is monomorphic in the value -- one
   `WireTypeId -> closure` mapping per type. For the Riak request
-  set this is fine (a few dozen message types). If `dyn-riak` ever
+  set this is fine (a few dozen message types). If `dyniak` ever
   needs streaming or chunked encoding (multi-fragment responses),
   we will extend `WireCodec` with `encode_stream` /
   `decode_stream` methods rather than reshape the request/response
@@ -220,5 +220,5 @@ follow.
 
 ## Status
 
-Scaffold ready for review. `dyn-riak` worker can take a hard
+Scaffold ready for review. `dyniak` worker can take a hard
 dependency on `dyn-encoding` v0.0.1 immediately.

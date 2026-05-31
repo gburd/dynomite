@@ -5,7 +5,7 @@ Cluster admin CLI for the Dynomite Rust port. Modelled on Riak's
 asks structured questions of.
 
 `dyn-admin` is a thin wrapper around the existing protocol surfaces
-shipped by `dyn-riak` (PBC) and `dynomite` (the `/stats` and
+shipped by `dyniak` (PBC) and `dynomite` (the `/stats` and
 `/metrics` HTTP endpoints). It does not run a daemon and does not
 hold any state of its own.
 
@@ -47,8 +47,8 @@ PONG from 127.0.0.1:8087 (1.234 ms)
 # Identity + stats summary.
 $ dyn-admin status
 node: 127.0.0.1:8087
-server_node: dyn-riak
-server_version: dyn-riak 0.0.1
+server_node: dyniak
+server_version: dyniak 0.0.1
 engine_source: node-a
 engine_version: 0.0.1
 datacenter: dc1
@@ -116,7 +116,7 @@ on this node`.
         |
    commands/<subcommand>.rs
         |
-   client::PbcClient        <- wraps dyn-riak::proto::pb::framer
+   client::PbcClient        <- wraps dyniak::proto::pb::framer
    client::http_get         <- 60-line tokio HTTP/1.1 GET
         |
    PBC port (8087)        Stats port (22222)

@@ -3,7 +3,7 @@
 //! Two surfaces:
 //!
 //! * [`PbcClient`] -- an async PBC client that wraps the framer
-//!   shipped in [`dyn_riak::proto::pb::framer`]. It encodes a
+//!   shipped in [`dyniak::proto::pb::framer`]. It encodes a
 //!   `prost::Message` request, frames it under the requested message
 //!   code, reads the response frame, and either decodes the body as
 //!   the expected response type or surfaces an
@@ -20,7 +20,7 @@ use prost::Message;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use dyn_riak::proto::pb::{read_frame, write_frame, Frame, MessageCode, RpbErrorResp};
+use dyniak::proto::pb::{read_frame, write_frame, Frame, MessageCode, RpbErrorResp};
 
 use crate::error::AdminError;
 

@@ -125,7 +125,7 @@ local-peer skipping, pre-set shutdown short-circuit.
 
 ```
 cargo build --workspace --all-targets --locked            OK
-cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyn-riak -p dyn-admin -- --check  OK
+cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyniak -p dyn-admin -- --check  OK
 cargo clippy --workspace --all-targets --all-features -- -D warnings  OK
 cargo nextest run --workspace                             1125 passed (was 1111)
 cargo test --doc --workspace                              613 passed

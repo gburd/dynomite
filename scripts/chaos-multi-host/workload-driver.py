@@ -10,7 +10,7 @@ dynomited instance. The selected mode determines:
                            ``riak.pbc_listen`` address; the
                            upstream ``data_store`` is irrelevant
                            because the request flows through
-                           dyn-riak's MemoryDatastore (or whatever
+                           dyniak's MemoryDatastore (or whatever
                            Datastore the binary was wired with)
                            rather than the Redis/memcache
                            dispatcher.
@@ -27,7 +27,7 @@ mode).
 The Riak PBC encoder is hand-rolled on top of the stdlib
 ``struct`` module so the driver has no third-party Python
 dependencies. Only the four operations Ping / Get / Put / Del are
-supported; that is enough to drive load against dyn-riak and
+supported; that is enough to drive load against dyniak and
 exercise the framer, codec, and dispatcher under chaos.
 """
 
@@ -749,11 +749,11 @@ MEMCACHE_WORKLOADS = [
 # four operations the driver supports, only wire types 0 and 2
 # are needed.
 #
-# Field tags below match the dyn-riak crate's
+# Field tags below match the dyniak crate's
 # ``proto::pb::messages`` schema:
 #   RpbGetReq:   bucket=1, key=2          (both bytes)
 #   RpbPutReq:   bucket=1, key=2, value=4 (all bytes)
-#                The dyn-riak v0 surface flattens the canonical
+#                The dyniak v0 surface flattens the canonical
 #                Riak ``RpbContent.value`` (nested at upstream
 #                tag 3) to a top-level ``value`` at tag 4. That
 #                is the wire shape the server decodes; matching

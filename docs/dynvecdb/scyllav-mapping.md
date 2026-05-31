@@ -51,7 +51,7 @@ through CQL against the `dynvecdb` MVP. Status values:
 | Token-ring routing                       | mvp-shipped   | `dynomite::cluster::vnode` exists; HTTP layer not wired through it yet. |
 | Quorum reads / writes                    | mvp-shipped   | Engine supports W of N; the search coordinator handles fanout. |
 | Cross-DC replication                     | mvp-shipped   | Inherited from `dynomite::cluster`. |
-| Active anti-entropy                      | mvp-shipped   | `dyn-riak` AAE works for KV; vector AAE plugs in via the same machinery. |
+| Active anti-entropy                      | mvp-shipped   | `dyniak` AAE works for KV; vector AAE plugs in via the same machinery. |
 | Hinted handoff                           | mvp-shipped   | `dynomite::cluster::hints`. |
 
 ## Operational surface

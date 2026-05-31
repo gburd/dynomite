@@ -19,7 +19,7 @@ All operations target the bucket `chaos`. The per-second mix is
 30% Ping, 30% Put (random 8-char key, random 32-byte value),
 30% Get, 10% Del. Get and Del each pick from a recently-put key
 list with 50% probability so the workload exercises both hit and
-miss paths through the dyn-riak `Datastore`.
+miss paths through the dyniak `Datastore`.
 
 The `start-host.sh` Riak placeholder (which previously logged a
 warning and fell back to redis) is replaced with real wiring that
@@ -35,7 +35,7 @@ start-args.
 
 The driver has no third-party Python dependencies. Each PBC
 frame is `4-byte BE length + 1-byte code + body` exactly per
-`crates/dyn-riak/src/proto/pb/framer.rs`. Inside the body, every
+`crates/dyniak/src/proto/pb/framer.rs`. Inside the body, every
 field is `(field_number << 3) | wire_type` varint-tagged:
 
 * wire type 0 = varint (uint32, bool); used here for
@@ -43,7 +43,7 @@ field is `(field_number << 3) | wire_type` varint-tagged:
 * wire type 2 = length-delimited (bytes, string, embedded
   message); used here for every bucket/key/value field.
 
-Field tags match the dyn-riak crate's `proto::pb::messages`
+Field tags match the dyniak crate's `proto::pb::messages`
 schema:
 
 | Message     | Fields                                |
@@ -58,16 +58,16 @@ schema:
 
 Upstream Riak places the object value inside a nested
 `RpbContent` at `RpbPutReq.content` (field tag 3), with the
-opaque bytes at `RpbContent.value` (field tag 1). The dyn-riak
+opaque bytes at `RpbContent.value` (field tag 1). The dyniak
 v0 surface flattens this to a single top-level
 `RpbPutReq.value: bytes` at field tag 4 (see
-`crates/dyn-riak/src/proto/pb/messages.rs` and the parity table
+`crates/dyniak/src/proto/pb/messages.rs` and the parity table
 in `docs/parity.md` for the rationale). The chaos workload driver
-matches the dyn-riak wire shape -- field 4 bytes -- because the
+matches the dyniak wire shape -- field 4 bytes -- because the
 server is the system under test; it must be able to decode every
 frame the driver emits. The user-facing brief described the
 upstream-Riak layout; matching the in-tree server schema is the
-deviation that keeps the smoke loop honest. If the dyn-riak
+deviation that keeps the smoke loop honest. If the dyniak
 follow-up slice replaces the flat `value` field with a nested
 `RpbContent` at tag 3, this driver needs a single corresponding
 edit in `encode_rpb_put_req`.
@@ -82,7 +82,7 @@ which `dynomited`'s `--features riak` startup wiring backs with
 the in-process `MemoryDatastore` whenever no `noxu_path` is
 configured. That keeps the chaos infra (redis bring-up, redis
 bouncer in the chaos injector, etc.) working without changes,
-while the PBC traffic flows through dyn-riak's listener and the
+while the PBC traffic flows through dyniak's listener and the
 in-process datastore. Side effect: bouncing redis in `MODE=riak`
 does not perturb the PBC workload (redis is no longer on the
 PBC request path); the chaos test in this mode primarily exercises

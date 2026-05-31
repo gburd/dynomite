@@ -1,7 +1,7 @@
-# dyn-riak MapReduce Wasm phase fitting
+# dyniak MapReduce Wasm phase fitting
 
 Date: 2026-05-24
-Branch: `stage/dyn-riak-mapreduce-wasm`
+Branch: `stage/dyniak-mapreduce-wasm`
 Status: READY_FOR_REVIEW
 
 ## Scope
@@ -12,9 +12,9 @@ variant from a typed-not-implemented placeholder
 Operators can now ship user-defined map and reduce phases as Wasm
 modules and reference them from a MapReduce job.
 
-The work lands behind a new `wasm` cargo feature on `dyn-riak`,
+The work lands behind a new `wasm` cargo feature on `dyniak`,
 off by default, so the Wasm runtime is paid for only by operators
-that opt in. The `--features dyn-riak/wasm` test suite grows by
+that opt in. The `--features dyniak/wasm` test suite grows by
 ten cases (eight unit, two integration); the no-feature suite
 grows by zero.
 
@@ -155,7 +155,7 @@ Workspace nextest counts:
 | Profile                         | Count   |
 |---------------------------------|---------|
 | `cargo nextest run --workspace` | 1006 (unchanged) |
-| `... --features dyn-riak/wasm`  | 1016 (+10) |
+| `... --features dyniak/wasm`  | 1016 (+10) |
 | `... --all-features`            | 1033     |
 
 The eight unit tests in `mapreduce::wasm::tests` cover:
@@ -193,20 +193,20 @@ The two integration tests in `tests/mapreduce_wasm.rs` are
 ## Files touched
 
 New:
-* `crates/dyn-riak/src/mapreduce/wasm.rs`
-* `crates/dyn-riak/tests/mapreduce_wasm.rs`
+* `crates/dyniak/src/mapreduce/wasm.rs`
+* `crates/dyniak/tests/mapreduce_wasm.rs`
 * `docs/journal/2026-05-24-mapreduce-wasm.md` (this file)
 
 Modified (additive):
 * `Cargo.toml` (workspace `wasmtime = "26"` entry, no default
   features, opt-in `cranelift,runtime,wat`).
-* `crates/dyn-riak/Cargo.toml` (new `wasm` feature gating
+* `crates/dyniak/Cargo.toml` (new `wasm` feature gating
   `dep:wasmtime` + `dep:ciborium`).
-* `crates/dyn-riak/src/mapreduce/mod.rs` (re-exports
+* `crates/dyniak/src/mapreduce/mod.rs` (re-exports
   `run_job_with_wasm`, `WasmHook`, and the feature-gated
   `WasmLimits` / `WasmModuleStore` / `WasmStoreError` /
   `load_modules_from_config`).
-* `crates/dyn-riak/src/mapreduce/executor.rs`:
+* `crates/dyniak/src/mapreduce/executor.rs`:
   * Added `WasmHook` trait.
   * Added `run_job_with_wasm` entry point; `run_job` now
     delegates to it with `None`.
@@ -221,14 +221,14 @@ Modified (additive):
 
 ```
 cargo build --workspace --all-targets --locked          OK
-cargo build -p dyn-riak --features wasm                 OK
-cargo fmt -p dyn-riak                                   OK
+cargo build -p dyniak --features wasm                 OK
+cargo fmt -p dyniak                                   OK
 cargo clippy --workspace --all-targets --all-features \
           -- -D warnings                                OK
 cargo nextest run --workspace                           OK (1006 + 4 skipped)
-cargo nextest run --workspace --features dyn-riak/wasm  OK (1016 + 4 skipped)
+cargo nextest run --workspace --features dyniak/wasm  OK (1016 + 4 skipped)
 cargo nextest run --workspace --all-features            OK (1033 + 4 skipped)
-cargo test --doc -p dyn-riak --features wasm            OK
+cargo test --doc -p dyniak --features wasm            OK
 scripts/check_ascii.sh                                  OK
 scripts/check_no_todos.sh                               OK
 scripts/check_no_port_comments.sh                       OK

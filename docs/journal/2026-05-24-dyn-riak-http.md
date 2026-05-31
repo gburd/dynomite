@@ -1,33 +1,33 @@
-# 2026-05-24 -- dyn-riak HTTP gateway
+# 2026-05-24 -- dyniak HTTP gateway
 
-Branch: `stage/dyn-riak-http`
-Commit base: `main` (after `2026-05-24-dyn-riak-scaffold`)
+Branch: `stage/dyniak-http`
+Commit base: `main` (after `2026-05-24-dyniak-scaffold`)
 
 ## What landed
 
 The HTTP sibling of the Riak PBC server already shipping in
-`crates/dyn-riak/src/server.rs`. Operators can now front the same
+`crates/dyniak/src/server.rs`. Operators can now front the same
 [`dynomite::embed::Datastore`] with two transports without touching
 the substrate or duplicating per-op handlers.
 
 Files added:
 
-* `crates/dyn-riak/src/proto/http/mod.rs` -- public surface plus
+* `crates/dyniak/src/proto/http/mod.rs` -- public surface plus
   `serve_http(listener, datastore)`. One tokio task per accepted
   connection; per-conn errors are logged at `tracing::warn!` so a
   misbehaving client cannot drop the listener.
-* `crates/dyn-riak/src/proto/http/routes.rs` -- the route table,
+* `crates/dyniak/src/proto/http/routes.rs` -- the route table,
   per-route handlers, and the request-body collector. The route
   parser is a pure function that takes `(method, path, query)` and
   returns a typed `Route` enum. Per-route handlers translate each
   recognised request into a `Datastore::dispatch(Msg)` call in the
   same shape `server::handle_conn` uses on the PBC side.
-* `crates/dyn-riak/src/proto/http/content_type.rs` -- the
+* `crates/dyniak/src/proto/http/content_type.rs` -- the
   `select_codec(accept, content_type)` negotiation routine.
   Implements the slice of RFC 7231 Section 5.3 the gateway needs:
   comma-split, `q=` weights, `*/*` wildcard with content-type
   fallback, case-insensitive matching, parameter stripping.
-* `crates/dyn-riak/tests/http_round_trip.rs` -- end-to-end test
+* `crates/dyniak/tests/http_round_trip.rs` -- end-to-end test
   spinning up `serve_http` over a real `tokio::net::TcpListener` and
   driving Ping / Put / Get / Delete / list-keys over a raw
   `tokio::net::TcpStream`. Asserts the expected Riak HTTP status
@@ -37,13 +37,13 @@ Files added:
 
 Files appended (not rewritten):
 
-* `crates/dyn-riak/src/lib.rs` -- adds `pub use crate::proto::http::serve_http`
+* `crates/dyniak/src/lib.rs` -- adds `pub use crate::proto::http::serve_http`
   alongside the existing PBC re-exports. (rustfmt's
   `reorder_imports` reorders the three `pub use` lines
   alphabetically; the existing items are unchanged.)
-* `crates/dyn-riak/src/proto/mod.rs` -- adds `pub mod http;`
+* `crates/dyniak/src/proto/mod.rs` -- adds `pub mod http;`
   alongside `pub mod pb;`. Same alphabetical reordering applies.
-* `crates/dyn-riak/Cargo.toml` -- adds direct deps on `hyper`,
+* `crates/dyniak/Cargo.toml` -- adds direct deps on `hyper`,
   `hyper-util`, and `http-body-util`. No new entries in
   `workspace.dependencies`: every version is already pinned by
   another path in the workspace dep graph (OTel transport pulls
@@ -127,7 +127,7 @@ handlers can share a single per-op function.
 ## Verification
 
 * `cargo build --workspace --all-targets` -- clean.
-* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyn-riak -- --check` -- clean.
+* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyniak -- --check` -- clean.
 * `cargo clippy --workspace --all-targets --all-features -- -D warnings` -- clean.
 * `cargo nextest run --workspace` -- 808 / 808.
 * `cargo test --doc --workspace` -- 609 / 609.
@@ -149,7 +149,7 @@ handlers can share a single per-op function.
   line away once the dep graph picks up the matching feature
   flags; the `hyper` features section already lists `http1`
   only).
-* Wiring `dyn-riak`'s HTTP listener into `dynomited` behind the
+* Wiring `dyniak`'s HTTP listener into `dynomited` behind the
   same `--features riak` switch the PBC listener uses.
 
 ## Notes

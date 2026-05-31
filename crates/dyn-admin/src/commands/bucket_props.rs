@@ -1,5 +1,5 @@
 //! `dyn-admin bucket-props get|set` -- inspect and update a bucket's
-//! [`dyn_riak::proto::pb::RpbBucketProps`].
+//! [`dyniak::proto::pb::RpbBucketProps`].
 //!
 //! Two subcommands:
 //!
@@ -23,7 +23,7 @@ use std::fmt;
 use std::io::Write;
 use std::str::FromStr;
 
-use dyn_riak::proto::pb::{
+use dyniak::proto::pb::{
     MessageCode, RpbBucketProps, RpbGetBucketReq, RpbGetBucketResp, RpbSetBucketReq,
     RpbSetBucketResp, CHASH_KEYFUN_BUCKETONLY, CHASH_KEYFUN_CUSTOM, CHASH_KEYFUN_STD,
     REPLICATION_STRATEGY_SUCCESSORS, REPLICATION_STRATEGY_TOPOLOGY,

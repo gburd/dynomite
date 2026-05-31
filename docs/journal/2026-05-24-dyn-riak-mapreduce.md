@@ -1,12 +1,12 @@
-# dyn-riak MapReduce ("Pipes") -- v0.0.3 slice
+# dyniak MapReduce ("Pipes") -- v0.0.3 slice
 
 Date: 2026-05-24
-Branch: `stage/dyn-riak-mapreduce`
+Branch: `stage/dyniak-mapreduce`
 Status: READY_FOR_REVIEW
 
 ## Scope
 
-A first slice of Riak-style MapReduce ("pipes") for the `dyn-riak`
+A first slice of Riak-style MapReduce ("pipes") for the `dyniak`
 crate. Delivers:
 
 * `crate::mapreduce` -- the framework: job model, phase types,
@@ -20,7 +20,7 @@ crate. Delivers:
   `crate::proto::http::routes` calls the same executor and returns
   `application/json`.
 * End-to-end integration tests:
-  `crates/dyn-riak/tests/mapreduce_round_trip.rs`.
+  `crates/dyniak/tests/mapreduce_round_trip.rs`.
 
 The slice runs against `dynomite::embed::MemoryDatastore`; no
 substrate changes were required.
@@ -196,24 +196,24 @@ Workspace-wide nextest count: 865 -> 925 (net +60).
 ## Files touched
 
 New:
-* `crates/dyn-riak/src/mapreduce/mod.rs`
-* `crates/dyn-riak/src/mapreduce/job.rs`
-* `crates/dyn-riak/src/mapreduce/phase.rs`
-* `crates/dyn-riak/src/mapreduce/executor.rs`
-* `crates/dyn-riak/src/mapreduce/registry.rs`
-* `crates/dyn-riak/src/mapreduce/builtins.rs`
-* `crates/dyn-riak/src/proto/pb/mapreduce.rs`
-* `crates/dyn-riak/tests/mapreduce_round_trip.rs`
+* `crates/dyniak/src/mapreduce/mod.rs`
+* `crates/dyniak/src/mapreduce/job.rs`
+* `crates/dyniak/src/mapreduce/phase.rs`
+* `crates/dyniak/src/mapreduce/executor.rs`
+* `crates/dyniak/src/mapreduce/registry.rs`
+* `crates/dyniak/src/mapreduce/builtins.rs`
+* `crates/dyniak/src/proto/pb/mapreduce.rs`
+* `crates/dyniak/tests/mapreduce_round_trip.rs`
 
 Modified (additive):
-* `crates/dyn-riak/src/lib.rs` (appended `pub mod mapreduce;`)
-* `crates/dyn-riak/src/proto/pb/mod.rs` (appended re-exports +
+* `crates/dyniak/src/lib.rs` (appended `pub mod mapreduce;`)
+* `crates/dyniak/src/proto/pb/mod.rs` (appended re-exports +
   `pub mod mapreduce;`)
-* `crates/dyn-riak/src/proto/pb/messages.rs` (added `MapRedReq`
+* `crates/dyniak/src/proto/pb/messages.rs` (added `MapRedReq`
   and `MapRedResp` to `MessageCode`)
-* `crates/dyn-riak/src/proto/http/routes.rs` (added `Route::MapRed`
+* `crates/dyniak/src/proto/http/routes.rs` (added `Route::MapRed`
   variant + parse arm + dispatch arm + handler)
-* `crates/dyn-riak/src/server.rs` (added `MapRedReq` dispatch +
+* `crates/dyniak/src/server.rs` (added `MapRedReq` dispatch +
   imports)
 * `docs/journal/allowances.md` (one new entry for the
   `cast_precision_loss` allowance on `int_to_float_lossy`)
@@ -222,7 +222,7 @@ Modified (additive):
 
 One new entry in `docs/journal/allowances.md`:
 
-* `crates/dyn-riak/src/mapreduce/builtins.rs` (`int_to_float_lossy`)
+* `crates/dyniak/src/mapreduce/builtins.rs` (`int_to_float_lossy`)
   -- `clippy::cast_precision_loss`. The helper is the single seam
   through which the integer reduce_sum accumulator joins the
   floating-point side; the conversion is the only way to mix the
@@ -233,7 +233,7 @@ One new entry in `docs/journal/allowances.md`:
 ```
 cargo build --workspace --all-targets --locked          OK
 cargo fmt -p dynomite -p dynomited -p dyn-hash-tool \
-          -p dyn-encoding -p dyn-riak -- --check        OK
+          -p dyn-encoding -p dyniak -- --check        OK
 cargo clippy --workspace --all-targets --all-features \
           -- -D warnings                                OK
 cargo nextest run --workspace                           OK (921 + 4 skipped)

@@ -69,7 +69,7 @@ The terminator is emitted inline when `rx.recv()` returns
 
 ### Tests
 
-Five new unit tests in `crates/dyn-riak/src/server.rs`:
+Five new unit tests in `crates/dyniak/src/server.rs`:
 
 * `process_frame_streams_mapreduce_response_with_per_phase_frames`
   -- two kept phases plus terminator = three frames; phase
@@ -91,7 +91,7 @@ and its tests assert the multipart shape directly.
 
 ### Doc updates
 
-* `crates/dyn-riak/src/proto/pb/mapreduce.rs` -- the deferred-
+* `crates/dyniak/src/proto/pb/mapreduce.rs` -- the deferred-
   streaming note in the module docs is replaced with the
   current contract (one frame per kept phase plus a body-less
   terminator; errors short-circuit).

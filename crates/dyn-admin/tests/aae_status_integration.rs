@@ -1,6 +1,6 @@
 //! End-to-end smoke test for `dyn-admin aae-status`.
 //!
-//! Spins up [`dyn_riak::serve_pbc_with_aae_status`] with a
+//! Spins up [`dyniak::serve_pbc_with_aae_status`] with a
 //! synthetic [`AaeStatusProvider`] returning a known snapshot
 //! and confirms the CLI renders matching content in both
 //! human and JSON modes.
@@ -12,8 +12,8 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tokio::net::TcpListener;
 
-use dyn_riak::aae::status::{AaePeerStatus, AaeStatusProvider, AaeStatusSnapshot};
-use dyn_riak::serve_pbc_with_aae_status;
+use dyniak::aae::status::{AaePeerStatus, AaeStatusProvider, AaeStatusSnapshot};
+use dyniak::serve_pbc_with_aae_status;
 use dynomite::cluster::admin_rpc::{ClusterAdmin, NoopClusterAdmin};
 use dynomite::embed::{Datastore, MemoryDatastore};
 
@@ -141,7 +141,7 @@ fn aae_status_default_provider_returns_empty_snapshot() {
         let addr = listener.local_addr().expect("local_addr");
         let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
         let task = tokio::spawn(async move {
-            let _ = dyn_riak::serve_pbc(listener, ds).await;
+            let _ = dyniak::serve_pbc(listener, ds).await;
         });
         tokio::time::sleep(Duration::from_millis(20)).await;
         (addr, task)

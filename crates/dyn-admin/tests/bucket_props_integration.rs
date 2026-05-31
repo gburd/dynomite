@@ -1,7 +1,7 @@
 //! End-to-end integration tests for the dyn-admin `bucket-props`
 //! subcommands.
 //!
-//! Each test spins up a real `dyn_riak::serve_pbc_with_routing`
+//! Each test spins up a real `dyniak::serve_pbc_with_routing`
 //! listener bound to a random localhost port with a populated
 //! `BucketPropsRegistry`, drives the relevant `dyn-admin` subcommand
 //! via `assert_cmd`, and asserts both the exit status and the
@@ -14,10 +14,10 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tokio::net::TcpListener;
 
-use dyn_riak::datatypes::keyfun::KeyFun;
-use dyn_riak::replication::{RingPoint, RingView};
-use dyn_riak::router::BucketRouter;
-use dyn_riak::{
+use dyniak::datatypes::keyfun::KeyFun;
+use dyniak::replication::{RingPoint, RingView};
+use dyniak::router::BucketRouter;
+use dyniak::{
     serve_pbc_with_routing, BucketProps, BucketPropsRegistry, PeerOp, PeerOutbound,
     ReplicationStrategy, RoutingHooks,
 };

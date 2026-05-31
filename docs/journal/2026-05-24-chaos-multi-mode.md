@@ -16,7 +16,7 @@ add a fourth host (`meh`) to the cluster.
     when no native binary is on `PATH`, mirroring the existing
     redis container fallback.
   - `MODE=riak`: emits a `==> WARNING: Riak mode requires the
-    dyn-riak crate, not yet available; falling back to redis`
+    dyniak crate, not yet available; falling back to redis`
     warning to stderr and runs as `redis`. The driver does the
     same on its side, so the warning is visible in both
     `start-host.log` and `workload-*.stderr`.
@@ -110,7 +110,7 @@ memcache: elapsed=65.0s ok=11174 fail=0 ops/s=171.9
           classes: set/3997 get/3839 arith/2228 delete/1110
 riak:     elapsed=65.0s ok=12391 fail=0 ops/s=190.6  (mode=redis)
           warning observed in start-host.log AND workload.stderr:
-            "WARNING: Riak mode requires the dyn-riak crate,
+            "WARNING: Riak mode requires the dyniak crate,
              not yet available; falling back to redis"
           classes: same as redis
 ```
@@ -135,7 +135,7 @@ baseline.
   for the first 4-host run will land at
   `dist/chaos-reports/v0.1.0/multi-host-pass-3.md` after the
   pass.
-* When the `dyn-riak` crate lands, swap the placeholder warning
+* When the `dyniak` crate lands, swap the placeholder warning
   for real Riak protocol launching in both `start-host.sh` and
   `workload-driver.py`. The plumbing (MODE arg, --mode flag) is
   already in place.

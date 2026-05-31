@@ -5,7 +5,7 @@
 //! produced by `capnpc` from a `.capnp` schema. The codec deliberately
 //! does not depend on `capnpc`; instead, each registered type
 //! provides its own conversion through the [`CapnpWire`] trait. The
-//! `dyn-riak` crate is expected to host the schema set and the
+//! `dyniak` crate is expected to host the schema set and the
 //! generated readers/builders; this codec dispatches by
 //! [`WireTypeId`] and routes through the trait.
 

@@ -1,5 +1,5 @@
 //! In-process backend supervisor that delegates Redis requests
-//! to a [`dyn_riak::datastore::NoxuDatastore`].
+//! to a [`dyniak::datastore::NoxuDatastore`].
 //!
 //! When the operator selects `data_store: noxu` in the YAML
 //! configuration, the [`crate::server::Server`] builder routes
@@ -42,7 +42,7 @@ use dynomite::proto::redis::redis_parse_req;
 use tokio::sync::mpsc;
 use tracing::Instrument as _;
 
-use dyn_riak::datastore::NoxuDatastore;
+use dyniak::datastore::NoxuDatastore;
 
 /// Long-running supervisor that owns the request channel for a
 /// Noxu-backed local datastore.

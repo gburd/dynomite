@@ -73,7 +73,7 @@ default constructs an empty cell).
 cargo build -p hashtree                   # OK
 cargo test -p hashtree                    # 7 + 0 + 4 + 1 doctest, all green
 cargo nextest run -p hashtree             # 23/23
-cargo nextest run -p dyn-riak             # 431/431
+cargo nextest run -p dyniak             # 431/431
 cargo clippy -p hashtree --all-targets -- -D warnings   # clean
 RUSTFLAGS='--cfg loom' cargo clippy -p hashtree --all-targets --release -- -D warnings   # clean
 bash scripts/loom.sh                       # 6/6 (3 hashtree + 3 loom-tests) plus 1 doctest

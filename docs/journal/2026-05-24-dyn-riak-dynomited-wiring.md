@@ -1,4 +1,4 @@
-# 2026-05-24 -- dyn-riak wired into dynomited behind --features riak
+# 2026-05-24 -- dyniak wired into dynomited behind --features riak
 
 **Branch**: `stage/dynomited-riak-wiring`
 **Status**: READY_FOR_REVIEW
@@ -6,9 +6,9 @@
 ## Scope
 
 Operator-facing wiring for the Riak protocol surface that
-landed in `crates/dyn-riak/` over the past three stages
-(`stage/dyn-riak-pbc-ops-v1`, `stage/dyn-riak-http`,
-`stage/dyn-riak-aae`). Until this slice the only consumer of
+landed in `crates/dyniak/` over the past three stages
+(`stage/dyniak-pbc-ops-v1`, `stage/dyniak-http`,
+`stage/dyniak-aae`). Until this slice the only consumer of
 the crate was its own test suite; nodes shipped with the
 default binary had no way to expose a Riak listener.
 
@@ -22,13 +22,13 @@ This slice adds:
   authored against the feature-on binary still validates without
   the feature flag.
 * A new `riak` Cargo feature on the `dynomited` crate that pulls
-  in the `dyn-riak` dependency and three CLI flags
+  in the `dyniak` dependency and three CLI flags
   (`--riak-pbc-listen`, `--riak-http-listen`,
   `--riak-aae-enabled`).
 * A new `dynomited::riak` module hosting the listener-bind
   helper, the spawn helpers for the PBC / HTTP / AAE tasks, and
   a `PeerChannelRepairSink` adapter that routes
-  `dyn_riak::aae::repair::RepairTask`s onto the dispatcher's
+  `dyniak::aae::repair::RepairTask`s onto the dispatcher's
   per-peer outbound `mpsc::Sender<OutboundRequest>` map.
 * `Server::build` and `Server::run` extensions that bind the
   Riak listeners eagerly, spawn the listener and AAE tasks, and
@@ -42,7 +42,7 @@ This slice adds:
   `validate_riak_addr` helper.
 * `crates/dynomite/src/conf/mod.rs` -- re-export `ConfRiak`.
 * `crates/dynomited/Cargo.toml` -- new `riak` feature gating an
-  optional `dyn-riak` dependency.
+  optional `dyniak` dependency.
 * `crates/dynomited/src/cli.rs` -- three new flags
   (`#[cfg(feature = "riak")]`); `format_usage` extension block
   documents them unconditionally so help output matches across
@@ -69,7 +69,7 @@ This slice adds:
   section.
 * `docs/book/src/operations/riak.md` -- new operator-facing
   reference.
-* `docs/journal/2026-05-24-dyn-riak-dynomited-wiring.md` --
+* `docs/journal/2026-05-24-dyniak-dynomited-wiring.md` --
   this entry.
 
 ## Test counts
@@ -91,7 +91,7 @@ This slice adds:
 
 Without `--features riak`, none of:
 
-* `dyn-riak` (or any of its transitive deps),
+* `dyniak` (or any of its transitive deps),
 * `dynomited::riak`,
 * the `--riak-*` CLI flags,
 * the Riak listener / AAE wiring in `Server`,
@@ -126,7 +126,7 @@ external surface.
 The integration tests exercise `RpbPing` (which never reaches
 the datastore) and `GET /ping` (same). PBC `Get`/`Put`/`Del`
 trampolining through the substrate is covered by the unit
-tests in `crates/dyn-riak/src/server.rs` already.
+tests in `crates/dyniak/src/server.rs` already.
 
 ## AAE wiring
 

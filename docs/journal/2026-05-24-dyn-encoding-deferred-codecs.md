@@ -197,7 +197,7 @@ registry test does not add a new test (it replaced the old one).
 ## Verification
 
 * `cargo build --workspace --all-targets --locked` -- clean.
-* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyn-riak -- --check` -- clean.
+* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyniak -- --check` -- clean.
 * `cargo clippy --workspace --all-targets --all-features -- -D warnings` -- clean.
 * `cargo nextest run --workspace` -- 794/794 pass, 4 skipped (unchanged set).
 * `cargo test --doc --workspace` -- 15/15 pass.

@@ -14,7 +14,7 @@
 //! ```
 //!
 //! The server is built on `hyper` directly, mirroring the
-//! shape used by [`dyn_riak::proto::http`] so the workspace
+//! shape used by [`dyniak::proto::http`] so the workspace
 //! does not pick up an additional HTTP framework just for this
 //! crate.
 //!
