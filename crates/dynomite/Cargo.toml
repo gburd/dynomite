@@ -89,6 +89,14 @@ serde_json = { workspace = true }
 # the cluster and merge the per-peer hit lists.
 gen-fsm = { path = "../gen-fsm" }
 
+# Trigram + bloom-filter text index. Powers the `TEXT`
+# schema-field path of the FT.* surface: when an FT.CREATE
+# schema declares a `TEXT` field, the registry instantiates a
+# `dyntext::TextIndex` per field, the HSET interception
+# pushes incoming bytes into it, and FT.SEARCH /
+# FT.REGEX route through the trigram funnel.
+dyntext = { path = "../dyntext" }
+
 [dev-dependencies]
 hegeltest = { workspace = true }
 criterion = { workspace = true }
@@ -97,7 +105,6 @@ hex = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 rcgen = { workspace = true }
 regex = { workspace = true }
-dyntext = { path = "../dyntext" }
 
 [features]
 default = ["tcp", "tls"]
