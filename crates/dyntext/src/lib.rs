@@ -21,10 +21,23 @@
 //!   together and serves exact-substring queries through the
 //!   four-tier filter funnel from the design doc.
 //!
+//! # Phase 2 scope
+//!
+//! Phase 2 adds regex-driven search on top of the existing
+//! exact-substring path:
+//!
+//! * A small internal regex AST built from
+//!   [`regex_syntax`]'s HIR (see [`regex_ast`]).
+//! * A required-trigram extractor that walks the AST and
+//!   computes the trigrams every matching string must contain
+//!   (see [`prefix_extract`]).
+//! * [`index::TextIndex::search_regex`], which uses the
+//!   extractor to prune the postings lists before running the
+//!   actual matcher (currently [`regex::bytes::Regex`]; Phase 3
+//!   swaps in TRE for approximate-match support).
+//!
 //! # Out of scope (planned follow-up phases)
 //!
-//! * Phase 2: regex AST + prefix extraction (compute the
-//!   trigrams a regex MUST contain).
 //! * Phase 3: TRE C library FFI for approximate-regex recheck.
 //! * Phase 4: Redis FT.SEARCH / FT.REGEX command parser
 //!   integration on top of the dynvec fold.
@@ -49,11 +62,15 @@
 pub mod bloom;
 pub mod index;
 pub mod postings;
+pub mod prefix_extract;
+pub mod regex_ast;
 pub mod trigram;
 
 pub use bloom::BloomFilter;
 pub use index::{IndexedDoc, TextIndex, MIN_TRIGRAM_QUERY_LEN};
 pub use postings::Postings;
+pub use prefix_extract::{required_trigram_hashes, required_trigrams};
+pub use regex_ast::{parse as parse_regex, Ast as RegexAst, RegexError};
 pub use trigram::{
     extract_query_trigram_set, extract_query_trigrams, extract_trigram_set, extract_trigrams,
     hash_trigram,
