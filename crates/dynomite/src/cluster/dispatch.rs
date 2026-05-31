@@ -217,6 +217,16 @@ pub struct ClusterDispatcher {
     /// accumulator. When `None`, the dispatcher's behaviour is
     /// unchanged.
     failure_metrics: Option<Arc<crate::stats::FailureMetrics>>,
+    /// Optional vector index registry. When set, the dispatcher
+    /// recognises RediSearch FT.* commands and the HSET
+    /// interception path on registered prefixes; FT.* keywords
+    /// short-circuit to a synthesised RESP reply built from
+    /// [`crate::proto::redis::ft::dispatch`], and HSETs against
+    /// indexed prefixes upsert the row through
+    /// [`crate::proto::redis::ft::maybe_index_hset`] before they
+    /// fall through to the standard backend path. When `None`,
+    /// the dispatcher's behaviour is unchanged.
+    vector_registry: Option<Arc<crate::vector::registry::VectorRegistry>>,
 }
 
 impl ClusterDispatcher {
@@ -248,6 +258,7 @@ impl ClusterDispatcher {
             mbuf_pool: MbufPool::default(),
             hint_store: None,
             failure_metrics: None,
+            vector_registry: None,
         }
     }
 
@@ -422,6 +433,59 @@ impl ClusterDispatcher {
     #[must_use]
     pub fn failure_metrics(&self) -> Option<&Arc<crate::stats::FailureMetrics>> {
         self.failure_metrics.as_ref()
+    }
+
+    /// Attach a [`crate::vector::registry::VectorRegistry`].
+    ///
+    /// When wired, parsed RediSearch FT.* requests
+    /// (`FT.CREATE` / `FT.SEARCH` / `FT.INFO` / `FT.LIST` /
+    /// `FT.DROPINDEX`) short-circuit to the registry-backed
+    /// executor in [`crate::proto::redis::ft`] and the synthesised
+    /// RESP bytes are returned to the client as
+    /// [`crate::net::DispatchOutcome::Inline`]. HSET requests
+    /// whose key matches a registered prefix are routed through
+    /// [`crate::proto::redis::ft::maybe_index_hset`] before they
+    /// fall through to the standard backend path; a malformed or
+    /// missing vector field surfaces as
+    /// [`crate::net::DispatchOutcome::Error`] with a `-ERR ...`
+    /// reply rather than reaching the backend.
+    ///
+    /// Without this builder call, the dispatcher's behaviour is
+    /// unchanged: FT.* keywords are forwarded to the local
+    /// datastore (which typically rejects them with `-ERR
+    /// unknown command`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use dynomite::cluster::dispatch::ClusterDispatcher;
+    /// # use dynomite::cluster::peer::{Peer, PeerEndpoint};
+    /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// # use dynomite::hashkit::DynToken;
+    /// # use dynomite::vector::registry::VectorRegistry;
+    /// let cfg = PoolConfig::default();
+    /// let local = Peer::new(
+    ///     0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
+    ///     vec![DynToken::from_u32(0)], true, true, false,
+    /// );
+    /// let pool = Arc::new(ServerPool::new(cfg, vec![local]));
+    /// let registry = Arc::new(VectorRegistry::new());
+    /// let _disp = ClusterDispatcher::new(pool).with_vector_registry(registry);
+    /// ```
+    #[must_use]
+    pub fn with_vector_registry(
+        mut self,
+        registry: Arc<crate::vector::registry::VectorRegistry>,
+    ) -> Self {
+        self.vector_registry = Some(registry);
+        self
+    }
+
+    /// Borrow the wired vector-index registry, if any.
+    #[must_use]
+    pub fn vector_registry(&self) -> Option<&Arc<crate::vector::registry::VectorRegistry>> {
+        self.vector_registry.as_ref()
     }
 
     /// True when both the hint store is wired AND the pool has
@@ -728,6 +792,16 @@ impl Dispatcher for ClusterDispatcher {
     fn dispatch(&self, req: Msg, responder: ServerSink) -> DispatchOutcome {
         if req.flags().quit {
             return DispatchOutcome::Drop;
+        }
+        // FT.* / HSET interception. Runs before the routing
+        // planner so vector-index commands never visit the
+        // backend, and HSETs against an indexed prefix get the
+        // vector mirrored into the in-process registry before
+        // the standard storage write fans out.
+        if let Some(reg) = self.vector_registry.as_ref() {
+            if let Some(outcome) = self.intercept_vector_command(reg.as_ref(), &req) {
+                return outcome;
+            }
         }
         // Inspect the request without consuming it: pull the routing
         // bytes from the first parsed key. `KeyPos::tag_bytes` returns
@@ -1242,6 +1316,179 @@ impl ClusterDispatcher {
             &self.mbuf_pool,
         )
     }
+
+    /// FT.* / HSET interception. Returns `Some(outcome)` when the
+    /// command was fully handled (FT.* keyword, or an HSET that
+    /// references an indexed prefix with a malformed vector
+    /// payload); returns `None` to let the caller fall through to
+    /// the standard dispatch path. The HSET success path returns
+    /// `None` after upserting into the registry so the standard
+    /// storage write still goes to the backend.
+    fn intercept_vector_command(
+        &self,
+        registry: &crate::vector::registry::VectorRegistry,
+        req: &Msg,
+    ) -> Option<DispatchOutcome> {
+        match req.ty() {
+            MsgType::ReqRedisFtCreate
+            | MsgType::ReqRedisFtSearch
+            | MsgType::ReqRedisFtInfo
+            | MsgType::ReqRedisFtList
+            | MsgType::ReqRedisFtDropindex
+            | MsgType::ReqRedisFtUnknown => Some(self.run_ft_command(registry, req)),
+            MsgType::ReqRedisHset => self.intercept_hset(registry, req),
+            _ => None,
+        }
+    }
+
+    /// Drive an FT.* command through the registry-backed executor
+    /// and wrap the RESP bytes in a [`DispatchOutcome::Inline`].
+    fn run_ft_command(
+        &self,
+        registry: &crate::vector::registry::VectorRegistry,
+        req: &Msg,
+    ) -> DispatchOutcome {
+        // For typed FT.* variants the keyword is unambiguous; for
+        // [`MsgType::ReqRedisFtUnknown`] we recover the original
+        // wire keyword from the request's mbuf chain (the parser
+        // case-folds for table lookup but the wire bytes are
+        // preserved verbatim) and let `ft::dispatch` surface a
+        // structured `-ERR ...` reply.
+        let recovered_kw: Vec<u8>;
+        let keyword: &[u8] = match req.ty() {
+            MsgType::ReqRedisFtCreate => b"FT.CREATE",
+            MsgType::ReqRedisFtSearch => b"FT.SEARCH",
+            MsgType::ReqRedisFtInfo => b"FT.INFO",
+            MsgType::ReqRedisFtList => b"FT.LIST",
+            MsgType::ReqRedisFtDropindex => b"FT.DROPINDEX",
+            MsgType::ReqRedisFtUnknown => {
+                recovered_kw = first_bulk_token(req).unwrap_or_else(|| b"FT.UNKNOWN".to_vec());
+                let payload = format!(
+                    "-ERR not supported in this build: {}\r\n",
+                    String::from_utf8_lossy(&recovered_kw),
+                );
+                return DispatchOutcome::Inline(synthetic_redis_reply(
+                    req,
+                    &self.mbuf_pool,
+                    payload.as_bytes(),
+                ));
+            }
+            // The dispatcher only enters this branch from the
+            // FT.* arm above, so the catch-all is unreachable
+            // unless the MsgType set drifts out of sync with the
+            // intercept arm.
+            _ => return DispatchOutcome::Drop,
+        };
+        let mut args: Vec<&[u8]> = Vec::with_capacity(1 + req.keys().len() + req.args().len());
+        args.push(keyword);
+        for k in req.keys() {
+            args.push(k.key());
+        }
+        for a in req.args() {
+            args.push(a.bytes());
+        }
+        let bytes = crate::proto::redis::ft::dispatch(registry, &args);
+        DispatchOutcome::Inline(synthetic_redis_reply(req, &self.mbuf_pool, &bytes))
+    }
+
+    /// HSET interception: returns `Some(Error(...))` when the
+    /// HSET targets a registered prefix but its vector field is
+    /// missing or malformed; returns `None` (so the dispatcher
+    /// falls through to the backend) on success or when no
+    /// registered prefix matches.
+    fn intercept_hset(
+        &self,
+        registry: &crate::vector::registry::VectorRegistry,
+        req: &Msg,
+    ) -> Option<DispatchOutcome> {
+        let mut args: Vec<&[u8]> = Vec::with_capacity(req.keys().len() + req.args().len());
+        for k in req.keys() {
+            args.push(k.key());
+        }
+        for a in req.args() {
+            args.push(a.bytes());
+        }
+        match crate::proto::redis::ft::maybe_index_hset(registry, &args) {
+            Ok(_) => None,
+            Err(e) => {
+                let payload = format!("-ERR {e}\r\n");
+                Some(DispatchOutcome::Error(synthetic_redis_reply(
+                    req,
+                    &self.mbuf_pool,
+                    payload.as_bytes(),
+                )))
+            }
+        }
+    }
+}
+
+/// Wrap an arbitrary RESP byte sequence as a synthetic Redis
+/// response [`Msg`]. The response inherits the request's id (so
+/// the FSM can pair it with the originating request), is marked
+/// `is_request = false`, and the supplied bytes are copied into
+/// one or more mbufs drawn from `pool`.
+fn synthetic_redis_reply(req: &Msg, pool: &MbufPool, payload: &[u8]) -> Msg {
+    let mut rsp = Msg::new(req.id(), MsgType::RspRedisStatus, false);
+    rsp.set_parent_id(req.id());
+    let mut written = 0usize;
+    while written < payload.len() {
+        let mut buf = pool.get();
+        let n = buf.recv(&payload[written..]);
+        debug_assert!(
+            n > 0,
+            "MbufPool returned a buffer with zero writable capacity"
+        );
+        rsp.mbufs_mut().push_back(buf);
+        written += n;
+    }
+    rsp.recompute_mlen();
+    rsp
+}
+
+/// Recover the first bulk-string token from a parsed RESP
+/// request's mbuf chain. The parser case-folds the keyword for
+/// the command-table lookup but stores the original wire bytes
+/// in the mbufs; this helper reads them back so the dispatcher
+/// can render structured error replies that quote the actual
+/// keyword the client sent.
+///
+/// Returns `None` when the mbuf chain does not begin with a
+/// well-formed `*N\r\n$M\r\n<token>\r\n` sequence.
+fn first_bulk_token(req: &Msg) -> Option<Vec<u8>> {
+    let mut wire: Vec<u8> = Vec::new();
+    for buf in req.mbufs() {
+        wire.extend_from_slice(buf.readable());
+        if wire.len() > 256 {
+            break;
+        }
+    }
+    let mut p = 0usize;
+    if wire.first() == Some(&b'*') {
+        let cr = wire.iter().position(|&b| b == b'\r')?;
+        if wire.get(cr + 1) != Some(&b'\n') {
+            return None;
+        }
+        p = cr + 2;
+    }
+    if wire.get(p) != Some(&b'$') {
+        return None;
+    }
+    let header_start = p + 1;
+    let header_cr = wire[header_start..]
+        .iter()
+        .position(|&b| b == b'\r')
+        .map(|i| header_start + i)?;
+    if wire.get(header_cr + 1) != Some(&b'\n') {
+        return None;
+    }
+    let len_str = std::str::from_utf8(&wire[header_start..header_cr]).ok()?;
+    let len: usize = len_str.parse().ok()?;
+    let body_start = header_cr + 2;
+    let body_end = body_start.checked_add(len)?;
+    if wire.len() < body_end + 2 {
+        return None;
+    }
+    Some(wire[body_start..body_end].to_vec())
 }
 
 /// Context required to schedule read-repair writes once the
