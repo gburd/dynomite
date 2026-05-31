@@ -60,6 +60,7 @@ fn fresh_registry() -> Arc<VectorRegistry> {
         metadata_fields: vec![MetadataField {
             name: META_FIELD.into(),
             field_type: MetadataFieldType::Text,
+            tag_separator: None,
         }],
     };
     registry.create(TABLE.into(), schema).unwrap();

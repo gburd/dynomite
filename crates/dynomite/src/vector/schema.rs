@@ -123,6 +123,24 @@ pub struct MetadataField {
     pub name: String,
     /// Field type.
     pub field_type: MetadataFieldType,
+    /// Per-tag separator for `TAG` fields. `None` selects the
+    /// RediSearch default (`,`). Ignored for non-`TAG` field
+    /// types. The separator is a single ASCII byte; the
+    /// FT.CREATE parser rejects multi-byte strings.
+    #[serde(default)]
+    pub tag_separator: Option<u8>,
+}
+
+impl MetadataField {
+    /// Effective TAG separator. Returns the configured value
+    /// for `TAG` fields, or `b','` (the RediSearch default)
+    /// when none was supplied. Defined for non-`TAG` fields
+    /// too so callers can use it uniformly; the value is
+    /// meaningless outside the `TAG` path.
+    #[must_use]
+    pub fn effective_tag_separator(&self) -> u8 {
+        self.tag_separator.unwrap_or(b',')
+    }
 }
 
 /// Compiled FT.CREATE schema.
@@ -208,6 +226,7 @@ mod tests {
             metadata_fields: vec![MetadataField {
                 name: "title".to_string(),
                 field_type: MetadataFieldType::Text,
+                tag_separator: None,
             }],
         };
         let engine = schema.to_engine_schema("docs");

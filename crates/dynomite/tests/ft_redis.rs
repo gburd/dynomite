@@ -72,7 +72,8 @@ fn ft_create_hash_hnsw_cosine_returns_ok() {
         table.schema.metadata_fields,
         vec![MetadataField {
             name: "title".to_string(),
-            field_type: MetadataFieldType::Text
+            field_type: MetadataFieldType::Text,
+            tag_separator: None,
         }]
     );
 }
