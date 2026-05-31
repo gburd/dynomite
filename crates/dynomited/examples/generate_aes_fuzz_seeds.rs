@@ -4,6 +4,12 @@
 //! key the fuzz harness uses and writes the ciphertexts to
 //! `crates/fuzz/seeds/crypto_aes_decrypt/`. Re-run after rotating
 //! the harness key.
+//!
+//! Run with:
+//!
+//! ```text
+//! cargo run --example generate_aes_fuzz_seeds -p dynomited
+//! ```
 
 use dynomite::crypto::aes::{encrypt_to_vec, AES_KEYLEN};
 use std::fs;
