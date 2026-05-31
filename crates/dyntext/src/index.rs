@@ -35,6 +35,7 @@ use crate::bloom::BloomFilter;
 use crate::postings::Postings;
 use crate::prefix_extract;
 use crate::regex_ast::{self, RegexError};
+use crate::tre::{TreCompiledPattern, TreError, TreMatchOpts};
 use crate::trigram;
 
 /// Minimum query length in bytes that the trigram index can
@@ -313,6 +314,41 @@ impl TextIndex {
             return false;
         }
         haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// Search for documents that match `pattern` as an
+    /// approximate POSIX extended regular expression with up
+    /// to `max_errors` edit operations.
+    ///
+    /// This is the Phase 3 entry point for the TRE-backed
+    /// recheck. The current implementation does a full scan
+    /// over the document store: every doc is fed to a single
+    /// compiled `TreCompiledPattern`. Phase 2 will add a
+    /// regex prefix extractor that lets us restrict the scan
+    /// to a trigram-postings-derived candidate set; the
+    /// signature here is forward-compatible with that change.
+    ///
+    /// Results are returned in ascending document-id order,
+    /// which equals insertion order because doc ids are
+    /// monotonic.
+    pub fn search_regex_approx(
+        &self,
+        pattern: &str,
+        max_errors: u16,
+    ) -> Result<Vec<u32>, TreError> {
+        let opts = TreMatchOpts {
+            max_errors,
+            ..TreMatchOpts::default()
+        };
+        let pat = TreCompiledPattern::compile(pattern.as_bytes(), opts)?;
+
+        let mut hits = Vec::new();
+        for (id, doc) in &self.docs {
+            if pat.is_match(&doc.text) {
+                hits.push(*id);
+            }
+        }
+        Ok(hits)
     }
 }
 

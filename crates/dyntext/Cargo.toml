@@ -34,6 +34,7 @@ serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 noxu-db = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
+tre-sys = { path = "../tre-sys" }
 
 [dev-dependencies]
 hegeltest = { workspace = true }
