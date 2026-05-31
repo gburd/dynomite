@@ -56,7 +56,13 @@ jobs:
       - name: install nextest
         uses: taiki-e/install-action@nextest
       - name: rustfmt
-        run: cargo fmt --all -- --check
+        run: |
+          cargo fmt \
+              -p dynomite -p dynomited -p dyn-hash-tool \
+              -p dyn-encoding -p dyn-riak -p dyn-admin \
+              -p dyntext -p dynvec -p gen-fsm -p hashtree \
+              -p loom-tests -p sup -p throttle-core \
+              -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: build (default features)
