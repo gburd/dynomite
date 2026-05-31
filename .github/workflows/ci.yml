@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: clone lamdb (noxu) sibling-checkout
         # The workspace's [workspace.dependencies] declares
         # noxu-* path-deps at ../lamdb/crates/<crate>. Cargo
