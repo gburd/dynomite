@@ -75,14 +75,19 @@ pub mod persist;
 pub mod postings;
 pub mod prefix_extract;
 pub mod regex_ast;
+pub mod tiling;
 pub mod tre;
 pub mod trigram;
 
 pub use bloom::BloomFilter;
 pub use index::{IndexedDoc, TextIndex, MIN_TRIGRAM_QUERY_LEN};
 pub use postings::Postings;
-pub use prefix_extract::{required_trigram_hashes, required_trigrams};
+pub use prefix_extract::{
+    anchored_prefix, extract_literal_runs, has_top_level_start_anchor, required_trigram_hashes,
+    required_trigrams,
+};
 pub use regex_ast::{parse as parse_regex, Ast as RegexAst, RegexError};
+pub use tiling::ApproxFilter;
 pub use tre::{TreCompiledPattern, TreError, TreMatch, TreMatchOpts};
 pub use trigram::{
     extract_query_trigram_set, extract_query_trigrams, extract_trigram_set, extract_trigrams,

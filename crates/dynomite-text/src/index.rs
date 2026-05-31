@@ -29,12 +29,14 @@
 
 use std::collections::BTreeMap;
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::bloom::BloomFilter;
 use crate::postings::Postings;
 use crate::prefix_extract;
 use crate::regex_ast::{self, RegexError};
+use crate::tiling::ApproxFilter;
 use crate::tre::{TreCompiledPattern, TreError, TreMatchOpts};
 use crate::trigram;
 
@@ -51,6 +53,20 @@ const DEFAULT_BLOOM_N: usize = 256;
 
 /// Default false positive rate for the per-document bloom.
 const DEFAULT_BLOOM_FP: f64 = 0.01;
+
+/// Threshold above which `search_regex_approx` parallelises
+/// the per-doc TRE recheck. Below this size the rayon
+/// scheduling overhead is comparable to the savings, so the
+/// sequential path is faster. Tuned empirically against the
+/// 256-byte alnum bench corpus.
+const PARALLEL_RECHECK_THRESHOLD: usize = 1024;
+
+/// Chunk size used by the parallel-recheck path. Enough work
+/// per task to amortise rayon's task-spawn overhead, small
+/// enough to balance load across cores. Empirically 256 docs
+/// per chunk hits the sweet spot for the 100k-doc corpus on
+/// an 8-core box.
+const PARALLEL_RECHECK_CHUNK_SIZE: usize = 256;
 
 /// One indexed document: its raw text (for tier-4 substring
 /// recheck) and its trigram bloom filter (for tier-3 cheap
@@ -244,7 +260,9 @@ impl TextIndex {
     ///    (named capture group, etc.) or yields no required
     ///    trigrams, fall back to scanning every doc.
     /// 3. Per-doc bloom filter recheck (skipped on full scan).
-    /// 4. Compile the pattern with [`regex::bytes::Regex`] and
+    /// 4. If the AST starts with `^literal`, prune candidates
+    ///    whose first bytes do not equal the literal prefix.
+    /// 5. Compile the pattern with [`regex::bytes::Regex`] and
     ///    re-run it against each candidate's stored bytes.
     ///
     /// Results are returned in insertion order.
@@ -269,10 +287,12 @@ impl TextIndex {
         // Required trigrams from the AST. If extraction fails
         // (PrefixUnsupported) or yields no constraint, we have
         // to scan every doc; the recheck still runs correctly.
-        let trigram_hashes: Vec<u64> = match regex_ast::parse(pattern) {
-            Ok(ast) => prefix_extract::required_trigram_hashes(&ast),
-            Err(_) => Vec::new(),
-        };
+        let ast = regex_ast::parse(pattern).ok();
+        let trigram_hashes: Vec<u64> = ast
+            .as_ref()
+            .map(prefix_extract::required_trigram_hashes)
+            .unwrap_or_default();
+        let anchored_prefix = ast.as_ref().and_then(prefix_extract::anchored_prefix);
 
         let candidates: Vec<u32> = if trigram_hashes.is_empty() {
             self.docs.keys().copied().collect()
@@ -295,6 +315,17 @@ impl TextIndex {
                     .all(|t| doc.bloom.contains(&t.to_le_bytes()))
             {
                 continue;
+            }
+            // Anchor fast-path: if the pattern is anchored and
+            // followed by a literal prefix, reject docs whose
+            // first bytes do not equal the prefix. This is
+            // cheap (a single byte-compare), sound for K=0,
+            // and lets the much heavier `regex` matcher off
+            // the hook for the common `^literal\w+...` shape.
+            if let Some(prefix) = anchored_prefix.as_ref() {
+                if doc.text.len() < prefix.len() || &doc.text[..prefix.len()] != prefix.as_slice() {
+                    continue;
+                }
             }
             // Tier 4: real regex recheck.
             if re.is_match(&doc.text) {
@@ -320,17 +351,39 @@ impl TextIndex {
     /// approximate POSIX extended regular expression with up
     /// to `max_errors` edit operations.
     ///
-    /// This is the Phase 3 entry point for the TRE-backed
-    /// recheck. The current implementation does a full scan
-    /// over the document store: every doc is fed to a single
-    /// compiled `TreCompiledPattern`. Phase 2 will add a
-    /// regex prefix extractor that lets us restrict the scan
-    /// to a trigram-postings-derived candidate set; the
-    /// signature here is forward-compatible with that change.
+    /// The path mirrors [`Self::search_regex`] but the tier-4
+    /// recheck delegates to [`TreCompiledPattern`] instead of
+    /// the std `regex` matcher because TRE is the only engine
+    /// in the workspace that implements approximate match
+    /// semantics. The pre-recheck filter funnel uses the
+    /// pigeonhole bound `surviving_trigrams >= T - 3k`
+    /// (see [`ApproxFilter`]) to stay sound under the edit
+    /// budget.
     ///
-    /// Results are returned in ascending document-id order,
-    /// which equals insertion order because doc ids are
-    /// monotonic.
+    /// For a `^literal...` pattern the anchor fast-path
+    /// rejects every candidate whose first bytes are too far
+    /// (in Hamming distance) from the literal prefix. For
+    /// `max_errors == 0` this is a byte-equality check; for
+    /// `max_errors >= 1` it is a Hamming-distance check
+    /// against the prefix length, which is sound for the
+    /// substitution-only case TRE optimises and conservative
+    /// (always returns `true` for prefixes whose Hamming
+    /// distance is within `max_errors`) for the
+    /// insert/delete cases.
+    ///
+    /// When the surviving candidate set after filtering is
+    /// large (`>= PARALLEL_RECHECK_THRESHOLD`), the per-doc
+    /// TRE recheck is dispatched to a Rayon parallel iterator
+    /// to fan the cost across CPU cores. TRE's compiled
+    /// `regex_t` is `!Send`, so each parallel worker compiles
+    /// its own copy from the original pattern bytes.
+    ///
+    /// Results are returned in ascending document-id order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreError::Compile`] if the pattern fails to
+    /// compile under the given options.
     pub fn search_regex_approx(
         &self,
         pattern: &str,
@@ -342,14 +395,204 @@ impl TextIndex {
         };
         let pat = TreCompiledPattern::compile(pattern.as_bytes(), opts)?;
 
-        let mut hits = Vec::new();
-        for (id, doc) in &self.docs {
-            if pat.is_match(&doc.text) {
-                hits.push(*id);
+        // Build the trigram filter and the anchor fast-path
+        // from the AST. A pattern that does not lower into the
+        // internal AST (named captures, regex-syntax features
+        // we don't model) falls back to the no-filter scan.
+        let ast = regex_ast::parse(pattern).ok();
+        let filter = ast.as_ref().map_or_else(
+            || ApproxFilter {
+                trigrams: Vec::new(),
+                min_required: 0,
+            },
+            |a| ApproxFilter::build(a, max_errors),
+        );
+        let anchored_prefix = ast.as_ref().and_then(prefix_extract::anchored_prefix);
+
+        // Tier 3 + anchor fast-path: cheap rejections before
+        // we hand the doc to TRE.
+        let prefilter = |doc: &IndexedDoc| -> bool {
+            if filter.is_active() && !filter.passes(&doc.bloom) {
+                return false;
             }
-        }
-        Ok(hits)
+            if let Some(prefix) = anchored_prefix.as_ref() {
+                if !anchor_prefix_compatible(&doc.text, prefix, max_errors) {
+                    return false;
+                }
+            }
+            true
+        };
+
+        // First sweep: build the (doc_id, &text) survivor list.
+        // When the filter is active we walk the candidate vec
+        // returned by the postings union; when it is inactive
+        // we iterate `self.docs` directly to avoid a chain of
+        // 100k BTreeMap lookups that would dominate the cost
+        // of the per-query setup.
+        let survivors: Vec<(u32, &[u8])> = if filter.is_active() {
+            let candidates = filter.candidates(&self.postings);
+            candidates
+                .into_iter()
+                .filter_map(|doc_id| {
+                    let doc = self.docs.get(&doc_id)?;
+                    if !prefilter(doc) {
+                        return None;
+                    }
+                    Some((doc_id, doc.text.as_slice()))
+                })
+                .collect()
+        } else {
+            self.docs
+                .iter()
+                .filter_map(|(id, doc)| {
+                    if !prefilter(doc) {
+                        return None;
+                    }
+                    Some((*id, doc.text.as_slice()))
+                })
+                .collect()
+        };
+
+        let hits: Vec<u32> = if survivors.len() >= PARALLEL_RECHECK_THRESHOLD {
+            run_parallel_recheck(pattern, opts, &survivors)?
+        } else {
+            survivors
+                .into_iter()
+                .filter_map(|(id, text)| if pat.is_match(text) { Some(id) } else { None })
+                .collect()
+        };
+
+        let mut out = hits;
+        out.sort_unstable();
+        Ok(out)
     }
+}
+
+/// Whether `doc` could plausibly be the start of an
+/// approximate match for the anchored literal `prefix` under
+/// an edit budget of `max_errors`.
+///
+/// The check is sound (never returns `false` when the doc
+/// could match) and cheap (compares at most
+/// `prefix.len() + max_errors` bytes per shift).
+///
+/// Strategy: iterate every alignment offset in
+/// `[0, max_errors]` and compute the edit distance between
+/// `prefix` and the corresponding doc prefix using a banded
+/// dynamic-programming table of width `2*max_errors + 1`. If
+/// any alignment is within `max_errors` edits, accept.
+///
+/// For `max_errors == 0` this collapses to a byte-equality
+/// check on the prefix length. For small `max_errors` (the
+/// common case in dyntext queries) the check costs
+/// O(prefix.len() * (2 * max_errors + 1)) byte comparisons.
+fn anchor_prefix_compatible(doc: &[u8], prefix: &[u8], max_errors: u16) -> bool {
+    if max_errors == 0 {
+        return doc.len() >= prefix.len() && &doc[..prefix.len()] == prefix;
+    }
+    let k = usize::from(max_errors);
+    // Restrict the doc window to the first prefix.len() + k
+    // bytes; an anchored match cannot reach further. If the
+    // doc is shorter than prefix.len() - k we still try -- the
+    // edit distance computation handles the length mismatch.
+    let window_end = (prefix.len() + k).min(doc.len());
+    let window = &doc[..window_end];
+    let dist = bounded_edit_distance(prefix, window, k);
+    dist <= k
+}
+
+/// Compute the prefix-edit distance between `pat` and `txt`,
+/// returning the smallest number of edits that turns `pat` into
+/// some prefix of `txt`. The result is capped at `k + 1` so
+/// the caller can reject early when the budget is exceeded.
+///
+/// This is the standard banded edit-distance recurrence,
+/// O(|pat| * (2 * k + 1)). It is symmetric in the
+/// substitution / insertion / deletion costs (all 1).
+fn bounded_edit_distance(pat: &[u8], txt: &[u8], k: usize) -> usize {
+    let m = pat.len();
+    let n = txt.len();
+    if m == 0 {
+        return 0;
+    }
+    // dp[i][j] = edits to turn pat[..i] into some prefix of
+    // txt[..j]. Only cells with |i - j| <= k matter; we keep
+    // two rows to avoid the |pat| x |txt| matrix.
+    let mut prev = vec![usize::MAX; n + 1];
+    let mut curr = vec![usize::MAX; n + 1];
+    prev[0] = 0;
+    for cell in prev.iter_mut().take(n.min(k) + 1).skip(1) {
+        *cell = 0; // free leading text characters (prefix-match)
+    }
+    for i in 1..=m {
+        curr[0] = i;
+        let lo = i.saturating_sub(k);
+        let hi = (i + k).min(n);
+        for j in 1..=n {
+            if j < lo || j > hi {
+                curr[j] = usize::MAX;
+                continue;
+            }
+            let cost = usize::from(pat[i - 1] != txt[j - 1]);
+            let sub = prev[j - 1].saturating_add(cost);
+            let del = prev[j].saturating_add(1);
+            let ins = curr[j - 1].saturating_add(1);
+            curr[j] = sub.min(del).min(ins);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    // Best alignment: the smallest dp[m][j] over j in
+    // [m - k, m + k] intersected with [0, n].
+    let lo = m.saturating_sub(k);
+    let hi = (m + k).min(n);
+    let mut best = usize::MAX;
+    for cell in prev.iter().take(hi + 1).skip(lo) {
+        best = best.min(*cell);
+    }
+    best.min(k + 1)
+}
+
+/// Run the TRE recheck across `survivors` in parallel.
+///
+/// `TreCompiledPattern` is `!Send`, so the parallel iterator
+/// compiles a fresh pattern in each worker via
+/// [`rayon::iter::ParallelIterator::map_init`]. The compile
+/// cost is amortised across the worker's chunk of survivors,
+/// which is much smaller than the per-doc TRE match cost.
+fn run_parallel_recheck(
+    pattern: &str,
+    opts: TreMatchOpts,
+    survivors: &[(u32, &[u8])],
+) -> Result<Vec<u32>, TreError> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let pattern_bytes = pattern.as_bytes();
+    let compile_failed = AtomicBool::new(false);
+    let hits: Vec<u32> = survivors
+        .par_chunks(PARALLEL_RECHECK_CHUNK_SIZE)
+        .map_init(
+            || TreCompiledPattern::compile(pattern_bytes, opts).ok(),
+            |worker_pat: &mut Option<TreCompiledPattern>, chunk: &[(u32, &[u8])]| -> Vec<u32> {
+                let Some(pat) = worker_pat.as_ref() else {
+                    compile_failed.store(true, Ordering::Relaxed);
+                    return Vec::new();
+                };
+                let mut local = Vec::new();
+                for &(id, text) in chunk {
+                    if pat.is_match(text) {
+                        local.push(id);
+                    }
+                }
+                local
+            },
+        )
+        .flatten()
+        .collect();
+    if compile_failed.load(Ordering::Relaxed) {
+        return Err(TreError::Internal(
+            "parallel worker failed to compile pattern".into(),
+        ));
+    }
+    Ok(hits)
 }
 
 #[cfg(test)]

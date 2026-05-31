@@ -29,8 +29,7 @@ path = "src/lib.rs"
 blake3 = { workspace = true }
 # Phase 2 regex prefix-extraction. `regex-syntax` parses the
 # pattern into an HIR without compiling a matcher; the actual
-# match runs via `regex::bytes::Regex` until Phase 3 swaps in
-# the TRE FFI for approximate-regex semantics.
+# K=0 match runs via `regex::bytes::Regex`; K>=1 uses TRE.
 regex = { workspace = true }
 regex-syntax = "0.8"
 roaring = { version = "0.10", features = ["serde"] }
@@ -39,6 +38,12 @@ thiserror = { workspace = true }
 noxu = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 tre-sys = { path = "../tre-sys", version = "0.0.1" }
+# Parallel recheck for `search_regex_approx` when the
+# candidate-set survivor count exceeds a threshold. Rayon's
+# work-stealing pool is the standard choice for compute-bound
+# data parallelism in the workspace; we do not need tokio's
+# async-aware scheduling here.
+rayon = "1.10"
 
 [dev-dependencies]
 hegeltest = { workspace = true }

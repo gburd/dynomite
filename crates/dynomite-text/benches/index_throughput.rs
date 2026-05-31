@@ -19,7 +19,7 @@
 
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use dyntext::TextIndex;
 
@@ -113,5 +113,117 @@ fn bench_search(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_insert, bench_search);
+/// Regex-search throughput across the K = 0, 1, 2 regimes
+/// against several corpus sizes. Mirrors the parameter space
+/// of the workspace-level `ft_search` bench but stays inside
+/// the `dynomite-text` crate so we can iterate on the matcher
+/// without rebuilding the engine.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "bench-only narrowing of a u64 PRNG output to a single byte"
+)]
+fn bench_regex(c: &mut Criterion) {
+    const ALNUM: &[u8; 37] = b"abcdefghijklmnopqrstuvwxyz0123456789 ";
+    const STRING_LEN: usize = 256;
+    const CORPUS_SIZES: &[usize] = &[1_000, 10_000];
+
+    fn rand_alnum(state: &mut Xorshift) -> u8 {
+        ALNUM[(state.next() % ALNUM.len() as u64) as usize]
+    }
+    fn rand_string(state: &mut Xorshift, len: usize) -> Vec<u8> {
+        (0..len).map(|_| rand_alnum(state)).collect()
+    }
+
+    fn build_index(n: usize) -> TextIndex {
+        let mut idx = TextIndex::new();
+        let mut state = Xorshift::new(0xDEAD_BEEF_CAFE_F00D ^ n as u64);
+        for _ in 0..n {
+            idx.insert(rand_string(&mut state, STRING_LEN));
+        }
+        idx
+    }
+
+    fn regex_escape(s: &[u8]) -> String {
+        let mut out = String::with_capacity(s.len());
+        for &b in s {
+            let c = b as char;
+            if matches!(
+                c,
+                '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$'
+            ) {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    fn make_queries(idx: &TextIndex, n: usize, seed: u64) -> Vec<String> {
+        let docs = idx.docs();
+        let dn = docs.len();
+        let mut state = Xorshift::new(seed);
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let want_hit = i % 2 == 0 && dn > 0;
+            let pat = if want_hit {
+                let pick = (state.next() % dn as u64) as usize;
+                let txt = docs.iter().nth(pick).map(|(_, d)| d.text.clone()).unwrap();
+                if txt.len() > 8 {
+                    let off = (state.next() % (txt.len() - 8) as u64) as usize;
+                    let head = &txt[off..off + 5];
+                    let tail = &txt[off + 5..off + 8];
+                    format!("{}\\w+{}", regex_escape(head), regex_escape(tail))
+                } else {
+                    let head: String = (0..5).map(|_| rand_alnum(&mut state) as char).collect();
+                    let tail: String = (0..3).map(|_| rand_alnum(&mut state) as char).collect();
+                    format!("{head}\\w+{tail}")
+                }
+            } else {
+                let head: String = (0..5).map(|_| rand_alnum(&mut state) as char).collect();
+                let tail: String = (0..3).map(|_| rand_alnum(&mut state) as char).collect();
+                format!("{head}\\w+{tail}")
+            };
+            out.push(pat);
+        }
+        out
+    }
+
+    let mut group = c.benchmark_group("dyntext_regex_search");
+    group.sample_size(20);
+    for &corpus in CORPUS_SIZES {
+        let idx = build_index(corpus);
+        let queries = make_queries(&idx, 32, 0xCAFE_F00D ^ corpus as u64);
+
+        group.bench_with_input(
+            BenchmarkId::new("k0", corpus),
+            &(&idx, &queries),
+            |b, (idx, queries)| {
+                let mut q_idx = 0_usize;
+                b.iter(|| {
+                    let q = &queries[q_idx % queries.len()];
+                    q_idx = q_idx.wrapping_add(1);
+                    black_box(idx.search_regex(q).expect("pattern compiles"));
+                });
+            },
+        );
+        for &k in &[1_u16, 2_u16] {
+            let label = if k == 1 { "k1" } else { "k2" };
+            group.bench_with_input(
+                BenchmarkId::new(label, corpus),
+                &(&idx, &queries),
+                |b, (idx, queries)| {
+                    let mut q_idx = 0_usize;
+                    b.iter(|| {
+                        let q = &queries[q_idx % queries.len()];
+                        q_idx = q_idx.wrapping_add(1);
+                        black_box(idx.search_regex_approx(q, k).expect("pattern compiles"));
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_insert, bench_search, bench_regex);
 criterion_main!(benches);
