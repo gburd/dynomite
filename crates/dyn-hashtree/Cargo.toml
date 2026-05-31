@@ -1,5 +1,5 @@
 [package]
-name = "hashtree"
+name = "dyn-hashtree"
 description = "Generic merkle/hashtree primitive for active anti-entropy and content-addressed comparison"
 version.workspace = true
 edition.workspace = true
@@ -10,6 +10,10 @@ authors.workspace = true
 
 [lints]
 workspace = true
+
+[lib]
+name = "hashtree"
+path = "src/lib.rs"
 
 [dependencies]
 blake3 = { workspace = true }

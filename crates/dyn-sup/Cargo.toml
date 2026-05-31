@@ -1,5 +1,5 @@
 [package]
-name = "sup"
+name = "dyn-sup"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 description = "OTP-style supervisor tree for tokio. Owns a set of supervised tasks, watches for panics or task exit, and restarts them per a configured strategy (one_for_one, rest_for_one, simple_one_for_one, one_for_all)."
+
+[lib]
+name = "sup"
+path = "src/lib.rs"
 
 [dependencies]
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }

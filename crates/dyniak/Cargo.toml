@@ -27,7 +27,7 @@ wasm = ["dep:wasmtime", "dep:ciborium"]
 [dependencies]
 dynomite = { path = "../dynomite" }
 dyn-encoding = { path = "../dyn-encoding" }
-hashtree = { path = "../hashtree" }
+dyn-hashtree = { path = "../dyn-hashtree" }
 gen-fsm = { path = "../gen-fsm" }
 throttle-core = { path = "../throttle-core" }
 bytes = { workspace = true }

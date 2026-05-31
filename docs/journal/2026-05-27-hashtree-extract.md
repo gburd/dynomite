@@ -42,7 +42,7 @@ structure that today is locked inside `crates/dyniak/src/aae/`.
 
 * **Workspace members**: appended `crates/hashtree`.
 
-* **dyniak**: added `hashtree = { path = "../hashtree" }`
+* **dyniak**: added `dyn-hashtree = { path = "../dyn-hashtree" }`
   as a regular dependency so future code in this crate can
   consume the new primitive without a separate edit.
 
