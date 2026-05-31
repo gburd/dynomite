@@ -25,7 +25,7 @@ noxu = ["dep:noxu"]
 wasm = ["dep:wasmtime", "dep:ciborium"]
 
 [dependencies]
-dynomite = { path = "../dynomite" }
+dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.1" }
 dyn-encoding = { path = "../dyn-encoding" }
 dyn-hashtree = { path = "../dyn-hashtree" }
 gen-fsm = { path = "../gen-fsm" }

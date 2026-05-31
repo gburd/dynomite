@@ -13,7 +13,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-dynomite = { path = "../dynomite", default-features = false, features = ["tcp"] }
+dynomite = { path = "../dynomite", package = "dynomite-engine", default-features = false, features = ["tcp"] }
 
 [[bin]]
 name = "proto_redis_parse"
