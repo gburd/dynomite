@@ -1,5 +1,9 @@
 # dynvecdb fold into the dynomite Redis path
 
+For an end-to-end walk-through that runs every FT.* command
+documented below against a live `dynomited` over `redis-cli`,
+see [`docs/book/src/tutorial-search.md`](../book/src/tutorial-search.md).
+
 ## Decision
 
 dynvecdb-as-its-own-server (HTTP API on port 21900) is the wrong
