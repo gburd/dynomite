@@ -87,7 +87,7 @@ throttle-core = { path = "../throttle-core", version = "0.0.1" }
 # Vector storage + HNSW ANN index. Hosts the per-table
 # `Engine` handle that `crate::vector` registers and serves
 # through Redis-Stack-style RediSearch FT.* commands.
-dynvec = { path = "../dynvec", version = "0.0.1" }
+dyn-vec = { path = "../dyn-vec", version = "0.0.1" }
 
 # Used to construct the per-row metadata payload that the
 # `dynvec::Engine::upsert` API requires when the Redis FT.*
