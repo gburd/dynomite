@@ -25,6 +25,7 @@ fn schema_with(algorithm: IndexAlgorithm, dim: u16) -> VectorSchema {
         metadata_fields: vec![MetadataField {
             name: "title".to_string(),
             field_type: MetadataFieldType::Text,
+            tag_separator: None,
         }],
     }
 }

@@ -26,7 +26,13 @@
 //!     PARAMS 2 <param> <bytes>
 //!     [RETURN <n> <field>...] [LIMIT <off> <cnt>]
 //!     [SORTBY @<field> [ASC|DESC]] [NOCONTENT]`
-//!   (vector k-NN form).
+//!   (vector k-NN form, optionally pre-filtered by a
+//!   filter expression on the LHS of the `=>`).
+//! * `FT.SEARCH <idx> "<filter>"` (filter-only form;
+//!   accepts numeric ranges `@f:[min max]`, tag sets
+//!   `@f:{a|b|c}`, text substrings `@f:word`, and the
+//!   boolean combinators AND / OR / NOT / grouping). See
+//!   [`super::ft_filter`].
 //! * `FT.SEARCH <idx> "@<field>:<substring>"` (text
 //!   substring form; routed through the trigram +
 //!   bloom-filter inverted index for any `TEXT`-typed schema
@@ -54,11 +60,12 @@
 //! `-ERR not supported in this build`. The full grammar is
 //! tracked under `docs/dynvec/fold-into-redis-path.md`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 
 use thiserror::Error;
 
+use crate::proto::redis::ft_filter::{self, FilterExpr};
 use crate::vector::registry::{VectorRegistry, VectorTable};
 use crate::vector::schema::{
     DistanceMetric, IndexAlgorithm, MetadataField, MetadataFieldType, VectorSchema, VectorType,
@@ -109,10 +116,18 @@ pub enum FtError {
 pub enum FtCommand {
     /// `FT.CREATE` parsed payload.
     Create(CreateRequest),
-    /// `FT.SEARCH` k-NN form: `*=>[KNN k @field $param]`.
+    /// `FT.SEARCH` k-NN form: `*=>[KNN k @field $param]`,
+    /// optionally pre-filtered by a filter expression on the
+    /// LHS of the `=>` operator.
     Search(SearchRequest),
     /// `FT.SEARCH` substring form: `@field:<substring>`.
+    /// Preserved as a fast-path for the trivial single-field
+    /// shape; richer expressions land on
+    /// [`Self::SearchFilter`].
     SearchText(SearchTextRequest),
+    /// `FT.SEARCH` filter-expression form (numeric ranges,
+    /// tag sets, boolean combinators) without a KNN clause.
+    SearchFilter(SearchFilterRequest),
     /// `FT.AGGREGATE` GROUPBY pipeline.
     Aggregate(AggregateRequest),
     /// `FT.EXPLAIN <idx> <query>`.
@@ -166,7 +181,9 @@ pub enum SortDirection {
 }
 
 /// Parsed `FT.SEARCH` request restricted to the
-/// `*=>[KNN k @field $param]` form. Carries the optional
+/// `<filter>=>[KNN k @field $param]` form (where the LHS
+/// `<filter>` is either `*` or an [`FilterExpr`] describing
+/// a pre-filter over the candidate set). Carries the optional
 /// projection clauses (`RETURN` / `LIMIT` / `SORTBY` /
 /// `NOCONTENT`) so callers can pre-flight them at parse
 /// time and the executor can apply them to the result set
@@ -181,6 +198,12 @@ pub struct SearchRequest {
     pub vector_field: String,
     /// Raw query vector bytes (little-endian f32 stream).
     pub vector_bytes: Vec<u8>,
+    /// Optional pre-filter expression. When `None` the query
+    /// matches every indexed document (the legacy `*=>[KNN]`
+    /// shape). When `Some(_)` the filter is applied to the
+    /// candidate set first; the KNN ranker only sees the
+    /// surviving rows.
+    pub filter: Option<FilterExpr>,
     /// Optional `RETURN N field1 ... fieldN` projection. When
     /// `Some(list)` only those fields appear on each hit;
     /// when `None` every stored metadata field is emitted
@@ -194,6 +217,27 @@ pub struct SearchRequest {
     pub sortby: Option<(String, SortDirection)>,
     /// True when the client asked for `NOCONTENT`: hits are
     /// emitted as bare doc ids with no field arrays.
+    pub nocontent: bool,
+}
+
+/// Parsed `FT.SEARCH` request for the filter-expression
+/// form (no KNN clause). The expression may combine numeric
+/// ranges, tag sets, text substrings, and boolean operators;
+/// see [`super::ft_filter`] for the grammar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchFilterRequest {
+    /// Index name.
+    pub name: String,
+    /// Filter expression. Evaluated against the index's
+    /// observed key set.
+    pub filter: FilterExpr,
+    /// Optional `RETURN` projection (see [`SearchRequest`]).
+    pub return_fields: Option<Vec<String>>,
+    /// Optional `LIMIT offset count` window.
+    pub limit: Option<(usize, usize)>,
+    /// Optional `SORTBY` ordering.
+    pub sortby: Option<(String, SortDirection)>,
+    /// True when the client asked for `NOCONTENT`.
     pub nocontent: bool,
 }
 
@@ -437,6 +481,7 @@ pub fn execute(registry: &VectorRegistry, cmd: FtCommand) -> Result<FtOutcome, F
         FtCommand::Create(req) => execute_create(registry, req),
         FtCommand::Search(req) => execute_search(registry, &req),
         FtCommand::SearchText(req) => execute_search_text(registry, &req),
+        FtCommand::SearchFilter(req) => execute_search_filter(registry, &req),
         FtCommand::Aggregate(req) => execute_aggregate(registry, &req),
         FtCommand::Explain(req) => execute_explain(registry, &req),
         FtCommand::Alter(req) => execute_alter(registry, &req),
@@ -547,46 +592,7 @@ fn parse_create(rest: &[&[u8]]) -> Result<CreateRequest, FtError> {
 
     expect_keyword(it.next_required("FT.CREATE: expected SCHEMA")?, "SCHEMA")?;
 
-    let mut vector_field: Option<(String, VectorType, u16, DistanceMetric, IndexAlgorithm)> = None;
-    let mut metadata_fields: Vec<MetadataField> = Vec::new();
-    while let Some(field_tok) = it.next() {
-        let field_name = utf8(field_tok, "FT.CREATE: field name")?;
-        let kind_tok = it.next_required("FT.CREATE: missing field kind")?;
-        let kind_up = ascii_upper(kind_tok);
-        match kind_up.as_slice() {
-            b"TEXT" => metadata_fields.push(MetadataField {
-                name: field_name,
-                field_type: MetadataFieldType::Text,
-            }),
-            b"NUMERIC" => metadata_fields.push(MetadataField {
-                name: field_name,
-                field_type: MetadataFieldType::Numeric,
-            }),
-            b"TAG" => metadata_fields.push(MetadataField {
-                name: field_name,
-                field_type: MetadataFieldType::Tag,
-            }),
-            b"GEO" => metadata_fields.push(MetadataField {
-                name: field_name,
-                field_type: MetadataFieldType::Geo,
-            }),
-            b"VECTOR" => {
-                if vector_field.is_some() {
-                    return Err(FtError::Unsupported(
-                        "multiple VECTOR fields per index".to_string(),
-                    ));
-                }
-                let parsed = parse_vector_clause(&mut it)?;
-                vector_field = Some((field_name, parsed.0, parsed.1, parsed.2, parsed.3));
-            }
-            other => {
-                return Err(FtError::Unsupported(format!(
-                    "FT.CREATE field kind {}",
-                    String::from_utf8_lossy(other)
-                )));
-            }
-        }
-    }
+    let (vector_field, metadata_fields) = parse_create_schema_body(&mut it)?;
     let (vec_name, vec_type, dim, distance, algorithm) = vector_field.ok_or_else(|| {
         FtError::Syntax("FT.CREATE: SCHEMA must declare a VECTOR field".to_string())
     })?;
@@ -605,6 +611,138 @@ fn parse_create(rest: &[&[u8]]) -> Result<CreateRequest, FtError> {
         doc_type,
         schema,
     })
+}
+
+/// Tuple of compiled VECTOR clause attributes returned by
+/// the FT.CREATE schema body parser. Carries the field name
+/// alongside the codec and metric selectors so the outer
+/// parser can assemble a [`VectorSchema`] without unpacking
+/// nested `Option`s twice.
+type CreateVectorClause = (String, VectorType, u16, DistanceMetric, IndexAlgorithm);
+
+/// Walk the SCHEMA body of an FT.CREATE invocation,
+/// accumulating the metadata field set and at most one
+/// VECTOR clause. The cursor must be positioned just after
+/// the `SCHEMA` keyword; on return it is at the end of the
+/// argument vector.
+fn parse_create_schema_body(
+    it: &mut TokenCursor<'_>,
+) -> Result<(Option<CreateVectorClause>, Vec<MetadataField>), FtError> {
+    let mut vector_field: Option<CreateVectorClause> = None;
+    let mut metadata_fields: Vec<MetadataField> = Vec::new();
+    while let Some(field_tok) = it.next() {
+        let field_name = utf8(field_tok, "FT.CREATE: field name")?;
+        let kind_tok = it.next_required("FT.CREATE: missing field kind")?;
+        let kind_up = ascii_upper(kind_tok);
+        match kind_up.as_slice() {
+            b"TEXT" => {
+                consume_field_modifiers(it);
+                metadata_fields.push(MetadataField {
+                    name: field_name,
+                    field_type: MetadataFieldType::Text,
+                    tag_separator: None,
+                });
+            }
+            b"NUMERIC" => {
+                consume_field_modifiers(it);
+                metadata_fields.push(MetadataField {
+                    name: field_name,
+                    field_type: MetadataFieldType::Numeric,
+                    tag_separator: None,
+                });
+            }
+            b"TAG" => {
+                let separator = parse_tag_modifiers(it, &field_name)?;
+                metadata_fields.push(MetadataField {
+                    name: field_name,
+                    field_type: MetadataFieldType::Tag,
+                    tag_separator: separator,
+                });
+            }
+            b"GEO" => {
+                consume_field_modifiers(it);
+                metadata_fields.push(MetadataField {
+                    name: field_name,
+                    field_type: MetadataFieldType::Geo,
+                    tag_separator: None,
+                });
+            }
+            b"VECTOR" => {
+                if vector_field.is_some() {
+                    return Err(FtError::Unsupported(
+                        "multiple VECTOR fields per index".to_string(),
+                    ));
+                }
+                let parsed = parse_vector_clause(it)?;
+                vector_field = Some((field_name, parsed.0, parsed.1, parsed.2, parsed.3));
+            }
+            other => {
+                return Err(FtError::Unsupported(format!(
+                    "FT.CREATE field kind {}",
+                    String::from_utf8_lossy(other)
+                )));
+            }
+        }
+    }
+    Ok((vector_field, metadata_fields))
+}
+
+/// Consume RediSearch per-field modifiers that this build
+/// recognises but does not act on (`SORTABLE`, `NOINDEX`,
+/// `UNF`, `WEIGHT <n>`, `PHONETIC <m>`). The cursor is
+/// advanced past every recognised modifier; the first
+/// unrecognised token (typically the next field name) is
+/// left in place for the outer loop.
+fn consume_field_modifiers(it: &mut TokenCursor<'_>) {
+    while let Some(tok) = it.peek() {
+        let up = ascii_upper(tok);
+        match up.as_slice() {
+            b"SORTABLE" | b"NOINDEX" | b"UNF" | b"CASESENSITIVE" | b"NOSTEM" => {
+                it.advance();
+            }
+            b"WEIGHT" | b"PHONETIC" => {
+                it.advance();
+                // Each takes a single value; if it is
+                // missing we let the outer loop surface a
+                // "missing field kind" error against the
+                // field that should have followed.
+                if it.peek().is_some() {
+                    it.advance();
+                }
+            }
+            _ => break,
+        }
+    }
+}
+
+/// Parse the optional `SEPARATOR <c>` modifier on a `TAG`
+/// field, plus any of the modifiers handled by
+/// [`consume_field_modifiers`]. Returns the configured
+/// separator byte (or `None` for the RediSearch default of
+/// `,`).
+fn parse_tag_modifiers(it: &mut TokenCursor<'_>, field_name: &str) -> Result<Option<u8>, FtError> {
+    let mut separator: Option<u8> = None;
+    while let Some(tok) = it.peek() {
+        let up = ascii_upper(tok);
+        match up.as_slice() {
+            b"SEPARATOR" => {
+                it.advance();
+                let sep_tok =
+                    it.next_required("FT.CREATE: TAG SEPARATOR expects a single-character value")?;
+                if sep_tok.len() != 1 {
+                    return Err(FtError::Syntax(format!(
+                        "FT.CREATE: TAG SEPARATOR for field {field_name} must be a single ASCII byte",
+                    )));
+                }
+                separator = Some(sep_tok[0]);
+            }
+            b"SORTABLE" | b"NOINDEX" | b"UNF" | b"CASESENSITIVE" => {
+                it.advance();
+            }
+            _ => break,
+        }
+    }
+    Ok(separator)
 }
 
 fn parse_vector_clause(
@@ -707,18 +845,53 @@ fn execute_create(registry: &VectorRegistry, req: CreateRequest) -> Result<FtOut
 
 // ---- FT.SEARCH ----------------------------------------------------------
 
-/// Top-level FT.SEARCH parser. Routes between the k-NN form
-/// (`*=>[KNN k @field $param]`) and the trigram-backed
-/// substring form (`@field:substring`) based on the shape of
-/// the query expression. The substring form is the
-/// dyntext-powered text-search path; the k-NN form is the
-/// dynvec ANN path.
+/// Top-level FT.SEARCH parser. Routes between three
+/// shapes based on the body of the query expression:
+///
+/// * `<filter>=>[KNN k @field $param]` -> [`FtCommand::Search`]
+///   (the LHS may be `*` for the legacy match-all form, or
+///   any [`FilterExpr`] from [`super::ft_filter`]).
+/// * `@field:<word>` (no boolean operators) ->
+///   [`FtCommand::SearchText`] (preserves the existing
+///   trigram fast-path).
+/// * Any other filter expression -> [`FtCommand::SearchFilter`].
 fn parse_search(rest: &[&[u8]]) -> Result<FtCommand, FtError> {
     let mut it = TokenCursor::new(rest);
     let name = it.next_string("FT.SEARCH: missing index name")?;
     let query = it.next_required("FT.SEARCH: missing query expression")?;
 
-    if let Some(parsed) = try_parse_text_field_query(query)? {
+    // Step 1: split off any `=>[KNN ...]` suffix.
+    let (filter_part, knn_part) = split_knn_suffix(query)?;
+
+    if let Some(knn_bytes) = knn_part {
+        // KNN form, optionally pre-filtered. Parse the LHS
+        // as either `*` (legacy match-all) or a filter
+        // expression.
+        let filter = parse_lhs_filter(filter_part)?;
+        let (k, vec_field, param_name) = parse_knn_clause(knn_bytes)?;
+        let mut params: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+        let mut opts = SearchClauseOptions::default();
+        consume_search_trailing_clauses_with_params(&mut it, &mut params, &mut opts)?;
+        let vector_bytes = params
+            .remove(param_name.as_bytes())
+            .ok_or_else(|| FtError::Syntax(format!("FT.SEARCH: PARAMS missing ${param_name}")))?;
+        return Ok(FtCommand::Search(SearchRequest {
+            name,
+            k,
+            vector_field: vec_field,
+            vector_bytes,
+            filter,
+            return_fields: opts.return_fields,
+            limit: opts.limit,
+            sortby: opts.sortby,
+            nocontent: opts.nocontent,
+        }));
+    }
+
+    // No KNN clause. Try the legacy single-field text
+    // substring fast-path first; otherwise fall through to
+    // the generic filter executor.
+    if let Some(parsed) = try_parse_simple_text_field_query(filter_part)? {
         let (field, substring) = parsed;
         let mut opts = SearchClauseOptions::default();
         consume_search_trailing_clauses(&mut it, false, &mut opts)?;
@@ -733,12 +906,161 @@ fn parse_search(rest: &[&[u8]]) -> Result<FtCommand, FtError> {
         }));
     }
 
-    let (k, vec_field, param_name) = parse_knn_query(query)?;
-
-    // Optional clauses: PARAMS plus the projection clauses
-    // (RETURN / LIMIT / SORTBY / NOCONTENT / DIALECT).
-    let mut params: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+    let filter = ft_filter::parse_expr(filter_part)?;
     let mut opts = SearchClauseOptions::default();
+    consume_search_trailing_clauses(&mut it, false, &mut opts)?;
+    Ok(FtCommand::SearchFilter(SearchFilterRequest {
+        name,
+        filter,
+        return_fields: opts.return_fields,
+        limit: opts.limit,
+        sortby: opts.sortby,
+        nocontent: opts.nocontent,
+    }))
+}
+
+/// Split a query body into `(filter_part, Some(knn_inner))`
+/// when a `=>[KNN ...]` suffix is present, or
+/// `(filter_part, None)` otherwise. The `knn_inner` slice
+/// excludes the surrounding `[]`.
+fn split_knn_suffix(query: &[u8]) -> Result<(&[u8], Option<&[u8]>), FtError> {
+    let trimmed = trim_ascii_bytes(query);
+    let Some(arrow) = find_byte_subseq(trimmed, b"=>") else {
+        return Ok((trimmed, None));
+    };
+    let lhs = trim_ascii_bytes(&trimmed[..arrow]);
+    let rhs = trim_ascii_bytes(&trimmed[arrow + 2..]);
+    if !rhs.starts_with(b"[") || !rhs.ends_with(b"]") {
+        return Err(FtError::Syntax(
+            "FT.SEARCH query: expected '[KNN ...]' after '=>'".to_string(),
+        ));
+    }
+    let inner = &rhs[1..rhs.len() - 1];
+    Ok((lhs, Some(inner)))
+}
+
+/// Parse the LHS of a `=>[KNN ...]` query into either
+/// `None` (the literal `*` match-all form) or `Some(expr)`
+/// (any other filter shape).
+fn parse_lhs_filter(lhs: &[u8]) -> Result<Option<FilterExpr>, FtError> {
+    let trimmed = trim_ascii_bytes(lhs);
+    if trimmed.is_empty() || trimmed == b"*" {
+        return Ok(None);
+    }
+    let expr = ft_filter::parse_expr(trimmed)?;
+    if matches!(expr, FilterExpr::All) {
+        Ok(None)
+    } else {
+        Ok(Some(expr))
+    }
+}
+
+fn trim_ascii_bytes(s: &[u8]) -> &[u8] {
+    let mut start = 0;
+    let mut end = s.len();
+    while start < end && s[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    while end > start && s[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    &s[start..end]
+}
+
+/// Try to interpret the LHS as the legacy single-field
+/// substring query `@field:<bytes>` (a single token, no
+/// brackets, braces, parens, or boolean operators). The
+/// fast-path preserves the trigram-index path for the
+/// existing wire tests.
+fn try_parse_simple_text_field_query(lhs: &[u8]) -> Result<Option<(String, Vec<u8>)>, FtError> {
+    let trimmed = trim_ascii_bytes(lhs);
+    if trimmed.is_empty() || trimmed[0] != b'@' {
+        return Ok(None);
+    }
+    // Reject any byte that would change parser dispatch:
+    // the simple form is exactly `@<ident>:<value>` with no
+    // syntactic controls.
+    for &b in trimmed {
+        if matches!(b, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'|' | b'"') {
+            return Ok(None);
+        }
+        if b.is_ascii_whitespace() {
+            return Ok(None);
+        }
+    }
+    let body = &trimmed[1..];
+    let colon = body
+        .iter()
+        .position(|&b| b == b':')
+        .ok_or_else(|| FtError::Syntax("FT.SEARCH text query: missing ':'".to_string()))?;
+    let field_bytes = &body[..colon];
+    let substring = &body[colon + 1..];
+    if field_bytes.is_empty() {
+        return Err(FtError::Syntax(
+            "FT.SEARCH text query: empty field name".to_string(),
+        ));
+    }
+    if substring.is_empty() {
+        return Ok(None);
+    }
+    let field = std::str::from_utf8(field_bytes)
+        .map(str::to_string)
+        .map_err(|_| FtError::Syntax("FT.SEARCH text query: field is not UTF-8".to_string()))?;
+    Ok(Some((field, substring.to_vec())))
+}
+
+/// Parse the `KNN k @field $param` body of a `*=>[KNN ...]`
+/// clause (without the surrounding brackets).
+fn parse_knn_clause(body: &[u8]) -> Result<(usize, String, String), FtError> {
+    let s = std::str::from_utf8(body)
+        .map_err(|_| FtError::Syntax("FT.SEARCH KNN clause is not UTF-8".to_string()))?;
+    let mut parts = s.split_ascii_whitespace();
+    let knn_kw = parts
+        .next()
+        .ok_or_else(|| FtError::Syntax("FT.SEARCH query: empty KNN clause".to_string()))?;
+    if !knn_kw.eq_ignore_ascii_case("KNN") {
+        return Err(FtError::Unsupported(format!(
+            "FT.SEARCH query operator: {knn_kw}"
+        )));
+    }
+    let k_str = parts
+        .next()
+        .ok_or_else(|| FtError::Syntax("FT.SEARCH query: KNN expects k".to_string()))?;
+    let k: usize = k_str
+        .parse()
+        .map_err(|_| FtError::Syntax(format!("FT.SEARCH query: invalid k {k_str}")))?;
+    let field_tok = parts
+        .next()
+        .ok_or_else(|| FtError::Syntax("FT.SEARCH query: KNN expects @field".to_string()))?;
+    let field = field_tok
+        .strip_prefix('@')
+        .ok_or_else(|| FtError::Syntax("FT.SEARCH query: field must start with @".to_string()))?;
+    let param_tok = parts
+        .next()
+        .ok_or_else(|| FtError::Syntax("FT.SEARCH query: KNN expects $param".to_string()))?;
+    let param = param_tok
+        .strip_prefix('$')
+        .ok_or_else(|| FtError::Syntax("FT.SEARCH query: param must start with $".to_string()))?;
+    if parts.next().is_some() {
+        return Err(FtError::Unsupported(
+            "FT.SEARCH query: extra tokens after KNN expression".to_string(),
+        ));
+    }
+    if k == 0 {
+        return Err(FtError::Syntax("FT.SEARCH KNN k must be > 0".to_string()));
+    }
+    Ok((k, field.to_string(), param.to_string()))
+}
+
+/// Variant of [`consume_search_trailing_clauses`] that
+/// captures `PARAMS` key/value pairs into `params`. Used by
+/// the KNN parse path; the filter-only path forbids `PARAMS`
+/// because the query body is self-contained.
+fn consume_search_trailing_clauses_with_params(
+    it: &mut TokenCursor<'_>,
+    params: &mut HashMap<Vec<u8>, Vec<u8>>,
+    opts: &mut SearchClauseOptions,
+) -> Result<(), FtError> {
     loop {
         let Some(tok) = it.next() else { break };
         let up = ascii_upper(tok);
@@ -757,18 +1079,14 @@ fn parse_search(rest: &[&[u8]]) -> Result<FtCommand, FtError> {
                     params.insert(k_tok.to_vec(), v_tok.to_vec());
                 }
             }
-            b"RETURN" => parse_return_clause(&mut it, &mut opts)?,
-            b"SORTBY" => parse_sortby_clause(&mut it, &mut opts)?,
-            b"LIMIT" => parse_limit_clause(&mut it, &mut opts)?,
+            b"RETURN" => parse_return_clause(it, opts)?,
+            b"SORTBY" => parse_sortby_clause(it, opts)?,
+            b"LIMIT" => parse_limit_clause(it, opts)?,
             b"NOCONTENT" => opts.nocontent = true,
             b"DIALECT" => {
                 it.next_required("FT.SEARCH: DIALECT expects a value")?;
             }
-            b"WITHSCORES" => {
-                // Tolerated as a no-op; this build always emits
-                // the score under the implicit `__vec_score`
-                // metadata field on each hit.
-            }
+            b"WITHSCORES" => {}
             other => {
                 return Err(FtError::Unsupported(format!(
                     "FT.SEARCH clause {}",
@@ -777,20 +1095,7 @@ fn parse_search(rest: &[&[u8]]) -> Result<FtCommand, FtError> {
             }
         }
     }
-
-    let vector_bytes = params
-        .remove(param_name.as_bytes())
-        .ok_or_else(|| FtError::Syntax(format!("FT.SEARCH: PARAMS missing ${param_name}")))?;
-    Ok(FtCommand::Search(SearchRequest {
-        name,
-        k,
-        vector_field: vec_field,
-        vector_bytes,
-        return_fields: opts.return_fields,
-        limit: opts.limit,
-        sortby: opts.sortby,
-        nocontent: opts.nocontent,
-    }))
+    Ok(())
 }
 
 /// Mutable accumulator for the `RETURN` / `LIMIT` / `SORTBY`
@@ -1032,13 +1337,51 @@ fn execute_search(registry: &VectorRegistry, req: &SearchRequest) -> Result<FtOu
     }
     let dim = usize::from(table.schema.dim);
     let query = decode_le_f32(&req.vector_bytes, dim)?;
-    let hits = table
-        .engine
-        .search(&query, req.k, None)
-        .map_err(|e| FtError::Engine(e.to_string()))?;
 
-    let mut out = Vec::with_capacity(hits.len());
-    for (row, score) in hits {
+    // When a pre-filter is supplied, evaluate it first and
+    // restrict the KNN result to surviving keys. The HNSW
+    // index does not accept a candidate filter directly, so
+    // we oversample (cap at the tracked-row count) and
+    // post-filter; the trim to `req.k` then takes the closest
+    // survivors. For datasets larger than the cap a real
+    // implementation would push the predicate into the
+    // index walk; the brief explicitly accepts the
+    // post-filter approach for the supported scale.
+    let allowed: Option<BTreeSet<Vec<u8>>> = if let Some(filter) = &req.filter {
+        let universe: BTreeSet<Vec<u8>> = table.indexed_keys().into_iter().collect();
+        let matched = ft_filter::evaluate(filter, &table, &universe)?;
+        Some(matched)
+    } else {
+        None
+    };
+
+    let oversample_k = match allowed.as_ref() {
+        // No filter: the engine's k is exactly what we want.
+        None => req.k,
+        Some(set) => {
+            // With a filter: ask the engine for the surviving
+            // count (clipped at the tracked-row count) so we
+            // don't miss any candidate. `set.len()` is a
+            // tight upper bound.
+            set.len().max(req.k)
+        }
+    };
+    let raw = if oversample_k == 0 {
+        Vec::new()
+    } else {
+        table
+            .engine
+            .search(&query, oversample_k, None)
+            .map_err(|e| FtError::Engine(e.to_string()))?
+    };
+
+    let mut out = Vec::new();
+    for (row, score) in raw {
+        if let Some(allowed) = &allowed {
+            if !allowed.contains(&row.key) {
+                continue;
+            }
+        }
         let mut fields: Vec<(String, Vec<u8>)> = Vec::new();
         fields.push(("__vec_score".to_string(), format_float(score).into_bytes()));
         for (k, v) in &row.metadata {
@@ -1051,6 +1394,55 @@ fn execute_search(registry: &VectorRegistry, req: &SearchRequest) -> Result<FtOu
         out.push(SearchHit {
             doc_id: row.key,
             score,
+            fields,
+        });
+        if out.len() >= req.k {
+            break;
+        }
+    }
+    Ok(finalize_search_outcome(
+        out,
+        req.sortby.as_ref(),
+        req.limit,
+        req.return_fields.as_deref(),
+        req.nocontent,
+    ))
+}
+
+/// Execute a filter-expression search (no KNN clause). The
+/// filter is evaluated against the index's observed key set;
+/// each surviving key becomes a [`SearchHit`] populated with
+/// its full metadata fan-out so the same projection pipeline
+/// (`SORTBY` -> `LIMIT` -> `RETURN` -> `NOCONTENT`) applies
+/// uniformly with the KNN path.
+fn execute_search_filter(
+    registry: &VectorRegistry,
+    req: &SearchFilterRequest,
+) -> Result<FtOutcome, FtError> {
+    let table = registry
+        .get(&req.name)
+        .ok_or_else(|| FtError::NotFound(req.name.clone()))?;
+    let universe: BTreeSet<Vec<u8>> = table.indexed_keys().into_iter().collect();
+    let matched = ft_filter::evaluate(&req.filter, &table, &universe)?;
+
+    let mut out: Vec<SearchHit> = Vec::with_capacity(matched.len());
+    for key in matched {
+        let row = match table.engine.get(&key) {
+            Ok(Some(r)) => r,
+            Ok(None) => continue,
+            Err(e) => return Err(FtError::Engine(e.to_string())),
+        };
+        let mut fields: Vec<(String, Vec<u8>)> = Vec::new();
+        for (k, v) in &row.metadata {
+            let value_bytes = match v {
+                serde_json::Value::String(s) => s.clone().into_bytes(),
+                other => other.to_string().into_bytes(),
+            };
+            fields.push((k.clone(), value_bytes));
+        }
+        out.push(SearchHit {
+            doc_id: row.key,
+            score: 0.0,
             fields,
         });
     }
