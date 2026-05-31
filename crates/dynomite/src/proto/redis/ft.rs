@@ -2,12 +2,13 @@
 //!
 //! This module is the in-process home of the
 //! `FT.CREATE` / `FT.SEARCH` / `FT.INFO` / `FT.LIST` /
-//! `FT.DROPINDEX` parsers and executors that route through the
-//! [`crate::vector::registry::VectorRegistry`] landed in Phase B.
-//! It also exposes [`maybe_index_hset`], the HSET interception
-//! helper that the Redis dispatcher consults so that a write to
-//! a key matching a registered prefix turns into a vector
-//! upsert in the corresponding index.
+//! `FT.DROPINDEX` / `FT.AGGREGATE` / `FT.EXPLAIN` /
+//! `FT.ALTER` parsers and executors that route through the
+//! [`crate::vector::registry::VectorRegistry`] landed in
+//! Phase B. It also exposes [`maybe_index_hset`], the HSET
+//! interception helper that the Redis dispatcher consults so
+//! that a write to a key matching a registered prefix turns
+//! into a vector upsert in the corresponding index.
 //!
 //! The module is intentionally self-contained: it consumes a
 //! slice of byte strings (the parsed RESP arguments) and emits
@@ -22,11 +23,24 @@
 //!   ( <field> TEXT | <field> VECTOR HNSW <m> TYPE FLOAT32
 //!     DIM <d> DISTANCE_METRIC COSINE|EUCLIDEAN|DOTPRODUCT )+`
 //! * `FT.SEARCH <idx> "*=>[KNN <k> @<field> $<param>]"
-//!     PARAMS 2 <param> <bytes>` (vector k-NN form).
+//!     PARAMS 2 <param> <bytes>
+//!     [RETURN <n> <field>...] [LIMIT <off> <cnt>]
+//!     [SORTBY @<field> [ASC|DESC]] [NOCONTENT]`
+//!   (vector k-NN form).
 //! * `FT.SEARCH <idx> "@<field>:<substring>"` (text
 //!   substring form; routed through the trigram +
 //!   bloom-filter inverted index for any `TEXT`-typed schema
-//!   field).
+//!   field). Accepts the same `RETURN` / `LIMIT` / `SORTBY`
+//!   / `NOCONTENT` projection clauses.
+//! * `FT.AGGREGATE <idx> <query> GROUPBY <n> @<field>...
+//!     ( REDUCE COUNT 0 AS <name>
+//!     | REDUCE SUM 1 @<field> AS <name>
+//!     | REDUCE AVG 1 @<field> AS <name> )+
+//!     [LIMIT <off> <cnt>]` (the basic aggregation pipeline).
+//! * `FT.EXPLAIN <idx> <query>` (textual query plan).
+//! * `FT.ALTER <idx> ADD <field> ( TEXT | TAG )` (schema
+//!   extension; rejects DROP / SCHEMA REPLACE and refuses
+//!   to add VECTOR fields, which require an index rebuild).
 //! * `FT.REGEX <idx> <field> <pattern> [K=<n>]` (Dynomite
 //!   extension; not standard RediSearch). `K=0` (default) is
 //!   the exact regex path; `K>=1` is the approximate regex
@@ -40,7 +54,7 @@
 //! `-ERR not supported in this build`. The full grammar is
 //! tracked under `docs/dynvec/fold-into-redis-path.md`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 
 use thiserror::Error;
@@ -99,6 +113,12 @@ pub enum FtCommand {
     Search(SearchRequest),
     /// `FT.SEARCH` substring form: `@field:<substring>`.
     SearchText(SearchTextRequest),
+    /// `FT.AGGREGATE` GROUPBY pipeline.
+    Aggregate(AggregateRequest),
+    /// `FT.EXPLAIN <idx> <query>`.
+    Explain(ExplainRequest),
+    /// `FT.ALTER <idx> ADD <field> <type>`.
+    Alter(AlterRequest),
     /// `FT.REGEX` (Dynomite extension): exact or approximate
     /// regex over a `TEXT`-indexed field.
     Regex(RegexRequest),
@@ -136,8 +156,21 @@ pub struct CreateRequest {
     pub schema: VectorSchema,
 }
 
+/// Sort direction for the `SORTBY` clause of `FT.SEARCH`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SortDirection {
+    /// Ascending order (smallest first).
+    Asc,
+    /// Descending order (largest first).
+    Desc,
+}
+
 /// Parsed `FT.SEARCH` request restricted to the
-/// `*=>[KNN k @field $param]` form.
+/// `*=>[KNN k @field $param]` form. Carries the optional
+/// projection clauses (`RETURN` / `LIMIT` / `SORTBY` /
+/// `NOCONTENT`) so callers can pre-flight them at parse
+/// time and the executor can apply them to the result set
+/// before rendering.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SearchRequest {
     /// Index name.
@@ -148,11 +181,26 @@ pub struct SearchRequest {
     pub vector_field: String,
     /// Raw query vector bytes (little-endian f32 stream).
     pub vector_bytes: Vec<u8>,
+    /// Optional `RETURN N field1 ... fieldN` projection. When
+    /// `Some(list)` only those fields appear on each hit;
+    /// when `None` every stored metadata field is emitted
+    /// alongside the implicit `__vec_score`.
+    pub return_fields: Option<Vec<String>>,
+    /// Optional `LIMIT offset count` pagination window.
+    /// `None` means "return up to `k` hits starting at 0".
+    pub limit: Option<(usize, usize)>,
+    /// Optional `SORTBY @field [ASC|DESC]` ordering. `None`
+    /// preserves the engine's distance order.
+    pub sortby: Option<(String, SortDirection)>,
+    /// True when the client asked for `NOCONTENT`: hits are
+    /// emitted as bare doc ids with no field arrays.
+    pub nocontent: bool,
 }
 
 /// Parsed `FT.SEARCH` request for the text-substring form
 /// `@field:<substring>`. The substring is matched against the
-/// TEXT field's trigram + bloom inverted index.
+/// TEXT field's trigram + bloom inverted index. Carries the
+/// same projection clauses as the k-NN variant.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SearchTextRequest {
     /// Index name.
@@ -161,6 +209,80 @@ pub struct SearchTextRequest {
     pub field: String,
     /// Raw substring bytes to search for.
     pub query: Vec<u8>,
+    /// Optional `RETURN` projection (see [`SearchRequest`]).
+    pub return_fields: Option<Vec<String>>,
+    /// Optional `LIMIT offset count` window.
+    pub limit: Option<(usize, usize)>,
+    /// Optional `SORTBY` ordering.
+    pub sortby: Option<(String, SortDirection)>,
+    /// True when the client asked for `NOCONTENT`.
+    pub nocontent: bool,
+}
+
+/// Reducer kind on an `FT.AGGREGATE` `REDUCE` clause.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReducerKind {
+    /// `REDUCE COUNT 0 AS <name>` -- per-group row count.
+    Count,
+    /// `REDUCE SUM 1 @<field> AS <name>` -- per-group sum of
+    /// the named numeric field.
+    Sum {
+        /// Field name (without the leading `@`).
+        field: String,
+    },
+    /// `REDUCE AVG 1 @<field> AS <name>` -- per-group mean of
+    /// the named numeric field.
+    Avg {
+        /// Field name (without the leading `@`).
+        field: String,
+    },
+}
+
+/// One reducer in an `FT.AGGREGATE` pipeline.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReducerSpec {
+    /// Reducer kind (`COUNT` / `SUM` / `AVG`).
+    pub kind: ReducerKind,
+    /// Output column name (the `AS <name>` token).
+    pub alias: String,
+}
+
+/// Parsed `FT.AGGREGATE` request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AggregateRequest {
+    /// Index name.
+    pub name: String,
+    /// Group-by fields (the `@<field>` tokens). At least
+    /// one is required by this build's subset.
+    pub group_by: Vec<String>,
+    /// Pipeline of reducers, in declaration order.
+    pub reducers: Vec<ReducerSpec>,
+    /// Optional `LIMIT offset count` window applied after
+    /// grouping.
+    pub limit: Option<(usize, usize)>,
+}
+
+/// Parsed `FT.EXPLAIN` request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExplainRequest {
+    /// Index name.
+    pub name: String,
+    /// The raw query expression to explain.
+    pub query: Vec<u8>,
+}
+
+/// Parsed `FT.ALTER ADD <field> <type>` request. Only ADD is
+/// supported in this build; DROP and SCHEMA REPLACE are
+/// rejected at parse time.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AlterRequest {
+    /// Index name.
+    pub name: String,
+    /// Field name to add.
+    pub field: String,
+    /// New field type. Limited to TEXT and TAG; VECTOR is
+    /// explicitly rejected at parse time.
+    pub field_type: MetadataFieldType,
 }
 
 /// Parsed `FT.REGEX` request. `max_errors` of `0` selects the
@@ -198,6 +320,28 @@ pub enum FtOutcome {
         /// Per-document (id, score) hits, sorted closest-first.
         hits: Vec<SearchHit>,
     },
+    /// FT.SEARCH result set when the client passed
+    /// `NOCONTENT`: only the matching doc ids are emitted,
+    /// without per-hit metadata arrays.
+    SearchNoContent {
+        /// Total number of matches returned.
+        total: usize,
+        /// Doc keys, in the same order they would appear in
+        /// the corresponding [`Self::Search`] response.
+        doc_ids: Vec<Vec<u8>>,
+    },
+    /// FT.AGGREGATE result set: total group count plus one
+    /// row of `(name, value)` pairs per group.
+    Aggregate {
+        /// Number of groups produced (before `LIMIT`).
+        total_groups: usize,
+        /// One row per group; each row is a flat list of
+        /// `(name, bytes)` pairs that the renderer emits as
+        /// a RESP array of bulk strings.
+        rows: Vec<Vec<(String, Vec<u8>)>>,
+    },
+    /// FT.EXPLAIN textual query plan.
+    Explain(String),
     /// `+OK` with side note: drop also affected `<n>`
     /// underlying documents.
     DropOk {
@@ -254,13 +398,30 @@ pub fn parse_command(args: &[&[u8]]) -> Result<FtCommand, FtError> {
     match cmd.as_slice() {
         b"FT.CREATE" => parse_create(rest).map(FtCommand::Create),
         b"FT.SEARCH" => parse_search(rest),
+        b"FT.AGGREGATE" => parse_aggregate(rest).map(FtCommand::Aggregate),
+        b"FT.EXPLAIN" => parse_explain(rest).map(FtCommand::Explain),
+        b"FT.ALTER" => parse_alter(rest).map(FtCommand::Alter),
         b"FT.REGEX" => parse_regex(rest).map(FtCommand::Regex),
         b"FT.INFO" => parse_info(rest),
         b"FT.LIST" | b"FT._LIST" => parse_list(rest),
         b"FT.DROPINDEX" => parse_dropindex(rest),
-        other => Err(FtError::UnknownCommand(
-            String::from_utf8_lossy(other).into_owned(),
-        )),
+        other => {
+            // Unknown FT.* keywords surface with the
+            // `not supported in this build` wording so the
+            // dispatcher can use the same shared response
+            // shape for genuinely-unimplemented commands.
+            // Non-FT.* keywords still yield UnknownCommand;
+            // the dispatcher only routes FT.* through here.
+            if other.starts_with(b"FT.") {
+                Err(FtError::Unsupported(
+                    String::from_utf8_lossy(other).into_owned(),
+                ))
+            } else {
+                Err(FtError::UnknownCommand(
+                    String::from_utf8_lossy(other).into_owned(),
+                ))
+            }
+        }
     }
 }
 
@@ -276,6 +437,9 @@ pub fn execute(registry: &VectorRegistry, cmd: FtCommand) -> Result<FtOutcome, F
         FtCommand::Create(req) => execute_create(registry, req),
         FtCommand::Search(req) => execute_search(registry, &req),
         FtCommand::SearchText(req) => execute_search_text(registry, &req),
+        FtCommand::Aggregate(req) => execute_aggregate(registry, &req),
+        FtCommand::Explain(req) => execute_explain(registry, &req),
+        FtCommand::Alter(req) => execute_alter(registry, &req),
         FtCommand::Regex(req) => execute_regex(registry, &req),
         FtCommand::Info { name } => execute_info(registry, name),
         FtCommand::List => Ok(FtOutcome::List(registry.list())),
@@ -556,18 +720,25 @@ fn parse_search(rest: &[&[u8]]) -> Result<FtCommand, FtError> {
 
     if let Some(parsed) = try_parse_text_field_query(query)? {
         let (field, substring) = parsed;
-        consume_search_trailing_clauses(&mut it, false)?;
+        let mut opts = SearchClauseOptions::default();
+        consume_search_trailing_clauses(&mut it, false, &mut opts)?;
         return Ok(FtCommand::SearchText(SearchTextRequest {
             name,
             field,
             query: substring,
+            return_fields: opts.return_fields,
+            limit: opts.limit,
+            sortby: opts.sortby,
+            nocontent: opts.nocontent,
         }));
     }
 
     let (k, vec_field, param_name) = parse_knn_query(query)?;
 
-    // Optional clauses: PARAMS, RETURN, SORTBY, LIMIT, DIALECT.
+    // Optional clauses: PARAMS plus the projection clauses
+    // (RETURN / LIMIT / SORTBY / NOCONTENT / DIALECT).
     let mut params: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+    let mut opts = SearchClauseOptions::default();
     loop {
         let Some(tok) = it.next() else { break };
         let up = ascii_upper(tok);
@@ -586,30 +757,17 @@ fn parse_search(rest: &[&[u8]]) -> Result<FtCommand, FtError> {
                     params.insert(k_tok.to_vec(), v_tok.to_vec());
                 }
             }
-            b"RETURN" => {
-                let n_tok = it.next_required("FT.SEARCH: RETURN expects a count")?;
-                let n = parse_unsigned(n_tok, "FT.SEARCH RETURN count")?;
-                for _ in 0..n {
-                    it.next_required("FT.SEARCH: RETURN expects field name")?;
-                }
-            }
-            b"SORTBY" => {
-                return Err(FtError::Unsupported(
-                    "FT.SEARCH SORTBY not supported in this build".to_string(),
-                ));
-            }
-            b"LIMIT" => {
-                // Phase C ignores LIMIT and always honours the
-                // implicit `0 k` from the KNN expression.
-                it.next_required("FT.SEARCH: LIMIT expects offset")?;
-                it.next_required("FT.SEARCH: LIMIT expects count")?;
-            }
+            b"RETURN" => parse_return_clause(&mut it, &mut opts)?,
+            b"SORTBY" => parse_sortby_clause(&mut it, &mut opts)?,
+            b"LIMIT" => parse_limit_clause(&mut it, &mut opts)?,
+            b"NOCONTENT" => opts.nocontent = true,
             b"DIALECT" => {
                 it.next_required("FT.SEARCH: DIALECT expects a value")?;
             }
-            b"NOCONTENT" | b"WITHSCORES" => {
-                // Tolerated as no-ops; Phase C always returns
-                // the score and the document key.
+            b"WITHSCORES" => {
+                // Tolerated as a no-op; this build always emits
+                // the score under the implicit `__vec_score`
+                // metadata field on each hit.
             }
             other => {
                 return Err(FtError::Unsupported(format!(
@@ -628,7 +786,94 @@ fn parse_search(rest: &[&[u8]]) -> Result<FtCommand, FtError> {
         k,
         vector_field: vec_field,
         vector_bytes,
+        return_fields: opts.return_fields,
+        limit: opts.limit,
+        sortby: opts.sortby,
+        nocontent: opts.nocontent,
     }))
+}
+
+/// Mutable accumulator for the `RETURN` / `LIMIT` / `SORTBY`
+/// / `NOCONTENT` projection clauses common to both
+/// `FT.SEARCH` shapes. Held inline by [`parse_search`] and
+/// passed by reference to [`consume_search_trailing_clauses`]
+/// so the substring path and the k-NN path stay in lockstep.
+#[derive(Default)]
+struct SearchClauseOptions {
+    return_fields: Option<Vec<String>>,
+    limit: Option<(usize, usize)>,
+    sortby: Option<(String, SortDirection)>,
+    nocontent: bool,
+}
+
+fn parse_return_clause(
+    it: &mut TokenCursor<'_>,
+    opts: &mut SearchClauseOptions,
+) -> Result<(), FtError> {
+    let n_tok = it.next_required("FT.SEARCH: RETURN expects a count")?;
+    let n = parse_unsigned(n_tok, "FT.SEARCH RETURN count")?;
+    let mut fields: Vec<String> = Vec::with_capacity(n);
+    for _ in 0..n {
+        let f_tok = it.next_required("FT.SEARCH: RETURN expects field name")?;
+        // RediSearch lets clients prefix RETURN field names
+        // with `@`. Treat both forms identically by stripping
+        // the marker before storing.
+        let trimmed: &[u8] = if f_tok.first() == Some(&b'@') {
+            &f_tok[1..]
+        } else {
+            f_tok
+        };
+        fields.push(utf8(trimmed, "FT.SEARCH RETURN field name")?);
+    }
+    opts.return_fields = Some(fields);
+    Ok(())
+}
+
+fn parse_limit_clause(
+    it: &mut TokenCursor<'_>,
+    opts: &mut SearchClauseOptions,
+) -> Result<(), FtError> {
+    let off_tok = it.next_required("FT.SEARCH: LIMIT expects offset")?;
+    let cnt_tok = it.next_required("FT.SEARCH: LIMIT expects count")?;
+    let off = parse_unsigned(off_tok, "FT.SEARCH LIMIT offset")?;
+    let cnt = parse_unsigned(cnt_tok, "FT.SEARCH LIMIT count")?;
+    opts.limit = Some((off, cnt));
+    Ok(())
+}
+
+fn parse_sortby_clause(
+    it: &mut TokenCursor<'_>,
+    opts: &mut SearchClauseOptions,
+) -> Result<(), FtError> {
+    let f_tok = it.next_required("FT.SEARCH: SORTBY expects @field")?;
+    let field_bytes: &[u8] = if f_tok.first() == Some(&b'@') {
+        &f_tok[1..]
+    } else {
+        f_tok
+    };
+    let field = utf8(field_bytes, "FT.SEARCH SORTBY field")?;
+    // The direction token is optional. Peek; if the next
+    // token is ASC/DESC, consume it; otherwise default to
+    // ASC and leave the cursor untouched so the caller's
+    // outer loop can dispatch it.
+    let direction = if let Some(next) = it.peek() {
+        let up = ascii_upper(next);
+        match up.as_slice() {
+            b"ASC" => {
+                it.advance();
+                SortDirection::Asc
+            }
+            b"DESC" => {
+                it.advance();
+                SortDirection::Desc
+            }
+            _ => SortDirection::Asc,
+        }
+    } else {
+        SortDirection::Asc
+    };
+    opts.sortby = Some((field, direction));
+    Ok(())
 }
 
 /// Try to interpret the FT.SEARCH query expression as the
@@ -687,6 +932,7 @@ fn find_byte_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 fn consume_search_trailing_clauses(
     it: &mut TokenCursor<'_>,
     allow_params: bool,
+    opts: &mut SearchClauseOptions,
 ) -> Result<(), FtError> {
     loop {
         let Some(tok) = it.next() else { break };
@@ -704,26 +950,14 @@ fn consume_search_trailing_clauses(
                     it.next_required("FT.SEARCH: PARAMS expects key/value pair")?;
                 }
             }
-            b"RETURN" => {
-                let n_tok = it.next_required("FT.SEARCH: RETURN expects a count")?;
-                let n = parse_unsigned(n_tok, "FT.SEARCH RETURN count")?;
-                for _ in 0..n {
-                    it.next_required("FT.SEARCH: RETURN expects field name")?;
-                }
-            }
-            b"SORTBY" => {
-                return Err(FtError::Unsupported(
-                    "FT.SEARCH SORTBY not supported in this build".to_string(),
-                ));
-            }
-            b"LIMIT" => {
-                it.next_required("FT.SEARCH: LIMIT expects offset")?;
-                it.next_required("FT.SEARCH: LIMIT expects count")?;
-            }
+            b"RETURN" => parse_return_clause(it, opts)?,
+            b"SORTBY" => parse_sortby_clause(it, opts)?,
+            b"LIMIT" => parse_limit_clause(it, opts)?,
+            b"NOCONTENT" => opts.nocontent = true,
             b"DIALECT" => {
                 it.next_required("FT.SEARCH: DIALECT expects a value")?;
             }
-            b"NOCONTENT" | b"WITHSCORES" => {}
+            b"WITHSCORES" => {}
             other => {
                 return Err(FtError::Unsupported(format!(
                     "FT.SEARCH clause {}",
@@ -820,8 +1054,13 @@ fn execute_search(registry: &VectorRegistry, req: &SearchRequest) -> Result<FtOu
             fields,
         });
     }
-    let total = out.len();
-    Ok(FtOutcome::Search { total, hits: out })
+    Ok(finalize_search_outcome(
+        out,
+        req.sortby.as_ref(),
+        req.limit,
+        req.return_fields.as_deref(),
+        req.nocontent,
+    ))
 }
 
 fn execute_search_text(
@@ -847,14 +1086,655 @@ fn execute_search_text(
         })?;
     let mut out = Vec::with_capacity(raw_hits.len());
     for (key, text) in raw_hits {
+        let mut fields: Vec<(String, Vec<u8>)> = vec![(req.field.clone(), text)];
+        // Mirror any sortby field that the user named so the
+        // ranking pass can find it on each hit. The trigram
+        // search returns only the matched body; pull the
+        // remaining metadata from the dynvec engine row when
+        // SORTBY references a different field.
+        if let Some((sort_field, _)) = &req.sortby {
+            if sort_field != &req.field {
+                if let Ok(Some(row)) = table.engine.get(&key) {
+                    if let Some(v) = row.metadata.get(sort_field) {
+                        let bytes = match v {
+                            serde_json::Value::String(s) => s.clone().into_bytes(),
+                            other => other.to_string().into_bytes(),
+                        };
+                        fields.push((sort_field.clone(), bytes));
+                    }
+                }
+            }
+        }
         out.push(SearchHit {
             doc_id: key,
             score: 0.0,
-            fields: vec![(req.field.clone(), text)],
+            fields,
         });
     }
-    let total = out.len();
-    Ok(FtOutcome::Search { total, hits: out })
+    Ok(finalize_search_outcome(
+        out,
+        req.sortby.as_ref(),
+        req.limit,
+        req.return_fields.as_deref(),
+        req.nocontent,
+    ))
+}
+
+/// Apply the projection pipeline (`SORTBY` -> `LIMIT` ->
+/// `RETURN` -> `NOCONTENT`) to a freshly-collected hit set
+/// and pick the right [`FtOutcome`] variant.
+///
+/// `sortby` runs first because both `LIMIT` and `RETURN`
+/// operate on the post-sort order. `LIMIT` then trims to the
+/// (offset, count) window. `RETURN` projects each hit's
+/// fields down to the requested subset. Finally, when
+/// `nocontent` is set the field arrays are dropped entirely
+/// and the renderer emits bare doc ids.
+fn finalize_search_outcome(
+    mut hits: Vec<SearchHit>,
+    sortby: Option<&(String, SortDirection)>,
+    limit: Option<(usize, usize)>,
+    return_fields: Option<&[String]>,
+    nocontent: bool,
+) -> FtOutcome {
+    if let Some((field, dir)) = sortby {
+        sort_hits_by_field(&mut hits, field, *dir);
+    }
+    if let Some((offset, count)) = limit {
+        if offset >= hits.len() {
+            hits.clear();
+        } else {
+            let end = offset.saturating_add(count).min(hits.len());
+            hits = hits.drain(offset..end).collect();
+        }
+    }
+    if let Some(fields) = return_fields {
+        for hit in &mut hits {
+            hit.fields
+                .retain(|(name, _)| fields.iter().any(|f| f == name));
+        }
+    }
+    let total = hits.len();
+    if nocontent {
+        let doc_ids = hits.into_iter().map(|h| h.doc_id).collect();
+        FtOutcome::SearchNoContent { total, doc_ids }
+    } else {
+        FtOutcome::Search { total, hits }
+    }
+}
+
+/// Sort `hits` in place by the metadata field `field` in
+/// direction `dir`. Hits that are missing the field sort
+/// last (in either direction) so they do not pollute the
+/// ordering of the hits that do declare it.
+fn sort_hits_by_field(hits: &mut [SearchHit], field: &str, dir: SortDirection) {
+    hits.sort_by(|a, b| {
+        let av = lookup_field(a, field);
+        let bv = lookup_field(b, field);
+        // Push None to the back regardless of direction.
+        match (av, bv) {
+            (Some(a_bytes), Some(b_bytes)) => {
+                match (parse_sort_key(a_bytes), parse_sort_key(b_bytes)) {
+                    (Some(a_num), Some(b_num)) => match dir {
+                        SortDirection::Asc => a_num
+                            .partial_cmp(&b_num)
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                        SortDirection::Desc => b_num
+                            .partial_cmp(&a_num)
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                    },
+                    _ => match dir {
+                        SortDirection::Asc => a_bytes.cmp(b_bytes),
+                        SortDirection::Desc => b_bytes.cmp(a_bytes),
+                    },
+                }
+            }
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+}
+
+fn lookup_field<'a>(hit: &'a SearchHit, name: &str) -> Option<&'a [u8]> {
+    hit.fields
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, v)| v.as_slice())
+}
+
+/// Try to parse a sort key as a finite f64. Used by
+/// [`sort_hits_by_field`] so numeric fields sort by value
+/// instead of by ASCII byte order.
+fn parse_sort_key(bytes: &[u8]) -> Option<f64> {
+    let s = std::str::from_utf8(bytes).ok()?;
+    let parsed: f64 = s.trim().parse().ok()?;
+    if parsed.is_finite() {
+        Some(parsed)
+    } else {
+        None
+    }
+}
+
+// ---- FT.AGGREGATE / FT.EXPLAIN / FT.ALTER ------------------------------
+
+/// Parse `FT.AGGREGATE <idx> <query> GROUPBY <n> @field...`
+/// `(REDUCE <kind> ...)+ [LIMIT <off> <cnt>]`. Other clauses
+/// (`SORTBY`, `APPLY`, `FILTER`, `LOAD`, `WITHCURSOR`, ...) are
+/// rejected with `not supported in this build` so the wire
+/// surface keeps the brief's exit gate honest.
+fn parse_aggregate(rest: &[&[u8]]) -> Result<AggregateRequest, FtError> {
+    let mut it = TokenCursor::new(rest);
+    let name = it.next_string("FT.AGGREGATE: missing index name")?;
+    let _query = it.next_required("FT.AGGREGATE: missing query expression")?;
+
+    let mut group_by: Vec<String> = Vec::new();
+    let mut reducers: Vec<ReducerSpec> = Vec::new();
+    let mut limit: Option<(usize, usize)> = None;
+    let mut saw_groupby = false;
+
+    while let Some(tok) = it.next() {
+        let up = ascii_upper(tok);
+        match up.as_slice() {
+            b"GROUPBY" => {
+                saw_groupby = true;
+                parse_aggregate_groupby(&mut it, &mut group_by)?;
+            }
+            b"REDUCE" => {
+                reducers.push(parse_aggregate_reduce(&mut it)?);
+            }
+            b"LIMIT" => {
+                let off_tok = it.next_required("FT.AGGREGATE: LIMIT expects offset")?;
+                let cnt_tok = it.next_required("FT.AGGREGATE: LIMIT expects count")?;
+                let off = parse_unsigned(off_tok, "FT.AGGREGATE LIMIT offset")?;
+                let cnt = parse_unsigned(cnt_tok, "FT.AGGREGATE LIMIT count")?;
+                limit = Some((off, cnt));
+            }
+            other => {
+                return Err(FtError::Unsupported(format!(
+                    "FT.AGGREGATE clause {}",
+                    String::from_utf8_lossy(other)
+                )));
+            }
+        }
+    }
+
+    if !saw_groupby {
+        return Err(FtError::Unsupported(
+            "FT.AGGREGATE without GROUPBY".to_string(),
+        ));
+    }
+    if reducers.is_empty() {
+        return Err(FtError::Syntax(
+            "FT.AGGREGATE: GROUPBY requires at least one REDUCE".to_string(),
+        ));
+    }
+    Ok(AggregateRequest {
+        name,
+        group_by,
+        reducers,
+        limit,
+    })
+}
+
+fn parse_aggregate_groupby(
+    it: &mut TokenCursor<'_>,
+    group_by: &mut Vec<String>,
+) -> Result<(), FtError> {
+    let n_tok = it.next_required("FT.AGGREGATE: GROUPBY expects a count")?;
+    let n = parse_unsigned(n_tok, "FT.AGGREGATE GROUPBY count")?;
+    if n == 0 {
+        return Err(FtError::Syntax(
+            "FT.AGGREGATE GROUPBY count must be > 0".to_string(),
+        ));
+    }
+    for _ in 0..n {
+        let f_tok = it.next_required("FT.AGGREGATE: GROUPBY expects @field")?;
+        let bytes: &[u8] = if f_tok.first() == Some(&b'@') {
+            &f_tok[1..]
+        } else {
+            f_tok
+        };
+        group_by.push(utf8(bytes, "FT.AGGREGATE GROUPBY field")?);
+    }
+    Ok(())
+}
+
+fn parse_aggregate_reduce(it: &mut TokenCursor<'_>) -> Result<ReducerSpec, FtError> {
+    let kind_tok = it.next_required("FT.AGGREGATE: REDUCE expects a kind")?;
+    let kind_up = ascii_upper(kind_tok);
+    let arg_count_tok = it.next_required("FT.AGGREGATE: REDUCE expects an argument count")?;
+    let arg_count = parse_unsigned(arg_count_tok, "FT.AGGREGATE REDUCE arg count")?;
+    let kind = match kind_up.as_slice() {
+        b"COUNT" => {
+            if arg_count != 0 {
+                return Err(FtError::Syntax(
+                    "FT.AGGREGATE REDUCE COUNT expects 0 args".to_string(),
+                ));
+            }
+            ReducerKind::Count
+        }
+        b"SUM" => {
+            if arg_count != 1 {
+                return Err(FtError::Syntax(
+                    "FT.AGGREGATE REDUCE SUM expects 1 arg".to_string(),
+                ));
+            }
+            ReducerKind::Sum {
+                field: take_field_arg(it, "FT.AGGREGATE: SUM expects @field")?,
+            }
+        }
+        b"AVG" => {
+            if arg_count != 1 {
+                return Err(FtError::Syntax(
+                    "FT.AGGREGATE REDUCE AVG expects 1 arg".to_string(),
+                ));
+            }
+            ReducerKind::Avg {
+                field: take_field_arg(it, "FT.AGGREGATE: AVG expects @field")?,
+            }
+        }
+        other => {
+            // Skip the per-reducer arguments before surfacing
+            // the error so the cursor stays well-formed for
+            // any caller that wants to keep parsing after a
+            // soft failure. Today we bail immediately so this
+            // is just hygiene, but it keeps the helper usable
+            // for future relaxations.
+            for _ in 0..arg_count {
+                let _ = it.next();
+            }
+            return Err(FtError::Unsupported(format!(
+                "FT.AGGREGATE REDUCE {}",
+                String::from_utf8_lossy(other)
+            )));
+        }
+    };
+    let as_tok = it.next_required("FT.AGGREGATE: REDUCE expects AS <name>")?;
+    if !as_tok.eq_ignore_ascii_case(b"AS") {
+        return Err(FtError::Syntax(
+            "FT.AGGREGATE REDUCE clause missing AS".to_string(),
+        ));
+    }
+    let alias = it.next_string("FT.AGGREGATE: REDUCE AS expects a name")?;
+    Ok(ReducerSpec { kind, alias })
+}
+
+fn take_field_arg(it: &mut TokenCursor<'_>, msg: &str) -> Result<String, FtError> {
+    let tok = it.next_required(msg)?;
+    let bytes: &[u8] = if tok.first() == Some(&b'@') {
+        &tok[1..]
+    } else {
+        tok
+    };
+    utf8(bytes, msg)
+}
+
+fn parse_explain(rest: &[&[u8]]) -> Result<ExplainRequest, FtError> {
+    let mut it = TokenCursor::new(rest);
+    let name = it.next_string("FT.EXPLAIN: missing index name")?;
+    let query_tok = it.next_required("FT.EXPLAIN: missing query expression")?;
+    // The DIALECT clause is the only trailing modifier we
+    // tolerate today; consume its argument if present so
+    // clients that always emit it stay green.
+    while let Some(tok) = it.next() {
+        let up = ascii_upper(tok);
+        match up.as_slice() {
+            b"DIALECT" => {
+                it.next_required("FT.EXPLAIN: DIALECT expects a value")?;
+            }
+            other => {
+                return Err(FtError::Unsupported(format!(
+                    "FT.EXPLAIN clause {}",
+                    String::from_utf8_lossy(other)
+                )));
+            }
+        }
+    }
+    Ok(ExplainRequest {
+        name,
+        query: query_tok.to_vec(),
+    })
+}
+
+fn parse_alter(rest: &[&[u8]]) -> Result<AlterRequest, FtError> {
+    let mut it = TokenCursor::new(rest);
+    let name = it.next_string("FT.ALTER: missing index name")?;
+    let op_tok = it.next_required("FT.ALTER: expected ADD")?;
+    let op_up = ascii_upper(op_tok);
+    match op_up.as_slice() {
+        b"ADD" => {}
+        b"DROP" => {
+            return Err(FtError::Unsupported("FT.ALTER DROP".to_string()));
+        }
+        b"SCHEMA" => {
+            // FT.ALTER ... SCHEMA ADD <field> <type>...; the
+            // SCHEMA-prefixed form is RediSearch 2.x syntax
+            // and not implemented here, even when the inner
+            // operation is ADD.
+            return Err(FtError::Unsupported("FT.ALTER SCHEMA".to_string()));
+        }
+        other => {
+            return Err(FtError::Syntax(format!(
+                "FT.ALTER: expected ADD, got {}",
+                String::from_utf8_lossy(other)
+            )));
+        }
+    }
+    let field = it.next_string("FT.ALTER ADD: missing field name")?;
+    let type_tok = it.next_required("FT.ALTER ADD: missing field type")?;
+    let type_up = ascii_upper(type_tok);
+    let field_type = match type_up.as_slice() {
+        b"TEXT" => MetadataFieldType::Text,
+        b"TAG" => MetadataFieldType::Tag,
+        b"VECTOR" => {
+            return Err(FtError::Unsupported(
+                "FT.ALTER ADD VECTOR (rebuild required)".to_string(),
+            ));
+        }
+        b"NUMERIC" | b"GEO" => {
+            return Err(FtError::Unsupported(format!(
+                "FT.ALTER ADD {}",
+                String::from_utf8_lossy(type_tok)
+            )));
+        }
+        other => {
+            return Err(FtError::Syntax(format!(
+                "FT.ALTER ADD: unknown type {}",
+                String::from_utf8_lossy(other)
+            )));
+        }
+    };
+    if it.peek().is_some() {
+        return Err(FtError::Syntax(
+            "FT.ALTER ADD: unexpected trailing tokens".to_string(),
+        ));
+    }
+    Ok(AlterRequest {
+        name,
+        field,
+        field_type,
+    })
+}
+
+fn execute_aggregate(
+    registry: &VectorRegistry,
+    req: &AggregateRequest,
+) -> Result<FtOutcome, FtError> {
+    let table = registry
+        .get(&req.name)
+        .ok_or_else(|| FtError::NotFound(req.name.clone()))?;
+    // Walk every key the FT.* surface absorbed via HSET
+    // interception. dynvec's storage layer does not expose
+    // a public iterator over rows, but the registry tracks
+    // every key it indexed in `indexed_keys`, so we re-fetch
+    // the row via `engine.get` for each one. The set is
+    // typically small (matches the number of HSETs that
+    // landed against the index's prefixes); the cost is
+    // dominated by the metadata fan-out, not the lookup.
+    let mut groups: BTreeMap<Vec<u8>, GroupAccumulator> = BTreeMap::new();
+    for key in table.indexed_keys() {
+        let row = match table.engine.get(&key) {
+            Ok(Some(r)) => r,
+            Ok(None) => continue,
+            Err(e) => return Err(FtError::Engine(e.to_string())),
+        };
+        let group_key = build_group_key(&req.group_by, &row.metadata);
+        let entry = groups.entry(group_key).or_insert_with(|| {
+            GroupAccumulator::new(
+                req.group_by
+                    .iter()
+                    .map(|f| {
+                        (
+                            f.clone(),
+                            metadata_string(row.metadata.get(f)).unwrap_or_default(),
+                        )
+                    })
+                    .collect(),
+                req.reducers.len(),
+            )
+        });
+        entry.observe(&req.reducers, &row.metadata);
+    }
+
+    // Emit groups in deterministic alphabetical order on
+    // the composite group key so paginated callers see a
+    // stable cursor without us having to expose one.
+    let mut rows: Vec<Vec<(String, Vec<u8>)>> = Vec::with_capacity(groups.len());
+    for (_, mut group) in groups {
+        let mut row: Vec<(String, Vec<u8>)> = std::mem::take(&mut group.fields);
+        for (i, reducer) in req.reducers.iter().enumerate() {
+            let value = group.render_reducer(i, reducer);
+            row.push((reducer.alias.clone(), value));
+        }
+        rows.push(row);
+    }
+
+    if let Some((offset, count)) = req.limit {
+        if offset >= rows.len() {
+            rows.clear();
+        } else {
+            let end = offset.saturating_add(count).min(rows.len());
+            rows = rows.drain(offset..end).collect();
+        }
+    }
+
+    let total_groups = rows.len();
+    Ok(FtOutcome::Aggregate { total_groups, rows })
+}
+
+/// Per-group accumulator state: the raw `(name, value)`
+/// pairs that identify the group, plus one parallel slot
+/// per reducer to track count + running sum.
+struct GroupAccumulator {
+    fields: Vec<(String, Vec<u8>)>,
+    slots: Vec<ReducerAccum>,
+}
+
+#[derive(Default)]
+struct ReducerAccum {
+    count: u64,
+    sum: f64,
+    /// True when at least one observed value parsed as a
+    /// finite number; for non-numeric SUM/AVG fields this
+    /// stays false and the renderer emits `0`.
+    saw_numeric: bool,
+}
+
+impl GroupAccumulator {
+    fn new(fields: Vec<(String, Vec<u8>)>, n_reducers: usize) -> Self {
+        let mut slots = Vec::with_capacity(n_reducers);
+        for _ in 0..n_reducers {
+            slots.push(ReducerAccum::default());
+        }
+        Self { fields, slots }
+    }
+
+    fn observe(&mut self, reducers: &[ReducerSpec], metadata: &HashMap<String, serde_json::Value>) {
+        for (i, reducer) in reducers.iter().enumerate() {
+            let slot = &mut self.slots[i];
+            slot.count = slot.count.saturating_add(1);
+            match &reducer.kind {
+                ReducerKind::Count => {}
+                ReducerKind::Sum { field } | ReducerKind::Avg { field } => {
+                    if let Some(v) = metadata.get(field) {
+                        if let Some(n) = metadata_number(v) {
+                            slot.sum += n;
+                            slot.saw_numeric = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn render_reducer(&self, i: usize, reducer: &ReducerSpec) -> Vec<u8> {
+        let slot = &self.slots[i];
+        match &reducer.kind {
+            ReducerKind::Count => slot.count.to_string().into_bytes(),
+            ReducerKind::Sum { .. } => {
+                if slot.saw_numeric {
+                    format_float_f64(slot.sum).into_bytes()
+                } else {
+                    b"0".to_vec()
+                }
+            }
+            ReducerKind::Avg { .. } => {
+                if slot.saw_numeric && slot.count > 0 {
+                    // `f64::from(u32)` is lossless, so trim
+                    // the count to u32 before the cast.
+                    // `saturating_as_f64` is not available
+                    // until Rust 1.87, so we round-trip
+                    // through `u32::try_from` to preserve
+                    // precision; values larger than `u32::MAX`
+                    // saturate at `u32::MAX` for the divisor,
+                    // which keeps the mean within float
+                    // resolution for sane group sizes.
+                    let denom = u32::try_from(slot.count).unwrap_or(u32::MAX);
+                    let mean = slot.sum / f64::from(denom);
+                    format_float_f64(mean).into_bytes()
+                } else {
+                    b"0".to_vec()
+                }
+            }
+        }
+    }
+}
+
+fn build_group_key(group_by: &[String], metadata: &HashMap<String, serde_json::Value>) -> Vec<u8> {
+    let mut key: Vec<u8> = Vec::new();
+    for field in group_by {
+        let v = metadata_string(metadata.get(field)).unwrap_or_default();
+        // `\x1f` (Unit Separator) is a control byte that
+        // never appears in field names or in stringified
+        // numeric/JSON metadata, so it makes a safe
+        // composite-key delimiter without escaping.
+        if !key.is_empty() {
+            key.push(0x1f);
+        }
+        key.extend_from_slice(&v);
+    }
+    key
+}
+
+fn metadata_string(value: Option<&serde_json::Value>) -> Option<Vec<u8>> {
+    match value? {
+        serde_json::Value::String(s) => Some(s.clone().into_bytes()),
+        other => Some(other.to_string().into_bytes()),
+    }
+}
+
+fn metadata_number(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn execute_explain(registry: &VectorRegistry, req: &ExplainRequest) -> Result<FtOutcome, FtError> {
+    let table = registry
+        .get(&req.name)
+        .ok_or_else(|| FtError::NotFound(req.name.clone()))?;
+    // The brief asks for "a textual representation of how the
+    // query would be planned". We classify the query into one
+    // of three buckets and emit a stable, multi-line plan.
+    // Stable wording lets clients regex-test the output.
+    let plan = if let Some((field, substring)) = try_parse_text_field_query(&req.query)? {
+        // Text substring path: renders the trigram set we'd
+        // probe and the bloom-filter lane.
+        let trigrams = trigram_preview(&substring);
+        format!(
+            "@{field}: SUBSTRING\n  field: {field}\n  query: {query}\n  index: trigram+bloom\n  trigrams: {trigrams}\n",
+            field = field,
+            query = String::from_utf8_lossy(&substring),
+            trigrams = trigrams,
+        )
+    } else if let Ok((k, vec_field, param_name)) = parse_knn_query(&req.query) {
+        let dim = table.schema.dim;
+        let metric = format!("{:?}", table.schema.distance).to_uppercase();
+        let alg = format!("{:?}", table.schema.algorithm).to_uppercase();
+        format!(
+            "VECTOR KNN\n  index: {idx}\n  algorithm: {alg}\n  metric: {metric}\n  field: {field}\n  k: {k}\n  dim: {dim}\n  param: ${param}\n",
+            idx = req.name,
+            alg = alg,
+            metric = metric,
+            field = vec_field,
+            k = k,
+            dim = dim,
+            param = param_name,
+        )
+    } else {
+        // Anything else (e.g. `*` or a free-form expression
+        // that neither parser accepts) lands here. Surface a
+        // best-effort plan so callers do not get a wire
+        // error for a debug-only command.
+        format!(
+            "UNKNOWN QUERY\n  index: {idx}\n  query: {q}\n  note: only @field:substring and *=>[KNN ...] are planned in this build\n",
+            idx = req.name,
+            q = String::from_utf8_lossy(&req.query),
+        )
+    };
+    Ok(FtOutcome::Explain(plan))
+}
+
+/// Render the trigram set [`dyntext::TextIndex::search_substring`]
+/// would probe for a query body. Used by FT.EXPLAIN to expose
+/// the planner's view of a substring query without running it.
+fn trigram_preview(query: &[u8]) -> String {
+    if query.len() < 3 {
+        return "<short-circuit: scan>".to_string();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for window in query.windows(3).take(8) {
+        parts.push(format!("\"{}\"", String::from_utf8_lossy(window)));
+    }
+    let suffix = if query.len() > 8 + 3 - 1 { ", ..." } else { "" };
+    format!("[{}{}]", parts.join(", "), suffix)
+}
+
+fn execute_alter(registry: &VectorRegistry, req: &AlterRequest) -> Result<FtOutcome, FtError> {
+    let table = registry
+        .get(&req.name)
+        .ok_or_else(|| FtError::NotFound(req.name.clone()))?;
+    match req.field_type {
+        MetadataFieldType::Text => {
+            // Provision a per-field trigram index. Subsequent
+            // HSETs that touch this field will be picked up
+            // by `maybe_index_hset` because
+            // `has_text_field` consults the runtime
+            // text_indexes map alongside the frozen schema.
+            let _new = table.add_text_field(&req.field);
+            Ok(FtOutcome::Ok)
+        }
+        MetadataFieldType::Tag => {
+            // TAG fields land in the row metadata blob without
+            // a dedicated index; the registry has no separate
+            // per-tag state to provision, so the schema-level
+            // record is sufficient. We still acknowledge the
+            // ADD so clients can keep their schema scripts
+            // declarative.
+            Ok(FtOutcome::Ok)
+        }
+        MetadataFieldType::Numeric | MetadataFieldType::Geo => {
+            // Reachable only via the parser's sealed table; if
+            // a future dialect lands a NUMERIC/GEO branch the
+            // sealed match in `parse_alter` already rejects it
+            // before we get here. Defensive guard.
+            Err(FtError::Unsupported(format!(
+                "FT.ALTER ADD type {:?}",
+                req.field_type
+            )))
+        }
+    }
+}
+
+fn format_float_f64(f: f64) -> String {
+    // Shortest round-trip that still parses as a float when
+    // the caller pipes the bulk string into `f64::parse`.
+    // 6 fractional digits matches the existing
+    // [`format_float`] used for vector scores.
+    format!("{f:.6}")
 }
 
 // ---- FT.REGEX -----------------------------------------------------------
@@ -1157,6 +2037,32 @@ pub fn render_outcome(outcome: &FtOutcome) -> Vec<u8> {
                     write_bulk(&mut out, fv);
                 }
             }
+        }
+        FtOutcome::SearchNoContent { total, doc_ids } => {
+            // NOCONTENT layout: [total, doc_id_1, doc_id_2, ...].
+            let total_i64 = i64::try_from(*total).unwrap_or(i64::MAX);
+            write_array_header(&mut out, 1 + doc_ids.len());
+            write_integer(&mut out, total_i64);
+            for id in doc_ids {
+                write_bulk(&mut out, id);
+            }
+        }
+        FtOutcome::Aggregate { total_groups, rows } => {
+            // FT.AGGREGATE layout (RediSearch shape):
+            //   [total_groups, [k, v, k, v, ...], ...].
+            let total_i64 = i64::try_from(*total_groups).unwrap_or(i64::MAX);
+            write_array_header(&mut out, 1 + rows.len());
+            write_integer(&mut out, total_i64);
+            for row in rows {
+                write_array_header(&mut out, row.len() * 2);
+                for (name, value) in row {
+                    write_bulk(&mut out, name.as_bytes());
+                    write_bulk(&mut out, value);
+                }
+            }
+        }
+        FtOutcome::Explain(plan) => {
+            write_bulk(&mut out, plan.as_bytes());
         }
     }
     out

@@ -1353,8 +1353,9 @@ impl ClusterDispatcher {
         // [`MsgType::ReqRedisFtUnknown`] we recover the original
         // wire keyword from the request's mbuf chain (the parser
         // case-folds for table lookup but the wire bytes are
-        // preserved verbatim) and let `ft::dispatch` surface a
-        // structured `-ERR ...` reply.
+        // preserved verbatim) so `ft::dispatch` can decide
+        // whether we recognise the keyword and either execute
+        // it or surface a structured `-ERR ...` reply.
         let recovered_kw: Vec<u8>;
         let keyword: &[u8] = match req.ty() {
             MsgType::ReqRedisFtCreate => b"FT.CREATE",
@@ -1365,15 +1366,7 @@ impl ClusterDispatcher {
             MsgType::ReqRedisFtRegex => b"FT.REGEX",
             MsgType::ReqRedisFtUnknown => {
                 recovered_kw = first_bulk_token(req).unwrap_or_else(|| b"FT.UNKNOWN".to_vec());
-                let payload = format!(
-                    "-ERR not supported in this build: {}\r\n",
-                    String::from_utf8_lossy(&recovered_kw),
-                );
-                return DispatchOutcome::Inline(synthetic_redis_reply(
-                    req,
-                    &self.mbuf_pool,
-                    payload.as_bytes(),
-                ));
+                recovered_kw.as_slice()
             }
             // The dispatcher only enters this branch from the
             // FT.* arm above, so the catch-all is unreachable

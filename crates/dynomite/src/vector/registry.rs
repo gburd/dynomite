@@ -135,13 +135,62 @@ impl VectorTable {
 
     /// True when the schema declares a `TEXT` field named
     /// `field`. The check is case-sensitive (the FT.CREATE
-    /// parser preserves the field name verbatim).
+    /// parser preserves the field name verbatim). After an
+    /// `FT.ALTER ADD <field> TEXT` the schema vector remains
+    /// frozen (it lives on an immutable `Arc<VectorTable>`),
+    /// so this method also consults the runtime
+    /// [`TextFieldIndex`] map: a field that the registry has
+    /// provisioned a trigram index for is treated as a TEXT
+    /// field for the lifetime of the table.
     #[must_use]
     pub fn has_text_field(&self, field: &str) -> bool {
-        self.schema
+        let in_schema = self
+            .schema
             .metadata_fields
             .iter()
-            .any(|f| f.field_type == MetadataFieldType::Text && f.name == field)
+            .any(|f| f.field_type == MetadataFieldType::Text && f.name == field);
+        if in_schema {
+            return true;
+        }
+        self.text_indexes.lock().contains_key(field)
+    }
+
+    /// Provision a runtime [`TextFieldIndex`] for `field`.
+    ///
+    /// Used by `FT.ALTER ADD <field> TEXT` to extend an
+    /// already-registered table with a new text-indexed
+    /// field. Idempotent: a second call for the same field
+    /// is a no-op and returns `false`.
+    ///
+    /// Returns `true` when a new index slot was provisioned,
+    /// `false` when the field was already known (either as
+    /// part of the original schema or because a prior
+    /// `FT.ALTER` provisioned it).
+    pub fn add_text_field(&self, field: &str) -> bool {
+        let mut guard = self.text_indexes.lock();
+        if guard.contains_key(field) {
+            return false;
+        }
+        guard.insert(field.to_string(), TextFieldIndex::default());
+        true
+    }
+
+    /// Snapshot the set of TEXT fields known to this table:
+    /// the original `SCHEMA` declarations plus anything
+    /// provisioned later through [`Self::add_text_field`].
+    /// Names are returned in lexicographic order.
+    #[must_use]
+    pub fn text_field_names(&self) -> Vec<String> {
+        let mut names: BTreeSet<String> = BTreeSet::new();
+        for f in &self.schema.metadata_fields {
+            if f.field_type == MetadataFieldType::Text {
+                names.insert(f.name.clone());
+            }
+        }
+        for k in self.text_indexes.lock().keys() {
+            names.insert(k.clone());
+        }
+        names.into_iter().collect()
     }
 
     /// True when the registry has provisioned a [`TextIndex`]
