@@ -40,6 +40,8 @@ jobs:
               build-essential pkg-config libssl-dev curl ca-certificates \
               redis-server libopenblas-dev
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: clone lamdb (noxu) sibling-checkout
         run: |
           git clone --depth 1 https://codeberg.org/gregburd/noxu.git ../lamdb
