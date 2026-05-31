@@ -197,6 +197,48 @@ fn vector_demo() {
     print_resp("response", &resp);
 }
 
+fn text_demo_approx_regex(idx: &TextIndex, corpus: &[&str], doc_ids: &[u32]) {
+    print_section("Approximate-regex search via dyntext::search_regex_approx (Phase 3, TRE FFI)");
+
+    let approx_queries: &[(&str, u16, &str)] = &[
+        ("errno: \\w+ refused", 0, "K=0 exact: must literally match"),
+        (
+            "errno: \\w+ refsed",
+            1,
+            "K=1 one transposition tolerated ('refsed' vs 'refused')",
+        ),
+        (
+            "errnno: \\w+ refused",
+            1,
+            "K=1 one extra char tolerated ('errnno' vs 'errno')",
+        ),
+        (
+            "errno: \\w+ rfusd",
+            2,
+            "K=2 two typos tolerated ('rfusd' vs 'refused')",
+        ),
+        (
+            "errno: \\w+ rfusd",
+            0,
+            "K=0 same query: no match because exact only",
+        ),
+    ];
+    for (pat, k, label) in approx_queries {
+        print_step(&format!("search_regex_approx({pat:?}, K={k}) -- {label}"));
+        match idx.search_regex_approx(pat, *k) {
+            Ok(hits) if hits.is_empty() => println!("   no hits"),
+            Ok(hits) => {
+                for h in &hits {
+                    let pos = doc_ids.iter().position(|x| x == h).unwrap_or(usize::MAX);
+                    let body = corpus.get(pos).copied().unwrap_or("?");
+                    println!("   doc_id={h}: {body}");
+                }
+            }
+            Err(e) => println!("   error: {e:?}"),
+        }
+    }
+}
+
 fn text_demo() {
     print_section("Text index + substring search (dyntext + pg_tre-like trigrams)");
 
@@ -281,45 +323,7 @@ fn text_demo() {
                  K=1 tolerates one typo, K=2 tolerates two.)",
     );
 
-    print_section("Approximate-regex search via dyntext::search_regex_approx (Phase 3, TRE FFI)");
-
-    let approx_queries: &[(&str, u16, &str)] = &[
-        ("errno: \\w+ refused", 0, "K=0 exact: must literally match"),
-        (
-            "errno: \\w+ refsed",
-            1,
-            "K=1 one transposition tolerated ('refsed' vs 'refused')",
-        ),
-        (
-            "errnno: \\w+ refused",
-            1,
-            "K=1 one extra char tolerated ('errnno' vs 'errno')",
-        ),
-        (
-            "errno: \\w+ rfusd",
-            2,
-            "K=2 two typos tolerated ('rfusd' vs 'refused')",
-        ),
-        (
-            "errno: \\w+ rfusd",
-            0,
-            "K=0 same query: no match because exact only",
-        ),
-    ];
-    for (pat, k, label) in approx_queries {
-        print_step(&format!("search_regex_approx({pat:?}, K={k}) -- {label}"));
-        match idx.search_regex_approx(pat, *k) {
-            Ok(hits) if hits.is_empty() => println!("   no hits"),
-            Ok(hits) => {
-                for h in &hits {
-                    let pos = doc_ids.iter().position(|x| x == h).unwrap_or(usize::MAX);
-                    let body = corpus.get(pos).copied().unwrap_or("?");
-                    println!("   doc_id={h}: {body}");
-                }
-            }
-            Err(e) => println!("   error: {e:?}"),
-        }
-    }
+    text_demo_approx_regex(&idx, corpus, &doc_ids);
 }
 
 fn main() {
