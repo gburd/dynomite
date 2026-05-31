@@ -1,5 +1,5 @@
 [package]
-name = "dynvec"
+name = "dyn-vec"
 description = "Vector storage + HNSW ANN index engine for the Dynomite Rust port"
 version = "0.0.1"
 edition.workspace = true
@@ -24,6 +24,10 @@ noxu = ["dep:noxu"]
 # served by `dynomite::vector` over the existing Redis
 # listener.
 http = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]
+
+[lib]
+name = "dynvec"
+path = "src/lib.rs"
 
 [dependencies]
 serde = { workspace = true }

@@ -8,7 +8,7 @@ members = [
     "crates/dyniak",
     "crates/dyn-admin",
     "crates/dyntext",
-    "crates/dynvec",
+    "crates/dyn-vec",
     "crates/tre-sys",
     "crates/gen-fsm",
     "crates/dyn-hashtree",
