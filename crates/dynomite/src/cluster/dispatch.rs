@@ -1335,6 +1335,7 @@ impl ClusterDispatcher {
             | MsgType::ReqRedisFtInfo
             | MsgType::ReqRedisFtList
             | MsgType::ReqRedisFtDropindex
+            | MsgType::ReqRedisFtRegex
             | MsgType::ReqRedisFtUnknown => Some(self.run_ft_command(registry, req)),
             MsgType::ReqRedisHset => self.intercept_hset(registry, req),
             _ => None,
@@ -1361,6 +1362,7 @@ impl ClusterDispatcher {
             MsgType::ReqRedisFtInfo => b"FT.INFO",
             MsgType::ReqRedisFtList => b"FT.LIST",
             MsgType::ReqRedisFtDropindex => b"FT.DROPINDEX",
+            MsgType::ReqRedisFtRegex => b"FT.REGEX",
             MsgType::ReqRedisFtUnknown => {
                 recovered_kw = first_bulk_token(req).unwrap_or_else(|| b"FT.UNKNOWN".to_vec());
                 let payload = format!(

@@ -24,7 +24,8 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 
-use crate::vector::schema::{IndexAlgorithm, VectorSchema};
+use crate::vector::schema::{IndexAlgorithm, MetadataFieldType, VectorSchema};
+use dyntext::TextIndex;
 use dynvec::Engine;
 
 /// Errors returned by the registry.
@@ -45,6 +46,48 @@ pub enum RegistryError {
     #[error("engine: {0}")]
     Engine(#[from] dynvec::storage::StoreError),
 }
+
+/// Per-`TEXT` schema field state.
+///
+/// Couples one [`dyntext::TextIndex`] (trigram + bloom
+/// inverted index) with the bookkeeping the FT.* surface
+/// needs to map between user-visible document keys and the
+/// internal monotonic doc ids the text index hands back. The
+/// pairing is one [`TextFieldIndex`] per `TEXT` schema field
+/// per registered index; the registry initialises one for
+/// every metadata field of type [`MetadataFieldType::Text`]
+/// at FT.CREATE time.
+#[derive(Debug, Default)]
+pub struct TextFieldIndex {
+    /// Trigram + bloom inverted index over the field's bytes.
+    pub index: TextIndex,
+    /// Internal text-doc-id -> user-visible document key.
+    pub doc_to_key: BTreeMap<u32, Vec<u8>>,
+    /// User-visible document key -> internal text-doc-id.
+    /// Used to evict the prior entry when the same key is
+    /// re-HSET-ed under an updated field value.
+    pub key_to_doc: BTreeMap<Vec<u8>, u32>,
+}
+
+/// Pair of (document key, raw text bytes) returned by the
+/// per-text-field search helpers on [`VectorTable`]. Each
+/// hit echoes the user-visible document key plus the
+/// original bytes the FT.* surface stored under the queried
+/// `TEXT` field, so callers can render the response without
+/// a second round trip to the dynvec engine.
+pub type TextHit = (Vec<u8>, Vec<u8>);
+
+/// Result of a regex query through the trigram-backed text
+/// index. The outer [`Option`] is `None` when no `TEXT`
+/// field by that name is declared; the inner [`Result`]
+/// surfaces a regex compilation error.
+pub type TextRegexResult = Option<Result<Vec<TextHit>, dyntext::regex_ast::RegexError>>;
+
+/// Result of an approximate-regex query through the TRE
+/// engine. The outer [`Option`] is `None` when no `TEXT`
+/// field by that name is declared; the inner [`Result`]
+/// surfaces a TRE-engine compilation or matching error.
+pub type TextRegexApproxResult = Option<Result<Vec<TextHit>, dyntext::TreError>>;
 
 /// One registered vector index.
 ///
@@ -69,6 +112,13 @@ pub struct VectorTable {
     pub engine: Engine,
     /// Document keys observed by the HSET interception path.
     indexed_keys: Mutex<BTreeSet<Vec<u8>>>,
+    /// Per-`TEXT`-field trigram index map. The map is keyed
+    /// by schema field name and is initialised with one
+    /// entry per `TEXT` field declared in the schema. The
+    /// keys are stable for the lifetime of the table; only
+    /// the per-entry [`TextFieldIndex`] state mutates as
+    /// HSETs land.
+    text_indexes: Mutex<BTreeMap<String, TextFieldIndex>>,
 }
 
 impl VectorTable {
@@ -81,6 +131,150 @@ impl VectorTable {
     #[must_use]
     pub fn indexed_keys(&self) -> Vec<Vec<u8>> {
         self.indexed_keys.lock().iter().cloned().collect()
+    }
+
+    /// True when the schema declares a `TEXT` field named
+    /// `field`. The check is case-sensitive (the FT.CREATE
+    /// parser preserves the field name verbatim).
+    #[must_use]
+    pub fn has_text_field(&self, field: &str) -> bool {
+        self.schema
+            .metadata_fields
+            .iter()
+            .any(|f| f.field_type == MetadataFieldType::Text && f.name == field)
+    }
+
+    /// True when the registry has provisioned a [`TextIndex`]
+    /// for `field`. The check returns `true` exactly when
+    /// [`Self::has_text_field`] returns `true`; exposed
+    /// separately so wire-level tests can assert that the
+    /// FT.CREATE path actually populated the registry rather
+    /// than just recorded the schema.
+    #[must_use]
+    pub fn has_text_index(&self, field: &str) -> bool {
+        self.text_indexes.lock().contains_key(field)
+    }
+
+    /// Number of documents currently indexed under `field`.
+    /// Returns `None` when no `TEXT` field by that name is
+    /// declared in the schema.
+    #[must_use]
+    pub fn text_index_doc_count(&self, field: &str) -> Option<usize> {
+        self.text_indexes
+            .lock()
+            .get(field)
+            .map(|state| state.index.doc_count())
+    }
+
+    /// Insert `text` into the [`TextIndex`] for `field`,
+    /// associating it with the user-visible `key`. If the
+    /// same `key` had a prior entry under this field it is
+    /// removed first so the postings index never accumulates
+    /// stale doc ids.
+    ///
+    /// No-op when the schema has no `TEXT` field by that
+    /// name; callers can therefore call this for every
+    /// HSET field/value pair without prior schema lookup.
+    pub fn upsert_text_field(&self, field: &str, key: &[u8], text: &[u8]) {
+        let mut guard = self.text_indexes.lock();
+        let Some(state) = guard.get_mut(field) else {
+            return;
+        };
+        if let Some(prev_id) = state.key_to_doc.remove(key) {
+            state.doc_to_key.remove(&prev_id);
+            state.index.remove(prev_id);
+        }
+        let doc_id = state.index.insert(text.to_vec());
+        state.doc_to_key.insert(doc_id, key.to_vec());
+        state.key_to_doc.insert(key.to_vec(), doc_id);
+    }
+
+    /// Run an exact-substring lookup against the [`TextIndex`]
+    /// registered under `field`. Returns the user-visible
+    /// keys whose stored text contains `query` as a contiguous
+    /// byte substring, paired with the original text bytes.
+    ///
+    /// Returns `None` when no `TEXT` field by that name is
+    /// declared in the schema. Callers translate that into a
+    /// `-ERR` reply.
+    #[must_use]
+    pub fn search_text_substring(&self, field: &str, query: &[u8]) -> Option<Vec<TextHit>> {
+        let guard = self.text_indexes.lock();
+        let state = guard.get(field)?;
+        let mut hits: Vec<TextHit> = Vec::new();
+        for doc_id in state.index.search_substring(query) {
+            let Some(key) = state.doc_to_key.get(&doc_id) else {
+                continue;
+            };
+            let Some(doc) = state.index.docs().get(&doc_id) else {
+                continue;
+            };
+            hits.push((key.clone(), doc.text.clone()));
+        }
+        Some(hits)
+    }
+
+    /// Run an exact-regex lookup against the [`TextIndex`]
+    /// registered under `field`. Returns the user-visible
+    /// keys whose stored text matches `pattern`, paired with
+    /// the original text bytes.
+    ///
+    /// Returns `None` when no `TEXT` field by that name is
+    /// declared in the schema, or `Some(Err(...))` when the
+    /// pattern fails to compile.
+    pub fn search_text_regex(&self, field: &str, pattern: &str) -> TextRegexResult {
+        let guard = self.text_indexes.lock();
+        let state = guard.get(field)?;
+        let result = state.index.search_regex(pattern).map(|ids| {
+            let mut out: Vec<TextHit> = Vec::new();
+            for doc_id in ids {
+                let Some(key) = state.doc_to_key.get(&doc_id) else {
+                    continue;
+                };
+                let Some(doc) = state.index.docs().get(&doc_id) else {
+                    continue;
+                };
+                out.push((key.clone(), doc.text.clone()));
+            }
+            out
+        });
+        Some(result)
+    }
+
+    /// Run an approximate-regex lookup against the
+    /// [`TextIndex`] registered under `field` with up to
+    /// `max_errors` edit operations. Returns the user-visible
+    /// keys whose stored text approximately matches `pattern`,
+    /// paired with the original text bytes.
+    ///
+    /// Returns `None` when no `TEXT` field by that name is
+    /// declared in the schema, or `Some(Err(...))` when the
+    /// pattern fails to compile through the TRE engine.
+    pub fn search_text_regex_approx(
+        &self,
+        field: &str,
+        pattern: &str,
+        max_errors: u16,
+    ) -> TextRegexApproxResult {
+        let guard = self.text_indexes.lock();
+        let state = guard.get(field)?;
+        let result = state
+            .index
+            .search_regex_approx(pattern, max_errors)
+            .map(|ids| {
+                let mut out: Vec<TextHit> = Vec::new();
+                for doc_id in ids {
+                    let Some(key) = state.doc_to_key.get(&doc_id) else {
+                        continue;
+                    };
+                    let Some(doc) = state.index.docs().get(&doc_id) else {
+                        continue;
+                    };
+                    out.push((key.clone(), doc.text.clone()));
+                }
+                out
+            });
+        Some(result)
     }
 }
 
@@ -159,11 +353,18 @@ impl VectorRegistry {
         }
         let engine_schema = schema.to_engine_schema(&name);
         let engine = Engine::in_memory(engine_schema)?;
+        let mut text_indexes: BTreeMap<String, TextFieldIndex> = BTreeMap::new();
+        for f in &schema.metadata_fields {
+            if f.field_type == MetadataFieldType::Text {
+                text_indexes.insert(f.name.clone(), TextFieldIndex::default());
+            }
+        }
         let table = VectorTable {
             name: name.clone(),
             schema,
             engine,
             indexed_keys: Mutex::new(BTreeSet::new()),
+            text_indexes: Mutex::new(text_indexes),
         };
         guard.insert(name, Arc::new(table));
         Ok(())
