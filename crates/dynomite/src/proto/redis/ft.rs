@@ -22,7 +22,16 @@
 //!   ( <field> TEXT | <field> VECTOR HNSW <m> TYPE FLOAT32
 //!     DIM <d> DISTANCE_METRIC COSINE|EUCLIDEAN|DOTPRODUCT )+`
 //! * `FT.SEARCH <idx> "*=>[KNN <k> @<field> $<param>]"
-//!     PARAMS 2 <param> <bytes>`
+//!     PARAMS 2 <param> <bytes>` (vector k-NN form).
+//! * `FT.SEARCH <idx> "@<field>:<substring>"` (text
+//!   substring form; routed through the trigram +
+//!   bloom-filter inverted index for any `TEXT`-typed schema
+//!   field).
+//! * `FT.REGEX <idx> <field> <pattern> [K=<n>]` (Dynomite
+//!   extension; not standard RediSearch). `K=0` (default) is
+//!   the exact regex path; `K>=1` is the approximate regex
+//!   path through the TRE C library, allowing up to `K` edit
+//!   operations between the pattern and the matching text.
 //! * `FT.INFO <idx>`
 //! * `FT.LIST` (alias `FT._LIST`)
 //! * `FT.DROPINDEX <idx> [DD]`
@@ -86,8 +95,13 @@ pub enum FtError {
 pub enum FtCommand {
     /// `FT.CREATE` parsed payload.
     Create(CreateRequest),
-    /// `FT.SEARCH` parsed payload.
+    /// `FT.SEARCH` k-NN form: `*=>[KNN k @field $param]`.
     Search(SearchRequest),
+    /// `FT.SEARCH` substring form: `@field:<substring>`.
+    SearchText(SearchTextRequest),
+    /// `FT.REGEX` (Dynomite extension): exact or approximate
+    /// regex over a `TEXT`-indexed field.
+    Regex(RegexRequest),
     /// `FT.INFO <name>`.
     Info {
         /// Index name.
@@ -134,6 +148,35 @@ pub struct SearchRequest {
     pub vector_field: String,
     /// Raw query vector bytes (little-endian f32 stream).
     pub vector_bytes: Vec<u8>,
+}
+
+/// Parsed `FT.SEARCH` request for the text-substring form
+/// `@field:<substring>`. The substring is matched against the
+/// TEXT field's trigram + bloom inverted index.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchTextRequest {
+    /// Index name.
+    pub name: String,
+    /// `TEXT` schema field referenced in the query.
+    pub field: String,
+    /// Raw substring bytes to search for.
+    pub query: Vec<u8>,
+}
+
+/// Parsed `FT.REGEX` request. `max_errors` of `0` selects the
+/// exact-regex path; values `>= 1` route through the TRE
+/// approximate-regex matcher tolerating up to `max_errors`
+/// edit operations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegexRequest {
+    /// Index name.
+    pub name: String,
+    /// `TEXT` schema field referenced in the query.
+    pub field: String,
+    /// Regular expression in POSIX-extended syntax.
+    pub pattern: String,
+    /// Maximum number of allowed edit operations.
+    pub max_errors: u16,
 }
 
 /// Outcome of an FT.* execution; the dispatch layer turns this
@@ -210,7 +253,8 @@ pub fn parse_command(args: &[&[u8]]) -> Result<FtCommand, FtError> {
     let rest = &args[1..];
     match cmd.as_slice() {
         b"FT.CREATE" => parse_create(rest).map(FtCommand::Create),
-        b"FT.SEARCH" => parse_search(rest).map(FtCommand::Search),
+        b"FT.SEARCH" => parse_search(rest),
+        b"FT.REGEX" => parse_regex(rest).map(FtCommand::Regex),
         b"FT.INFO" => parse_info(rest),
         b"FT.LIST" | b"FT._LIST" => parse_list(rest),
         b"FT.DROPINDEX" => parse_dropindex(rest),
@@ -231,6 +275,8 @@ pub fn execute(registry: &VectorRegistry, cmd: FtCommand) -> Result<FtOutcome, F
     match cmd {
         FtCommand::Create(req) => execute_create(registry, req),
         FtCommand::Search(req) => execute_search(registry, &req),
+        FtCommand::SearchText(req) => execute_search_text(registry, &req),
+        FtCommand::Regex(req) => execute_regex(registry, &req),
         FtCommand::Info { name } => execute_info(registry, name),
         FtCommand::List => Ok(FtOutcome::List(registry.list())),
         FtCommand::DropIndex {
@@ -497,10 +543,27 @@ fn execute_create(registry: &VectorRegistry, req: CreateRequest) -> Result<FtOut
 
 // ---- FT.SEARCH ----------------------------------------------------------
 
-fn parse_search(rest: &[&[u8]]) -> Result<SearchRequest, FtError> {
+/// Top-level FT.SEARCH parser. Routes between the k-NN form
+/// (`*=>[KNN k @field $param]`) and the trigram-backed
+/// substring form (`@field:substring`) based on the shape of
+/// the query expression. The substring form is the
+/// dyntext-powered text-search path; the k-NN form is the
+/// dynvec ANN path.
+fn parse_search(rest: &[&[u8]]) -> Result<FtCommand, FtError> {
     let mut it = TokenCursor::new(rest);
     let name = it.next_string("FT.SEARCH: missing index name")?;
     let query = it.next_required("FT.SEARCH: missing query expression")?;
+
+    if let Some(parsed) = try_parse_text_field_query(query)? {
+        let (field, substring) = parsed;
+        consume_search_trailing_clauses(&mut it, false)?;
+        return Ok(FtCommand::SearchText(SearchTextRequest {
+            name,
+            field,
+            query: substring,
+        }));
+    }
+
     let (k, vec_field, param_name) = parse_knn_query(query)?;
 
     // Optional clauses: PARAMS, RETURN, SORTBY, LIMIT, DIALECT.
@@ -560,12 +623,116 @@ fn parse_search(rest: &[&[u8]]) -> Result<SearchRequest, FtError> {
     let vector_bytes = params
         .remove(param_name.as_bytes())
         .ok_or_else(|| FtError::Syntax(format!("FT.SEARCH: PARAMS missing ${param_name}")))?;
-    Ok(SearchRequest {
+    Ok(FtCommand::Search(SearchRequest {
         name,
         k,
         vector_field: vec_field,
         vector_bytes,
-    })
+    }))
+}
+
+/// Try to interpret the FT.SEARCH query expression as the
+/// trigram-backed text form `@field:substring`. Returns
+/// `Ok(Some((field, substring)))` when the shape matches,
+/// `Ok(None)` to defer to the k-NN parser, and `Err` for
+/// shapes that look like a text query but are malformed.
+fn try_parse_text_field_query(query: &[u8]) -> Result<Option<(String, Vec<u8>)>, FtError> {
+    if query.is_empty() || query[0] != b'@' {
+        return Ok(None);
+    }
+    // The k-NN form `@title:foo=>[KNN k @vec $blob]` is not
+    // implemented; surface the same `Unsupported` error the
+    // legacy parser produced for that shape.
+    if find_byte_subseq(query, b"=>").is_some() {
+        return Err(FtError::Unsupported(format!(
+            "FT.SEARCH query: {}",
+            String::from_utf8_lossy(query)
+        )));
+    }
+    let body = &query[1..];
+    let colon = body
+        .iter()
+        .position(|&b| b == b':')
+        .ok_or_else(|| FtError::Syntax("FT.SEARCH text query: missing ':'".to_string()))?;
+    let field_bytes = &body[..colon];
+    let substring = &body[colon + 1..];
+    if field_bytes.is_empty() {
+        return Err(FtError::Syntax(
+            "FT.SEARCH text query: empty field name".to_string(),
+        ));
+    }
+    let field = std::str::from_utf8(field_bytes)
+        .map(str::to_string)
+        .map_err(|_| FtError::Syntax("FT.SEARCH text query: field is not UTF-8".to_string()))?;
+    Ok(Some((field, substring.to_vec())))
+}
+
+/// Find the first occurrence of `needle` in `haystack`, or
+/// `None` when absent. Linear scan; the inputs are short
+/// FT.SEARCH query expressions (a few dozen bytes at most).
+fn find_byte_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Walk the trailing FT.SEARCH clauses (RETURN, LIMIT,
+/// DIALECT, NOCONTENT, WITHSCORES) without consuming PARAMS,
+/// which is k-NN-only. The flag controls whether PARAMS is
+/// permitted; today the substring path forbids it because
+/// the query body is already self-contained.
+fn consume_search_trailing_clauses(
+    it: &mut TokenCursor<'_>,
+    allow_params: bool,
+) -> Result<(), FtError> {
+    loop {
+        let Some(tok) = it.next() else { break };
+        let up = ascii_upper(tok);
+        match up.as_slice() {
+            b"PARAMS" if allow_params => {
+                let n_tok = it.next_required("FT.SEARCH: PARAMS expects a count")?;
+                let n = parse_unsigned(n_tok, "FT.SEARCH PARAMS count")?;
+                if !n.is_multiple_of(2) {
+                    return Err(FtError::Syntax(
+                        "FT.SEARCH PARAMS count must be even".to_string(),
+                    ));
+                }
+                for _ in 0..n {
+                    it.next_required("FT.SEARCH: PARAMS expects key/value pair")?;
+                }
+            }
+            b"RETURN" => {
+                let n_tok = it.next_required("FT.SEARCH: RETURN expects a count")?;
+                let n = parse_unsigned(n_tok, "FT.SEARCH RETURN count")?;
+                for _ in 0..n {
+                    it.next_required("FT.SEARCH: RETURN expects field name")?;
+                }
+            }
+            b"SORTBY" => {
+                return Err(FtError::Unsupported(
+                    "FT.SEARCH SORTBY not supported in this build".to_string(),
+                ));
+            }
+            b"LIMIT" => {
+                it.next_required("FT.SEARCH: LIMIT expects offset")?;
+                it.next_required("FT.SEARCH: LIMIT expects count")?;
+            }
+            b"DIALECT" => {
+                it.next_required("FT.SEARCH: DIALECT expects a value")?;
+            }
+            b"NOCONTENT" | b"WITHSCORES" => {}
+            other => {
+                return Err(FtError::Unsupported(format!(
+                    "FT.SEARCH clause {}",
+                    String::from_utf8_lossy(other)
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Parse the `*=>[KNN k @field $param]` query expression.
@@ -651,6 +818,125 @@ fn execute_search(registry: &VectorRegistry, req: &SearchRequest) -> Result<FtOu
             doc_id: row.key,
             score,
             fields,
+        });
+    }
+    let total = out.len();
+    Ok(FtOutcome::Search { total, hits: out })
+}
+
+fn execute_search_text(
+    registry: &VectorRegistry,
+    req: &SearchTextRequest,
+) -> Result<FtOutcome, FtError> {
+    let table = registry
+        .get(&req.name)
+        .ok_or_else(|| FtError::NotFound(req.name.clone()))?;
+    if !table.has_text_field(&req.field) {
+        return Err(FtError::Syntax(format!(
+            "FT.SEARCH: index {} has no TEXT field {}",
+            req.name, req.field
+        )));
+    }
+    let raw_hits = table
+        .search_text_substring(&req.field, &req.query)
+        .ok_or_else(|| {
+            FtError::Engine(format!(
+                "text index for field {} not provisioned",
+                req.field
+            ))
+        })?;
+    let mut out = Vec::with_capacity(raw_hits.len());
+    for (key, text) in raw_hits {
+        out.push(SearchHit {
+            doc_id: key,
+            score: 0.0,
+            fields: vec![(req.field.clone(), text)],
+        });
+    }
+    let total = out.len();
+    Ok(FtOutcome::Search { total, hits: out })
+}
+
+// ---- FT.REGEX -----------------------------------------------------------
+
+/// Parse `FT.REGEX <idx> <field> <pattern> [K=<n>]`.
+///
+/// `K=` is the only recognised option today; an unknown
+/// option surfaces as [`FtError::Unsupported`]. The `n` value
+/// must fit into a [`u16`]; pragmatically the TRE engine
+/// rejects anything beyond the pattern length anyway, so the
+/// upper bound here is purely a parser-level guard rail.
+fn parse_regex(rest: &[&[u8]]) -> Result<RegexRequest, FtError> {
+    let mut it = TokenCursor::new(rest);
+    let name = it.next_string("FT.REGEX: missing index name")?;
+    let field = it.next_string("FT.REGEX: missing field name")?;
+    let pattern_tok = it.next_required("FT.REGEX: missing pattern")?;
+    let pattern = std::str::from_utf8(pattern_tok)
+        .map(str::to_string)
+        .map_err(|_| FtError::Syntax("FT.REGEX: pattern is not UTF-8".to_string()))?;
+    let mut max_errors: u16 = 0;
+    for tok in &mut it {
+        let up = ascii_upper(tok);
+        if let Some(rest) = up.strip_prefix(b"K=") {
+            let s = std::str::from_utf8(rest)
+                .map_err(|_| FtError::Syntax("FT.REGEX: K= value is not UTF-8".to_string()))?;
+            let n: u32 = s
+                .parse()
+                .map_err(|_| FtError::Syntax(format!("FT.REGEX: invalid K= value {s}")))?;
+            max_errors = u16::try_from(n)
+                .map_err(|_| FtError::Syntax(format!("FT.REGEX: K= value {n} exceeds u16")))?;
+        } else {
+            return Err(FtError::Unsupported(format!(
+                "FT.REGEX option {}",
+                String::from_utf8_lossy(tok)
+            )));
+        }
+    }
+    Ok(RegexRequest {
+        name,
+        field,
+        pattern,
+        max_errors,
+    })
+}
+
+fn execute_regex(registry: &VectorRegistry, req: &RegexRequest) -> Result<FtOutcome, FtError> {
+    let table = registry
+        .get(&req.name)
+        .ok_or_else(|| FtError::NotFound(req.name.clone()))?;
+    if !table.has_text_field(&req.field) {
+        return Err(FtError::Syntax(format!(
+            "FT.REGEX: index {} has no TEXT field {}",
+            req.name, req.field
+        )));
+    }
+    let raw_hits = if req.max_errors == 0 {
+        table
+            .search_text_regex(&req.field, &req.pattern)
+            .ok_or_else(|| {
+                FtError::Engine(format!(
+                    "text index for field {} not provisioned",
+                    req.field
+                ))
+            })?
+            .map_err(|e| FtError::Syntax(format!("FT.REGEX: invalid pattern: {e}")))?
+    } else {
+        table
+            .search_text_regex_approx(&req.field, &req.pattern, req.max_errors)
+            .ok_or_else(|| {
+                FtError::Engine(format!(
+                    "text index for field {} not provisioned",
+                    req.field
+                ))
+            })?
+            .map_err(|e| FtError::Engine(format!("FT.REGEX (approximate): {e}")))?
+    };
+    let mut out = Vec::with_capacity(raw_hits.len());
+    for (key, text) in raw_hits {
+        out.push(SearchHit {
+            doc_id: key,
+            score: 0.0,
+            fields: vec![(req.field.clone(), text)],
         });
     }
     let total = out.len();
@@ -790,6 +1076,7 @@ fn execute_dropindex(
 fn insert_into_index(table: &VectorTable, key: &[u8], pairs: &[&[u8]]) -> Result<(), FtError> {
     let mut vector: Option<Vec<f32>> = None;
     let mut metadata: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut text_writes: Vec<(String, Vec<u8>)> = Vec::new();
     let mut chunks = pairs.chunks_exact(2);
     for chunk in &mut chunks {
         let field = chunk[0];
@@ -802,6 +1089,14 @@ fn insert_into_index(table: &VectorTable, key: &[u8], pairs: &[&[u8]]) -> Result
         } else {
             let value_str = String::from_utf8_lossy(value).into_owned();
             metadata.insert(field_str.to_string(), serde_json::Value::String(value_str));
+            // Mirror the value into the trigram index when the
+            // schema declares this field as TEXT-indexed. The
+            // dynvec metadata copy stays so FT.SEARCH KNN /
+            // FT.INFO can echo the field; the dyntext copy is
+            // what powers @field:substring and FT.REGEX.
+            if table.has_text_field(field_str) {
+                text_writes.push((field_str.to_string(), value.to_vec()));
+            }
         }
     }
     if !chunks.remainder().is_empty() {
@@ -819,6 +1114,9 @@ fn insert_into_index(table: &VectorTable, key: &[u8], pairs: &[&[u8]]) -> Result
         .engine
         .upsert(key.to_vec(), &v, metadata)
         .map_err(|e| FtError::Engine(e.to_string()))?;
+    for (field, bytes) in text_writes {
+        table.upsert_text_field(&field, key, &bytes);
+    }
     table.record_indexed_key(key.to_vec());
     Ok(())
 }

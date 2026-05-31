@@ -230,6 +230,7 @@ define_msg_types![
     (ReqRedisFtInfo, "REQ_REDIS_FT_INFO"),
     (ReqRedisFtList, "REQ_REDIS_FT_LIST"),
     (ReqRedisFtDropindex, "REQ_REDIS_FT_DROPINDEX"),
+    (ReqRedisFtRegex, "REQ_REDIS_FT_REGEX"),
     (ReqRedisFtUnknown, "REQ_REDIS_FT_UNKNOWN"),
     (EndIdx, "END_IDX"),
 ];
