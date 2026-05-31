@@ -1,7 +1,7 @@
 //! Generates the JSON conformance corpus consumed by
-//! `tests/stage_03_hashkit.rs`.
+//! `crates/dynomite/tests/stage_03_hashkit.rs`.
 //!
-//! Run with `cargo run -p dynomite --example generate_hashkit_vectors`.
+//! Run with `cargo run -p dynomited --example generate_hashkit_vectors`.
 //! The output is meant to be redirected into
 //! `crates/dynomite/tests/fixtures/hashkit_vectors.json` and reviewed
 //! before committing.
