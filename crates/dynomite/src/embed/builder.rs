@@ -47,6 +47,7 @@ pub struct ServerBuilder {
     pool_name: String,
     pool: ConfPool,
     hooks: ServerHooks,
+    vector_registry: Option<std::sync::Arc<crate::vector::registry::VectorRegistry>>,
 }
 
 impl std::fmt::Debug for ServerBuilder {
@@ -84,6 +85,7 @@ impl ServerBuilder {
             pool_name: pool_name.into(),
             pool: ConfPool::default(),
             hooks: ServerHooks::default(),
+            vector_registry: None,
         }
     }
 
@@ -105,6 +107,7 @@ impl ServerBuilder {
             pool_name,
             pool: cfg.pool().clone(),
             hooks: ServerHooks::default(),
+            vector_registry: None,
         }
     }
 
@@ -443,6 +446,47 @@ impl ServerBuilder {
         self
     }
 
+    /// Plug a shared [`crate::vector::registry::VectorRegistry`].
+    ///
+    /// Without this setter the builder installs a fresh,
+    /// per-server registry on `build()`. Embedders that want to
+    /// drive multiple servers against a single shared catalog of
+    /// indexes (mirroring, fan-out testing, ...) can pass an
+    /// `Arc` they constructed elsewhere; the same registry will
+    /// then be reachable through
+    /// [`crate::embed::ServerHandle::vector_registry`] on every
+    /// server built with this builder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use dynomite::embed::ServerBuilder;
+    /// use dynomite::vector::registry::VectorRegistry;
+    /// let registry = Arc::new(VectorRegistry::new());
+    /// let _b = ServerBuilder::new("p").with_vector_registry(registry);
+    /// ```
+    #[must_use]
+    pub fn with_vector_registry(
+        mut self,
+        registry: std::sync::Arc<crate::vector::registry::VectorRegistry>,
+    ) -> Self {
+        self.vector_registry = Some(registry);
+        self
+    }
+
+    /// Borrow the configured [`crate::vector::registry::VectorRegistry`],
+    /// if one was supplied via
+    /// [`Self::with_vector_registry`]. Returns `None` when the
+    /// default-allocated registry will be installed by
+    /// [`Self::build`].
+    #[must_use]
+    pub fn vector_registry(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::vector::registry::VectorRegistry>> {
+        self.vector_registry.as_ref()
+    }
+
     // `conf_pool_mut` removed: the escape hatch leaked the
     // entire internal `ConfPool` shape onto the public API.
     // Targeted setters land as the missing fields are
@@ -489,6 +533,9 @@ impl ServerBuilder {
         });
         let crypto = self.hooks.crypto;
         let metrics = self.hooks.metrics;
+        let vector_registry = self
+            .vector_registry
+            .unwrap_or_else(|| std::sync::Arc::new(crate::vector::registry::VectorRegistry::new()));
 
         Ok(Server::from_pool(
             self.pool_name,
@@ -499,6 +546,7 @@ impl ServerBuilder {
                 crypto,
                 metrics,
             },
+            vector_registry,
         ))
     }
 }
