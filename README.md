@@ -33,6 +33,10 @@ cargo nextest run --workspace
 The Nix flake pins every tool needed to build, test, fuzz, bench, and
 package the project.
 
+For a ten-minute walk-through that takes a fresh checkout to a running
+search stack with vector, text, and regex queries over `redis-cli`,
+see [`docs/book/src/tutorial-search.md`](./docs/book/src/tutorial-search.md).
+
 ## Acknowledgements
 
 This Rust implementation is a port of the original

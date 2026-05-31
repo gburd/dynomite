@@ -2,6 +2,7 @@
 
 [Introduction](./intro.md)
 
+- [Tutorial: vector + text + regex search](./tutorial-search.md)
 - [Architecture](./architecture.md)
 - [Configuration](./configuration.md)
 - [Protocols](./protocols/index.md)
