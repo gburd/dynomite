@@ -2,7 +2,7 @@
 //! `crates/dynomite/tests/fixtures/crypto/`. Run with:
 //!
 //! ```text
-//! cargo run --example gen_crypto_fixture -p dynomite
+//! cargo run --example gen_crypto_fixture -p dynomited
 //! ```
 //!
 //! The fixture pins the AES wire format implemented in Stage 6.
@@ -42,6 +42,8 @@ fn main() {
     assert_eq!(recovered, plaintext);
 
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("dynomite")
         .join("tests")
         .join("fixtures")
         .join("crypto");
