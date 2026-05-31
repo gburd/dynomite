@@ -155,7 +155,6 @@ pub fn classify(ty: MsgType) -> CommandClass {
         | M::ReqRedisSetrange
         | M::ReqRedisHincrby
         | M::ReqRedisHincrbyfloat
-        | M::ReqRedisHset
         | M::ReqRedisHsetnx
         | M::ReqRedisLrange
         | M::ReqRedisLrem
@@ -183,6 +182,7 @@ pub fn classify(ty: MsgType) -> CommandClass {
         | M::ReqRedisHmget
         | M::ReqRedisHmset
         | M::ReqRedisHscan
+        | M::ReqRedisHset
         | M::ReqRedisLpush
         | M::ReqRedisRpush
         | M::ReqRedisSadd
@@ -244,6 +244,12 @@ pub fn classify(ty: MsgType) -> CommandClass {
         M::ReqRedisFtCreate | M::ReqRedisFtSearch | M::ReqRedisFtDropindex => CommandClass::ArgN,
         M::ReqRedisFtInfo => CommandClass::Arg0,
         M::ReqRedisFtList => CommandClass::Argz,
+        // Unknown FT.* keywords surface as a generic variadic
+        // command so the parser collects every token into the
+        // arg vector for the dispatcher's intercept; the
+        // intercept then synthesises a `-ERR not supported`
+        // reply.
+        M::ReqRedisFtUnknown => CommandClass::ArgN,
 
         _ => CommandClass::Arg0,
     }
@@ -333,6 +339,28 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
         buf[i] = b.to_ascii_lowercase();
     }
     let key = &buf[..keyword.len()];
+    // RediSearch FT.* surface. Recognised keywords map to
+    // their typed `ReqRedisFt*` variants below; any other FT.*
+    // keyword is stamped as `ReqRedisFtUnknown` so it lands in
+    // the dispatcher's vector-registry intercept and surfaces
+    // a structured `-ERR` rather than being reflected at the
+    // backend (which would return its own opaque `unknown
+    // command` reply).
+    if key.starts_with(b"ft.")
+        && !matches!(
+            key,
+            b"ft.create" | b"ft.search" | b"ft.info" | b"ft.list" | b"ft._list" | b"ft.dropindex"
+        )
+    {
+        return Some((
+            MsgType::ReqRedisFtUnknown,
+            CommandTraits {
+                is_read: true,
+                quit: false,
+                routing: RoutingOverride::LocalNodeOnly,
+            },
+        ));
+    }
     let (ty, is_read, quit, routing) = match key {
         // length 3
         b"get" => (MsgType::ReqRedisGet, true, false, RoutingOverride::None),

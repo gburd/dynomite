@@ -154,6 +154,7 @@ pub(crate) struct ServerInner {
     pool_name: String,
     config: Mutex<ConfPool>,
     generation: AtomicU64,
+    vector_registry: Arc<crate::vector::registry::VectorRegistry>,
 }
 
 impl std::fmt::Debug for ServerInner {
@@ -189,11 +190,17 @@ pub struct Server {
     cluster: Arc<ServerPool>,
     hooks: ServerHooks,
     stats: Arc<Stats>,
+    vector_registry: Arc<crate::vector::registry::VectorRegistry>,
 }
 
 impl Server {
     /// Used internally by [`crate::embed::ServerBuilder::build`].
-    pub(crate) fn from_pool(pool_name: String, pool: ConfPool, hooks: ServerHooks) -> Self {
+    pub(crate) fn from_pool(
+        pool_name: String,
+        pool: ConfPool,
+        hooks: ServerHooks,
+        vector_registry: Arc<crate::vector::registry::VectorRegistry>,
+    ) -> Self {
         let pool_cfg = PoolConfig::from_conf(&pool_name, &pool);
         let local_peer = build_local_peer(&pool, &pool_cfg);
         let mut peers = vec![local_peer];
@@ -221,7 +228,18 @@ impl Server {
             cluster: server_pool_arc,
             hooks,
             stats,
+            vector_registry,
         }
+    }
+
+    /// Borrow the [`crate::vector::registry::VectorRegistry`]
+    /// this server was built with. The [`crate::embed::ServerBuilder`]
+    /// installs a fresh registry by default; call
+    /// [`crate::embed::ServerBuilder::with_vector_registry`] to
+    /// share one across multiple servers.
+    #[must_use]
+    pub fn vector_registry(&self) -> &Arc<crate::vector::registry::VectorRegistry> {
+        &self.vector_registry
     }
 
     /// The pool name configured in the YAML / builder.
@@ -277,9 +295,11 @@ impl Server {
             cluster,
             mut hooks,
             stats,
+            vector_registry,
         } = self;
 
-        let dispatcher = ClusterDispatcher::new(cluster.clone());
+        let dispatcher =
+            ClusterDispatcher::new(cluster.clone()).with_vector_registry(vector_registry.clone());
         let bus = EventBus::new(64);
         let events = Arc::new(EventManager::new(64));
         let cancel = CancellationToken::new();
@@ -318,6 +338,7 @@ impl Server {
             pool_name: pool_name.clone(),
             config: Mutex::new(pool.clone()),
             generation: AtomicU64::new(0),
+            vector_registry,
         });
 
         // Register self in the in-process registry so peer
@@ -390,6 +411,15 @@ impl ServerHandle {
     #[must_use]
     pub fn crypto_provider(&self) -> Option<&dyn CryptoProvider> {
         self.inner.crypto.as_deref()
+    }
+
+    /// Borrow the [`crate::vector::registry::VectorRegistry`]
+    /// installed at build time. The default builder installs a
+    /// fresh, empty registry; share one across servers via
+    /// [`crate::embed::ServerBuilder::with_vector_registry`].
+    #[must_use]
+    pub fn vector_registry(&self) -> Arc<crate::vector::registry::VectorRegistry> {
+        Arc::clone(&self.inner.vector_registry)
     }
 
     /// Local listen address (post-bind), if a `listen:` was

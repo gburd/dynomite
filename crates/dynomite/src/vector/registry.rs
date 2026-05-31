@@ -118,6 +118,15 @@ pub struct VectorRegistry {
     inner: Arc<RwLock<BTreeMap<String, Arc<VectorTable>>>>,
 }
 
+impl std::fmt::Debug for VectorRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<String> = self.inner.read().keys().cloned().collect();
+        f.debug_struct("VectorRegistry")
+            .field("indexes", &names)
+            .finish()
+    }
+}
+
 impl VectorRegistry {
     /// Build an empty registry.
     #[must_use]

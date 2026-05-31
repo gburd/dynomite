@@ -219,6 +219,12 @@ pub struct Server {
     /// from. The run loop refreshes the failure block of this
     /// snapshot on a one-second timer.
     stats_sink: Arc<Mutex<Snapshot>>,
+    /// Process-wide vector index registry shared by the
+    /// [`ClusterDispatcher`] and any out-of-band code that wants
+    /// to inspect the live FT.* surface (tests, admin tools).
+    /// Built fresh on every [`Server::build`] call; survives for
+    /// the lifetime of the [`Server`].
+    vector_registry: Arc<dynomite::vector::registry::VectorRegistry>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
 }
@@ -469,6 +475,16 @@ impl Server {
         if let Some(store) = hint_store.as_ref() {
             dispatcher = dispatcher.with_hint_store(store.clone());
         }
+        // Vector index registry. The dispatcher routes RediSearch
+        // FT.* commands and the HSET interception path through
+        // this in-process registry; without it, FT.* keywords would
+        // be forwarded to the backend (which typically rejects them
+        // with `-ERR unknown command`). One registry is built per
+        // dynomited process; share it across components by holding
+        // an `Arc` clone (e.g. the [`crate::server::Server`]
+        // accessor exposes it via [`Self::vector_registry`]).
+        let vector_registry = Arc::new(dynomite::vector::registry::VectorRegistry::new());
+        dispatcher = dispatcher.with_vector_registry(vector_registry.clone());
         let mut peer_handles: Vec<JoinHandle<Result<(), NetError>>> = Vec::new();
         let mut gossip_peer_txs: Vec<(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)> =
             Vec::new();
@@ -665,9 +681,20 @@ impl Server {
             tls_profiles,
             failure_metrics,
             stats_sink,
+            vector_registry,
             shutdown_tx,
             shutdown_rx,
         })
+    }
+
+    /// Borrow the [`dynomite::vector::registry::VectorRegistry`]
+    /// the dispatcher routes RediSearch FT.* commands and the
+    /// HSET interception path through. The handle is cheap to
+    /// clone; embedders that drive admin paths out-of-band can
+    /// hold one alongside the `Server`.
+    #[must_use]
+    pub fn vector_registry(&self) -> Arc<dynomite::vector::registry::VectorRegistry> {
+        Arc::clone(&self.vector_registry)
     }
 
     /// Attach the original YAML configuration file path so the
@@ -843,6 +870,7 @@ impl Server {
             tls_profiles,
             failure_metrics,
             stats_sink,
+            vector_registry: _,
             shutdown_tx,
             mut shutdown_rx,
         } = self;
