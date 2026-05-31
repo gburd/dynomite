@@ -1017,28 +1017,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dyn-vec"
-version = "0.0.1"
-dependencies = [
- "bytes",
- "criterion",
- "half",
- "hegeltest",
- "http-body-util",
- "hyper",
- "hyper-util",
- "noxu",
- "parking_lot",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "turbovec",
-]
-
-[[package]]
 name = "dyniak"
 version = "0.0.1"
 dependencies = [
@@ -1084,8 +1062,8 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "crossbeam-queue",
- "dyn-vec",
- "dyntext",
+ "dynomite-text",
+ "dynomite-vec",
  "futures-core",
  "gen-fsm",
  "hegeltest",
@@ -1123,6 +1101,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynomite-text"
+version = "0.0.1"
+dependencies = [
+ "bincode",
+ "blake3",
+ "criterion",
+ "hegeltest",
+ "noxu",
+ "regex",
+ "regex-syntax",
+ "roaring",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tre-sys",
+]
+
+[[package]]
+name = "dynomite-vec"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "criterion",
+ "half",
+ "hegeltest",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "noxu",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "turbovec",
+]
+
+[[package]]
 name = "dynomited"
 version = "0.0.1"
 dependencies = [
@@ -1154,24 +1172,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "dyntext"
-version = "0.0.1"
-dependencies = [
- "bincode",
- "blake3",
- "criterion",
- "hegeltest",
- "noxu",
- "regex",
- "regex-syntax",
- "roaring",
- "serde",
- "tempfile",
- "thiserror 2.0.18",
- "tre-sys",
 ]
 
 [[package]]
