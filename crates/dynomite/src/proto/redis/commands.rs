@@ -240,8 +240,11 @@ pub fn classify(ty: MsgType) -> CommandClass {
         // RediSearch FT.* commands. CREATE / SEARCH / DROPINDEX
         // take the index name as the lone key and a variadic
         // payload; INFO takes only the index name; LIST takes
-        // no key.
-        M::ReqRedisFtCreate | M::ReqRedisFtSearch | M::ReqRedisFtDropindex => CommandClass::ArgN,
+        // no key. FT.REGEX (Dynomite extension) takes the
+        // index name as the lone key and a variadic payload.
+        M::ReqRedisFtCreate | M::ReqRedisFtSearch | M::ReqRedisFtDropindex | M::ReqRedisFtRegex => {
+            CommandClass::ArgN
+        }
         M::ReqRedisFtInfo => CommandClass::Arg0,
         M::ReqRedisFtList => CommandClass::Argz,
         // Unknown FT.* keywords surface as a generic variadic
@@ -349,7 +352,13 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
     if key.starts_with(b"ft.")
         && !matches!(
             key,
-            b"ft.create" | b"ft.search" | b"ft.info" | b"ft.list" | b"ft._list" | b"ft.dropindex"
+            b"ft.create"
+                | b"ft.search"
+                | b"ft.info"
+                | b"ft.list"
+                | b"ft._list"
+                | b"ft.dropindex"
+                | b"ft.regex"
         )
     {
         return Some((
@@ -839,6 +848,17 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
         b"ft.dropindex" => (
             MsgType::ReqRedisFtDropindex,
             false,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
+        // FT.REGEX is a Dynomite extension (not standard
+        // RediSearch) for exact and approximate-regex search
+        // over `TEXT`-typed schema fields. Routed exactly like
+        // FT.SEARCH: index name carried as the lone key, the
+        // rest goes through the variadic arg vector.
+        b"ft.regex" => (
+            MsgType::ReqRedisFtRegex,
+            true,
             false,
             RoutingOverride::LocalNodeOnly,
         ),
