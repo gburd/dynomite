@@ -2,15 +2,15 @@
 //!
 //! This module defines the binary serialisation format the
 //! coordinator uses when broadcasting an FT.SEARCH to remote
-//! peers via the [`crate::proto::dnode::DmsgType::FtSearchReq`]
-//! and [`crate::proto::dnode::DmsgType::FtSearchRep`] DNODE
+//! peers via the [`dynomite::proto::dnode::DmsgType::FtSearchReq`]
+//! and [`dynomite::proto::dnode::DmsgType::FtSearchRep`] DNODE
 //! frames.
 //!
 //! # Format choice
 //!
 //! The codec is a small, hand-rolled length-prefixed layout
 //! that uses only the standard library, mirroring the
-//! [`crate::proto::dnode::Handshake`] approach. Pulling in a
+//! [`dynomite::proto::dnode::Handshake`] approach. Pulling in a
 //! heavier serde codec was rejected because:
 //!
 //! * the message shapes are tiny and stable;
@@ -104,14 +104,14 @@ pub enum CodecError {
 }
 
 /// Encode a [`BroadcastRequest`] to a binary payload suitable
-/// for the [`crate::proto::dnode::DmsgType::FtSearchReq`]
+/// for the [`dynomite::proto::dnode::DmsgType::FtSearchReq`]
 /// DNODE frame.
 ///
 /// # Examples
 ///
 /// ```
-/// use dynomite::vector::query_fsm::{BroadcastRequest, SerializedQuery};
-/// use dynomite::vector::wire::{decode_request, encode_request};
+/// use dynomite_search::query_fsm::{BroadcastRequest, SerializedQuery};
+/// use dynomite_search::wire::{decode_request, encode_request};
 ///
 /// let req = BroadcastRequest {
 ///     table: "idx".into(),
@@ -235,13 +235,13 @@ pub fn decode_request(bytes: &[u8]) -> Result<BroadcastRequest, CodecError> {
 }
 
 /// Encode a [`PeerReply`] (one peer's per-peer top-K) for the
-/// [`crate::proto::dnode::DmsgType::FtSearchRep`] DNODE frame.
+/// [`dynomite::proto::dnode::DmsgType::FtSearchRep`] DNODE frame.
 ///
 /// # Examples
 ///
 /// ```
-/// use dynomite::vector::query_fsm::{HitWithScore, PeerReply};
-/// use dynomite::vector::wire::{decode_reply, encode_reply};
+/// use dynomite_search::query_fsm::{HitWithScore, PeerReply};
+/// use dynomite_search::wire::{decode_reply, encode_reply};
 ///
 /// let reply = PeerReply {
 ///     hits: vec![HitWithScore {

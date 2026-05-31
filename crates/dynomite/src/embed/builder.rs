@@ -47,7 +47,7 @@ pub struct ServerBuilder {
     pool_name: String,
     pool: ConfPool,
     hooks: ServerHooks,
-    vector_registry: Option<std::sync::Arc<crate::vector::registry::VectorRegistry>>,
+    command_extension: Option<std::sync::Arc<dyn crate::embed::CommandExtension>>,
 }
 
 impl std::fmt::Debug for ServerBuilder {
@@ -85,7 +85,7 @@ impl ServerBuilder {
             pool_name: pool_name.into(),
             pool: ConfPool::default(),
             hooks: ServerHooks::default(),
-            vector_registry: None,
+            command_extension: None,
         }
     }
 
@@ -107,7 +107,7 @@ impl ServerBuilder {
             pool_name,
             pool: cfg.pool().clone(),
             hooks: ServerHooks::default(),
-            vector_registry: None,
+            command_extension: None,
         }
     }
 
@@ -446,45 +446,56 @@ impl ServerBuilder {
         self
     }
 
-    /// Plug a shared [`crate::vector::registry::VectorRegistry`].
+    /// Plug a [`crate::embed::CommandExtension`].
     ///
-    /// Without this setter the builder installs a fresh,
-    /// per-server registry on `build()`. Embedders that want to
-    /// drive multiple servers against a single shared catalog of
-    /// indexes (mirroring, fan-out testing, ...) can pass an
-    /// `Arc` they constructed elsewhere; the same registry will
-    /// then be reachable through
-    /// [`crate::embed::ServerHandle::vector_registry`] on every
-    /// server built with this builder.
+    /// The extension is consulted by the dispatcher in the
+    /// hot path: parsed FT.* requests and HSET requests are
+    /// offered to it before the routing planner runs. The
+    /// trait is part of the engine; the standard RediSearch
+    /// implementation lives in the `dynomite-search` crate.
+    /// Without this setter the dispatcher's behaviour is
+    /// unchanged from the substrate's stock behaviour.
     ///
     /// # Examples
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use dynomite::embed::ServerBuilder;
-    /// use dynomite::vector::registry::VectorRegistry;
-    /// let registry = Arc::new(VectorRegistry::new());
-    /// let _b = ServerBuilder::new("p").with_vector_registry(registry);
+    /// use dynomite::embed::{CommandExtension, HsetOutcome, ServerBuilder};
+    /// use dynomite::msg::MsgType;
+    /// #[derive(Debug)]
+    /// struct NoOp;
+    /// impl CommandExtension for NoOp {
+    ///     fn handles_msg_type(&self, _: MsgType) -> bool { false }
+    ///     fn try_dispatch(&self, _: &[&[u8]]) -> Option<Vec<u8>> { None }
+    /// }
+    /// let _b = ServerBuilder::new("p").with_command_extension(Arc::new(NoOp));
     /// ```
     #[must_use]
-    pub fn with_vector_registry(
+    pub fn with_command_extension(
         mut self,
-        registry: std::sync::Arc<crate::vector::registry::VectorRegistry>,
+        ext: std::sync::Arc<dyn crate::embed::CommandExtension>,
     ) -> Self {
-        self.vector_registry = Some(registry);
+        self.command_extension = Some(ext);
         self
     }
 
-    /// Borrow the configured [`crate::vector::registry::VectorRegistry`],
-    /// if one was supplied via
-    /// [`Self::with_vector_registry`]. Returns `None` when the
-    /// default-allocated registry will be installed by
-    /// [`Self::build`].
+    /// Mutating equivalent of [`Self::with_command_extension`]
+    /// for callers (notably `dynomite-search::install`) that
+    /// want to attach an extension to a builder they hold by
+    /// `&mut`.
+    pub fn set_command_extension(
+        &mut self,
+        ext: std::sync::Arc<dyn crate::embed::CommandExtension>,
+    ) -> &mut Self {
+        self.command_extension = Some(ext);
+        self
+    }
+
+    /// Borrow the configured [`crate::embed::CommandExtension`],
+    /// if one was supplied.
     #[must_use]
-    pub fn vector_registry(
-        &self,
-    ) -> Option<&std::sync::Arc<crate::vector::registry::VectorRegistry>> {
-        self.vector_registry.as_ref()
+    pub fn command_extension(&self) -> Option<&std::sync::Arc<dyn crate::embed::CommandExtension>> {
+        self.command_extension.as_ref()
     }
 
     // `conf_pool_mut` removed: the escape hatch leaked the
@@ -533,9 +544,7 @@ impl ServerBuilder {
         });
         let crypto = self.hooks.crypto;
         let metrics = self.hooks.metrics;
-        let vector_registry = self
-            .vector_registry
-            .unwrap_or_else(|| std::sync::Arc::new(crate::vector::registry::VectorRegistry::new()));
+        let command_extension = self.command_extension;
 
         Ok(Server::from_pool(
             self.pool_name,
@@ -546,7 +555,7 @@ impl ServerBuilder {
                 crypto,
                 metrics,
             },
-            vector_registry,
+            command_extension,
         ))
     }
 }

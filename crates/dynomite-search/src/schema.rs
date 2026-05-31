@@ -1,7 +1,7 @@
 //! Schema types for the vector subsystem.
 //!
 //! These types model the subset of the RediSearch FT.CREATE
-//! grammar that `dynomite::vector` will eventually parse and
+//! grammar that `dynomite_search` will eventually parse and
 //! act on. Phase B (this commit) lands the data shapes; Phase
 //! C will add the FT.* command parser that builds them and
 //! routes through [`super::registry::VectorRegistry`].

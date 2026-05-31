@@ -32,12 +32,12 @@
 //! responsible for actually contacting peers. This keeps the
 //! FSM testable in-process without standing up a real cluster.
 //!
-//! Phase B (this commit) places the FSM under
-//! `dynomite::vector` so the future Phase C wiring can connect
-//! it to the existing [`crate::cluster::apl`] preference-list
-//! walker and [`crate::cluster::vnode::dispatch`] without a
-//! cross-crate dependency. The [`PeerProbe`] callback remains
-//! the integration seam.
+//! Phase B (this commit) places the FSM under the
+//! `dynomite-search` crate so the future Phase C wiring can
+//! connect it to the existing [`dynomite::cluster::apl`]
+//! preference-list walker and `dynomite::cluster::vnode`
+//! dispatch without a cross-crate dependency. The
+//! [`PeerProbe`] callback remains the integration seam.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -52,8 +52,8 @@ use tokio::sync::mpsc;
 
 use dynvec::SearchResult;
 
-use crate::cluster::apl::{walk_n_successors, ClusterState};
-use crate::embed::events::PeerId;
+use dynomite::cluster::apl::{walk_n_successors, ClusterState};
+use dynomite::embed::events::PeerId;
 
 /// Default per-peer deadline applied by [`broadcast`].
 ///
@@ -434,7 +434,7 @@ pub struct PeerReply {
 /// Cluster-wide FT.SEARCH request.
 ///
 /// Crosses the wire as the payload of a
-/// [`crate::proto::dnode::DmsgType::FtSearchReq`] frame; see
+/// [`dynomite::proto::dnode::DmsgType::FtSearchReq`] frame; see
 /// [`super::wire`] for the codec.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BroadcastRequest {
@@ -484,8 +484,8 @@ pub enum MergeOrder {
 ///
 /// Production wiring builds this on top of the dnode peer
 /// channel (encode the [`BroadcastRequest`], send the resulting
-/// [`crate::proto::dnode::DmsgType::FtSearchReq`] frame, await
-/// the matching [`crate::proto::dnode::DmsgType::FtSearchRep`],
+/// [`dynomite::proto::dnode::DmsgType::FtSearchReq`] frame, await
+/// the matching [`dynomite::proto::dnode::DmsgType::FtSearchRep`],
 /// decode and return the hits). Tests pass an in-memory
 /// callback that simulates per-peer behaviour without standing
 /// up real connections.
@@ -520,7 +520,7 @@ pub type AsyncPeerProbe = Arc<
 /// ```
 /// use std::collections::HashSet;
 /// use dynomite::cluster::apl::{ClusterState, RingPoint};
-/// use dynomite::vector::query_fsm::select_primary_peers;
+/// use dynomite_search::query_fsm::select_primary_peers;
 /// let cs = ClusterState::new(
 ///     vec![
 ///         RingPoint::new(100, 0),
@@ -566,7 +566,7 @@ pub const fn default_per_peer_deadline() -> Duration {
 /// # Examples
 ///
 /// ```
-/// use dynomite::vector::query_fsm::{
+/// use dynomite_search::query_fsm::{
 ///     merge_hits_ranked, HitWithScore, MergeOrder, PeerReply,
 /// };
 /// let p1 = PeerReply {
@@ -778,7 +778,7 @@ impl FsmHandler for BroadcastCoordinator {
 ///
 /// `peers` is the list of peer ids the request will be
 /// broadcast to; build it via [`select_primary_peers`] from a
-/// [`crate::cluster::apl::ClusterState`] in production. `probe`
+/// [`dynomite::cluster::apl::ClusterState`] in production. `probe`
 /// is invoked once per peer and is responsible for actually
 /// running the per-peer search (in production, by serialising
 /// the request via [`super::wire::encode_request`] and writing
@@ -979,7 +979,7 @@ mod tests {
 
     use std::collections::HashSet;
 
-    use crate::cluster::apl::{ClusterState, RingPoint};
+    use dynomite::cluster::apl::{ClusterState, RingPoint};
 
     fn knn_request(top_k: u32) -> BroadcastRequest {
         BroadcastRequest {

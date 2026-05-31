@@ -7,11 +7,9 @@
 //! focus on the command parsing and execution semantics, not
 //! the RESP framing.
 
-use dynomite::proto::redis::ft::{
-    self, DocType, FtCommand, FtError, FtOutcome, InfoValue, SearchHit,
-};
-use dynomite::vector::registry::VectorRegistry;
-use dynomite::vector::schema::{
+use dynomite_search::ft::{self, DocType, FtCommand, FtError, FtOutcome, InfoValue, SearchHit};
+use dynomite_search::registry::VectorRegistry;
+use dynomite_search::schema::{
     DistanceMetric, IndexAlgorithm, MetadataField, MetadataFieldType, VectorType,
 };
 

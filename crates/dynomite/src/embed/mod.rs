@@ -61,6 +61,7 @@
 pub mod builder;
 pub mod error;
 pub mod events;
+pub mod extension;
 pub mod hooks;
 pub mod server;
 pub mod snapshots;
@@ -72,6 +73,7 @@ pub use self::error::EmbedError;
 pub use self::events::{
     CloseReason, ConnId, ConnRoleTag, EventStream, PeerDownReason, PeerId, ServerEvent,
 };
+pub use self::extension::{CommandExtension, HsetOutcome};
 pub use self::hooks::{
     BoxFuture, CryptoProvider, CryptoProviderError, Datastore, DatastoreError, DnsSeedsProvider,
     FloridaSeedsProvider, LoggingMetricsSink, MemcacheDatastore, MemoryDatastore, MetricsError,

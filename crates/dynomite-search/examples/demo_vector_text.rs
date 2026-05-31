@@ -13,8 +13,8 @@
 //! exactly what dynomited's dispatcher will use once the
 //! parser-side wiring lands.
 
-use dynomite::proto::redis::ft::{self, FtOutcome, InfoValue};
-use dynomite::vector::registry::VectorRegistry;
+use dynomite_search::ft::{self, FtOutcome, InfoValue};
+use dynomite_search::registry::VectorRegistry;
 use dyntext::index::TextIndex;
 /// Convert a slice of f32 to its little-endian byte
 /// representation (the wire format Redis Stack clients send
@@ -124,7 +124,7 @@ fn vector_demo_create_and_insert(registry: &VectorRegistry) {
 }
 
 fn vector_demo() {
-    print_section("Vector index + KNN search (dynomite::vector + ft::*)");
+    print_section("Vector index + KNN search (dynomite_search::ft::*)");
 
     let registry = VectorRegistry::new();
 

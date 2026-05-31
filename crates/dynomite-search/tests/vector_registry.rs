@@ -1,4 +1,4 @@
-//! Integration tests for [`dynomite::vector::registry::VectorRegistry`].
+//! Integration tests for [`dynomite_search::registry::VectorRegistry`].
 //!
 //! Phase B of the dynvec-fold-into-redis-path work lands the
 //! registry as the single source of truth for FT.* command
@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use std::thread;
 
-use dynomite::vector::{
+use dynomite_search::{
     DistanceMetric, IndexAlgorithm, MetadataField, MetadataFieldType, RegistryError,
     VectorRegistry, VectorSchema, VectorType,
 };

@@ -39,7 +39,7 @@
 //! # Examples
 //!
 //! ```
-//! use dynomite::proto::redis::ft_filter::{parse_expr, FilterExpr};
+//! use dynomite_search::ft_filter::{parse_expr, FilterExpr};
 //!
 //! let expr = parse_expr(b"@score:[100 200]").unwrap();
 //! match expr {
@@ -49,9 +49,9 @@
 //! ```
 use std::collections::BTreeSet;
 
-use crate::proto::redis::ft::FtError;
-use crate::vector::registry::VectorTable;
-use crate::vector::schema::MetadataFieldType;
+use crate::ft::FtError;
+use crate::registry::VectorTable;
+use crate::schema::MetadataFieldType;
 
 /// One bound on a numeric range filter.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -218,10 +218,7 @@ pub fn evaluate(
                 .metadata_fields
                 .iter()
                 .find(|f| f.name == *field)
-                .map_or(
-                    b',',
-                    super::super::super::vector::schema::MetadataField::effective_tag_separator,
-                );
+                .map_or(b',', crate::schema::MetadataField::effective_tag_separator);
             let mut out = BTreeSet::new();
             for key in universe {
                 let Some(bytes) = lookup_metadata_bytes(table, key, field)? else {

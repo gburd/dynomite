@@ -12,7 +12,7 @@
 //!    `Turbovec2Bit` to expose the per-codec cost on the same
 //!    workload. The brief asks for `Fp32` as well; the engine
 //!    layer maps the wire-level `FLOAT32` schema to the `Fp16`
-//!    codec on disk (see `dynomite::vector::schema`), so `Fp16`
+//!    codec on disk (see `dynomite_search::schema`), so `Fp16`
 //!    is the canonical representative for the float path. The
 //!    extra row substitutes the most aggressive `Turbovec2Bit`
 //!    codec to round out the four-codec sweep.

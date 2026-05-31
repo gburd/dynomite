@@ -42,18 +42,28 @@ path = "src/bin/gen-man.rs"
 required-features = ["gen-man"]
 
 [features]
-default = []
+default = ["search"]
 # Build the optional `gen-man` binary that regenerates the
 # `dynomited(8)` manpage. Off by default so the production build
 # does not pull `clap_mangen` (and `roff`) into the dependency
 # graph.
 gen-man = ["dep:clap_mangen"]
+# Wire the `dynomite-search` crate into the dispatcher so the
+# RediSearch FT.* command surface (FT.CREATE / FT.SEARCH /
+# FT.INFO / FT.LIST / FT.DROPINDEX / FT.AGGREGATE / FT.EXPLAIN
+# / FT.ALTER / FT.REGEX) is recognised and the HSET
+# interception path mirrors writes into the in-process vector
+# index registry. On by default; turning the feature off
+# strips the search dependency tree out of the binary and
+# leaves the dispatcher running with the cluster substrate
+# alone.
+search = ["dep:dynomite-search"]
 # Enable the end-to-end integration test that spawns a real
 # `redis-server` and drives the `dynomited` binary against it.
 # The test discovers `redis-server` via `PATH`; when the binary
 # is missing it marks itself ignored rather than failing. The
 # feature gates only the test, no production code.
-integration = []
+integration = ["search"]
 # Forward the engine's QUIC transport feature so the conformance
 # suite can exercise QUIC at the library level. Compiles in
 # `quiche` plus its build-time dependencies.
@@ -63,7 +73,7 @@ quic = ["dynomite/quic"]
 # `dyniak` crate. Off by default; turning the feature on
 # does not change behaviour for operators who do not configure
 # a `riak:` block in their YAML.
-riak = ["dep:dyniak", "dyniak/noxu"]
+riak = ["dep:dyniak", "dyniak/noxu", "search"]
 # Enable Wasm phase fitting for the Riak MapReduce executor.
 # When set, `dynomited` reads the `riak.wasm_modules:` YAML
 # block at startup, loads each entry through
@@ -74,7 +84,8 @@ riak = ["dep:dyniak", "dyniak/noxu"]
 wasm = ["riak", "dyniak/wasm"]
 
 [dependencies]
-dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.1" }
+dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.2" }
+dynomite-search = { path = "../dynomite-search", version = "0.0.1", optional = true }
 dyniak = { path = "../dyniak", optional = true }
 clap = { workspace = true }
 tokio = { workspace = true }

@@ -222,9 +222,11 @@ pub struct Server {
     /// Process-wide vector index registry shared by the
     /// [`ClusterDispatcher`] and any out-of-band code that wants
     /// to inspect the live FT.* surface (tests, admin tools).
-    /// Built fresh on every [`Server::build`] call; survives for
-    /// the lifetime of the [`Server`].
-    vector_registry: Arc<dynomite::vector::registry::VectorRegistry>,
+    /// Built fresh on every [`Server::build`] call (when the
+    /// `search` feature is enabled); survives for the lifetime
+    /// of the [`Server`].
+    #[cfg(feature = "search")]
+    vector_registry: std::sync::Arc<dynomite_search::VectorRegistry>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
 }
@@ -477,14 +479,24 @@ impl Server {
         }
         // Vector index registry. The dispatcher routes RediSearch
         // FT.* commands and the HSET interception path through
-        // this in-process registry; without it, FT.* keywords would
-        // be forwarded to the backend (which typically rejects them
-        // with `-ERR unknown command`). One registry is built per
-        // dynomited process; share it across components by holding
-        // an `Arc` clone (e.g. the [`crate::server::Server`]
-        // accessor exposes it via [`Self::vector_registry`]).
-        let vector_registry = Arc::new(dynomite::vector::registry::VectorRegistry::new());
-        dispatcher = dispatcher.with_vector_registry(vector_registry.clone());
+        // the `dynomite-search` extension when the binary was
+        // built with the `search` feature; otherwise the
+        // dispatcher does not recognise FT.* keywords and
+        // forwards them to the backend (which typically rejects
+        // them with `-ERR unknown command`). One registry is
+        // built per dynomited process; share it across
+        // components by holding an `Arc` clone (e.g. the
+        // [`crate::server::Server`] accessor exposes it via
+        // [`Self::vector_registry`]).
+        #[cfg(feature = "search")]
+        let vector_registry = {
+            let registry = std::sync::Arc::new(dynomite_search::VectorRegistry::new());
+            let extension = std::sync::Arc::new(dynomite_search::SearchExtension::new(
+                std::sync::Arc::clone(&registry),
+            ));
+            dispatcher = dispatcher.with_command_extension(extension);
+            registry
+        };
         let mut peer_handles: Vec<JoinHandle<Result<(), NetError>>> = Vec::new();
         let mut gossip_peer_txs: Vec<(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)> =
             Vec::new();
@@ -681,20 +693,25 @@ impl Server {
             tls_profiles,
             failure_metrics,
             stats_sink,
+            #[cfg(feature = "search")]
             vector_registry,
             shutdown_tx,
             shutdown_rx,
         })
     }
 
-    /// Borrow the [`dynomite::vector::registry::VectorRegistry`]
-    /// the dispatcher routes RediSearch FT.* commands and the
-    /// HSET interception path through. The handle is cheap to
-    /// clone; embedders that drive admin paths out-of-band can
-    /// hold one alongside the `Server`.
+    /// Borrow the [`dynomite_search::VectorRegistry`] the
+    /// dispatcher routes RediSearch FT.* commands and the HSET
+    /// interception path through. The handle is cheap to clone;
+    /// embedders that drive admin paths out-of-band can hold
+    /// one alongside the `Server`.
+    ///
+    /// Only available when the binary was built with the
+    /// `search` Cargo feature (default-on).
+    #[cfg(feature = "search")]
     #[must_use]
-    pub fn vector_registry(&self) -> Arc<dynomite::vector::registry::VectorRegistry> {
-        Arc::clone(&self.vector_registry)
+    pub fn vector_registry(&self) -> std::sync::Arc<dynomite_search::VectorRegistry> {
+        std::sync::Arc::clone(&self.vector_registry)
     }
 
     /// Attach the original YAML configuration file path so the
@@ -870,7 +887,8 @@ impl Server {
             tls_profiles,
             failure_metrics,
             stats_sink,
-            vector_registry: _,
+            #[cfg(feature = "search")]
+                vector_registry: _,
             shutdown_tx,
             mut shutdown_rx,
         } = self;

@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "dynomite-engine"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aes",
  "ahash",
@@ -1062,10 +1062,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "crossbeam-queue",
- "dynomite-text",
- "dynomite-vec",
  "futures-core",
- "gen-fsm",
  "hegeltest",
  "hex",
  "httparse",
@@ -1098,6 +1095,27 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "dynomite-search"
+version = "0.0.1"
+dependencies = [
+ "criterion",
+ "dynomite-engine",
+ "dynomite-text",
+ "dynomite-vec",
+ "gen-fsm",
+ "hegeltest",
+ "hex",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1150,6 +1168,7 @@ dependencies = [
  "clap_mangen",
  "dyniak",
  "dynomite-engine",
+ "dynomite-search",
  "nix",
  "opentelemetry",
  "opentelemetry-appender-tracing",

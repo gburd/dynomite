@@ -2,17 +2,17 @@
 //!
 //! These tests exercise the distributed FT.SEARCH path end to
 //! end without standing up a real network: each "peer" is a
-//! [`dynomite::vector::registry::VectorRegistry`] handle held
+//! [`dynomite_search::registry::VectorRegistry`] handle held
 //! in-process. The simulated probe round-trips the request and
 //! reply through the on-the-wire codec
-//! [`dynomite::vector::wire`] so the tests cover both the
+//! [`dynomite_search::wire`] so the tests cover both the
 //! merge logic and the byte format the production peer plane
 //! will exchange.
 //!
 //! The pattern is the in-process-cluster pattern used by
 //! `crates/dynomite/tests/read_repair.rs`: build N registries,
 //! seed each with a disjoint slice of documents, and then
-//! drive [`dynomite::vector::query_fsm::broadcast`] with a
+//! drive [`dynomite_search::query_fsm::broadcast`] with a
 //! probe that dispatches to the right registry.
 //!
 //! Test list (matching the brief):
@@ -29,15 +29,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dynomite::embed::events::PeerId;
-use dynomite::vector::query_fsm::{
+use dynomite_search::query_fsm::{
     broadcast, AsyncPeerProbe, BroadcastRequest, HitWithScore, MergeOrder, PeerReply,
     SerializedQuery,
 };
-use dynomite::vector::registry::VectorRegistry;
-use dynomite::vector::schema::{
+use dynomite_search::registry::VectorRegistry;
+use dynomite_search::schema::{
     DistanceMetric, IndexAlgorithm, MetadataField, MetadataFieldType, VectorSchema, VectorType,
 };
-use dynomite::vector::wire::{decode_reply, decode_request, encode_reply, encode_request};
+use dynomite_search::wire::{decode_reply, decode_request, encode_reply, encode_request};
 use serde_json::Value;
 
 const TABLE: &str = "ix";

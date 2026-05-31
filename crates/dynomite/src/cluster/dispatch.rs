@@ -217,16 +217,17 @@ pub struct ClusterDispatcher {
     /// accumulator. When `None`, the dispatcher's behaviour is
     /// unchanged.
     failure_metrics: Option<Arc<crate::stats::FailureMetrics>>,
-    /// Optional vector index registry. When set, the dispatcher
-    /// recognises RediSearch FT.* commands and the HSET
-    /// interception path on registered prefixes; FT.* keywords
-    /// short-circuit to a synthesised RESP reply built from
-    /// [`crate::proto::redis::ft::dispatch`], and HSETs against
-    /// indexed prefixes upsert the row through
-    /// [`crate::proto::redis::ft::maybe_index_hset`] before they
-    /// fall through to the standard backend path. When `None`,
-    /// the dispatcher's behaviour is unchanged.
-    vector_registry: Option<Arc<crate::vector::registry::VectorRegistry>>,
+    /// Optional command-dispatch extension. When set, the
+    /// dispatcher offers FT.* / HSET requests to the extension
+    /// before the routing planner runs; the extension may
+    /// short-circuit with a synthesised reply
+    /// ([`crate::net::DispatchOutcome::Inline`]), reject the
+    /// request with a structured error
+    /// ([`crate::net::DispatchOutcome::Error`]), or fall
+    /// through to the standard storage path. When `None`, the
+    /// dispatcher's behaviour is unchanged. See
+    /// [`crate::embed::CommandExtension`] for the trait shape.
+    command_extension: Option<Arc<dyn crate::embed::CommandExtension>>,
 }
 
 impl ClusterDispatcher {
@@ -258,7 +259,7 @@ impl ClusterDispatcher {
             mbuf_pool: MbufPool::default(),
             hint_store: None,
             failure_metrics: None,
-            vector_registry: None,
+            command_extension: None,
         }
     }
 
@@ -435,25 +436,23 @@ impl ClusterDispatcher {
         self.failure_metrics.as_ref()
     }
 
-    /// Attach a [`crate::vector::registry::VectorRegistry`].
+    /// Attach a [`crate::embed::CommandExtension`].
     ///
-    /// When wired, parsed RediSearch FT.* requests
-    /// (`FT.CREATE` / `FT.SEARCH` / `FT.INFO` / `FT.LIST` /
-    /// `FT.DROPINDEX`) short-circuit to the registry-backed
-    /// executor in [`crate::proto::redis::ft`] and the synthesised
-    /// RESP bytes are returned to the client as
-    /// [`crate::net::DispatchOutcome::Inline`]. HSET requests
-    /// whose key matches a registered prefix are routed through
-    /// [`crate::proto::redis::ft::maybe_index_hset`] before they
-    /// fall through to the standard backend path; a malformed or
-    /// missing vector field surfaces as
-    /// [`crate::net::DispatchOutcome::Error`] with a `-ERR ...`
-    /// reply rather than reaching the backend.
+    /// When wired, parsed FT.* requests and HSET requests are
+    /// offered to the extension before the routing planner
+    /// runs. The extension may produce a synthesised RESP
+    /// reply (returned to the client as
+    /// [`crate::net::DispatchOutcome::Inline`]), surface a
+    /// structured `-ERR ...` reply
+    /// ([`crate::net::DispatchOutcome::Error`]), or fall
+    /// through. Without this builder call the dispatcher's
+    /// behaviour is unchanged: FT.* keywords are forwarded to
+    /// the local datastore (which typically rejects them with
+    /// `-ERR unknown command`) and HSETs proceed unmodified.
     ///
-    /// Without this builder call, the dispatcher's behaviour is
-    /// unchanged: FT.* keywords are forwarded to the local
-    /// datastore (which typically rejects them with `-ERR
-    /// unknown command`).
+    /// The standard RediSearch implementation lives in the
+    /// `dynomite-search` crate; the trait itself is part of
+    /// the engine so embedders can plug their own.
     ///
     /// # Examples
     ///
@@ -462,30 +461,33 @@ impl ClusterDispatcher {
     /// # use dynomite::cluster::dispatch::ClusterDispatcher;
     /// # use dynomite::cluster::peer::{Peer, PeerEndpoint};
     /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// # use dynomite::embed::{CommandExtension, HsetOutcome};
     /// # use dynomite::hashkit::DynToken;
-    /// # use dynomite::vector::registry::VectorRegistry;
+    /// # use dynomite::msg::MsgType;
+    /// #[derive(Debug)]
+    /// struct NoOp;
+    /// impl CommandExtension for NoOp {
+    ///     fn handles_msg_type(&self, _: MsgType) -> bool { false }
+    ///     fn try_dispatch(&self, _: &[&[u8]]) -> Option<Vec<u8>> { None }
+    /// }
     /// let cfg = PoolConfig::default();
     /// let local = Peer::new(
     ///     0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
     ///     vec![DynToken::from_u32(0)], true, true, false,
     /// );
     /// let pool = Arc::new(ServerPool::new(cfg, vec![local]));
-    /// let registry = Arc::new(VectorRegistry::new());
-    /// let _disp = ClusterDispatcher::new(pool).with_vector_registry(registry);
+    /// let _disp = ClusterDispatcher::new(pool).with_command_extension(Arc::new(NoOp));
     /// ```
     #[must_use]
-    pub fn with_vector_registry(
-        mut self,
-        registry: Arc<crate::vector::registry::VectorRegistry>,
-    ) -> Self {
-        self.vector_registry = Some(registry);
+    pub fn with_command_extension(mut self, ext: Arc<dyn crate::embed::CommandExtension>) -> Self {
+        self.command_extension = Some(ext);
         self
     }
 
-    /// Borrow the wired vector-index registry, if any.
+    /// Borrow the wired command extension, if any.
     #[must_use]
-    pub fn vector_registry(&self) -> Option<&Arc<crate::vector::registry::VectorRegistry>> {
-        self.vector_registry.as_ref()
+    pub fn command_extension(&self) -> Option<&Arc<dyn crate::embed::CommandExtension>> {
+        self.command_extension.as_ref()
     }
 
     /// True when both the hint store is wired AND the pool has
@@ -798,8 +800,8 @@ impl Dispatcher for ClusterDispatcher {
         // backend, and HSETs against an indexed prefix get the
         // vector mirrored into the in-process registry before
         // the standard storage write fans out.
-        if let Some(reg) = self.vector_registry.as_ref() {
-            if let Some(outcome) = self.intercept_vector_command(reg.as_ref(), &req) {
+        if let Some(ext) = self.command_extension.as_ref() {
+            if let Some(outcome) = self.intercept_command(ext.as_ref(), &req) {
                 return outcome;
             }
         }
@@ -1319,41 +1321,41 @@ impl ClusterDispatcher {
 
     /// FT.* / HSET interception. Returns `Some(outcome)` when the
     /// command was fully handled (FT.* keyword, or an HSET that
-    /// references an indexed prefix with a malformed vector
-    /// payload); returns `None` to let the caller fall through to
-    /// the standard dispatch path. The HSET success path returns
-    /// `None` after upserting into the registry so the standard
-    /// storage write still goes to the backend.
-    fn intercept_vector_command(
+    /// references an indexed prefix with a malformed payload);
+    /// returns `None` to let the caller fall through to the
+    /// standard dispatch path. The HSET success path returns
+    /// `None` after the extension records the side-effect so
+    /// the standard storage write still goes to the backend.
+    fn intercept_command(
         &self,
-        registry: &crate::vector::registry::VectorRegistry,
+        ext: &dyn crate::embed::CommandExtension,
         req: &Msg,
     ) -> Option<DispatchOutcome> {
-        match req.ty() {
-            MsgType::ReqRedisFtCreate
-            | MsgType::ReqRedisFtSearch
-            | MsgType::ReqRedisFtInfo
-            | MsgType::ReqRedisFtList
-            | MsgType::ReqRedisFtDropindex
-            | MsgType::ReqRedisFtRegex
-            | MsgType::ReqRedisFtUnknown => Some(self.run_ft_command(registry, req)),
-            MsgType::ReqRedisHset => self.intercept_hset(registry, req),
-            _ => None,
+        if ext.handles_msg_type(req.ty()) {
+            return Some(self.run_extension_command(ext, req));
         }
+        if matches!(req.ty(), MsgType::ReqRedisHset) {
+            return self.intercept_extension_hset(ext, req);
+        }
+        None
     }
 
-    /// Drive an FT.* command through the registry-backed executor
+    /// Drive an FT.* command through the registered extension
     /// and wrap the RESP bytes in a [`DispatchOutcome::Inline`].
-    fn run_ft_command(
+    /// When the extension declines (`try_dispatch` returns
+    /// `None`) the outcome is rendered as a `-ERR not
+    /// supported in this build` reply so the dispatcher does
+    /// not silently drop the request.
+    fn run_extension_command(
         &self,
-        registry: &crate::vector::registry::VectorRegistry,
+        ext: &dyn crate::embed::CommandExtension,
         req: &Msg,
     ) -> DispatchOutcome {
         // For typed FT.* variants the keyword is unambiguous; for
         // [`MsgType::ReqRedisFtUnknown`] we recover the original
         // wire keyword from the request's mbuf chain (the parser
         // case-folds for table lookup but the wire bytes are
-        // preserved verbatim) so `ft::dispatch` can decide
+        // preserved verbatim) so the extension can decide
         // whether we recognise the keyword and either execute
         // it or surface a structured `-ERR ...` reply.
         let recovered_kw: Vec<u8>;
@@ -1369,9 +1371,9 @@ impl ClusterDispatcher {
                 recovered_kw.as_slice()
             }
             // The dispatcher only enters this branch from the
-            // FT.* arm above, so the catch-all is unreachable
-            // unless the MsgType set drifts out of sync with the
-            // intercept arm.
+            // FT.* arm in [`Self::intercept_command`], so the
+            // catch-all is unreachable unless the MsgType set
+            // drifts out of sync with that arm.
             _ => return DispatchOutcome::Drop,
         };
         let mut args: Vec<&[u8]> = Vec::with_capacity(1 + req.keys().len() + req.args().len());
@@ -1382,18 +1384,21 @@ impl ClusterDispatcher {
         for a in req.args() {
             args.push(a.bytes());
         }
-        let bytes = crate::proto::redis::ft::dispatch(registry, &args);
+        let bytes = ext.try_dispatch(&args).unwrap_or_else(|| {
+            let kw = String::from_utf8_lossy(keyword);
+            format!("-ERR not supported in this build: {kw}\r\n").into_bytes()
+        });
         DispatchOutcome::Inline(synthetic_redis_reply(req, &self.mbuf_pool, &bytes))
     }
 
-    /// HSET interception: returns `Some(Error(...))` when the
-    /// HSET targets a registered prefix but its vector field is
-    /// missing or malformed; returns `None` (so the dispatcher
-    /// falls through to the backend) on success or when no
-    /// registered prefix matches.
-    fn intercept_hset(
+    /// HSET interception via the registered extension.
+    /// Returns `Some(Error(...))` when the extension reports a
+    /// malformed payload against a registered prefix; returns
+    /// `None` (so the dispatcher falls through to the backend)
+    /// on success or when no registered prefix matches.
+    fn intercept_extension_hset(
         &self,
-        registry: &crate::vector::registry::VectorRegistry,
+        ext: &dyn crate::embed::CommandExtension,
         req: &Msg,
     ) -> Option<DispatchOutcome> {
         let mut args: Vec<&[u8]> = Vec::with_capacity(req.keys().len() + req.args().len());
@@ -1403,10 +1408,10 @@ impl ClusterDispatcher {
         for a in req.args() {
             args.push(a.bytes());
         }
-        match crate::proto::redis::ft::maybe_index_hset(registry, &args) {
-            Ok(_) => None,
-            Err(e) => {
-                let payload = format!("-ERR {e}\r\n");
+        match ext.try_intercept_hset(&args) {
+            crate::embed::HsetOutcome::Absorbed | crate::embed::HsetOutcome::NotIndexed => None,
+            crate::embed::HsetOutcome::Error(message) => {
+                let payload = format!("-ERR {message}\r\n");
                 Some(DispatchOutcome::Error(synthetic_redis_reply(
                     req,
                     &self.mbuf_pool,

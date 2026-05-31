@@ -155,12 +155,12 @@ pub enum DmsgType {
     /// Sent by the FT.SEARCH coordinator on the node that
     /// received the client request to every primary peer
     /// covering the index's key range. The payload encodes a
-    /// [`crate::vector::query_fsm::BroadcastRequest`] (table
-    /// name, serialised query body, top-K). Routed by the
-    /// dispatcher to the dedicated FT.SEARCH coordinator FSM
-    /// instead of the data-plane stack so the per-peer query
-    /// runs against the local registry rather than being
-    /// re-forwarded.
+    /// broadcast request (table name, serialised query body,
+    /// top-K) - see the `dynomite-search` crate's
+    /// `query_fsm::BroadcastRequest`. Routed by the dispatcher
+    /// to the dedicated FT.SEARCH coordinator FSM instead of
+    /// the data-plane stack so the per-peer query runs against
+    /// the local registry rather than being re-forwarded.
     FtSearchReq = 15,
     /// Cluster-wide RediSearch FT.SEARCH reply frame.
     ///

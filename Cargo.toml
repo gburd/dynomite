@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/dynomite",
     "crates/dynomited",
+    "crates/dynomite-search",
     "crates/dyn-hash-tool",
     "crates/dyn-encoding",
     "crates/dyniak",

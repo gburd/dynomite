@@ -1,0 +1,75 @@
+[package]
+name = "dynomite-search"
+description = "RediSearch FT.* command surface for the Dynomite engine: vector + text indexing, schema, registry, k-NN coordinator, and RESP wire codec."
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+homepage = "https://github.com/gburd/dynomite"
+documentation = "https://docs.rs/dynomite-search"
+readme = "README.md"
+keywords = ["search", "vector", "redisearch", "hnsw", "trigram"]
+categories = ["database-implementations", "text-processing", "data-structures"]
+include = [
+    "/src/**/*.rs",
+    "/Cargo.toml",
+    "/README.md",
+]
+
+[package.metadata.docs.rs]
+all-features = false
+targets = ["x86_64-unknown-linux-gnu"]
+
+[lints]
+workspace = true
+
+[lib]
+name = "dynomite_search"
+path = "src/lib.rs"
+
+[dependencies]
+# The cluster substrate. `dynomite-search` consumes the engine
+# through its public API: `CommandExtension` for command
+# dispatch / HSET interception, `cluster::apl` for the
+# preference-list walker the k-NN coordinator broadcasts over,
+# `embed::events::PeerId`, and the parsed `Msg` shape.
+dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.2" }
+
+# Vector storage + HNSW ANN index. Hosts the per-table
+# `Engine` handle that the `registry` module hands out and the
+# FT.* command handlers operate against.
+dynomite-vec = { path = "../dynomite-vec", version = "0.0.1" }
+
+# Trigram + bloom-filter text index. Powers the `TEXT`
+# schema-field path: when an FT.CREATE schema declares a
+# `TEXT` field the registry instantiates a `dyntext::TextIndex`
+# per field, the HSET interception pushes incoming bytes into
+# it, and FT.SEARCH / FT.REGEX route through the trigram
+# funnel.
+dynomite-text = { path = "../dynomite-text", version = "0.0.1" }
+
+# State-functions FSM driver used by `query_fsm` to fan out a
+# k-NN search across the cluster and merge the per-peer hit
+# lists.
+gen-fsm = { path = "../gen-fsm", version = "0.0.1" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+hegeltest = { workspace = true }
+criterion = { workspace = true }
+regex = { workspace = true }
+tempfile = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+
+[[bench]]
+name = "ft_search"
+harness = false

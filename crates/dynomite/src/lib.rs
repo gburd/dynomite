@@ -48,7 +48,6 @@ pub mod runtime;
 pub mod seeds;
 pub mod stats;
 pub mod util;
-pub mod vector;
 
 pub use crate::core::types::{DynError, Msec, MsgId, Sec, SecureServerOption, Status, Usec};
 pub use crate::embed::{Server, ServerBuilder, ServerHandle};

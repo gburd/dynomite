@@ -4,7 +4,7 @@
 //! `FT.CREATE` / `FT.SEARCH` / `FT.INFO` / `FT.LIST` /
 //! `FT.DROPINDEX` / `FT.AGGREGATE` / `FT.EXPLAIN` /
 //! `FT.ALTER` parsers and executors that route through the
-//! [`crate::vector::registry::VectorRegistry`] landed in
+//! [`crate::registry::VectorRegistry`] landed in
 //! Phase B. It also exposes [`maybe_index_hset`], the HSET
 //! interception helper that the Redis dispatcher consults so
 //! that a write to a key matching a registered prefix turns
@@ -65,9 +65,9 @@ use std::io::Write;
 
 use thiserror::Error;
 
-use crate::proto::redis::ft_filter::{self, FilterExpr};
-use crate::vector::registry::{VectorRegistry, VectorTable};
-use crate::vector::schema::{
+use crate::ft_filter::{self, FilterExpr};
+use crate::registry::{VectorRegistry, VectorTable};
+use crate::schema::{
     DistanceMetric, IndexAlgorithm, MetadataField, MetadataFieldType, VectorSchema, VectorType,
 };
 
@@ -473,7 +473,7 @@ pub fn parse_command(args: &[&[u8]]) -> Result<FtCommand, FtError> {
 ///
 /// # Errors
 ///
-/// Surfaces [`RegistryError`](crate::vector::registry::RegistryError)
+/// Surfaces [`RegistryError`](crate::registry::RegistryError)
 /// translated into [`FtError`] for already-exists / not-found
 /// outcomes, or [`FtError::Engine`] for engine-side failures.
 pub fn execute(registry: &VectorRegistry, cmd: FtCommand) -> Result<FtOutcome, FtError> {
@@ -832,7 +832,7 @@ fn parse_vector_clause(
 }
 
 fn execute_create(registry: &VectorRegistry, req: CreateRequest) -> Result<FtOutcome, FtError> {
-    use crate::vector::registry::RegistryError;
+    use crate::registry::RegistryError;
     match registry.create(req.name.clone(), req.schema) {
         Ok(()) => Ok(FtOutcome::Ok),
         Err(RegistryError::AlreadyExists(name)) => Err(FtError::AlreadyExists(name)),
@@ -2321,7 +2321,7 @@ fn execute_dropindex(
     name: String,
     delete_documents: bool,
 ) -> Result<FtOutcome, FtError> {
-    use crate::vector::registry::RegistryError;
+    use crate::registry::RegistryError;
     if delete_documents {
         match registry.drop_with_dd(&name) {
             Ok(keys) => Ok(FtOutcome::DropOk {

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 
-use crate::vector::schema::{IndexAlgorithm, MetadataFieldType, VectorSchema};
+use crate::schema::{IndexAlgorithm, MetadataFieldType, VectorSchema};
 use dyntext::TextIndex;
 use dynvec::Engine;
 
@@ -340,7 +340,7 @@ pub struct VectorTableInfo {
     /// Frozen vector dimension.
     pub dim: u16,
     /// Distance metric.
-    pub distance: crate::vector::schema::DistanceMetric,
+    pub distance: crate::schema::DistanceMetric,
     /// Index algorithm.
     pub algorithm: IndexAlgorithm,
     /// Live (non-tombstoned) row count.
@@ -354,7 +354,7 @@ pub struct VectorTableInfo {
 /// The registry owns the [`VectorTable`] map; FT.* command
 /// handlers consult it on every command. Construct one with
 /// [`VectorRegistry::new`] (typically as a field on the
-/// dynomite [`crate::core::context::Context`]) and clone the
+/// dynomite engine context) and clone the
 /// returned handle freely; clones share state.
 #[derive(Clone, Default)]
 pub struct VectorRegistry {
@@ -487,7 +487,7 @@ impl VectorRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vector::schema::{DistanceMetric, IndexAlgorithm, VectorType};
+    use crate::schema::{DistanceMetric, IndexAlgorithm, VectorType};
 
     fn schema(algorithm: IndexAlgorithm) -> VectorSchema {
         VectorSchema {
