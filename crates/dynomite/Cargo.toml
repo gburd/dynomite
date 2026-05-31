@@ -175,3 +175,7 @@ harness = false
 [[bench]]
 name = "macro_throughput"
 harness = false
+
+[[bench]]
+name = "ft_search"
+harness = false
