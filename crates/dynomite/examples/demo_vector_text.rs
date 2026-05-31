@@ -277,9 +277,49 @@ fn text_demo() {
     }
     println!();
     println!(
-        "   (Phase 2 will replace the std `regex` recheck with TRE-backed approximate-regex,\n    \
-                 letting the user say (error){{~1}}.*(42[0-9]){{~0}} and tolerate up to k typos.)",
+        "   (Phase 3 below uses the real TRE FFI for approximate-regex matching;\n    \
+                 K=1 tolerates one typo, K=2 tolerates two.)",
     );
+
+    print_section("Approximate-regex search via dyntext::search_regex_approx (Phase 3, TRE FFI)");
+
+    let approx_queries: &[(&str, u16, &str)] = &[
+        ("errno: \\w+ refused", 0, "K=0 exact: must literally match"),
+        (
+            "errno: \\w+ refsed",
+            1,
+            "K=1 one transposition tolerated ('refsed' vs 'refused')",
+        ),
+        (
+            "errnno: \\w+ refused",
+            1,
+            "K=1 one extra char tolerated ('errnno' vs 'errno')",
+        ),
+        (
+            "errno: \\w+ rfusd",
+            2,
+            "K=2 two typos tolerated ('rfusd' vs 'refused')",
+        ),
+        (
+            "errno: \\w+ rfusd",
+            0,
+            "K=0 same query: no match because exact only",
+        ),
+    ];
+    for (pat, k, label) in approx_queries {
+        print_step(&format!("search_regex_approx({pat:?}, K={k}) -- {label}"));
+        match idx.search_regex_approx(pat, *k) {
+            Ok(hits) if hits.is_empty() => println!("   no hits"),
+            Ok(hits) => {
+                for h in &hits {
+                    let pos = doc_ids.iter().position(|x| x == h).unwrap_or(usize::MAX);
+                    let body = corpus.get(pos).copied().unwrap_or("?");
+                    println!("   doc_id={h}: {body}");
+                }
+            }
+            Err(e) => println!("   error: {e:?}"),
+        }
+    }
 }
 
 fn main() {

@@ -101,8 +101,27 @@ call.
    query regex: '^errno: \w+ refused'
    doc_id=1: errno: connection refused
 
-   (Phase 2 will replace the std `regex` recheck with TRE-backed approximate-regex,
-    letting the user say (error){~1}.*(42[0-9]){~0} and tolerate up to k typos.)
+   (Phase 3 below uses the real TRE FFI for approximate-regex matching;
+    K=1 tolerates one typo, K=2 tolerates two.)
+
+============================================================
+ Approximate-regex search via dyntext::search_regex_approx (Phase 3, TRE FFI)
+============================================================
+
+>> search_regex_approx("errno: \\w+ refused", K=0) -- K=0 exact: must literally match
+   doc_id=1: errno: connection refused
+
+>> search_regex_approx("errno: \\w+ refsed", K=1) -- K=1 one transposition tolerated ('refsed' vs 'refused')
+   doc_id=1: errno: connection refused
+
+>> search_regex_approx("errnno: \\w+ refused", K=1) -- K=1 one extra char tolerated ('errnno' vs 'errno')
+   doc_id=1: errno: connection refused
+
+>> search_regex_approx("errno: \\w+ rfusd", K=2) -- K=2 two typos tolerated ('rfusd' vs 'refused')
+   doc_id=1: errno: connection refused
+
+>> search_regex_approx("errno: \\w+ rfusd", K=0) -- K=0 same query: no match because exact only
+   no hits
 
 ============================================================
  demo complete
