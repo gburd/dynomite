@@ -33,6 +33,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::bloom::BloomFilter;
 use crate::postings::Postings;
+use crate::prefix_extract;
+use crate::regex_ast::{self, RegexError};
 use crate::trigram;
 
 /// Minimum query length in bytes that the trigram index can
@@ -224,6 +226,82 @@ impl TextIndex {
             }
         }
         out
+    }
+
+    /// Search for documents whose text matches `pattern` as a
+    /// regular expression.
+    ///
+    /// The query path is the same four-tier filter funnel as
+    /// [`Self::search_substring`], plus a Phase-2 prefix
+    /// extraction step:
+    ///
+    /// 1. Parse `pattern` into the internal AST and extract
+    ///    the trigrams that any matching string MUST contain
+    ///    (see [`crate::prefix_extract`]).
+    /// 2. Intersect those trigrams' postings lists into a
+    ///    candidate doc-id set. If the AST cannot be lowered
+    ///    (named capture group, etc.) or yields no required
+    ///    trigrams, fall back to scanning every doc.
+    /// 3. Per-doc bloom filter recheck (skipped on full scan).
+    /// 4. Compile the pattern with [`regex::bytes::Regex`] and
+    ///    re-run it against each candidate's stored bytes.
+    ///
+    /// Results are returned in insertion order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegexError::Parse`] if the pattern is
+    /// syntactically invalid or uses a regex feature that the
+    /// underlying `regex` crate does not support (lookarounds,
+    /// backreferences, ...). A pattern that parses cleanly but
+    /// trips the prefix extractor's unsupported-feature path
+    /// (named capture groups) does NOT surface as an error:
+    /// the search still runs, just via the slower full-scan +
+    /// recheck path.
+    pub fn search_regex(&self, pattern: &str) -> Result<Vec<u32>, RegexError> {
+        // Compile the matcher first; a pattern the matcher
+        // cannot handle is a hard error to the caller. We use
+        // `regex::bytes::Regex` because the corpus is byte
+        // slices, not UTF-8.
+        let re = regex::bytes::Regex::new(pattern).map_err(|e| RegexError::Parse(e.to_string()))?;
+
+        // Required trigrams from the AST. If extraction fails
+        // (PrefixUnsupported) or yields no constraint, we have
+        // to scan every doc; the recheck still runs correctly.
+        let trigram_hashes: Vec<u64> = match regex_ast::parse(pattern) {
+            Ok(ast) => prefix_extract::required_trigram_hashes(&ast),
+            Err(_) => Vec::new(),
+        };
+
+        let candidates: Vec<u32> = if trigram_hashes.is_empty() {
+            self.docs.keys().copied().collect()
+        } else {
+            self.postings.intersect(&trigram_hashes).iter().collect()
+        };
+
+        let mut hits: Vec<u32> = Vec::new();
+        for doc_id in candidates {
+            let Some(doc) = self.docs.get(&doc_id) else {
+                continue;
+            };
+            // Tier 3: per-doc bloom filter -- only meaningful
+            // when we have required trigrams. On a full scan
+            // it would be a tautology because we have no
+            // membership query to make.
+            if !trigram_hashes.is_empty()
+                && !trigram_hashes
+                    .iter()
+                    .all(|t| doc.bloom.contains(&t.to_le_bytes()))
+            {
+                continue;
+            }
+            // Tier 4: real regex recheck.
+            if re.is_match(&doc.text) {
+                hits.push(doc_id);
+            }
+        }
+        hits.sort_unstable();
+        Ok(hits)
     }
 
     /// Byte-level substring match.
