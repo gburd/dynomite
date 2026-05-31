@@ -73,7 +73,7 @@ quic = ["dynomite/quic"]
 # `dyniak` crate. Off by default; turning the feature on
 # does not change behaviour for operators who do not configure
 # a `riak:` block in their YAML.
-riak = ["dep:dyniak", "dyniak/noxu", "search"]
+riak = ["dep:dyniak", "dyniak/noxu"]
 # Enable Wasm phase fitting for the Riak MapReduce executor.
 # When set, `dynomited` reads the `riak.wasm_modules:` YAML
 # block at startup, loads each entry through
