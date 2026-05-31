@@ -1,3 +1,6 @@
 [submodule "_/dynomite"]
 	path = _/dynomite
 	url = https://github.com/Netflix/dynomite.git
+[submodule "crates/tre-sys/vendor/tre"]
+	path = crates/tre-sys/vendor/tre
+	url = https://github.com/laurikari/tre.git
