@@ -11,9 +11,9 @@ members = [
     "crates/dynvec",
     "crates/tre-sys",
     "crates/gen-fsm",
-    "crates/hashtree",
+    "crates/dyn-hashtree",
     "crates/loom-tests",
-    "crates/sup",
+    "crates/dyn-sup",
     "crates/throttle-core",
 ]
 exclude = [

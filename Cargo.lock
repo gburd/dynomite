@@ -970,6 +970,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dyn-hashtree"
+version = "0.0.1"
+dependencies = [
+ "bincode",
+ "blake3",
+ "hegeltest",
+ "loom",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dyn-stack"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -995,17 +1007,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 
 [[package]]
+name = "dyn-sup"
+version = "0.0.1"
+dependencies = [
+ "loom",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "dyniak"
 version = "0.0.1"
 dependencies = [
  "bytes",
  "ciborium",
  "dyn-encoding",
+ "dyn-hashtree",
  "dynomite",
  "futures-core",
  "futures-util",
  "gen-fsm",
- "hashtree",
  "hegeltest",
  "http-body-util",
  "hyper",
@@ -1704,18 +1726,6 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
-
-[[package]]
-name = "hashtree"
-version = "0.0.1"
-dependencies = [
- "bincode",
- "blake3",
- "hegeltest",
- "loom",
- "serde",
- "thiserror 2.0.18",
-]
 
 [[package]]
 name = "heck"
@@ -4038,16 +4048,6 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
-
-[[package]]
-name = "sup"
-version = "0.0.1"
-dependencies = [
- "loom",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "syn"
