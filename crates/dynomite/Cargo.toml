@@ -87,7 +87,7 @@ throttle-core = { path = "../throttle-core", version = "0.0.1" }
 # Vector storage + HNSW ANN index. Hosts the per-table
 # `Engine` handle that `crate::vector` registers and serves
 # through Redis-Stack-style RediSearch FT.* commands.
-dyn-vec = { path = "../dyn-vec", version = "0.0.1" }
+dynomite-vec = { path = "../dynomite-vec", version = "0.0.1" }
 
 # Used to construct the per-row metadata payload that the
 # `dynvec::Engine::upsert` API requires when the Redis FT.*
@@ -108,7 +108,7 @@ gen-fsm = { path = "../gen-fsm", version = "0.0.1" }
 # `dyntext::TextIndex` per field, the HSET interception
 # pushes incoming bytes into it, and FT.SEARCH /
 # FT.REGEX route through the trigram funnel.
-dyntext = { path = "../dyntext", version = "0.0.1" }
+dynomite-text = { path = "../dynomite-text", version = "0.0.1" }
 
 [dev-dependencies]
 hegeltest = { workspace = true }

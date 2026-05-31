@@ -1,5 +1,5 @@
 [package]
-name = "dyntext"
+name = "dynomite-text"
 description = "Trigram + bloom-filter text index for approximate-substring + (future) approximate-regex search."
 version.workspace = true
 edition.workspace = true
@@ -20,6 +20,10 @@ default = []
 # compiles cleanly without the `noxu` checkout next door,
 # matching the pattern used by `dyniak::datastore::noxu`.
 noxu = ["dep:noxu", "dep:bincode"]
+
+[lib]
+name = "dyntext"
+path = "src/lib.rs"
 
 [dependencies]
 blake3 = { workspace = true }
