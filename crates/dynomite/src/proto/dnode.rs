@@ -150,6 +150,26 @@ pub enum DmsgType {
     /// frames to the dedicated handoff coordinator without parsing
     /// the payload first.
     HandoffChunk = 14,
+    /// Cluster-wide RediSearch FT.SEARCH request frame.
+    ///
+    /// Sent by the FT.SEARCH coordinator on the node that
+    /// received the client request to every primary peer
+    /// covering the index's key range. The payload encodes a
+    /// [`crate::vector::query_fsm::BroadcastRequest`] (table
+    /// name, serialised query body, top-K). Routed by the
+    /// dispatcher to the dedicated FT.SEARCH coordinator FSM
+    /// instead of the data-plane stack so the per-peer query
+    /// runs against the local registry rather than being
+    /// re-forwarded.
+    FtSearchReq = 15,
+    /// Cluster-wide RediSearch FT.SEARCH reply frame.
+    ///
+    /// Returned by every peer that received a [`Self::FtSearchReq`]
+    /// once its local search completed (or the per-peer
+    /// deadline elapsed). The payload encodes the per-peer
+    /// top-K hit list plus a `timed_out` flag the coordinator
+    /// uses to mark partial results.
+    FtSearchRep = 16,
 }
 
 impl DmsgType {
@@ -180,6 +200,8 @@ impl DmsgType {
             12 => DmsgType::GossipDigestAck2,
             13 => DmsgType::GossipShutdown,
             14 => DmsgType::HandoffChunk,
+            15 => DmsgType::FtSearchReq,
+            16 => DmsgType::FtSearchRep,
             _ => return None,
         })
     }
@@ -939,7 +961,9 @@ pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
         DmsgType::CryptoHandshake
         | DmsgType::GossipSyn
         | DmsgType::GossipSynReply
-        | DmsgType::HandoffChunk => DmsgDispatch::Bypass,
+        | DmsgType::HandoffChunk
+        | DmsgType::FtSearchReq
+        | DmsgType::FtSearchRep => DmsgDispatch::Bypass,
         _ => DmsgDispatch::Forward,
     }
 }
@@ -1248,5 +1272,12 @@ mod tests {
         // variants.
         d.ty = DmsgType::HandoffChunk;
         assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
+        // FT.SEARCH coordinator messages are routed to the
+        // dedicated query-fsm coordinator via the same
+        // bypass path used by the handoff coordinator.
+        for ty in [DmsgType::FtSearchReq, DmsgType::FtSearchRep] {
+            d.ty = ty;
+            assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
+        }
     }
 }
