@@ -18,7 +18,7 @@
 
 use std::io::Write;
 
-use dyn_riak::proto::pb::{MessageCode, RpbGetServerInfoResp, RpbServerInfoReq};
+use dyniak::proto::pb::{MessageCode, RpbGetServerInfoResp, RpbServerInfoReq};
 use serde::Serialize;
 
 use crate::client::{http_get, PbcClient};
@@ -169,7 +169,7 @@ mod tests {
                 node: "node-a".into(),
                 dc: "dc1".into(),
                 rack: "r1".into(),
-                version: "dyn-riak 0.0.1".into(),
+                version: "dyniak 0.0.1".into(),
                 token: "<unset>".into(),
                 state: "up".into(),
             }],

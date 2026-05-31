@@ -1,6 +1,6 @@
 //! End-to-end smoke test for `dyn-admin ping`.
 //!
-//! Spins up [`dyn_riak::serve_pbc`] over a `tokio::net::TcpListener`
+//! Spins up [`dyniak::serve_pbc`] over a `tokio::net::TcpListener`
 //! bound to a random localhost port, drives a real `dyn-admin ping`
 //! invocation via [`assert_cmd`] against the listener, and asserts
 //! that the binary exits with status 0 and prints `PONG`.
@@ -16,7 +16,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tokio::net::TcpListener;
 
-use dyn_riak::serve_pbc;
+use dyniak::serve_pbc;
 use dynomite::embed::{Datastore, MemoryDatastore};
 
 fn make_runtime() -> tokio::runtime::Runtime {

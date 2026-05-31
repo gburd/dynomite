@@ -11,7 +11,7 @@
 
 use std::io::Write;
 
-use dyn_riak::proto::pb::{MessageCode, RpbGetServerInfoResp, RpbServerInfoReq};
+use dyniak::proto::pb::{MessageCode, RpbGetServerInfoResp, RpbServerInfoReq};
 use serde::Serialize;
 
 use crate::client::{http_get, PbcClient};
@@ -214,16 +214,16 @@ mod tests {
     fn human_render_includes_pbc_fields() {
         let status = Status {
             node: "127.0.0.1:8087".into(),
-            server_node: Some("dyn-riak".into()),
-            server_version: Some("dyn-riak 0.0.1".into()),
+            server_node: Some("dyniak".into()),
+            server_version: Some("dyniak 0.0.1".into()),
             stats: None,
             stats_error: None,
         };
         let mut buf = Vec::new();
         render(&status, OutputFormat::Human, &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
-        assert!(s.contains("server_node: dyn-riak"));
-        assert!(s.contains("server_version: dyn-riak 0.0.1"));
+        assert!(s.contains("server_node: dyniak"));
+        assert!(s.contains("server_version: dyniak 0.0.1"));
     }
 
     #[test]

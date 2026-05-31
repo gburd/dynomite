@@ -12,7 +12,7 @@ Cap'n Proto, Bebop) can talk to the same server without first
 shoehorning their messages through protobuf.
 
 This crate provides the abstraction. It does **not** implement the
-Riak protocol itself; that lives in the (forthcoming) `dyn-riak`
+Riak protocol itself; that lives in the (forthcoming) `dyniak`
 crate and consumes `dyn-encoding` to negotiate the wire format on
 each connection.
 
@@ -85,7 +85,7 @@ The protobuf codec deliberately avoids `prost-build`. The three
 schema-first newcomers similarly avoid their respective code
 generators (`flatc`, `capnpc`, `bebopc`); each defines a small
 per-codec trait so the schema and conversion glue live in the
-crate that owns the message types (typically `dyn-riak`), not in
+crate that owns the message types (typically `dyniak`), not in
 this codec abstraction. For testing, hand-rolled fixtures live
 inline in each codec module's `tests` block.
 

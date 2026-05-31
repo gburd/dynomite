@@ -17,9 +17,9 @@ default = []
 # `TextIndex` to an embedded Noxu DB environment so the
 # trigram postings, per-doc bloom filters, and raw text
 # survive a process restart. Off by default so the crate
-# compiles cleanly without the `lamdb` checkout next door,
-# matching the pattern used by `dyn-riak::datastore::noxu`.
-noxu = ["dep:noxu-db", "dep:bincode"]
+# compiles cleanly without the `noxu` checkout next door,
+# matching the pattern used by `dyniak::datastore::noxu`.
+noxu = ["dep:noxu", "dep:bincode"]
 
 [dependencies]
 blake3 = { workspace = true }
@@ -32,7 +32,7 @@ regex-syntax = "0.8"
 roaring = { version = "0.10", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
-noxu-db = { workspace = true, optional = true }
+noxu = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 tre-sys = { path = "../tre-sys" }
 

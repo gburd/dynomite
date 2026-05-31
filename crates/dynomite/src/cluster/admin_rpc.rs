@@ -1,7 +1,7 @@
 //! Cluster admin RPC surface.
 //!
 //! This module defines the trait [`ClusterAdmin`] that the
-//! `dyn-riak` PBC server invokes when an operator drives one of
+//! `dyniak` PBC server invokes when an operator drives one of
 //! the `cluster-list`, `cluster-join`, `cluster-leave`,
 //! `cluster-plan`, or `cluster-commit` admin commands. The
 //! reference engine pulls these mutations off a dedicated

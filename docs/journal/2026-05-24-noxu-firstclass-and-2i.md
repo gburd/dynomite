@@ -16,7 +16,7 @@ Two related slices land together:
    `NoxuDatastore`. Equality and range queries both resolve to
    the keys whose stored objects carry a matching index entry.
 
-The `dyn-riak` crate's `MemoryDatastore` keeps its existing
+The `dyniak` crate's `MemoryDatastore` keeps its existing
 behaviour (returns a "not implemented" error frame for 2i and
 list ops); the upgrade is local to the `noxu` feature path.
 
@@ -107,7 +107,7 @@ value bytes verbatim.
 ## Wire-shape note
 
 The upstream Riak schema nests indexes inside an `RpbContent`
-message at tag 4 of `RpbPutReq`. The v0.0.1 dyn-riak slice
+message at tag 4 of `RpbPutReq`. The v0.0.1 dyniak slice
 modelled the put body as a flat `value: bytes` at tag 4 (a
 deviation already documented in `docs/parity.md`); to keep the
 2i path usable without a wire-incompatible refactor, the
@@ -118,12 +118,12 @@ remove the top-level tag.
 
 ## Test coverage
 
-* Unit tests in `crates/dyn-riak/src/datastore/noxu.rs` cover
+* Unit tests in `crates/dyniak/src/datastore/noxu.rs` cover
   primary K/V round-trips, equality and range 2i queries,
   reverse-mapping cleanup on delete, index replacement on
   update, malformed `_int` rejection, and the bucket / index
   name validation path.
-* Integration tests in `crates/dyn-riak/tests/noxu_pbc_round_trip.rs`
+* Integration tests in `crates/dyniak/tests/noxu_pbc_round_trip.rs`
   drive PBC frames over a real TCP loopback connection
   against a Noxu environment in a tempdir, exercising both
   put-with-indexes and the resulting equality / range queries.
@@ -144,11 +144,11 @@ remove the top-level tag.
 * Default `cargo nextest run --workspace` was 1106 before this
   slice; after, it is 1111 (added: the four pool conf tests,
   one `enums::data_store_round_trip` upgrade, and the
-  workspace-default builds did not pick up dyn-riak's noxu
+  workspace-default builds did not pick up dyniak's noxu
   tests). Workspace + `--features riak` runs 1167 (riak
   bucket adds 4 tests in dynomited::riak plus the 4 in
-  noxu_backend); workspace + dyn-riak/noxu runs 302 in
-  dyn-riak alone (240 lib + 62 integration).
+  noxu_backend); workspace + dyniak/noxu runs 302 in
+  dyniak alone (240 lib + 62 integration).
 
 ## Follow-ups deliberately not landed
 
@@ -175,18 +175,18 @@ remove the top-level tag.
   pattern-matching updates for the new variant.
 * `crates/dynomite/src/embed/hooks.rs`: 2i extension methods
   on the `Datastore` trait, default impl returns Unsupported.
-* `crates/dyn-riak/src/datastore/noxu.rs`: full 2i
+* `crates/dyniak/src/datastore/noxu.rs`: full 2i
   implementation, `Datastore` impl wires the new trait
   methods.
-* `crates/dyn-riak/src/proto/pb/messages.rs`: indexes field on
+* `crates/dyniak/src/proto/pb/messages.rs`: indexes field on
   `RpbPutReq` at tag 100.
-* `crates/dyn-riak/src/server.rs`: `handle_get`, `handle_put`,
+* `crates/dyniak/src/server.rs`: `handle_get`, `handle_put`,
   `handle_del`, `handle_index` against the new K/V + 2i trait
   surface; legacy `handle_unsupported` retired.
-* `crates/dyn-riak/tests/noxu_pbc_round_trip.rs`: PBC-level 2i
+* `crates/dyniak/tests/noxu_pbc_round_trip.rs`: PBC-level 2i
   integration tests.
 * `crates/dynomited/Cargo.toml`: `riak` feature now also
-  enables `dyn-riak/noxu`.
+  enables `dyniak/noxu`.
 * `crates/dynomited/src/lib.rs`,
   `crates/dynomited/src/main.rs`,
   `crates/dynomited/src/server.rs`,

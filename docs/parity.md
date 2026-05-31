@@ -1110,7 +1110,7 @@ store value bytes verbatim.
 
 The wire shape of `RpbPutReq` carries the indexes at a
 top-level tag (100) rather than nested under `RpbContent` at
-tag 4, because the v0.0.1 dyn-riak slice modelled
+tag 4, because the v0.0.1 dyniak slice modelled
 `RpbPutReq.value` as a flat `bytes` field at tag 4 (already a
 documented deviation). The eventual `RpbContent` refactor will
 move the indexes back inside.
@@ -1295,7 +1295,7 @@ Pinned by:
 ### D4: Causality tracking: DVVSet over classic vector clocks
 
 The Riak port tracks per-key causality with a Dotted Version
-Vector Set ([`dyn_riak::datatypes::DvvSet`]) instead of the
+Vector Set ([`dyniak::datatypes::DvvSet`]) instead of the
 classic vector-clock shape used by the C engine's `vclock`
 utility (the C code does not implement a CRDT-typed Riak; this
 deviation describes the choice made for the Rust Riak surface).
@@ -1329,24 +1329,24 @@ transparent.
 The legacy [`Vclock`] type is retained for archaeology and
 direct in-test comparisons; it is `#[deprecated(since =
 "0.0.2")]` and any new call site outside the three documented
-ones (the re-export in `crates/dyn-riak/src/datatypes/mod.rs`,
-the module file `crates/dyn-riak/src/datatypes/vclock.rs`, and
+ones (the re-export in `crates/dyniak/src/datatypes/mod.rs`,
+the module file `crates/dyniak/src/datatypes/vclock.rs`, and
 the integration test
-`crates/dyn-riak/tests/datatypes_round_trip.rs`) trips the
+`crates/dyniak/tests/datatypes_round_trip.rs`) trips the
 deprecation lint and demands its own allowance entry.
 
 Pinned by:
-- `dyn_riak::datatypes::dvv::tests` (22 unit tests on the
+- `dyniak::datatypes::dvv::tests` (22 unit tests on the
   algorithm).
-- `crates/dyn-riak/tests/dvv_properties.rs` (9 hegeltest
+- `crates/dyniak/tests/dvv_properties.rs` (9 hegeltest
   properties: single-actor sequential dominance, cross-actor
   concurrency, merge associativity / commutativity /
   idempotence, sync identity, dot absorption, encode
   round-trip, compare totality).
-- `dyn_riak::proto::pb::datatypes::tests::dvvset_*` (3 tests
+- `dyniak::proto::pb::datatypes::tests::dvvset_*` (3 tests
   exercising the protobuf-context blob round trip on both
   fetch and update sides).
-- `crates/dyn-riak/src/aae/repair.rs::RepairTask::evaluate`
+- `crates/dyniak/src/aae/repair.rs::RepairTask::evaluate`
   (now consumes `&[(Bytes, DvvSet)]`; the
   `RepairOutcome::Winner` variant carries a `dvv: DvvSet`
   field).
@@ -1371,14 +1371,14 @@ sees the produced bytes verbatim; no modules under
 `dynomite::hashkit` or `dynomite::cluster::vnode` were touched.
 
 Pinned by:
-- `dyn_riak::datatypes::keyfun::tests` (route shape, wire
+- `dyniak::datatypes::keyfun::tests` (route shape, wire
   round-trip, defaulting, `CUSTOM` rejection).
-- `dyn_riak::router::tests::bucketonly_keyfun_collapses_keys_to_one_partition`
+- `dyniak::router::tests::bucketonly_keyfun_collapses_keys_to_one_partition`
   (100-key workload at one peer).
-- `dyn_riak::router::tests::std_keyfun_distributes_within_5_percent_of_uniform`
+- `dyniak::router::tests::std_keyfun_distributes_within_5_percent_of_uniform`
   (10000-key workload within 5 percent of uniform across 5
   peers).
-- `crates/dyn-riak/tests/bucket_props_routing.rs::bucketonly_keyfun_routes_two_keys_to_same_primary`
+- `crates/dyniak/tests/bucket_props_routing.rs::bucketonly_keyfun_routes_two_keys_to_same_primary`
   (end-to-end PBC PUT, two keys land on the same per-peer
   outbound channel).
 
@@ -1400,12 +1400,12 @@ for newly created bucket-types and operators override per-
 bucket-type via `RpbSetBucketReq`.
 
 The planner
-([`dyn_riak::replication::plan_replicas`](crate::replication::plan_replicas))
+([`dyniak::replication::plan_replicas`](crate::replication::plan_replicas))
 is additive: `Topology` returns `ReplicationPlan::Topology(empty)`
 as a sentinel and the existing topology pipeline keeps
 producing the targets; `Successors` walks the ring and
 returns `[primary, succ1, succ2, ...]`. The dispatch
-integration is in `dyn_riak::router::BucketRouter` plus the
+integration is in `dyniak::router::BucketRouter` plus the
 new `serve_pbc_with_routing` entry point. The existing
 `serve_pbc` / `serve_pbc_with_admin` / `serve_pbc_tls*`
 functions trampoline through with no hooks, preserving every
@@ -1420,18 +1420,18 @@ are returned as targets and the runtime
 topology mode).
 
 Pinned by:
-- `dyn_riak::replication::tests` (5-peer ring fixture
+- `dyniak::replication::tests` (5-peer ring fixture
   exercising peer-0 / peer-3 / wrap-around cases, `n_val=2`
   and `n_val=10` boundaries, dedup, empty-ring synthetic
   primary).
-- `dyn_riak::bucket_props::tests` (mode-aware defaults,
+- `dyniak::bucket_props::tests` (mode-aware defaults,
   override precedence, normalised bucket-type fallback).
-- `dyn_riak::router::tests::topology_strategy_yields_empty_replica_list`
+- `dyniak::router::tests::topology_strategy_yields_empty_replica_list`
   (sentinel passthrough).
-- `crates/dyn-riak/tests/bucket_props_routing.rs::successors_strategy_fans_one_put_out_to_three_peers`
+- `crates/dyniak/tests/bucket_props_routing.rs::successors_strategy_fans_one_put_out_to_three_peers`
   (end-to-end PBC PUT to three distinct peer outbound
   channels via mock `PeerOutbound`).
-- `crates/dyn-riak/tests/bucket_props_routing.rs::topology_strategy_does_not_fan_out_via_successors_path`
+- `crates/dyniak/tests/bucket_props_routing.rs::topology_strategy_does_not_fan_out_via_successors_path`
   (existing topology mode unchanged).
 
 ### Stage 11: entropy chunks are length-prefixed instead of fixed `cipher_size`
@@ -2311,7 +2311,7 @@ tree across process restarts to avoid a full datastore
 rescan on cold start.
 
 * Snapshot module:
-  [`dyn_riak::aae::persist`](crate::aae::persist) with the
+  [`dyniak::aae::persist`](crate::aae::persist) with the
   v1 file format documented at the module level.
 * Cadence: `ConfAae::snapshot_interval_seconds` (default
   300s) drives `Scheduler::snapshot_due()` /
@@ -2324,11 +2324,11 @@ rescan on cold start.
   and the scheduler treats them as "rebuild from scratch."
 
 Pinned by:
-- `dyn_riak::aae::persist::tests` (9 unit tests on the
+- `dyniak::aae::persist::tests` (9 unit tests on the
   encoder, decoder, atomic save, and corruption surfaces).
-- `dyn_riak::aae::scheduler::tests` (2 cadence tests on
+- `dyniak::aae::scheduler::tests` (2 cadence tests on
   `snapshot_due` / `mark_snapshot_taken`).
-- `crates/dyn-riak/tests/aae_persist_round_trip.rs` (4
+- `crates/dyniak/tests/aae_persist_round_trip.rs` (4
   integration tests on the restart contract).
 
 ### D7: AAE Noxu native-fold rebuild
@@ -2341,7 +2341,7 @@ friendly, no per-key MVCC handshake) plus a bounded memory
 peak.
 
 * Module:
-  [`dyn_riak::aae::noxu_fold`](crate::aae::noxu_fold), gated
+  [`dyniak::aae::noxu_fold`](crate::aae::noxu_fold), gated
   behind the `noxu` cargo feature.
 * Helper:
   [`NoxuDatastore::fold_primary`](crate::datastore::NoxuDatastore::fold_primary)
@@ -2355,7 +2355,7 @@ peak.
   `Get::SearchGte`.
 
 Pinned by:
-- `dyn_riak::aae::noxu_fold::tests` (4 unit tests:
+- `dyniak::aae::noxu_fold::tests` (4 unit tests:
   empty-datastore, 1000-key fold, 2i-filtered fold,
   bit-equal comparison vs explicit-insert path).
 

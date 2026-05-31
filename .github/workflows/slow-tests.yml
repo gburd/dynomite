@@ -34,13 +34,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: clone lamdb (noxu) sibling-checkout
-        run: |
-          git clone --depth 1 https://codeberg.org/gregburd/noxu.git ../lamdb
-          # Quoracle has its own nested submodule reference
-          # that .gitmodules omits; init only the top-level
-          # submodule we need without recursing.
-          ( cd ../lamdb && git submodule update --init --depth 1 crates/noxu-rep/quoracle )
       - name: install build prerequisites
         run: |
           sudo apt-get update

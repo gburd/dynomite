@@ -1,16 +1,16 @@
-# 2026-05-24 -- dyn-riak Map and HyperLogLog (CRDT slice 2)
+# 2026-05-24 -- dyniak Map and HyperLogLog (CRDT slice 2)
 
-Branch: `stage/dyn-riak-crdts-map-hll`
-Commit base: `9811ffb` (main: "fix(dyn-riak): make LwwRegister merge commutative on (ts, actor) tie")
+Branch: `stage/dyniak-crdts-map-hll`
+Commit base: `9811ffb` (main: "fix(dyniak): make LwwRegister merge commutative on (ts, actor) tie")
 
 ## What landed
 
 The two CRDTs deferred from the v0.0.3 first-slice CRDT work:
 
-* `crates/dyn-riak/src/datatypes/map.rs` -- observed-remove
+* `crates/dyniak/src/datatypes/map.rs` -- observed-remove
   map keying typed CRDT fields (counter, OR-set, LWW register,
   EW flag, nested map).
-* `crates/dyn-riak/src/datatypes/hll.rs` -- HyperLogLog
+* `crates/dyniak/src/datatypes/hll.rs` -- HyperLogLog
   cardinality estimator (precision = 14 bits, m = 16384
   registers, Murmur3 hash routed through
   `dynomite::hashkit::hash`).
@@ -19,7 +19,7 @@ Plus the wire-side schema for both:
 
 * `MapField`, `MapUpdate`, `MapOp`, `ScalarOp`, `ScalarValue`,
   `MapEntry`, `MapValue`, `RegisterOp`, `FlagOp`, `HllValue`
-  added to `crates/dyn-riak/src/proto/pb/datatypes.rs`.
+  added to `crates/dyniak/src/proto/pb/datatypes.rs`.
 * The previously reserved tags fill in: `DtOp.map_op` (tag 3),
   `DtValue.map_value` (tag 3), `DtUpdateResp.map_value`
   (tag 5).
@@ -148,7 +148,7 @@ Counts (relative to `main` at `9811ffb`):
 | Suite | Before | After |
 |---|---:|---:|
 | `cargo nextest run --workspace` | 1006 | 1050 |
-| ... thereof unit tests in `dyn-riak` | 212 | 240 |
+| ... thereof unit tests in `dyniak` | 212 | 240 |
 | ... thereof integration tests | 28 | 39 |
 | ... thereof property tests | 12 | 18 |
 
@@ -179,33 +179,33 @@ Brief's mandatory scenarios each have a dedicated test:
 ## Files touched
 
 ```
-crates/dyn-riak/src/datatypes/hll.rs                    [new]
-crates/dyn-riak/src/datatypes/map.rs                    [new]
-crates/dyn-riak/src/datatypes/mod.rs                    [+10 lines, append-only]
-crates/dyn-riak/src/proto/pb/datatypes.rs               [filled in reserved tags + tests]
-crates/dyn-riak/src/proto/pb/mod.rs                     [+6 lines, append-only]
-crates/dyn-riak/tests/datatypes_round_trip.rs           [+11 tests, append-only]
-crates/dyn-riak/tests/datatypes_properties.rs           [+6 tests, append-only]
+crates/dyniak/src/datatypes/hll.rs                    [new]
+crates/dyniak/src/datatypes/map.rs                    [new]
+crates/dyniak/src/datatypes/mod.rs                    [+10 lines, append-only]
+crates/dyniak/src/proto/pb/datatypes.rs               [filled in reserved tags + tests]
+crates/dyniak/src/proto/pb/mod.rs                     [+6 lines, append-only]
+crates/dyniak/tests/datatypes_round_trip.rs           [+11 tests, append-only]
+crates/dyniak/tests/datatypes_properties.rs           [+6 tests, append-only]
 docs/journal/allowances.md                              [+1 row]
-docs/journal/2026-05-24-dyn-riak-crdts-map-hll.md       [this file]
+docs/journal/2026-05-24-dyniak-crdts-map-hll.md       [this file]
 ```
 
-`crates/dyn-riak/src/lib.rs` did not need a new re-export:
+`crates/dyniak/src/lib.rs` did not need a new re-export:
 `pub mod datatypes` already exposes the module tree, and
 `HyperLogLog` / `Map` / friends are reachable through
-`dyn_riak::datatypes::*`.
+`dyniak::datatypes::*`.
 
 `crates/dynomite/`, `crates/dynomited/`, `crates/dyn-encoding/`,
 `crates/dyn-hash-tool/`, `crates/dyn-admin/`,
-`crates/dyn-riak/src/proto/http/`, `crates/dyn-riak/src/aae/`,
-`crates/dyn-riak/src/server.rs`, `crates/dyn-riak/src/mapreduce/`,
+`crates/dyniak/src/proto/http/`, `crates/dyniak/src/aae/`,
+`crates/dyniak/src/server.rs`, `crates/dyniak/src/mapreduce/`,
 and `scripts/` are untouched.
 
 ## Verification
 
 ```
 cargo build --workspace --all-targets --locked      -- clean
-cargo fmt -p dyn-riak -- --check                    -- clean
+cargo fmt -p dyniak -- --check                    -- clean
 cargo clippy --workspace --all-targets \
          --all-features -- -D warnings              -- clean
 cargo nextest run --workspace                       -- 1050 passed, 4 skipped

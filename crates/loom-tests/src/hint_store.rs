@@ -1,6 +1,6 @@
 //! Hint-store model: a single-producer single-consumer ring of
 //! pending hints. The production type is
-//! `dyn_riak::handoff::HintStore`. We model only the contended
+//! `dyniak::handoff::HintStore`. We model only the contended
 //! path: a writer enqueueing hints while a reader drains them.
 //!
 //! Invariant under model check: every successfully enqueued hint

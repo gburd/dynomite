@@ -15,7 +15,7 @@
 //! callers must hand-roll their `flatbuffers_encode` /
 //! `flatbuffers_decode` bodies (or generate them out-of-band and
 //! plug them into a [`FlatbuffersWire`] impl). The
-//! `dyn-riak` crate is expected to host the schema set and the
+//! `dyniak` crate is expected to host the schema set and the
 //! generated code; this codec simply dispatches.
 
 use std::collections::HashMap;

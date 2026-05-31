@@ -17,7 +17,7 @@ name = "dyn-admin"
 path = "src/main.rs"
 
 [dependencies]
-dyn-riak = { path = "../dyn-riak" }
+dyniak = { path = "../dyniak" }
 clap = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

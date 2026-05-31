@@ -45,8 +45,8 @@ a slice of the `/stats` JSON snapshot:
 ```sh
 $ dyn-admin status
 node: 127.0.0.1:8087
-server_node: dyn-riak
-server_version: dyn-riak 0.0.1
+server_node: dyniak
+server_version: dyniak 0.0.1
 engine_source: node-a
 engine_version: 0.0.1
 datacenter: dc1
@@ -71,7 +71,7 @@ Ring status (queried 127.0.0.1:8087)
 
 node                          dc          rack        state   version               token
 ----------------------------  ----------  ----------  ------  --------------------  --------
-node-a                        dc1         r1          up      dyn-riak 0.0.1        <unset>
+node-a                        dc1         r1          up      dyniak 0.0.1        <unset>
 ```
 
 `token` and richer per-vnode state become populated once the
@@ -127,7 +127,7 @@ Cluster (seed 127.0.0.1:8087)
 
 addr                      node                          state   version
 ------------------------  ----------------------------  ------  --------------------
-127.0.0.1:8087            dyn-riak                      up      dyn-riak 0.0.1
+127.0.0.1:8087            dyniak                      up      dyniak 0.0.1
 
 note: multi-peer discovery deferred: substrate does not yet expose a peer-list message
       over PBC; reporting only the contacted seed

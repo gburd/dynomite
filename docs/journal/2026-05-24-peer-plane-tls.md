@@ -9,8 +9,8 @@ This slice adds explicit TLS for two surfaces:
 
 * The DNODE peer plane (inbound `DnodeProxy` listener and outbound
   per-peer supervisors in `dynomited::server`).
-* The Riak protocol gateways (`dyn_riak::serve_pbc` and
-  `dyn_riak::serve_http`).
+* The Riak protocol gateways (`dyniak::serve_pbc` and
+  `dyniak::serve_http`).
 
 Both surfaces remain plaintext by default. Operators opt in by
 setting two PEM paths each: `peer_tls_cert` + `peer_tls_key` for
@@ -76,7 +76,7 @@ The chosen versions:
 * `Cargo.toml` (workspace): five new workspace deps.
 * `crates/dynomite/Cargo.toml`: `rustls`, `tokio-rustls`,
   `rustls-pemfile`, `webpki-roots`.
-* `crates/dyn-riak/Cargo.toml`: same set + `hyper-rustls` /
+* `crates/dyniak/Cargo.toml`: same set + `hyper-rustls` /
   `http-body-util` / `hyper-util` extra features for tests.
 * `crates/dynomited/Cargo.toml`: same set as `dynomite`.
 * `crates/dynomite/src/net/tls.rs`: new module. Exposes
@@ -95,14 +95,14 @@ The chosen versions:
   `peer_tls_ca`); same triple on `ConfRiak` (`tls_cert`,
   `tls_key`, `tls_ca`); `validate_tls_pair` cross-check in
   `ConfPool::validate` and `ConfRiak::validate`.
-* `crates/dyn-riak/src/server.rs`: new `serve_pbc_tls(listener,
+* `crates/dyniak/src/server.rs`: new `serve_pbc_tls(listener,
   ds, acceptor)`. The plaintext `serve_pbc` keeps its existing
   signature; both end up in `serve_pbc_inner` so the per-frame
   loop is shared.
-* `crates/dyn-riak/src/proto/http/mod.rs`: new `serve_http_tls`
+* `crates/dyniak/src/proto/http/mod.rs`: new `serve_http_tls`
   using `tokio_rustls::TlsAcceptor` + `TokioIo` -> hyper's
   `http1::serve_connection`.
-* `crates/dyn-riak/src/lib.rs`: re-exports `serve_pbc_tls` /
+* `crates/dyniak/src/lib.rs`: re-exports `serve_pbc_tls` /
   `serve_http_tls`.
 * `crates/dynomited/src/server.rs`: `PeerTlsRuntime` struct;
   `build_peer_tls_runtime(&ConfPool)`; the peer supervisor
@@ -131,7 +131,7 @@ New tests:
   round-trip of a Redis-shaped DNODE frame over a `DnodeProxy`
   with TLS, plaintext-mode regression, and a `webpki_roots`
   smoke.
-* `crates/dyn-riak/tests/tls_round_trip.rs` (4): `RpbPingReq`
+* `crates/dyniak/tests/tls_round_trip.rs` (4): `RpbPingReq`
   over TLS, plaintext PBC `RpbPingReq` (regression), `GET
   /ping` over TLS, plaintext `GET /ping` (regression).
 * `crates/dynomited/src/riak.rs` (2): `build_handles` loads the
@@ -151,7 +151,7 @@ slice. The always-on TLS surface (operator sets
 accepted connection) is the v1 contract and is sufficient for
 operators wiring a fronting load balancer.
 
-To implement later: in `dyn_riak::server::handle_conn`,
+To implement later: in `dyniak::server::handle_conn`,
 recognize `MessageCode::StartTls` (a new entry on the
 `MessageCode` enum, value 255), respond with an
 `RpbStartTlsResp`, then upgrade the in-flight stream to a
@@ -174,8 +174,8 @@ defaults leave `peer_tls_cert` / `peer_tls_key` / `tls_cert` /
 `tls_key` at `None`. With the existing test suite intact,
 `stage_09_net::dnode_peer_round_trip` continues to exercise
 the plaintext DNODE path via plain `TcpTransport`. The
-`dyn-riak::tests::pbc_round_trip` and
-`dyn-riak::tests::http_round_trip` integration tests are
+`dyniak::tests::pbc_round_trip` and
+`dyniak::tests::http_round_trip` integration tests are
 unchanged.
 
 ## Lints

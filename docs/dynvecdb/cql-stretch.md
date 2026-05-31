@@ -153,7 +153,7 @@ need the index to expose a "search after this score" API.
 ## Authentication, TLS
 
 Out of scope for the MVP-plus-one slice. Reuse the
-`tokio-rustls` setup that `dyn-riak::proto::http` already
+`tokio-rustls` setup that `dyniak::proto::http` already
 plumbs.
 
 ## Packaging

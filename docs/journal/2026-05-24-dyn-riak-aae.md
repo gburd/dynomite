@@ -1,11 +1,11 @@
-# 2026-05-24 -- dyn-riak Tictac AAE module
+# 2026-05-24 -- dyniak Tictac AAE module
 
-Branch: `stage/dyn-riak-aae`
-Commit base: `0b08494` (main: "merge: stage/dyn-riak-scaffold into main")
+Branch: `stage/dyniak-aae`
+Commit base: `0b08494` (main: "merge: stage/dyniak-scaffold into main")
 
 ## What landed
 
-`crates/dyn-riak/src/aae/`, a self-contained Tictac active anti-
+`crates/dyniak/src/aae/`, a self-contained Tictac active anti-
 entropy module:
 
 * `aae/mod.rs` -- public surface and crate-level docs.
@@ -30,7 +30,7 @@ entropy module:
   explicitly; the dynomite `ConfPool` is not extended from this
   crate per AGENTS.md).
 
-`crates/dyn-riak/src/lib.rs` got a single appended `pub mod aae;`
+`crates/dyniak/src/lib.rs` got a single appended `pub mod aae;`
 line; no other crate was touched.
 
 ## Design choices
@@ -169,7 +169,7 @@ both pre- and post-update form" check.
 ## Verification
 
 * `cargo build --workspace --all-targets --locked` -- clean.
-* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyn-riak -- --check` -- clean.
+* `cargo fmt -p dynomite -p dynomited -p dyn-hash-tool -p dyn-encoding -p dyniak -- --check` -- clean.
 * `cargo clippy --workspace --all-targets --all-features -- -D warnings` -- clean.
 * `cargo nextest run --workspace`: 774 -> 799 (+25 tests).
 * `cargo test --doc --workspace`: 15 passed (was 12 before this

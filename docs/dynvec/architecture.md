@@ -8,9 +8,9 @@ workspace:
   `dynomite::cluster::apl` for routing primary writes and the
   per-table peer set.
 * **node-local persistence** -- Noxu DB through the
-  `dyn-riak::datastore::NoxuDatastore` shape (the same engine
+  `dyniak::datastore::NoxuDatastore` shape (the same engine
   the Riak-compatible surface uses) wrapped by an in-crate
-  abstraction so an embedder who does not have lamdb checked
+  abstraction so an embedder who does not have noxu checked
   out next door can still spin up an in-memory store.
 * **state-graph orchestration** -- `gen-fsm`, used for the
   distributed k-NN coordinator (Init -> Fanout -> Gather ->
@@ -201,7 +201,7 @@ Routes:
 Implementation lives in `src/api.rs`. Built directly on `hyper`
 to avoid adding a new HTTP framework dependency to the
 workspace; the route table mirrors the shape used by
-`dyn_riak::proto::http`.
+`dyniak::proto::http`.
 
 The MVP HTTP server runs single-node: writes and searches go
 to the local `VectorStore`. The cluster-wide fanout shape lives
@@ -228,7 +228,7 @@ Once the HTTP layer is wired through `cluster_query::run`:
 * Searches: HTTP -> coordinator broadcasts to one peer per
   vnode covering the search's partition set -> per-peer top-K
   -> merge to global top-K.
-* Replication and AAE: re-uses the existing `dyn-riak`
+* Replication and AAE: re-uses the existing `dyniak`
   active-anti-entropy machinery; vector rows are content-
   addressable via the row key.
 

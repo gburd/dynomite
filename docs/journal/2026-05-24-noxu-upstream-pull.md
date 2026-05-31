@@ -4,7 +4,7 @@ Operator directive: pull in the latest Noxu code and use it.
 
 ## Lamdb state before
 
-* Local lamdb main: `3bc6a12` ("feat(examples): add cash, cask, and ftdb application examples").
+* Local noxu main: `3bc6a12` ("feat(examples): add cash, cask, and ftdb application examples").
 * Origin/main: had been force-updated to `79e14fe`.
 * Local commits ahead of remote: 134.
 * Remote commits ahead of local: 174.
@@ -17,7 +17,7 @@ main and force-pushing).
 
 1. `git branch -f preserve/local-main-pre-2026-05-24 main`
    - preserves the operator's local 134 commits as a named ref
-2. `git stash push -m 'lamdb-local-pre-pull-2026-05-24' --include-untracked`
+2. `git stash push -m 'noxu-local-pre-pull-2026-05-24' --include-untracked`
    - preserves the operator's working-tree state (a deleted
      `.claude/scheduled_tasks.lock`, a modified `noxu-rep`
      submodule, two untracked files)
@@ -40,7 +40,7 @@ Plus a new `v1.2.0` tag.
 
 ## Verification against our consumers
 
-`crates/dyn-riak` is the only consumer of Noxu. The freshly-merged
+`crates/dyniak` is the only consumer of Noxu. The freshly-merged
 Items 2+5 worker delivered NoxuDatastore as a first-class backend
 plus 2i lookup; the merge against upstream Noxu HEAD was clean
 with no source-level changes required.
@@ -50,7 +50,7 @@ with no source-level changes required.
 | `cargo build --workspace --all-targets --all-features --locked` | clean |
 | `cargo nextest run --workspace` | 1111 passed, 4 skipped |
 | `cargo nextest run -p dynomited --features riak` | 63 passed, 4 skipped |
-| `cargo nextest run -p dyn-riak --features noxu` | 302 passed, 0 skipped |
+| `cargo nextest run -p dyniak --features noxu` | 302 passed, 0 skipped |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | clean |
 | `cargo fmt -p ... -- --check` (scoped to our crates) | clean |
 | `cargo test --doc --workspace` | clean |
@@ -61,7 +61,7 @@ with no source-level changes required.
 ## Open question for the operator
 
 The 134 local commits at `preserve/local-main-pre-2026-05-24`
-are real lamdb work that may or may not be present in the new
+are real noxu work that may or may not be present in the new
 upstream history. From dynomite's perspective we now consume
-upstream HEAD; whatever needs to happen to reconcile lamdb's
-local-vs-upstream story belongs in the lamdb tracker.
+upstream HEAD; whatever needs to happen to reconcile noxu's
+local-vs-upstream story belongs in the noxu tracker.

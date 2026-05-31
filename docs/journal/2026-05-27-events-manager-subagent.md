@@ -30,14 +30,14 @@ counters.
     and `mark_down_pname` publish `ClusterEvent::PeerUp` /
     `ClusterEvent::PeerDown` (with the observed phi value) on
     every transition they apply.
-* Modified: `crates/dyn-riak/src/aae/scheduler.rs`
+* Modified: `crates/dyniak/src/aae/scheduler.rs`
   * `Scheduler::install_events`, `Scheduler::events`,
     `Scheduler::notify_exchange_started`,
     `Scheduler::notify_exchange_completed` so the AAE driver
     code can publish `AaeExchangeStarted` /
     `AaeExchangeCompleted` payloads when it has the full
     (peer, partition, repaired) tuple. The brief explicitly
-    parks the actual driver wiring on the dyn-riak side; this
+    parks the actual driver wiring on the dyniak side; this
     commit only exposes the publish primitives.
 
 ## API surface
@@ -89,11 +89,11 @@ pub type PeerId = u32;
   every periodic tick, plus `PeerUp` and
   `RingChanged{tag="seed-discovery"}` on every newly discovered
   seed.
-* `dyn-riak::aae::Scheduler::notify_exchange_*` -> publish
+* `dyniak::aae::Scheduler::notify_exchange_*` -> publish
   primitives for `AaeExchangeStarted` / `AaeExchangeCompleted`.
   Driver-side call sites are deferred per the brief
   ("dynomite side just exposes the manager"); the manager is
-  reachable from any `dyn-riak` code that holds a
+  reachable from any `dyniak` code that holds a
   `ServerHandle` via `handle.events()`.
 
 ## Tests
@@ -111,7 +111,7 @@ Plus 9 doctests on the new public items.
 
 * `cargo nextest run -p dynomite --test events_manager`
   -> 4 / 4 PASS.
-* `cargo nextest run -p dynomite -p dyn-riak`
+* `cargo nextest run -p dynomite -p dyniak`
   -> 1225 / 1225 PASS (no regressions).
 * `cargo test --doc -p dynomite events`
   -> 16 / 16 PASS.
@@ -125,12 +125,12 @@ Plus 9 doctests on the new public items.
 ## Notes / open items
 
 * `Cargo.lock` was inadvertently updated by cargo when the
-  out-of-tree `noxu-db` workspace at `/tmp/lamdb/...` bumped
+  out-of-tree `noxu-db` workspace at `/tmp/noxu/...` bumped
   from `2.0.0-rc1` to `2.0.0`. Reverted to keep this commit
   scoped to the events module; the lockfile drift is an
   unrelated infrastructure issue. Build still works without
   `--locked`.
-* The dyn-riak driver loop that sequences AAE exchanges does
+* The dyniak driver loop that sequences AAE exchanges does
   not yet call `notify_exchange_started` /
   `notify_exchange_completed`; the brief explicitly parks that
   wiring. Tracked as a follow-up: thread the per-token

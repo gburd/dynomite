@@ -20,51 +20,51 @@ the `Topology` branch.
 
 ## Files touched
 
-* `crates/dyn-riak/src/proto/pb/messages.rs` -- added
+* `crates/dyniak/src/proto/pb/messages.rs` -- added
   `replication_strategy: Option<u32>` at tag 31 with
   `TOPOLOGY = 0` / `SUCCESSORS = 1` constants.
-* `crates/dyn-riak/src/proto/pb/mod.rs` -- re-exported
+* `crates/dyniak/src/proto/pb/mod.rs` -- re-exported
   `REPLICATION_STRATEGY_*`.
-* `crates/dyn-riak/src/replication.rs` -- new module with
+* `crates/dyniak/src/replication.rs` -- new module with
   `ReplicationStrategy`, `RingPoint`, `RingView`,
   `ReplicationPlan`, and the
   `plan_replicas(distribution, key_hash, n_val, strategy,
   consistency)` entry point. Walk semantics: locate the
   primary slot, then iterate forward through the ordered ring
   points, deduplicating peer indices, capping at `n_val`.
-* `crates/dyn-riak/src/bucket_props.rs` -- per-bucket
+* `crates/dyniak/src/bucket_props.rs` -- per-bucket
   registry caching effective `(KeyFun, ReplicationStrategy,
   n_val)`. Mode-aware defaults via
   `BucketPropsRegistry::new_riak_defaults()`.
-* `crates/dyn-riak/src/router.rs` -- `BucketRouter` resolves
+* `crates/dyniak/src/router.rs` -- `BucketRouter` resolves
   `(bucket-type, bucket, key)` -> `RouteDecision { props,
   route_bytes, key_hash, plan }`. Handed an `Arc<BucketRouter>`
   plus an `Arc<dyn PeerOutbound>` it doubles as the
   successors-mode dispatch seam for the PBC server.
-* `crates/dyn-riak/src/server.rs` -- new
+* `crates/dyniak/src/server.rs` -- new
   `serve_pbc_with_routing` entry point and a
   `handle_conn_with_hooks` driver. The existing
   `serve_pbc` / `serve_pbc_with_admin` / `serve_pbc_tls*`
   entry points trampoline through the new path with no
   hooks; behaviour for unrouted callers is unchanged.
-* `crates/dyn-riak/src/lib.rs` -- re-exports for the new
+* `crates/dyniak/src/lib.rs` -- re-exports for the new
   module surface.
 
 ## Test deltas
 
-* Unit (`crates/dyn-riak/src/replication.rs::tests`): five-peer
+* Unit (`crates/dyniak/src/replication.rs::tests`): five-peer
   ring fixture at the prompt's prescribed token positions
   exercises the prompted `peer-0 / peer-3` cases, the
   `n_val=2` and `n_val=10` boundaries, dedup of duplicate peer
   slots, and the empty-ring synthetic primary.
-* Unit (`crates/dyn-riak/src/bucket_props.rs::tests`):
+* Unit (`crates/dyniak/src/bucket_props.rs::tests`):
   registry defaulting (Riak-mode vs non-Riak-mode), per-bucket
   override, normalised bucket-type fallback to `default`.
-* Unit (`crates/dyn-riak/src/router.rs::tests`):
+* Unit (`crates/dyniak/src/router.rs::tests`):
   `topology_strategy_yields_empty_replica_list`,
   `route_bytes_match_keyfun_shape`,
   `empty_bucket_type_normalises_to_default`.
-* Integration (`crates/dyn-riak/tests/bucket_props_routing.rs`):
+* Integration (`crates/dyniak/tests/bucket_props_routing.rs`):
   `successors_strategy_fans_one_put_out_to_three_peers` --
   end-to-end PBC PUT through `serve_pbc_with_routing` to a
   5-peer ring with `Successors n_val=3`; asserts the put hits

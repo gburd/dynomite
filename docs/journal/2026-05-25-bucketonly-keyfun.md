@@ -13,36 +13,36 @@ untouched.
 
 ## Files touched
 
-* `crates/dyn-riak/src/proto/pb/messages.rs` -- added
+* `crates/dyniak/src/proto/pb/messages.rs` -- added
   `chash_keyfun: Option<u32>` at tag 30 with the canonical
   `STD/BUCKETONLY/CUSTOM` constants. Documented the schema
   extension; tag 9 stays reserved for the upstream Riak
   `RpbModFun` shape we do not model.
-* `crates/dyn-riak/src/proto/pb/mod.rs` -- re-exported
+* `crates/dyniak/src/proto/pb/mod.rs` -- re-exported
   `CHASH_KEYFUN_*` constants alongside the existing `Rpb*`
   types.
-* `crates/dyn-riak/src/datatypes/keyfun.rs` -- new module with
+* `crates/dyniak/src/datatypes/keyfun.rs` -- new module with
   `KeyFun::{Std, BucketOnly}` plus `route_bytes` (allocating)
   and `route_bytes_into` (buffer-reuse) helpers. Wire decode
   rejects `CUSTOM = 99` with a typed `KeyFunError::Custom` so
   a future user-defined slice has a non-breaking enum slot.
-* `crates/dyn-riak/src/datatypes/mod.rs` -- registered the new
+* `crates/dyniak/src/datatypes/mod.rs` -- registered the new
   module.
 
 ## Test deltas
 
-* Unit (`crates/dyn-riak/src/datatypes/keyfun.rs::tests`):
+* Unit (`crates/dyniak/src/datatypes/keyfun.rs::tests`):
   shape, round-trip, defaulting, empty-input totality.
-* Unit (`crates/dyn-riak/src/proto/pb/messages.rs::tests`):
+* Unit (`crates/dyniak/src/proto/pb/messages.rs::tests`):
   `bucket_props_chash_keyfun_round_trips`,
   `bucket_props_default_omits_new_selectors`.
-* Unit (`crates/dyn-riak/src/router.rs::tests`):
+* Unit (`crates/dyniak/src/router.rs::tests`):
   `bucketonly_keyfun_collapses_keys_to_one_partition` (100
   keys land on one peer) and
   `std_keyfun_distributes_within_5_percent_of_uniform` (10k
   keys distributed to within 5 percent of uniform across 5
   peers).
-* Integration (`crates/dyn-riak/tests/bucket_props_routing.rs`):
+* Integration (`crates/dyniak/tests/bucket_props_routing.rs`):
   `bucketonly_keyfun_routes_two_keys_to_same_primary` --
   drives two PUTs through `serve_pbc_with_routing` and asserts
   both land on the same per-peer outbound channel.

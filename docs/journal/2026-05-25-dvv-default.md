@@ -5,7 +5,7 @@ Commit base: `429fea8` (main: "merge: stage/random-slicing into main")
 
 ## What landed
 
-`crates/dyn-riak/src/datatypes/dvv.rs`, a self-contained Dotted
+`crates/dyniak/src/datatypes/dvv.rs`, a self-contained Dotted
 Version Vector Set (DVVSet) implementation, plus the migration
 of the AAE repair winner-selection path off the legacy classic
 [`Vclock`] type. The default for the Riak `DtFetchResp.context`
@@ -14,38 +14,38 @@ opaque blob is now a [`DvvSet`]-encoded clock; the wire shape of
 continue to round-trip whatever the server hands back without
 needing to parse the bytes.
 
-* `crates/dyn-riak/src/datatypes/dvv.rs` -- the new module.
+* `crates/dyniak/src/datatypes/dvv.rs` -- the new module.
   Exposes [`DvvSet`], [`DvvOrder`], `update`, `sync`, `merge`,
   `compare`, `encode`, `decode`, plus inspection helpers
   (`max_seq`, `contains_event`, `vc_iter`, `dots`, `len`,
   `is_empty`).
-* `crates/dyn-riak/src/datatypes/mod.rs` -- module-level docs
+* `crates/dyniak/src/datatypes/mod.rs` -- module-level docs
   point readers at DVV first; the `Vclock` re-export sits behind
   a single `#[allow(deprecated)]` (logged in
   `docs/journal/allowances.md`).
-* `crates/dyn-riak/src/datatypes/vclock.rs` -- the `Vclock` and
+* `crates/dyniak/src/datatypes/vclock.rs` -- the `Vclock` and
   `VclockOrder` types now carry `#[deprecated(since = "0.0.2",
   note = "use DvvSet")]`. The module-level `#![allow(deprecated)]`
   keeps the kept-for-archaeology unit tests on; the file's
   internal doc points at DVV first.
-* `crates/dyn-riak/src/aae/repair.rs` -- `RepairTask::evaluate`
+* `crates/dyniak/src/aae/repair.rs` -- `RepairTask::evaluate`
   takes `&[(Bytes, DvvSet)]` and the `RepairOutcome::Winner`
   variant now carries a `dvv: DvvSet` field (renamed from
   `vclock: Vclock`). Comparison logic is unchanged in shape; it
   just routes through `DvvOrder` instead of `VclockOrder`.
-* `crates/dyn-riak/src/proto/pb/datatypes.rs` -- the
+* `crates/dyniak/src/proto/pb/datatypes.rs` -- the
   `DtFetchResp.context` rustdoc now documents the
   Riak-mode default of a `DvvSet`-encoded blob; three new
   round-trip tests cover the protobuf-context-protobuf path on
   both the fetch and update sides, plus the empty-clock case.
-* `crates/dyn-riak/tests/dvv_properties.rs` -- nine
+* `crates/dyniak/tests/dvv_properties.rs` -- nine
   `#[hegel::test]` properties: `single_actor_sequential_writes_dominate_each_other`,
   `cross_actor_concurrent_writes_remain_concurrent`,
   `merge_commutative`, `merge_associative`, `merge_idempotent`,
   `sync_against_self_is_identity`, `dots_eventually_absorbed`,
   `encode_decode_round_trip`, and
   `compare_is_total_under_canonical_form`.
-* `crates/dyn-riak/tests/datatypes_round_trip.rs` -- file-level
+* `crates/dyniak/tests/datatypes_round_trip.rs` -- file-level
   `#![allow(deprecated)]` so the kept-for-archaeology
   `Vclock`-direct integration tests continue to compile under
   `RUSTFLAGS="-D warnings"`.
@@ -182,7 +182,7 @@ either way.
 
 ## What is deferred
 
-`crates/dyn-riak/src/aae/exchange.rs` carries
+`crates/dyniak/src/aae/exchange.rs` carries
 `KeyEntry.vclock: Vec<u8>` on the AAE wire. Per the brief, the
 exchange protocol's wire bytes stay as opaque blobs and don't
 need DVV-aware decoding for the v1: each peer interprets its
@@ -192,17 +192,17 @@ slice can promote the bytes to `DvvSet` parsing on receipt if
 we want the repair scheduler to do same-pass dominance instead
 of routing through `RepairTask::evaluate`.
 
-`crates/dyn-riak/src/datastore/` already round-trips
+`crates/dyniak/src/datastore/` already round-trips
 `context: Option<Vec<u8>>` verbatim across put / get; no change
 required.
 
 The `Vclock` API is kept for archaeology and direct
 in-test comparisons:
 
-* `crates/dyn-riak/src/datatypes/vclock.rs` continues to ship
+* `crates/dyniak/src/datatypes/vclock.rs` continues to ship
   `Vclock`, `VclockOrder`, encode / decode, plus the original
   unit tests.
-* `crates/dyn-riak/tests/datatypes_round_trip.rs` keeps its
+* `crates/dyniak/tests/datatypes_round_trip.rs` keeps its
   `vclock_compare_*` tests as the kept-for-archaeology coverage
   of the legacy clock.
 * The `Vclock` and `VclockOrder` types carry
@@ -218,14 +218,14 @@ in-test comparisons:
 
 * Workspace baseline (`main`): 1273 nextest tests.
 * This branch: 1307 nextest tests (+34).
-  * 22 new unit tests in `dyn_riak::datatypes::dvv::tests`
+  * 22 new unit tests in `dyniak::datatypes::dvv::tests`
     (constructors, update behaviour, sync semantics, dot
     absorption, compare arms, encode/decode + malformed
     inputs).
   * 3 new context-blob round-trip tests in
-    `dyn_riak::proto::pb::datatypes::tests::dvvset_*`.
+    `dyniak::proto::pb::datatypes::tests::dvvset_*`.
   * 9 new hegeltest properties in
-    `dyn_riak::dvv_properties` (sequential dominance,
+    `dyniak::dvv_properties` (sequential dominance,
     cross-actor concurrency, merge laws, sync identity, dot
     absorption, encode round-trip, compare totality).
 * `cargo test --doc --workspace` clean (15 doctests).
@@ -242,13 +242,13 @@ entry and in `docs/parity.md` D4.
 ## Files touched
 
 ```
-M  crates/dyn-riak/src/aae/repair.rs
-A  crates/dyn-riak/src/datatypes/dvv.rs
-M  crates/dyn-riak/src/datatypes/mod.rs
-M  crates/dyn-riak/src/datatypes/vclock.rs
-M  crates/dyn-riak/src/proto/pb/datatypes.rs
-M  crates/dyn-riak/tests/datatypes_round_trip.rs
-A  crates/dyn-riak/tests/dvv_properties.rs
+M  crates/dyniak/src/aae/repair.rs
+A  crates/dyniak/src/datatypes/dvv.rs
+M  crates/dyniak/src/datatypes/mod.rs
+M  crates/dyniak/src/datatypes/vclock.rs
+M  crates/dyniak/src/proto/pb/datatypes.rs
+M  crates/dyniak/tests/datatypes_round_trip.rs
+A  crates/dyniak/tests/dvv_properties.rs
 M  docs/book/src/operations/riak.md
 M  docs/journal/allowances.md
 A  docs/journal/2026-05-25-dvv-default.md

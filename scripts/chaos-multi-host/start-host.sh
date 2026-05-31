@@ -12,7 +12,7 @@
 #   MODE=riak               - run redis-server (used as the
 #                             dispatcher's backing store, even
 #                             though the workload driver dials
-#                             dyn-riak's PBC listener) AND
+#                             dyniak's PBC listener) AND
 #                             configure dynomited's riak.pbc_listen
 #                             so the workload driver can drive
 #                             Riak PBC traffic. Requires a

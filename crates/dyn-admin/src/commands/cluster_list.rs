@@ -8,7 +8,7 @@
 
 use std::io::Write;
 
-use dyn_riak::proto::pb::{DynRpbListPeersReq, DynRpbListPeersResp, MessageCode};
+use dyniak::proto::pb::{DynRpbListPeersReq, DynRpbListPeersResp, MessageCode};
 use serde::Serialize;
 
 use crate::client::PbcClient;

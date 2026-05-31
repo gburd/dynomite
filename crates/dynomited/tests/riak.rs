@@ -164,7 +164,7 @@ async fn riak_http_ping_returns_200() {
     let handle = server.shutdown_handle();
     let supervisor = tokio::spawn(async move { server.run().await });
 
-    // Drive a raw HTTP/1.1 GET /ping. The dyn-riak gateway
+    // Drive a raw HTTP/1.1 GET /ping. The dyniak gateway
     // accepts both GET and HEAD on /ping with a 200 response.
     let mut sock = None;
     for _ in 0..20 {
@@ -298,44 +298,44 @@ async fn riak_pbc_2i_against_noxu_round_trip() {
     sock.set_nodelay(true).ok();
 
     // Put alice with age_int=42 and city_bin=seattle.
-    let put = dyn_riak::proto::pb::RpbPutReq {
+    let put = dyniak::proto::pb::RpbPutReq {
         bucket: b"users".to_vec(),
         key: Some(b"alice".to_vec()),
         value: b"profile".to_vec(),
         indexes: vec![
-            dyn_riak::proto::pb::RpbPair {
+            dyniak::proto::pb::RpbPair {
                 key: b"age_int".to_vec(),
                 value: Some(b"42".to_vec()),
             },
-            dyn_riak::proto::pb::RpbPair {
+            dyniak::proto::pb::RpbPair {
                 key: b"city_bin".to_vec(),
                 value: Some(b"seattle".to_vec()),
             },
         ],
-        ..dyn_riak::proto::pb::RpbPutReq::default()
+        ..dyniak::proto::pb::RpbPutReq::default()
     };
     pbc_send(&mut sock, 11, &put.encode_to_vec()).await;
     let (code, _) = pbc_recv(&mut sock).await;
     assert_eq!(code, 12, "expected RpbPutResp");
 
     // Equality query on age_int=42 returns alice.
-    let idx_eq = dyn_riak::proto::pb::RpbIndexReq {
+    let idx_eq = dyniak::proto::pb::RpbIndexReq {
         bucket: b"users".to_vec(),
         index: b"age_int".to_vec(),
-        qtype: dyn_riak::proto::pb::INDEX_QUERY_TYPE_EQ,
+        qtype: dyniak::proto::pb::INDEX_QUERY_TYPE_EQ,
         key: Some(b"42".to_vec()),
-        ..dyn_riak::proto::pb::RpbIndexReq::default()
+        ..dyniak::proto::pb::RpbIndexReq::default()
     };
     pbc_send(&mut sock, 25, &idx_eq.encode_to_vec()).await;
     // Drain frames until we see done=true; with the streaming
-    // RpbIndexResp shape (commit dyn-riak/streaming-mr-2i),
+    // RpbIndexResp shape (commit dyniak/streaming-mr-2i),
     // small result sets may arrive as one chunk frame plus a
     // terminator frame with the done flag set.
     let mut all_keys: Vec<Vec<u8>> = Vec::new();
     loop {
         let (code, body) = pbc_recv(&mut sock).await;
         assert_eq!(code, 26, "expected RpbIndexResp");
-        let resp = dyn_riak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
+        let resp = dyniak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
         all_keys.extend(resp.keys);
         if resp.done == Some(true) {
             break;
@@ -344,20 +344,20 @@ async fn riak_pbc_2i_against_noxu_round_trip() {
     assert_eq!(all_keys, vec![b"alice".to_vec()]);
 
     // Range query on age_int [10, 50] also returns alice.
-    let idx_rg = dyn_riak::proto::pb::RpbIndexReq {
+    let idx_rg = dyniak::proto::pb::RpbIndexReq {
         bucket: b"users".to_vec(),
         index: b"age_int".to_vec(),
-        qtype: dyn_riak::proto::pb::INDEX_QUERY_TYPE_RANGE,
+        qtype: dyniak::proto::pb::INDEX_QUERY_TYPE_RANGE,
         range_min: Some(b"10".to_vec()),
         range_max: Some(b"50".to_vec()),
-        ..dyn_riak::proto::pb::RpbIndexReq::default()
+        ..dyniak::proto::pb::RpbIndexReq::default()
     };
     pbc_send(&mut sock, 25, &idx_rg.encode_to_vec()).await;
     let mut all_keys: Vec<Vec<u8>> = Vec::new();
     loop {
         let (code, body) = pbc_recv(&mut sock).await;
         assert_eq!(code, 26);
-        let resp = dyn_riak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
+        let resp = dyniak::proto::pb::RpbIndexResp::decode(body.as_slice()).expect("decode resp");
         all_keys.extend(resp.keys);
         if resp.done == Some(true) {
             break;
@@ -396,7 +396,7 @@ async fn riak_pbc_2i_against_noxu_round_trip() {
 async fn riak_wasm_modules_yaml_loads_and_executor_accepts_phase() {
     use std::sync::Arc;
 
-    use dyn_riak::mapreduce::{
+    use dyniak::mapreduce::{
         builtins::default_registry, run_job_with_wasm, Inputs, KeyDatum, MapReduceJob, Phase,
         WasmHook,
     };

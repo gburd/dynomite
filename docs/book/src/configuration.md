@@ -142,7 +142,7 @@ Operational notes:
 
 ## Riak mode
 
-The optional Riak protocol surface (`crates/dyn-riak`) is
+The optional Riak protocol surface (`crates/dyniak`) is
 wired into `dynomited` behind the `riak` Cargo feature. When
 the binary is built with `--features riak`, the `riak:` block
 of the pool body controls the PBC listener, the HTTP gateway,

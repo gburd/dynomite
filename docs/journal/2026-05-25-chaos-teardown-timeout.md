@@ -73,7 +73,7 @@ bash scripts/check_no_port_comments.sh
 bash scripts/check_ascii.sh
 cargo build --workspace --all-targets --locked
 cargo fmt -p dynomite -p dynomited -p dyn-hash-tool \
-          -p dyn-encoding -p dyn-riak -p dyn-admin -- --check
+          -p dyn-encoding -p dyniak -p dyn-admin -- --check
 ```
 
 shellcheck reports the two pre-existing `MEH_SSH` /

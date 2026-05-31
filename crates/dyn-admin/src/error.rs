@@ -1,6 +1,6 @@
 //! Top-level error type for the `dyn-admin` CLI.
 
-use dyn_riak::error::RiakError;
+use dyniak::error::RiakError;
 
 /// Errors surfaced by `dyn-admin` subcommands.
 ///

@@ -101,13 +101,13 @@ its own family of counters and gauges. They start at zero and only
 become meaningful once the embedding wires the AAE handle into
 the scheduler and repair scheduler:
 
-* `dyn_riak::aae::Scheduler::install_metrics(handle)` plus
+* `dyniak::aae::Scheduler::install_metrics(handle)` plus
   `Scheduler::observe_exchange_attempt` /
   `observe_exchange_success` / `observe_divergent_keys` from the
   per-tick hot path.
-* `dyn_riak::aae::RepairScheduler::with_metrics(handle, dc, rack)`
+* `dyniak::aae::RepairScheduler::with_metrics(handle, dc, rack)`
   for the repair-dispatched count.
-* `dyn_riak::aae::metrics::save_snapshot_with_metrics(...)` /
+* `dyniak::aae::metrics::save_snapshot_with_metrics(...)` /
   `load_snapshot_with_metrics(...)` for the snapshot counters.
 
 The families and labels:

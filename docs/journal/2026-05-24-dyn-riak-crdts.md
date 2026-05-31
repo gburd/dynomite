@@ -1,12 +1,12 @@
-# 2026-05-24 -- dyn-riak CRDT data types (v0.0.3)
+# 2026-05-24 -- dyniak CRDT data types (v0.0.3)
 
-Branch: `stage/dyn-riak-crdts`
-Commit base: `261ac6b` (main: "merge: stage/dyn-riak-aae into main")
+Branch: `stage/dyniak-crdts`
+Commit base: `261ac6b` (main: "merge: stage/dyniak-aae into main")
 
 ## What landed
 
 A first slice of Riak CRDT data types under
-`crates/dyn-riak/src/datatypes/`, plus the wire-level
+`crates/dyniak/src/datatypes/`, plus the wire-level
 `DtFetchReq` / `DtFetchResp` / `DtUpdateReq` / `DtUpdateResp`
 PBC messages and the supporting per-type op payloads.
 
@@ -108,7 +108,7 @@ default for new flags (`enable_wins`); the alternate
 
 ### PBC envelope
 
-The PBC structs live in `crates/dyn-riak/src/proto/pb/datatypes.rs`.
+The PBC structs live in `crates/dyniak/src/proto/pb/datatypes.rs`.
 Riak's published schema places nested messages (`MapOp`,
 `MapEntry`, `MapField`, `MapUpdate`) inside `DtOp` and
 `DtValue`. Those nested types are not modelled here; their tag
@@ -132,7 +132,7 @@ Counts (relative to `main` at base commit):
 | Suite | Before | After |
 |---|---:|---:|
 | `cargo nextest run --workspace` | 861 | 941 |
-| ... thereof unit tests in `dyn-riak` | 105 | 173 |
+| ... thereof unit tests in `dyniak` | 105 | 173 |
 | ... thereof integration tests | 0 | 14 |
 | ... thereof property tests | 0 | 12 |
 
@@ -142,7 +142,7 @@ Total new tests: **80** (28 unit + 14 integration + 12 property
 
 The four scenarios called out in the brief each get a dedicated
 integration test in
-`crates/dyn-riak/tests/datatypes_round_trip.rs`:
+`crates/dyniak/tests/datatypes_round_trip.rs`:
 
 * `pncounter_distinct_actors_sum_on_merge`
 * `orset_remove_concurrent_with_add_keeps_element`
@@ -159,24 +159,24 @@ idempotence on `PnCounter`, `OrSet`, `LwwRegister`, and `EwFlag`.
 ## Files touched
 
 ```
-crates/dyn-riak/Cargo.toml                              [+1 line]
-crates/dyn-riak/src/lib.rs                              [+1 line]
-crates/dyn-riak/src/proto/pb/mod.rs                     [+8 lines]
-crates/dyn-riak/src/datatypes/mod.rs                    [new]
-crates/dyn-riak/src/datatypes/vclock.rs                 [new]
-crates/dyn-riak/src/datatypes/counter.rs                [new]
-crates/dyn-riak/src/datatypes/set.rs                    [new]
-crates/dyn-riak/src/datatypes/register.rs               [new]
-crates/dyn-riak/src/datatypes/flag.rs                   [new]
-crates/dyn-riak/src/proto/pb/datatypes.rs               [new]
-crates/dyn-riak/tests/datatypes_round_trip.rs           [new]
-crates/dyn-riak/tests/datatypes_properties.rs           [new]
-docs/journal/2026-05-24-dyn-riak-crdts.md               [this file]
+crates/dyniak/Cargo.toml                              [+1 line]
+crates/dyniak/src/lib.rs                              [+1 line]
+crates/dyniak/src/proto/pb/mod.rs                     [+8 lines]
+crates/dyniak/src/datatypes/mod.rs                    [new]
+crates/dyniak/src/datatypes/vclock.rs                 [new]
+crates/dyniak/src/datatypes/counter.rs                [new]
+crates/dyniak/src/datatypes/set.rs                    [new]
+crates/dyniak/src/datatypes/register.rs               [new]
+crates/dyniak/src/datatypes/flag.rs                   [new]
+crates/dyniak/src/proto/pb/datatypes.rs               [new]
+crates/dyniak/tests/datatypes_round_trip.rs           [new]
+crates/dyniak/tests/datatypes_properties.rs           [new]
+docs/journal/2026-05-24-dyniak-crdts.md               [this file]
 ```
 
 `crates/dynomite/`, `crates/dynomited/`, `crates/dyn-encoding/`,
-`crates/dyn-hash-tool/`, `crates/dyn-riak/src/proto/http/`, and
-`crates/dyn-riak/src/aae/` are untouched. `lib.rs` and
+`crates/dyn-hash-tool/`, `crates/dyniak/src/proto/http/`, and
+`crates/dyniak/src/aae/` are untouched. `lib.rs` and
 `proto/pb/mod.rs` are append-only edits.
 
 ## Verification
@@ -184,7 +184,7 @@ docs/journal/2026-05-24-dyn-riak-crdts.md               [this file]
 ```
 cargo build --workspace --all-targets --locked            -- clean
 cargo fmt -p dynomite -p dynomited -p dyn-hash-tool \
-         -p dyn-encoding -p dyn-riak -- --check           -- clean
+         -p dyn-encoding -p dyniak -- --check           -- clean
 cargo clippy --workspace --all-targets --all-features \
          -- -D warnings                                   -- clean
 cargo nextest run --workspace                             -- 941 passed, 4 skipped

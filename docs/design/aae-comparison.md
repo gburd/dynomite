@@ -1,14 +1,14 @@
 # Active Anti-Entropy: comparison vs Riak's two generations
 
 This document compares Dynomite's shipped Tictac AAE implementation
-(in `crates/dyn-riak/src/aae/`) against Riak's two generations of
+(in `crates/dyniak/src/aae/`) against Riak's two generations of
 AAE: the original 2.x hashtree-based design and the NHS-Digital /
 Martin-Sumner-led redesign that ships in modern `riak_kv` against
 the `leveled` storage engine.
 
 ## Section 1. What we shipped
 
-Module layout: `crates/dyn-riak/src/aae/`
+Module layout: `crates/dyniak/src/aae/`
 
 | File | Role |
 |---|---|
@@ -50,7 +50,7 @@ not persist the tree to disk.
 Wire format: **Rust-self-consistent**.  We deliberately did not
 target Erlang ETF parity; a real Riak node cannot AAE-handshake
 with our nodes.  This is documented as a non-goal in
-`docs/journal/2026-05-24-dyn-riak-aae.md`.
+`docs/journal/2026-05-24-dyniak-aae.md`.
 
 Hash: `xxhash64`.  Riak uses SHA-1 in gen-1 and `crypto:hash(sha)`
 in gen-2.
@@ -206,7 +206,7 @@ caveat as Section 2.
 ### What we deliberately deviated from
 
 1. **No Erlang ETF wire compatibility**.  Documented as an
-   explicit non-goal in 2026-05-24-dyn-riak-aae.md.  A real
+   explicit non-goal in 2026-05-24-dyniak-aae.md.  A real
    Riak node cannot AAE-handshake with us.  Re-affirmed in
    the 2026-05-25 user discussion: wire compatibility is
    non-goal.

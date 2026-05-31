@@ -7,7 +7,7 @@
 
 use std::io::Write;
 
-use dyn_riak::proto::pb::{
+use dyniak::proto::pb::{
     DynRpbClusterJoinReq, DynRpbClusterJoinResp, MessageCode, DYN_STAGED_CHANGE_ADD,
     DYN_STAGED_CHANGE_REMOVE,
 };
@@ -78,7 +78,7 @@ fn render<W: Write>(report: &JoinReport, fmt: OutputFormat, out: &mut W) -> Resu
 }
 
 pub(crate) fn change_from_pb(
-    pb: &dyn_riak::proto::pb::DynRpbStagedChange,
+    pb: &dyniak::proto::pb::DynRpbStagedChange,
 ) -> Result<StagedChange, AdminError> {
     let kind = match pb.kind {
         DYN_STAGED_CHANGE_ADD => "add".into(),

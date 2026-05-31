@@ -60,22 +60,22 @@ integration = []
 quic = ["dynomite/quic"]
 # Enable the Riak protocol surface: PBC server, HTTP gateway,
 # and (optional) active anti-entropy scheduler. Pulls in the
-# `dyn-riak` crate. Off by default; turning the feature on
+# `dyniak` crate. Off by default; turning the feature on
 # does not change behaviour for operators who do not configure
 # a `riak:` block in their YAML.
-riak = ["dep:dyn-riak", "dyn-riak/noxu"]
+riak = ["dep:dyniak", "dyniak/noxu"]
 # Enable Wasm phase fitting for the Riak MapReduce executor.
 # When set, `dynomited` reads the `riak.wasm_modules:` YAML
 # block at startup, loads each entry through
-# `dyn_riak::mapreduce::wasm::load_modules_from_config`, and
+# `dyniak::mapreduce::wasm::load_modules_from_config`, and
 # registers the resulting store with the executor. Implies
 # `riak`. Pulls in `wasmtime` (and `ciborium`) via the
-# `dyn-riak/wasm` feature.
-wasm = ["riak", "dyn-riak/wasm"]
+# `dyniak/wasm` feature.
+wasm = ["riak", "dyniak/wasm"]
 
 [dependencies]
 dynomite = { path = "../dynomite" }
-dyn-riak = { path = "../dyn-riak", optional = true }
+dyniak = { path = "../dyniak", optional = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

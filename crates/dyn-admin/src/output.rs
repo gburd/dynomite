@@ -94,7 +94,7 @@ pub fn write_section<W: Write>(out: &mut W, title: &str) -> io::Result<()> {
 // -----------------------------------------------------------------
 
 /// Description of a peer to add. Mirrors
-/// `dyn_riak::proto::pb::DynRpbPeerInfo` but in a shape that
+/// `dyniak::proto::pb::DynRpbPeerInfo` but in a shape that
 /// serialises naturally for both human and JSON output.
 #[derive(Clone, Debug, Serialize)]
 pub struct PeerSpec {

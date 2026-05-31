@@ -1,7 +1,7 @@
 # Riak mode
 
 `dynomited` ships an optional Riak-compatible protocol surface
-through the [`dyn-riak`](https://crates.io/crates/dyn-riak)
+through the [`dyniak`](https://crates.io/crates/dyniak)
 crate. The surface is gated behind the `riak` Cargo feature so
 operators who do not run Riak workloads pay nothing for the
 extra dependencies and listeners.
@@ -257,7 +257,7 @@ of the context blob is opaque to clients (you round-trip the
 bytes verbatim), so the migration is transparent and existing
 client drivers continue to work without modification.
 
-The legacy `Vclock` API in `dyn_riak::datatypes::vclock` is
+The legacy `Vclock` API in `dyniak::datatypes::vclock` is
 deprecated but retained for archaeology and direct comparisons
 in the in-tree integration tests. Operator-visible behaviour is
 unchanged from a typical client's perspective: the same `R / W`
@@ -274,7 +274,7 @@ References:
 * Goncalves, Almeida, Baquero, Fonte, "Scalable and Accurate
   Causality Tracking for Eventually Consistent Stores" (2014).
 * The implementation lives in
-  `crates/dyn-riak/src/datatypes/dvv.rs`; the deviation is
+  `crates/dyniak/src/datatypes/dvv.rs`; the deviation is
   recorded in `docs/parity.md` D4 and the design notes in
   `docs/journal/2026-05-25-dvv-default.md`.
 ## Bucket properties
@@ -304,7 +304,7 @@ which hashes only `<bucket>`. The wire-level enum is:
 The selector is stored in
 `RpbBucketProps.chash_keyfun` (Dynomite extension at tag 30).
 Set it through the standard `RpbSetBucketReq` admin path; the
-in-memory enum is `dyn_riak::datatypes::keyfun::KeyFun`. The
+in-memory enum is `dyniak::datatypes::keyfun::KeyFun`. The
 shaping happens before the cluster's hash function: the
 distribution layer (vnode or random-slicing) keeps consuming the
 already-hashed bytes verbatim.
@@ -345,5 +345,5 @@ Edge cases honoured by the planner:
 The selector is stored in
 `RpbBucketProps.replication_strategy` (Dynomite extension at
 tag 31). The in-memory enum is
-`dyn_riak::replication::ReplicationStrategy`; the planning
-function is `dyn_riak::replication::plan_replicas`.
+`dyniak::replication::ReplicationStrategy`; the planning
+function is `dyniak::replication::plan_replicas`.

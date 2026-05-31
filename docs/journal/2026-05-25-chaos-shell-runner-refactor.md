@@ -156,7 +156,7 @@ network. Recipe:
     bash scripts/check_ascii.sh
     cargo build --workspace --all-targets --locked
     cargo fmt -p dynomite -p dynomited -p dyn-hash-tool \
-              -p dyn-encoding -p dyn-riak -p dyn-admin -- --check
+              -p dyn-encoding -p dyniak -p dyn-admin -- --check
 
 shellcheck is clean for both scripts. The previous pass-3
 SC2034 warnings on `MEH_SSH` / `MEH_RSYNC_E` are gone now that

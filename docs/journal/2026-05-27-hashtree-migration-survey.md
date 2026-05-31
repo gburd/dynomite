@@ -11,7 +11,7 @@ we should migrate ad-hoc tree code onto it?
 Code search (`grep -rn 'merkle\|MerkleTree\|hashtree\|Merkle'`) over
 `crates/`:
 
-* `crates/dyn-riak/src/aae/tictac.rs` and friends - the existing
+* `crates/dyniak/src/aae/tictac.rs` and friends - the existing
   TicTac AAE tree. The hashtree-extract worker correctly identified
   that this can NOT be expressed in terms of the new generic crate
   (its semantics are 2-level time-buckets, `(bucket, key, vclock)`
@@ -60,7 +60,7 @@ retrofit of any existing code.
 
 ## TicTac stays
 
-The existing `dyn-riak::aae::tictac` code stays. It is
+The existing `dyniak::aae::tictac` code stays. It is
 purpose-built for Riak-style AAE with sibling-aware merge and
 time-bucket aggregation, and the hashtree-extract worker correctly
 flagged that bending the generic API to fit it would be a net
