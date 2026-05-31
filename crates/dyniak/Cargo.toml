@@ -26,10 +26,10 @@ wasm = ["dep:wasmtime", "dep:ciborium"]
 
 [dependencies]
 dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.1" }
-dyn-encoding = { path = "../dyn-encoding" }
-dyn-hashtree = { path = "../dyn-hashtree" }
-gen-fsm = { path = "../gen-fsm" }
-throttle-core = { path = "../throttle-core" }
+dyn-encoding = { path = "../dyn-encoding", version = "0.0.1" }
+dyn-hashtree = { path = "../dyn-hashtree", version = "0.0.1" }
+gen-fsm = { path = "../gen-fsm", version = "0.0.1" }
+throttle-core = { path = "../throttle-core", version = "0.0.1" }
 bytes = { workspace = true }
 parking_lot = { workspace = true }
 prost = { workspace = true }
