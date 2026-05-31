@@ -25,6 +25,7 @@
 pub mod query_fsm;
 pub mod registry;
 pub mod schema;
+pub mod wire;
 
 pub use registry::{RegistryError, VectorRegistry, VectorTable, VectorTableInfo};
 pub use schema::{
