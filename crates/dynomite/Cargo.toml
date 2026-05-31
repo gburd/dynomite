@@ -1,5 +1,5 @@
 [package]
-name = "dynomite"
+name = "dynomite-engine"
 description = "Embeddable Dynamo-style distributed replication engine: token-ring partitioning, gossip cluster, hinted handoff, anti-entropy, RediSearch FT.* surface."
 version.workspace = true
 edition.workspace = true
@@ -25,6 +25,10 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 [lints]
 workspace = true
+
+[lib]
+name = "dynomite"
+path = "src/lib.rs"
 
 [dependencies]
 tokio = { workspace = true }

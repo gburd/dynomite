@@ -930,7 +930,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "dyniak",
- "dynomite",
+ "dynomite-engine",
  "parking_lot",
  "predicates",
  "prost",
@@ -964,7 +964,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
- "dynomite",
+ "dynomite-engine",
  "predicates",
  "tempfile",
 ]
@@ -1024,7 +1024,7 @@ dependencies = [
  "ciborium",
  "dyn-encoding",
  "dyn-hashtree",
- "dynomite",
+ "dynomite-engine",
  "futures-core",
  "futures-util",
  "gen-fsm",
@@ -1050,7 +1050,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynomite"
+name = "dynomite-engine"
 version = "0.0.1"
 dependencies = [
  "aes",
@@ -1149,7 +1149,7 @@ dependencies = [
  "clap",
  "clap_mangen",
  "dyniak",
- "dynomite",
+ "dynomite-engine",
  "nix",
  "opentelemetry",
  "opentelemetry-appender-tracing",
