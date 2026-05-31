@@ -41,7 +41,14 @@
 //! * Phase 3: TRE C library FFI for approximate-regex recheck.
 //! * Phase 4: Redis FT.SEARCH / FT.REGEX command parser
 //!   integration on top of the dynvec fold.
-//! * Phase 5: persistence into the Noxu storage backend.
+//!
+//! # Optional features
+//!
+//! * `noxu` -- enables the [`persist`] module that serialises
+//!   a [`TextIndex`] to an embedded Noxu DB environment so
+//!   the trigram postings, per-doc bloom filters, and raw
+//!   text survive a process restart. The feature pulls in
+//!   `noxu-db` and `bincode` as workspace path dependencies.
 //!
 //! # Quick start
 //!
@@ -61,6 +68,8 @@
 
 pub mod bloom;
 pub mod index;
+#[cfg(feature = "noxu")]
+pub mod persist;
 pub mod postings;
 pub mod prefix_extract;
 pub mod regex_ast;
