@@ -141,6 +141,7 @@ mod tests {
     use crate::distance::Distance;
     use crate::encoding::Codec;
     use crate::index::HnswParams;
+    use crate::storage::IndexAlgorithm;
 
     fn schema(name: &str, dim: u16) -> TableSchema {
         TableSchema {
@@ -149,6 +150,7 @@ mod tests {
             codec: Codec::Int8Quantized,
             distance: Distance::Euclidean,
             hnsw: HnswParams::default(),
+            algorithm: IndexAlgorithm::Hnsw,
         }
     }
 

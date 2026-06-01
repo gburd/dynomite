@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use dynvec::distance::Distance;
 use dynvec::encoding::{decode_turbovec, distance_turbovec, encode_turbovec, Codec, EncodedVector};
 use dynvec::index::HnswParams;
-use dynvec::storage::{TableSchema, VectorStore};
+use dynvec::storage::{IndexAlgorithm, TableSchema, VectorStore};
 
 /// xorshift64* PRNG, seeded -> `Vec<f32>` with components in
 /// roughly `[-1, 1)`. Deterministic.
@@ -39,12 +39,18 @@ fn rand_vec(seed: u64, dim: usize) -> Vec<f32> {
 }
 
 fn schema_turbovec(name: &str, dim: u16, codec: Codec) -> TableSchema {
+    // The existing turbovec recall test exercises the brute-
+    // force [`dynvec::TurboTable`] path. The HNSW path lives
+    // in `tests/turbo_hnsw.rs`; keep this fixture wired to
+    // `Flat` so the brute-force scoring receives explicit
+    // coverage independently of the default algorithm.
     TableSchema {
         name: name.to_string(),
         dim,
         codec,
         distance: Distance::Cosine,
         hnsw: HnswParams::default(),
+        algorithm: IndexAlgorithm::Flat,
     }
 }
 

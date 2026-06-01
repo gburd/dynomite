@@ -43,7 +43,7 @@ use tokio::net::TcpListener;
 use crate::distance::Distance;
 use crate::encoding::Codec;
 use crate::index::HnswParams;
-use crate::storage::{StoreError, TableSchema, VectorStore};
+use crate::storage::{IndexAlgorithm, StoreError, TableSchema, VectorStore};
 
 /// JSON body for `POST /tables`.
 ///
@@ -64,6 +64,9 @@ pub struct CreateTableRequest {
     /// HNSW tuning override.
     #[serde(default)]
     pub hnsw: Option<HnswParams>,
+    /// ANN index algorithm override.
+    #[serde(default)]
+    pub algorithm: Option<IndexAlgorithm>,
 }
 
 const fn default_codec() -> Codec {
@@ -208,6 +211,7 @@ async fn create_table(req: Request<Incoming>, store: &VectorStore) -> Response<R
         codec: parsed.codec,
         distance: parsed.distance,
         hnsw: parsed.hnsw.unwrap_or_default(),
+        algorithm: parsed.algorithm.unwrap_or_default(),
     };
     match store.create_table(schema.clone()) {
         Ok(()) => json(StatusCode::CREATED, &schema),

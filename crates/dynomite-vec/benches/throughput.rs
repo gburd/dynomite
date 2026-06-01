@@ -26,7 +26,7 @@ use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use dynvec::distance::Distance;
 use dynvec::encoding::Codec;
 use dynvec::index::HnswParams;
-use dynvec::storage::{TableSchema, VectorStore};
+use dynvec::storage::{IndexAlgorithm, TableSchema, VectorStore};
 
 fn rand_vec(seed: u64, dim: usize) -> Vec<f32> {
     let mut x = seed;
@@ -54,6 +54,7 @@ fn schema(name: &str, dim: u16) -> TableSchema {
         codec: Codec::Int8Quantized,
         distance: Distance::Euclidean,
         hnsw: HnswParams::default(),
+        algorithm: IndexAlgorithm::Hnsw,
     }
 }
 
@@ -68,6 +69,21 @@ fn schema_turbovec(name: &str, dim: u16) -> TableSchema {
         // default for embedding workloads.
         distance: Distance::Cosine,
         hnsw: HnswParams::default(),
+        // Brute-force baseline: the SIMD scan that this
+        // benchmark group is paired against the HNSW variants
+        // below.
+        algorithm: IndexAlgorithm::Flat,
+    }
+}
+
+fn schema_turbo_hnsw(name: &str, dim: u16, codec: Codec) -> TableSchema {
+    TableSchema {
+        name: name.to_string(),
+        dim,
+        codec,
+        distance: Distance::Cosine,
+        hnsw: HnswParams::default(),
+        algorithm: IndexAlgorithm::Hnsw,
     }
 }
 
@@ -142,5 +158,130 @@ fn bench_search_turbovec(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_insert, bench_search, bench_search_turbovec);
+/// Turbo-HNSW search benchmark for the 4-bit codec. Pairs
+/// HNSW topology with the turbovec packed-code distance
+/// kernel; this is the path the workspace falls back to when
+/// the corpus is large enough that the brute scan above caps
+/// p99.
+fn bench_search_turbo_hnsw_4bit(c: &mut Criterion) {
+    let store = VectorStore::in_memory();
+    store
+        .create_table(schema_turbo_hnsw("t", 64, Codec::Turbovec4Bit))
+        .unwrap();
+    for i in 0..10_000_u64 {
+        let v = rand_vec(i.wrapping_mul(0x9E37_79B9_7F4A_7C15), 64);
+        let key = format!("k{i}").into_bytes();
+        store.upsert("t", key, &v, HashMap::new()).unwrap();
+    }
+
+    let mut group = c.benchmark_group("search_turbo_hnsw_4bit");
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("topk10_64d_10k", |b| {
+        let mut q = 0_u64;
+        b.iter(|| {
+            let qv = rand_vec(q.wrapping_mul(0x517C_C1B7_2722_0A95), 64);
+            let hits = store.search("t", &qv, 10, None).unwrap();
+            q += 1;
+            black_box(hits);
+        });
+    });
+    group.finish();
+}
+
+/// Turbo-HNSW search benchmark at 2-bit. The packed code
+/// halves vs 4-bit, the codec error doubles; HNSW topology
+/// holds recall together via the bigger ef_construction.
+fn bench_search_turbo_hnsw_2bit(c: &mut Criterion) {
+    let store = VectorStore::in_memory();
+    store
+        .create_table(schema_turbo_hnsw("t", 64, Codec::Turbovec2Bit))
+        .unwrap();
+    for i in 0..10_000_u64 {
+        let v = rand_vec(i.wrapping_mul(0x9E37_79B9_7F4A_7C15), 64);
+        let key = format!("k{i}").into_bytes();
+        store.upsert("t", key, &v, HashMap::new()).unwrap();
+    }
+
+    let mut group = c.benchmark_group("search_turbo_hnsw_2bit");
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("topk10_64d_10k", |b| {
+        let mut q = 0_u64;
+        b.iter(|| {
+            let qv = rand_vec(q.wrapping_mul(0x517C_C1B7_2722_0A95), 64);
+            let hits = store.search("t", &qv, 10, None).unwrap();
+            q += 1;
+            black_box(hits);
+        });
+    });
+    group.finish();
+}
+
+/// Turbo-HNSW at 4-bit on a 100k corpus. The full ft-search
+/// rig in `crates/dynomite/benches/ft_search.rs` is the
+/// authoritative end-to-end reference; this is the smaller
+/// `dynomite-vec` companion that lets a contributor see the
+/// per-codec asymptote without rebuilding the rest of the
+/// engine.
+fn bench_search_turbo_hnsw_4bit_100k(c: &mut Criterion) {
+    let store = VectorStore::in_memory();
+    store
+        .create_table(schema_turbo_hnsw("t", 64, Codec::Turbovec4Bit))
+        .unwrap();
+    for i in 0..100_000_u64 {
+        let v = rand_vec(i.wrapping_mul(0x9E37_79B9_7F4A_7C15), 64);
+        let key = format!("k{i}").into_bytes();
+        store.upsert("t", key, &v, HashMap::new()).unwrap();
+    }
+
+    let mut group = c.benchmark_group("search_turbo_hnsw_4bit");
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("topk10_64d_100k", |b| {
+        let mut q = 0_u64;
+        b.iter(|| {
+            let qv = rand_vec(q.wrapping_mul(0x517C_C1B7_2722_0A95), 64);
+            let hits = store.search("t", &qv, 10, None).unwrap();
+            q += 1;
+            black_box(hits);
+        });
+    });
+    group.finish();
+}
+
+/// Turbo-HNSW at 2-bit on a 100k corpus. This is the path
+/// the stage's perf goal targets.
+fn bench_search_turbo_hnsw_2bit_100k(c: &mut Criterion) {
+    let store = VectorStore::in_memory();
+    store
+        .create_table(schema_turbo_hnsw("t", 64, Codec::Turbovec2Bit))
+        .unwrap();
+    for i in 0..100_000_u64 {
+        let v = rand_vec(i.wrapping_mul(0x9E37_79B9_7F4A_7C15), 64);
+        let key = format!("k{i}").into_bytes();
+        store.upsert("t", key, &v, HashMap::new()).unwrap();
+    }
+
+    let mut group = c.benchmark_group("search_turbo_hnsw_2bit");
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("topk10_64d_100k", |b| {
+        let mut q = 0_u64;
+        b.iter(|| {
+            let qv = rand_vec(q.wrapping_mul(0x517C_C1B7_2722_0A95), 64);
+            let hits = store.search("t", &qv, 10, None).unwrap();
+            q += 1;
+            black_box(hits);
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_insert,
+    bench_search,
+    bench_search_turbovec,
+    bench_search_turbo_hnsw_4bit,
+    bench_search_turbo_hnsw_2bit,
+    bench_search_turbo_hnsw_4bit_100k,
+    bench_search_turbo_hnsw_2bit_100k,
+);
 criterion_main!(benches);

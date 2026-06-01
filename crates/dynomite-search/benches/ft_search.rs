@@ -116,7 +116,7 @@ use dyntext::TextIndex;
 use dynvec::distance::Distance;
 use dynvec::encoding::Codec;
 use dynvec::index::HnswParams;
-use dynvec::storage::{TableSchema, VectorStore};
+use dynvec::storage::{IndexAlgorithm, TableSchema, VectorStore};
 
 // --- Tunables -------------------------------------------------
 
@@ -265,7 +265,7 @@ fn query_count() -> usize {
 
 // --- Corpus builders ------------------------------------------
 
-fn vector_schema(name: &str, codec: Codec) -> TableSchema {
+fn vector_schema(name: &str, codec: Codec, algorithm: IndexAlgorithm) -> TableSchema {
     TableSchema {
         name: name.to_string(),
         dim: VECTOR_DIM,
@@ -276,13 +276,14 @@ fn vector_schema(name: &str, codec: Codec) -> TableSchema {
         // compares like-for-like.
         distance: Distance::Cosine,
         hnsw: HnswParams::default(),
+        algorithm,
     }
 }
 
-fn build_vector_store(corpus: usize, codec: Codec) -> VectorStore {
+fn build_vector_store(corpus: usize, codec: Codec, algorithm: IndexAlgorithm) -> VectorStore {
     let store = VectorStore::in_memory();
     store
-        .create_table(vector_schema("t", codec))
+        .create_table(vector_schema("t", codec, algorithm))
         .expect("invariant: fresh store accepts the schema");
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15 ^ codec.name().len() as u64;
     for i in 0..corpus {
@@ -471,19 +472,25 @@ fn search_substring_without_bloom(idx: &TextIndex, query: &[u8]) -> Vec<u32> {
 
 // --- Bench groups --------------------------------------------
 
-const VECTOR_CODECS: &[(Codec, &str)] = &[
-    (Codec::Fp16, "fp16"),
-    (Codec::Int8Quantized, "int8"),
-    (Codec::Turbovec4Bit, "tv4b"),
-    (Codec::Turbovec2Bit, "tv2b"),
+const VECTOR_CODECS: &[(Codec, &str, IndexAlgorithm)] = &[
+    (Codec::Fp16, "fp16", IndexAlgorithm::Hnsw),
+    (Codec::Int8Quantized, "int8", IndexAlgorithm::Hnsw),
+    (Codec::Turbovec4Bit, "tv4b", IndexAlgorithm::Flat),
+    (Codec::Turbovec2Bit, "tv2b", IndexAlgorithm::Flat),
+    // HNSW topology over turbovec packed codes; the speedup
+    // over the brute SIMD scan kicks in once the corpus
+    // crosses ~50k vectors. Below that, the brute scan's
+    // SIMD throughput beats HNSW's traversal overhead.
+    (Codec::Turbovec4Bit, "tv4b_hnsw", IndexAlgorithm::Hnsw),
+    (Codec::Turbovec2Bit, "tv2b_hnsw", IndexAlgorithm::Hnsw),
 ];
 
 fn bench_vector_knn(c: &mut Criterion) {
     let mut group = c.benchmark_group("vector_knn_latency");
     let n_pct = query_count();
     for &corpus in corpus_sizes() {
-        for &(codec, label) in VECTOR_CODECS {
-            let store = build_vector_store(corpus, codec);
+        for &(codec, label, algorithm) in VECTOR_CODECS {
+            let store = build_vector_store(corpus, codec, algorithm);
             let queries = vector_queries(256, 0x00C0_FFEE_u64.wrapping_add(corpus as u64));
 
             let id = BenchmarkId::new(label, corpus);
@@ -500,7 +507,7 @@ fn bench_vector_knn(c: &mut Criterion) {
             });
 
             if n_pct > 0 {
-                let store = build_vector_store(corpus, codec);
+                let store = build_vector_store(corpus, codec, algorithm);
                 let queries = vector_queries(n_pct, 0xBEEF_u64.wrapping_add(corpus as u64));
                 let mut durations = Vec::with_capacity(n_pct);
                 for q in &queries {

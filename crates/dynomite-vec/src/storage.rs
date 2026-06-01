@@ -28,10 +28,39 @@ use thiserror::Error;
 use crate::distance::Distance;
 use crate::encoding::{Codec, EncodedVector, EncodingError};
 use crate::index::{HnswIndex, HnswParams, IndexError, NodeId, SearchResult};
+use crate::turbo_hnsw::TurboHnswIndex;
 use crate::turbo_index::TurboTable;
 
 /// Bucket key: an opaque byte string supplied by the client.
 pub type RowKey = Vec<u8>;
+
+/// ANN index algorithm selector.
+///
+/// `Hnsw` builds the hierarchical navigable small world graph
+/// (linear scan only on the bottom-most candidate set; sub-
+/// linear elsewhere). `Flat` runs a brute-force scan against
+/// every stored vector. The two are mostly interchangeable
+/// from the caller's perspective; the difference shows up at
+/// large corpora where `Hnsw` keeps `O(log N)` traversal cost
+/// and `Flat` is `O(N)`. Today only the turbovec codec path
+/// honours `Flat` (the brute SIMD scan in
+/// [`crate::turbo_index::TurboTable`]); non-turbovec codecs
+/// fall back to `Hnsw` regardless of the requested algorithm.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum IndexAlgorithm {
+    /// Hierarchical navigable small world graph (default).
+    Hnsw,
+    /// Brute-force linear scan over every stored vector.
+    Flat,
+}
+
+impl Default for IndexAlgorithm {
+    fn default() -> Self {
+        Self::Hnsw
+    }
+}
 
 /// Per-table schema.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,8 +73,15 @@ pub struct TableSchema {
     pub codec: Codec,
     /// Distance metric for ANN search.
     pub distance: Distance,
-    /// HNSW tuning.
+    /// HNSW tuning. Honoured by the `Hnsw` algorithm and the
+    /// turbovec HNSW path; ignored by `Flat` brute-force
+    /// tables.
     pub hnsw: HnswParams,
+    /// ANN index algorithm. Defaults to
+    /// [`IndexAlgorithm::Hnsw`] for backward compatibility
+    /// with schemas that pre-date this field.
+    #[serde(default)]
+    pub algorithm: IndexAlgorithm,
 }
 
 /// A persisted vector row.
@@ -211,23 +247,60 @@ struct TableState {
     next_node_id: NodeId,
 }
 
-/// Per-table ANN container. The HNSW path is the default; the
-/// turbovec path is selected when the table's codec is one of
-/// the `Turbovec*` variants. Both shapes expose the same
-/// {insert, delete, search, len} surface so [`VectorStore`] can
-/// dispatch on codec without sprinkling enum matches across the
-/// hot paths.
+/// Per-table ANN container.
+///
+/// Five concrete shapes:
+///
+/// * `Hnsw` -- the f32 HNSW used by every non-turbovec codec.
+/// * `TurboFlat` -- the brute-force SIMD scan from
+///   [`crate::turbo_index::TurboTable`], chosen when a
+///   turbovec codec opts into `IndexAlgorithm::Flat`.
+/// * `TurboHnsw{2,3,4}` -- HNSW topology over turbovec packed
+///   codes, chosen when a turbovec codec opts into
+///   `IndexAlgorithm::Hnsw` (the default).
+///
+/// All variants expose the same `{insert, delete, search, len}`
+/// surface so [`VectorStore`] can dispatch without sprinkling
+/// match arms across the hot paths.
 enum AnnContainer {
     Hnsw(HnswIndex),
-    Turbo(TurboTable),
+    TurboFlat(TurboTable),
+    TurboHnsw2(TurboHnswIndex<2>),
+    TurboHnsw3(TurboHnswIndex<3>),
+    TurboHnsw4(TurboHnswIndex<4>),
 }
 
 impl AnnContainer {
     fn new(schema: &TableSchema) -> Result<Self, StoreError> {
         if let Some(bits) = schema.codec.turbovec_bits() {
-            let table = TurboTable::new(schema.distance, schema.dim, bits)?;
-            Ok(Self::Turbo(table))
+            match schema.algorithm {
+                IndexAlgorithm::Flat => {
+                    let table = TurboTable::new(schema.distance, schema.dim, bits)?;
+                    Ok(Self::TurboFlat(table))
+                }
+                IndexAlgorithm::Hnsw => match bits {
+                    2 => Ok(Self::TurboHnsw2(TurboHnswIndex::<2>::new(
+                        schema.distance,
+                        schema.dim,
+                        schema.hnsw,
+                    )?)),
+                    3 => Ok(Self::TurboHnsw3(TurboHnswIndex::<3>::new(
+                        schema.distance,
+                        schema.dim,
+                        schema.hnsw,
+                    )?)),
+                    4 => Ok(Self::TurboHnsw4(TurboHnswIndex::<4>::new(
+                        schema.distance,
+                        schema.dim,
+                        schema.hnsw,
+                    )?)),
+                    _ => Err(StoreError::Index(IndexError::Empty)),
+                },
+            }
         } else {
+            // Non-turbovec codecs do not have a Flat fallback;
+            // honour the request as Hnsw so the schema stays
+            // round-trippable.
             Ok(Self::Hnsw(HnswIndex::new(schema.distance, schema.hnsw)))
         }
     }
@@ -235,14 +308,20 @@ impl AnnContainer {
     fn insert(&mut self, id: NodeId, vector: Vec<f32>) -> Result<(), IndexError> {
         match self {
             Self::Hnsw(idx) => idx.insert(id, vector),
-            Self::Turbo(t) => t.insert(id, vector),
+            Self::TurboFlat(t) => t.insert(id, vector),
+            Self::TurboHnsw2(t) => t.insert(id, vector),
+            Self::TurboHnsw3(t) => t.insert(id, vector),
+            Self::TurboHnsw4(t) => t.insert(id, vector),
         }
     }
 
     fn delete(&mut self, id: NodeId) -> bool {
         match self {
             Self::Hnsw(idx) => idx.delete(id),
-            Self::Turbo(t) => t.delete(id),
+            Self::TurboFlat(t) => t.delete(id),
+            Self::TurboHnsw2(t) => t.delete(id),
+            Self::TurboHnsw3(t) => t.delete(id),
+            Self::TurboHnsw4(t) => t.delete(id),
         }
     }
 
@@ -254,14 +333,20 @@ impl AnnContainer {
     ) -> Result<Vec<SearchResult>, IndexError> {
         match self {
             Self::Hnsw(idx) => idx.search(query, k, ef),
-            Self::Turbo(t) => t.search(query, k, ef),
+            Self::TurboFlat(t) => t.search(query, k, ef),
+            Self::TurboHnsw2(t) => t.search(query, k, ef),
+            Self::TurboHnsw3(t) => t.search(query, k, ef),
+            Self::TurboHnsw4(t) => t.search(query, k, ef),
         }
     }
 
     fn len(&self) -> usize {
         match self {
             Self::Hnsw(idx) => idx.len(),
-            Self::Turbo(t) => t.len(),
+            Self::TurboFlat(t) => t.len(),
+            Self::TurboHnsw2(t) => t.len(),
+            Self::TurboHnsw3(t) => t.len(),
+            Self::TurboHnsw4(t) => t.len(),
         }
     }
 }
@@ -559,6 +644,7 @@ mod tests {
             codec: Codec::Int8Quantized,
             distance: Distance::Euclidean,
             hnsw: HnswParams::default(),
+            algorithm: IndexAlgorithm::Hnsw,
         }
     }
 

@@ -183,6 +183,10 @@ impl VectorSchema {
             codec: self.vector_type.engine_codec(),
             distance: self.distance.engine_distance(),
             hnsw: dynvec::index::HnswParams::default(),
+            algorithm: match self.algorithm {
+                IndexAlgorithm::Hnsw => dynvec::storage::IndexAlgorithm::Hnsw,
+                IndexAlgorithm::Flat => dynvec::storage::IndexAlgorithm::Flat,
+            },
         }
     }
 }

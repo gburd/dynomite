@@ -18,7 +18,7 @@ use dynvec::api::serve;
 use dynvec::distance::Distance;
 use dynvec::encoding::Codec;
 use dynvec::index::HnswParams;
-use dynvec::storage::{TableSchema, VectorStore};
+use dynvec::storage::{IndexAlgorithm, TableSchema, VectorStore};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -30,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         codec: Codec::Int8Quantized,
         distance: Distance::Cosine,
         hnsw: HnswParams::default(),
+        algorithm: IndexAlgorithm::Hnsw,
     })?;
 
     // Seed a few vectors so the demo has something to search.

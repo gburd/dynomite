@@ -6,7 +6,7 @@ use std::sync::Arc;
 use dynvec::distance::Distance;
 use dynvec::encoding::Codec;
 use dynvec::index::HnswParams;
-use dynvec::storage::{MemoryBackend, StoreError, TableSchema, VectorStore};
+use dynvec::storage::{IndexAlgorithm, MemoryBackend, StoreError, TableSchema, VectorStore};
 
 fn schema(name: &str, dim: u16, codec: Codec, distance: Distance) -> TableSchema {
     TableSchema {
@@ -15,6 +15,7 @@ fn schema(name: &str, dim: u16, codec: Codec, distance: Distance) -> TableSchema
         codec,
         distance,
         hnsw: HnswParams::default(),
+        algorithm: IndexAlgorithm::Hnsw,
     }
 }
 

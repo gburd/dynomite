@@ -34,7 +34,7 @@
 //! use dynvec::distance::Distance;
 //! use dynvec::encoding::Codec;
 //! use dynvec::index::HnswParams;
-//! use dynvec::storage::{TableSchema, VectorStore};
+//! use dynvec::storage::{IndexAlgorithm, TableSchema, VectorStore};
 //!
 //! let store = VectorStore::in_memory();
 //! store.create_table(TableSchema {
@@ -43,6 +43,7 @@
 //!     codec: Codec::Int8Quantized,
 //!     distance: Distance::Cosine,
 //!     hnsw: HnswParams::default(),
+//!     algorithm: IndexAlgorithm::Hnsw,
 //! }).unwrap();
 //! store
 //!     .upsert("demo", b"a".to_vec(), &[1.0, 0.0, 0.0], HashMap::new())
@@ -61,6 +62,7 @@ pub mod encoding;
 pub mod engine;
 pub mod index;
 pub mod storage;
+pub mod turbo_hnsw;
 pub mod turbo_index;
 
 #[cfg(feature = "http")]
@@ -74,6 +76,8 @@ pub use crate::encoding::{
 pub use crate::engine::Engine;
 pub use crate::index::{HnswIndex, HnswParams, NodeId, SearchResult};
 pub use crate::storage::{
-    Backend, MemoryBackend, RowKey, StoreError, TableSchema, TableStats, VectorRow, VectorStore,
+    Backend, IndexAlgorithm, MemoryBackend, RowKey, StoreError, TableSchema, TableStats, VectorRow,
+    VectorStore,
 };
+pub use crate::turbo_hnsw::{CodecDistance, TurboHnswIndex};
 pub use crate::turbo_index::TurboTable;
