@@ -461,6 +461,151 @@ def workload_list(c: RespConn) -> str:
     return op
 
 
+def workload_ft_search(c: RespConn) -> str:
+    """Exercise the RediSearch FT.* command surface.
+
+    Drives FT.CREATE / FT.SEARCH / FT.INFO / FT.LIST /
+    FT.DROPINDEX, plus HSET into a documented index prefix so
+    the HSET-interception path that auto-indexes hashes into
+    the registered TEXT / TAG / NUMERIC / VECTOR field types
+    runs under fault injection. The TEXT field exercises the
+    trigram + bloom funnel; the TAG field exercises the
+    set-membership filter; the NUMERIC field exercises the
+    range filter; the VECTOR field exercises the HNSW (or
+    brute) k-NN search.
+
+    The driver picks a deterministic per-process index name so
+    repeated runs against the same host keep using the same
+    index (FT.CREATE on an existing index returns -ERR which we
+    classify and tolerate as a no-op for the chaos workload).
+    Op names returned to the retry layer match the FT verb so
+    the per-class report breaks down by which FT operation
+    was running when the fault hit.
+    """
+    op = random.choice([
+        "FT.CREATE", "FT.LIST", "FT.INFO",
+        "FT.HSET_INDEX", "FT.HSET_INDEX", "FT.HSET_INDEX",  # 3x weight
+        "FT.SEARCH_TEXT", "FT.SEARCH_TEXT",                   # 2x weight
+        "FT.SEARCH_TAG",
+        "FT.SEARCH_NUMERIC",
+        "FT.SEARCH_VECTOR",
+        "FT.DROPINDEX",
+    ])
+    idx = "chaos_idx"
+    prefix = "chaos:doc:"
+    if op == "FT.CREATE":
+        # Best-effort create. Already-exists is fine.
+        try:
+            c.call("FT.CREATE", idx,
+                   "ON", "HASH",
+                   "PREFIX", "1", prefix,
+                   "SCHEMA",
+                   "title", "TEXT",
+                   "tag", "TAG",
+                   "score", "NUMERIC",
+                   "embedding", "VECTOR", "HNSW", "6",
+                   "TYPE", "FLOAT32",
+                   "DIM", "4",
+                   "DISTANCE_METRIC", "COSINE")
+        except RespError as e:
+            if "already exists" not in str(e).lower():
+                raise
+        return op
+    if op == "FT.LIST":
+        c.call("FT.LIST")
+        return op
+    if op == "FT.INFO":
+        try:
+            c.call("FT.INFO", idx)
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown index" not in _low
+                    and "unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    if op == "FT.HSET_INDEX":
+        # HSET into the registered prefix; the FT.* HSET-
+        # interception path indexes title/tag/score/embedding
+        # automatically. The vector is 4 little-endian f32s
+        # (the schema declared dim=4) so the parser can decode
+        # it.
+        k = prefix + randkey(6)
+        floats = [random.random() for _ in range(4)]
+        emb = struct.pack("<4f", *floats)
+        c.call("HSET", k,
+               "title", "chaos run " + randkey(3),
+               "tag", random.choice(["alpha", "beta", "gamma"]),
+               "score", str(random.randint(0, 1000)),
+               "embedding", emb)
+        return op
+    if op == "FT.SEARCH_TEXT":
+        try:
+            c.call("FT.SEARCH", idx,
+                   random.choice(["@title:chaos", "chaos", "run"]),
+                   "LIMIT", "0", "5")
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown index" not in _low
+                    and "unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    if op == "FT.SEARCH_TAG":
+        try:
+            c.call("FT.SEARCH", idx,
+                   "@tag:{" + random.choice(["alpha", "beta", "gamma"]) + "}",
+                   "LIMIT", "0", "5")
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown index" not in _low
+                    and "unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    if op == "FT.SEARCH_NUMERIC":
+        lo = random.randint(0, 500)
+        hi = lo + random.randint(1, 500)
+        try:
+            c.call("FT.SEARCH", idx,
+                   "@score:[" + str(lo) + " " + str(hi) + "]",
+                   "LIMIT", "0", "5")
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown index" not in _low
+                    and "unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    if op == "FT.SEARCH_VECTOR":
+        floats = [random.random() for _ in range(4)]
+        vec = struct.pack("<4f", *floats)
+        try:
+            c.call("FT.SEARCH", idx,
+                   "*=>[KNN 5 @embedding $V]",
+                   "PARAMS", "2", "V", vec,
+                   "DIALECT", "2")
+        except RespError as e:
+            low = str(e).lower()
+            if ("unknown index" not in low
+                    and "unsupported" not in low):
+                raise
+        return op
+    if op == "FT.DROPINDEX":
+        # Rare op: drop and re-create on the next pass; tolerates
+        # absence.
+        try:
+            c.call("FT.DROPINDEX", idx)
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown index" not in _low
+                    and "unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    return op
+
+
 def workload_keyspace(c: RespConn) -> str:
     op = random.choice(["DEL", "EXISTS", "EXPIRE", "TTL",
                         "PERSIST", "TYPE"])
@@ -504,14 +649,15 @@ def workload_scripting(c: RespConn) -> str:
 
 
 WORKLOADS = [
-    ("strings", workload_strings, 30),
-    ("hash", workload_hash, 15),
-    ("set", workload_set, 10),
-    ("zset", workload_zset, 10),
-    ("list", workload_list, 10),
-    ("keyspace", workload_keyspace, 10),
-    ("multikey", workload_multikey, 10),
-    ("scripting", workload_scripting, 5),
+    ("strings", workload_strings, 25),
+    ("hash", workload_hash, 12),
+    ("set", workload_set, 8),
+    ("zset", workload_zset, 8),
+    ("list", workload_list, 8),
+    ("keyspace", workload_keyspace, 8),
+    ("multikey", workload_multikey, 8),
+    ("scripting", workload_scripting, 4),
+    ("ft", workload_ft_search, 19),
 ]
 
 
