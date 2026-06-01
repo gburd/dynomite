@@ -1,0 +1,32 @@
+# Riak Protocol Buffer Client (PBC) workload: balanced
+# ping/get/put/del. Targets a single server bound on port 8087.
+
+[run]
+duration = "60s"
+concurrent = 8
+rate = "max"
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "riak_pbc"
+host = "127.0.0.1"
+port = 8087
+bucket = "bench"
+timeout_ms = 5000
+
+[ops]
+ping = 3
+put  = 3
+get  = 3
+del  = 1
+
+[keygen]
+kind = "pareto"
+max = 100000
+shape = 1.5
+prefix = "rk_"
+
+[valgen]
+kind = "exponential"
+mean = 256

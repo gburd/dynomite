@@ -1,0 +1,32 @@
+# Riak CRDT workload: counter increments, set adds, map register
+# updates. Each op writes through the Riak DataType update path
+# (RpbDtUpdateReq, message code 82).
+
+[run]
+duration = "60s"
+concurrent = 4
+rate = { rps = 2000 }
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "riak_pbc"
+host = "127.0.0.1"
+port = 8087
+bucket = "crdts"
+timeout_ms = 5000
+
+[ops]
+counter_inc = 5
+set_add     = 3
+map_update  = 2
+
+[keygen]
+kind = "uniform"
+max = 10000
+prefix = "ck_"
+
+[valgen]
+kind = "uniform"
+min = 8
+max = 64

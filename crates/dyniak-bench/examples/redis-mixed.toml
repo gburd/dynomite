@@ -1,0 +1,31 @@
+# Mixed RESP-2 workload: 70% GET, 30% SET, with a small DEL fraction.
+#
+# The keyspace is uniform over 1M keys; values are fixed at 256 bytes.
+# Saturate the server.
+
+[run]
+duration = "30s"
+concurrent = 16
+rate = "max"
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "redis"
+host = "127.0.0.1"
+port = 6379
+timeout_ms = 5000
+
+[ops]
+get = 7
+set = 3
+del = 1
+
+[keygen]
+kind = "uniform"
+max = 1000000
+prefix = "k_"
+
+[valgen]
+kind = "fixed"
+size = 256

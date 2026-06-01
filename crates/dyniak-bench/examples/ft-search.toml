@@ -1,0 +1,34 @@
+# RediSearch workload: FT.CREATE the index once (the driver
+# tolerates "Index already exists"), then a mix of FT.SEARCH and
+# the FT.SUG* family.
+#
+# The op weights below assume a server already populated with a
+# few documents under the `doc:*` prefix.
+
+[run]
+duration = "60s"
+concurrent = 8
+rate = "max"
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "redis"
+host = "127.0.0.1"
+port = 6379
+timeout_ms = 5000
+
+[ops]
+ft_create = 1
+ft_search = 8
+ft_sugadd = 2
+ft_sugget = 4
+
+[keygen]
+kind = "fixed"
+key  = "idx-bench"
+
+[valgen]
+kind = "uniform"
+min = 4
+max = 16

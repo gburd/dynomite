@@ -1,0 +1,71 @@
+[package]
+name = "dyniak-bench"
+description = "Load-generation and benchmarking tool with Riak PBC, Redis (RESP-2), and HTTP drivers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+# Per-crate clippy relaxations specific to a benchmarking tool
+# that does heavy numeric scaling between u64 (HdrHistogram
+# ticks, monotonic clock nanos), f64 (plotters axes, percentile
+# arithmetic), and usize (collection sizes, plot dimensions).
+# These casts are explicit, bounded, and safe in this context;
+# the alternative (TryFrom + manual error handling on every
+# axis tick) hurts readability without changing observable
+# behaviour.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+cast_possible_wrap = "allow"
+similar_names = "allow"
+many_single_char_names = "allow"
+too_many_lines = "allow"
+needless_pass_by_value = "allow"
+[lib]
+name = "dyniak_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dyniak-bench"
+path = "src/main.rs"
+
+[features]
+default = []
+http = ["dep:reqwest"]
+riak = []
+
+[dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+toml = "0.9"
+hdrhistogram = "7.5"
+tokio = { version = "1.52", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "process", "signal"] }
+parking_lot = { workspace = true }
+plotters = { version = "0.3", default-features = false, features = ["svg_backend", "line_series", "full_palette"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tempfile = { workspace = true }
