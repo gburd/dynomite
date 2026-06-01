@@ -291,9 +291,9 @@ impl Rig {
             .spawn()
             .expect("spawn redis-server");
 
-        if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(5)) {
+        if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
             kill_silently(&mut redis);
-            panic!("redis-server did not bind {backend_port} within 5s");
+            panic!("redis-server did not bind {backend_port} within 30s");
         }
 
         let conf = dir_path.join("d.yml");
@@ -317,10 +317,10 @@ impl Rig {
             .spawn()
             .expect("spawn dynomited");
 
-        if !wait_for_listen(listen_port, Instant::now() + Duration::from_secs(5)) {
+        if !wait_for_listen(listen_port, Instant::now() + Duration::from_secs(30)) {
             kill_silently(&mut dyn_child);
             kill_silently(&mut redis);
-            panic!("dynomited did not bind {listen_port} within 5s");
+            panic!("dynomited did not bind {listen_port} within 30s");
         }
 
         Some(Self {

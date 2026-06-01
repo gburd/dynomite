@@ -20,3 +20,7 @@ target/
 **/*.rs.bk
 Cargo.lock.bak
 dump.rdb
+
+# dyniak-bench output directories (per-run; reference results
+# go under crates/dyniak-bench/tests/smoke only)
+/tests/bench-*

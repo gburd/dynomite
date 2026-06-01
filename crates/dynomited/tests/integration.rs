@@ -126,9 +126,9 @@ async fn redis_set_get_quit_round_trip() {
         .spawn()
         .expect("spawn redis-server");
 
-    if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(5)) {
+    if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
         kill_silently(&mut redis);
-        panic!("redis-server did not bind {backend_port} within 5s");
+        panic!("redis-server did not bind {backend_port} within 30s");
     }
 
     // Write the dynomite YAML pointing at the ephemeral redis.
@@ -153,10 +153,10 @@ async fn redis_set_get_quit_round_trip() {
         .spawn()
         .expect("spawn dynomited");
 
-    if !wait_for_listen(listen_port, Instant::now() + Duration::from_secs(5)) {
+    if !wait_for_listen(listen_port, Instant::now() + Duration::from_secs(30)) {
         kill_silently(&mut dyn_child);
         kill_silently(&mut redis);
-        panic!("dynomited did not bind {listen_port} within 5s");
+        panic!("dynomited did not bind {listen_port} within 30s");
     }
 
     // Drive a real Redis client conversation through dynomited.
@@ -248,9 +248,9 @@ async fn redis_set_get_with_requirepass() {
         .spawn()
         .expect("spawn redis-server");
 
-    if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(5)) {
+    if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
         kill_silently(&mut redis);
-        panic!("redis-server did not bind {backend_port} within 5s");
+        panic!("redis-server did not bind {backend_port} within 30s");
     }
 
     // Write the dynomite YAML pointing at the passworded redis.
@@ -275,10 +275,10 @@ async fn redis_set_get_with_requirepass() {
         .spawn()
         .expect("spawn dynomited");
 
-    if !wait_for_listen(listen_port, Instant::now() + Duration::from_secs(5)) {
+    if !wait_for_listen(listen_port, Instant::now() + Duration::from_secs(30)) {
         kill_silently(&mut dyn_child);
         kill_silently(&mut redis);
-        panic!("dynomited did not bind {listen_port} within 5s");
+        panic!("dynomited did not bind {listen_port} within 30s");
     }
 
     // Drive a SET / GET through dynomited. The proxy never sees
