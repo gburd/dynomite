@@ -719,7 +719,7 @@ EOF
 # Per-host bootstrap. A failure here removes the host from the
 # rest of the run; downstream steps gate on host_active.
 if host_active arnold; then
-    bootstrap_remote_src dc-arnold arnold "$ARNOLD_RSYNC_E" yes "${ARNOLD_SSH[@]}" \
+    bootstrap_remote_src dc-arnold arnold "$ARNOLD_RSYNC_E" no "${ARNOLD_SSH[@]}" \
         || mark_host_failed arnold "bootstrap_remote_src failed"
 fi
 if host_active nuc; then
