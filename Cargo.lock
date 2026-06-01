@@ -1099,7 +1099,7 @@ dependencies = [
 
 [[package]]
 name = "dynomite-search"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "criterion",
  "dynomite-engine",
@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "dynomite-text"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bincode",
  "blake3",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "dynomite-vec"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bytes",
  "criterion",
