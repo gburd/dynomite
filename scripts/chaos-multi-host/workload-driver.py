@@ -606,6 +606,85 @@ def workload_ft_search(c: RespConn) -> str:
     return op
 
 
+def workload_ft_suggest(c: RespConn) -> str:
+    """Exercise the FT.SUGADD / FT.SUGGET / FT.SUGDEL / FT.SUGLEN
+    suggestion-dictionary surface.
+
+    Each chaos host shares a small dictionary keyed by
+    ``chaos_sugest`` so concurrent SUGADDs against the same key
+    from different drivers exercise the registry's lock
+    contention path. Tolerates 'unknown command' for hosts
+    without --features search.
+    """
+    op = random.choice([
+        "FT.SUGADD", "FT.SUGADD",
+        "FT.SUGGET", "FT.SUGGET", "FT.SUGGET",
+        "FT.SUGGET_FUZZY",
+        "FT.SUGDEL",
+        "FT.SUGLEN",
+    ])
+    key = "chaos_sugest"
+    if op == "FT.SUGADD":
+        # Skewed score so SUGGET ordering is stable across calls.
+        suggestion = "chaos-" + randkey(4)
+        score = random.uniform(0.1, 100.0)
+        flags = []
+        if random.random() < 0.3:
+            flags.append("INCR")
+        if random.random() < 0.3:
+            flags.extend(["PAYLOAD", randval(8)])
+        try:
+            c.call("FT.SUGADD", key, suggestion, str(score), *flags)
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    if op == "FT.SUGGET":
+        prefix = random.choice(["chaos", "ch", ""])
+        try:
+            c.call("FT.SUGGET", key, prefix, "MAX", "5")
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    if op == "FT.SUGGET_FUZZY":
+        # Inject a single-char typo and use FUZZY.
+        prefix = random.choice(["chaos", "chzos", "chys"])
+        try:
+            c.call("FT.SUGGET", key, prefix, "FUZZY", "WITHSCORES",
+                   "MAX", "5")
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    if op == "FT.SUGDEL":
+        suggestion = "chaos-" + randkey(4)
+        try:
+            c.call("FT.SUGDEL", key, suggestion)
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    if op == "FT.SUGLEN":
+        try:
+            c.call("FT.SUGLEN", key)
+        except RespError as e:
+            _low = str(e).lower()
+            if ("unknown command" not in _low
+                    and "unsupported" not in _low):
+                raise
+        return op
+    return op
+
+
 def workload_keyspace(c: RespConn) -> str:
     op = random.choice(["DEL", "EXISTS", "EXPIRE", "TTL",
                         "PERSIST", "TYPE"])
@@ -649,15 +728,16 @@ def workload_scripting(c: RespConn) -> str:
 
 
 WORKLOADS = [
-    ("strings", workload_strings, 25),
-    ("hash", workload_hash, 12),
-    ("set", workload_set, 8),
-    ("zset", workload_zset, 8),
-    ("list", workload_list, 8),
-    ("keyspace", workload_keyspace, 8),
-    ("multikey", workload_multikey, 8),
+    ("strings", workload_strings, 22),
+    ("hash", workload_hash, 11),
+    ("set", workload_set, 7),
+    ("zset", workload_zset, 7),
+    ("list", workload_list, 7),
+    ("keyspace", workload_keyspace, 7),
+    ("multikey", workload_multikey, 7),
     ("scripting", workload_scripting, 4),
-    ("ft", workload_ft_search, 19),
+    ("ft", workload_ft_search, 18),
+    ("ftsug", workload_ft_suggest, 10),
 ]
 
 
