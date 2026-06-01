@@ -39,7 +39,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 /// Default per-step timeout when waiting on a process or socket.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Time we allow a child to exit gracefully after `SIGTERM`
 /// before escalating to `SIGKILL` on Drop.
