@@ -35,7 +35,7 @@ path = "src/lib.rs"
 # dispatch / HSET interception, `cluster::apl` for the
 # preference-list walker the k-NN coordinator broadcasts over,
 # `embed::events::PeerId`, and the parsed `Msg` shape.
-dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.2" }
+dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.3" }
 
 # Vector storage + HNSW ANN index. Hosts the per-table
 # `Engine` handle that the `registry` module hands out and the

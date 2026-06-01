@@ -17,7 +17,7 @@ name = "dyn-hash-tool"
 path = "src/main.rs"
 
 [dependencies]
-dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.2" }
+dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.3" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 
