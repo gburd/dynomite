@@ -361,7 +361,10 @@ impl RedisDriver {
     fn op_ft_create(&mut self, key: &[u8]) -> Result<DriverOutcome, String> {
         // best-effort idempotent index creation; we ignore "Index
         // already exists" errors so the workload can mix create
-        // and search with no orchestration.
+        // and search with no orchestration. Schema includes a
+        // single VECTOR field to satisfy dynomite-search's
+        // current requirement that every index declare at least
+        // one VECTOR.
         match self.call(&[
             b"FT.CREATE",
             key,
@@ -373,6 +376,16 @@ impl RedisDriver {
             b"SCHEMA",
             b"f",
             b"TEXT",
+            b"v",
+            b"VECTOR",
+            b"HNSW",
+            b"6",
+            b"TYPE",
+            b"FLOAT32",
+            b"DIM",
+            b"4",
+            b"DISTANCE_METRIC",
+            b"COSINE",
         ]) {
             Ok(reply) => {
                 if let Some(e) = reply.err_text() {
@@ -391,8 +404,27 @@ impl RedisDriver {
     }
 
     fn op_ft_search(&mut self, key: &[u8]) -> Result<DriverOutcome, String> {
-        self.call_check(&[b"FT.SEARCH", key, b"*", b"LIMIT", b"0", b"10"])?;
-        Ok(DriverOutcome::Ok)
+        // Tolerate "index not found" so a workload mixing
+        // create + search does not race-fail when the create
+        // hasn't landed on this connection yet (the search and
+        // create can target different shards under a routed
+        // dynomited proxy).
+        match self.call(&[b"FT.SEARCH", key, b"*", b"LIMIT", b"0", b"10"]) {
+            Ok(reply) => {
+                if let Some(e) = reply.err_text() {
+                    let low = e.to_ascii_lowercase();
+                    if low.contains("index not found") || low.contains("unknown index") {
+                        return Ok(DriverOutcome::Ok);
+                    }
+                    return Err(format!("RESP error: {e}"));
+                }
+                Ok(DriverOutcome::Ok)
+            }
+            Err(e) => {
+                self.drop_socket();
+                Err(format!("io error: {e}"))
+            }
+        }
     }
 
     fn op_ft_sugadd(&mut self, key: &[u8], val: &[u8]) -> Result<DriverOutcome, String> {
