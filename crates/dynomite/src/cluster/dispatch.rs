@@ -1366,6 +1366,10 @@ impl ClusterDispatcher {
             MsgType::ReqRedisFtList => b"FT.LIST",
             MsgType::ReqRedisFtDropindex => b"FT.DROPINDEX",
             MsgType::ReqRedisFtRegex => b"FT.REGEX",
+            MsgType::ReqRedisFtSugadd => b"FT.SUGADD",
+            MsgType::ReqRedisFtSugget => b"FT.SUGGET",
+            MsgType::ReqRedisFtSugdel => b"FT.SUGDEL",
+            MsgType::ReqRedisFtSuglen => b"FT.SUGLEN",
             MsgType::ReqRedisFtUnknown => {
                 recovered_kw = first_bulk_token(req).unwrap_or_else(|| b"FT.UNKNOWN".to_vec());
                 recovered_kw.as_slice()

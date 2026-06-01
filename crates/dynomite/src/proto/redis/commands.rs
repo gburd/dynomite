@@ -247,6 +247,14 @@ pub fn classify(ty: MsgType) -> CommandClass {
         }
         M::ReqRedisFtInfo => CommandClass::Arg0,
         M::ReqRedisFtList => CommandClass::Argz,
+        // FT.SUG* family. SUGADD takes a key + suggestion +
+        // score + optional flags (variadic). SUGGET takes a
+        // key + prefix + optional flags (variadic). SUGDEL
+        // takes a key + suggestion (Arg1). SUGLEN takes only
+        // the key (Arg0).
+        M::ReqRedisFtSugadd | M::ReqRedisFtSugget => CommandClass::ArgN,
+        M::ReqRedisFtSugdel => CommandClass::Arg1,
+        M::ReqRedisFtSuglen => CommandClass::Arg0,
         // Unknown FT.* keywords surface as a generic variadic
         // command so the parser collects every token into the
         // arg vector for the dispatcher's intercept; the
@@ -359,6 +367,10 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
                 | b"ft._list"
                 | b"ft.dropindex"
                 | b"ft.regex"
+                | b"ft.sugadd"
+                | b"ft.sugget"
+                | b"ft.sugdel"
+                | b"ft.suglen"
         )
     {
         return Some((
@@ -858,6 +870,36 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
         // rest goes through the variadic arg vector.
         b"ft.regex" => (
             MsgType::ReqRedisFtRegex,
+            true,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
+        // FT.SUG* family backs the autocomplete
+        // suggestion-dictionary surface. The first argument
+        // is the suggestion-key (binary-safe), routed as the
+        // lone key so the parser collects the remaining
+        // tokens into the variadic arg vector. SUGLEN is
+        // single-key + zero-arg so it lands on Arg0.
+        b"ft.sugadd" => (
+            MsgType::ReqRedisFtSugadd,
+            false,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
+        b"ft.sugget" => (
+            MsgType::ReqRedisFtSugget,
+            true,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
+        b"ft.sugdel" => (
+            MsgType::ReqRedisFtSugdel,
+            false,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
+        b"ft.suglen" => (
+            MsgType::ReqRedisFtSuglen,
             true,
             false,
             RoutingOverride::LocalNodeOnly,

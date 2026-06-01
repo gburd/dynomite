@@ -47,6 +47,8 @@ pub mod ft_filter;
 pub mod query_fsm;
 pub mod registry;
 pub mod schema;
+pub mod sugest;
+pub mod sugest_registry;
 pub mod wire;
 
 use std::sync::Arc;
@@ -61,31 +63,59 @@ pub use crate::registry::{
 pub use crate::schema::{
     DistanceMetric, IndexAlgorithm, MetadataField, MetadataFieldType, VectorSchema, VectorType,
 };
+pub use crate::sugest::{SuggestionDict, SuggestionEntry, SuggestionHit};
+pub use crate::sugest_registry::SuggestionRegistry;
 
 /// [`CommandExtension`] implementation that routes FT.*
 /// commands and the HSET interception path through a shared
-/// [`VectorRegistry`].
+/// [`VectorRegistry`] and [`SuggestionRegistry`].
 ///
 /// Every cloneable handle to a `SearchExtension` references
-/// the same registry; embedders who want to inspect the live
-/// FT.* surface (admin paths, tests) can clone the registry
-/// out via [`SearchExtension::registry`].
+/// the same registries; embedders who want to inspect the
+/// live FT.* surface (admin paths, tests) can clone the
+/// registry handles out via [`SearchExtension::registry`]
+/// and [`SearchExtension::suggestions`].
 #[derive(Clone, Debug)]
 pub struct SearchExtension {
     registry: Arc<VectorRegistry>,
+    suggestions: Arc<SuggestionRegistry>,
 }
 
 impl SearchExtension {
     /// Wrap an existing registry in a [`SearchExtension`].
+    /// The suggestion-dictionary registry is allocated
+    /// fresh; callers that want to share it explicitly can
+    /// use [`Self::with_suggestions`].
     #[must_use]
     pub fn new(registry: Arc<VectorRegistry>) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            suggestions: Arc::new(SuggestionRegistry::new()),
+        }
     }
 
-    /// Borrow the wrapped registry.
+    /// Wrap both registries in a [`SearchExtension`].
+    #[must_use]
+    pub fn with_suggestions(
+        registry: Arc<VectorRegistry>,
+        suggestions: Arc<SuggestionRegistry>,
+    ) -> Self {
+        Self {
+            registry,
+            suggestions,
+        }
+    }
+
+    /// Borrow the wrapped vector-index registry.
     #[must_use]
     pub fn registry(&self) -> &Arc<VectorRegistry> {
         &self.registry
+    }
+
+    /// Borrow the wrapped suggestion-dictionary registry.
+    #[must_use]
+    pub fn suggestions(&self) -> &Arc<SuggestionRegistry> {
+        &self.suggestions
     }
 }
 
@@ -93,6 +123,7 @@ impl Default for SearchExtension {
     fn default() -> Self {
         Self {
             registry: Arc::new(VectorRegistry::new()),
+            suggestions: Arc::new(SuggestionRegistry::new()),
         }
     }
 }
@@ -107,11 +138,31 @@ impl CommandExtension for SearchExtension {
                 | MsgType::ReqRedisFtList
                 | MsgType::ReqRedisFtDropindex
                 | MsgType::ReqRedisFtRegex
+                | MsgType::ReqRedisFtSugadd
+                | MsgType::ReqRedisFtSugget
+                | MsgType::ReqRedisFtSugdel
+                | MsgType::ReqRedisFtSuglen
                 | MsgType::ReqRedisFtUnknown
         )
     }
 
     fn try_dispatch(&self, args: &[&[u8]]) -> Option<Vec<u8>> {
+        // FT.SUG* commands route through the suggestion
+        // registry; everything else lands on the vector-
+        // index dispatcher. The keyword is `args[0]`.
+        if let Some(head) = args.first() {
+            let mut upper = [0u8; 16];
+            let n = head.len().min(upper.len());
+            for (i, &b) in head.iter().take(n).enumerate() {
+                upper[i] = b.to_ascii_uppercase();
+            }
+            if matches!(
+                &upper[..n],
+                b"FT.SUGADD" | b"FT.SUGGET" | b"FT.SUGDEL" | b"FT.SUGLEN"
+            ) {
+                return Some(crate::ft::dispatch_sugest(&self.suggestions, args));
+            }
+        }
         Some(crate::ft::dispatch(&self.registry, args))
     }
 

@@ -22,6 +22,10 @@
 //!      [`crate::msg::MsgType::ReqRedisFtList`] /
 //!      [`crate::msg::MsgType::ReqRedisFtDropindex`] /
 //!      [`crate::msg::MsgType::ReqRedisFtRegex`] /
+//!      [`crate::msg::MsgType::ReqRedisFtSugadd`] /
+//!      [`crate::msg::MsgType::ReqRedisFtSugget`] /
+//!      [`crate::msg::MsgType::ReqRedisFtSugdel`] /
+//!      [`crate::msg::MsgType::ReqRedisFtSuglen`] /
 //!      [`crate::msg::MsgType::ReqRedisFtUnknown`] the
 //!      dispatcher checks
 //!      [`CommandExtension::handles_msg_type`] and, if true,

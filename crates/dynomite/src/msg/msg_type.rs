@@ -8,7 +8,7 @@
 //! returned by [`MsgType::name`] remain compatible across the two
 //! implementations.
 //!
-//! The enum is exhaustive: 178 named variants plus the trailing
+//! The enum is exhaustive: 182 named variants plus the trailing
 //! `EndIdx` sentinel. Helpers are provided to round-trip integer
 //! indices and to classify a tag as a request or a response.
 
@@ -231,6 +231,10 @@ define_msg_types![
     (ReqRedisFtList, "REQ_REDIS_FT_LIST"),
     (ReqRedisFtDropindex, "REQ_REDIS_FT_DROPINDEX"),
     (ReqRedisFtRegex, "REQ_REDIS_FT_REGEX"),
+    (ReqRedisFtSugadd, "REQ_REDIS_FT_SUGADD"),
+    (ReqRedisFtSugget, "REQ_REDIS_FT_SUGGET"),
+    (ReqRedisFtSugdel, "REQ_REDIS_FT_SUGDEL"),
+    (ReqRedisFtSuglen, "REQ_REDIS_FT_SUGLEN"),
     (ReqRedisFtUnknown, "REQ_REDIS_FT_UNKNOWN"),
     (EndIdx, "END_IDX"),
 ];

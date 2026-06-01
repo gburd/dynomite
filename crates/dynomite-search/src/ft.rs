@@ -70,6 +70,7 @@ use crate::registry::{VectorRegistry, VectorTable};
 use crate::schema::{
     DistanceMetric, IndexAlgorithm, MetadataField, MetadataFieldType, VectorSchema, VectorType,
 };
+use crate::sugest_registry::SuggestionRegistry;
 
 /// Failure modes for the FT.* surface.
 ///
@@ -493,6 +494,226 @@ pub fn execute(registry: &VectorRegistry, cmd: FtCommand) -> Result<FtOutcome, F
             delete_documents,
         } => execute_dropindex(registry, name, delete_documents),
     }
+}
+
+/// Parse and execute a FT.SUG* command against `registry`,
+/// returning the RESP bytes the wire wants to see. The
+/// keyword in `args[0]` decides which of `FT.SUGADD` /
+/// `FT.SUGGET` / `FT.SUGDEL` / `FT.SUGLEN` to dispatch.
+///
+/// Suggestion-dictionary state is local to one replica; no
+/// cluster fan-out happens for this surface.
+#[must_use]
+pub fn dispatch_sugest(registry: &SuggestionRegistry, args: &[&[u8]]) -> Vec<u8> {
+    let Some(head) = args.first() else {
+        return render_error(&FtError::UnknownCommand(String::new()));
+    };
+    let cmd = ascii_upper(head);
+    let rest = &args[1..];
+    match cmd.as_slice() {
+        b"FT.SUGADD" => match parse_sugadd(rest) {
+            Ok((key, suggestion, score, incr, payload)) => {
+                let size = registry.add(&key, suggestion, score, incr, payload);
+                render_integer(size)
+            }
+            Err(e) => render_error(&e),
+        },
+        b"FT.SUGGET" => match parse_sugget(rest) {
+            Ok(req) => {
+                let hits = registry.get(
+                    &req.key,
+                    &req.prefix,
+                    req.max,
+                    req.fuzzy,
+                    req.with_scores,
+                    req.with_payloads,
+                );
+                render_sugget(&hits, req.with_scores, req.with_payloads)
+            }
+            Err(e) => render_error(&e),
+        },
+        b"FT.SUGDEL" => match parse_sugdel(rest) {
+            Ok((key, suggestion)) => {
+                let removed = registry.del(&key, &suggestion);
+                render_integer(usize::from(removed))
+            }
+            Err(e) => render_error(&e),
+        },
+        b"FT.SUGLEN" => match parse_suglen(rest) {
+            Ok(key) => render_integer(registry.len(&key)),
+            Err(e) => render_error(&e),
+        },
+        other => render_error(&FtError::UnknownCommand(
+            String::from_utf8_lossy(other).into_owned(),
+        )),
+    }
+}
+
+// ---- FT.SUGADD ----------------------------------------------------------
+
+/// Tuple returned by [`parse_sugadd`]: the parsed key,
+/// suggestion bytes, score, INCR flag, and optional
+/// payload. Factored into a `type` to keep the function
+/// signature readable for clippy.
+type SugaddArgs = (Vec<u8>, Vec<u8>, f64, bool, Option<Vec<u8>>);
+
+/// Parse `FT.SUGADD <key> <suggestion> <score> [INCR]
+/// [PAYLOAD <payload>]`. Returns `(key, suggestion, score,
+/// incr, payload)`.
+fn parse_sugadd(rest: &[&[u8]]) -> Result<SugaddArgs, FtError> {
+    let mut it = TokenCursor::new(rest);
+    let key = it.next_required("FT.SUGADD: missing key")?.to_vec();
+    let suggestion = it.next_required("FT.SUGADD: missing suggestion")?.to_vec();
+    let score_tok = it.next_required("FT.SUGADD: missing score")?;
+    let score = parse_score(score_tok, "FT.SUGADD score")?;
+    let mut incr = false;
+    let mut payload: Option<Vec<u8>> = None;
+    while let Some(tok) = it.next() {
+        let up = ascii_upper(tok);
+        match up.as_slice() {
+            b"INCR" => incr = true,
+            b"PAYLOAD" => {
+                let p = it.next_required("FT.SUGADD: PAYLOAD expects a value")?;
+                payload = Some(p.to_vec());
+            }
+            other => {
+                return Err(FtError::Unsupported(format!(
+                    "FT.SUGADD option {}",
+                    String::from_utf8_lossy(other)
+                )));
+            }
+        }
+    }
+    Ok((key, suggestion, score, incr, payload))
+}
+
+// ---- FT.SUGGET ----------------------------------------------------------
+
+/// Parsed FT.SUGGET request.
+struct SuggetRequest {
+    key: Vec<u8>,
+    prefix: Vec<u8>,
+    fuzzy: bool,
+    with_scores: bool,
+    with_payloads: bool,
+    max: usize,
+}
+
+/// Parse `FT.SUGGET <key> <prefix> [FUZZY] [WITHSCORES]
+/// [WITHPAYLOADS] [MAX <n>]`.
+fn parse_sugget(rest: &[&[u8]]) -> Result<SuggetRequest, FtError> {
+    let mut it = TokenCursor::new(rest);
+    let key = it.next_required("FT.SUGGET: missing key")?.to_vec();
+    let prefix = it.next_required("FT.SUGGET: missing prefix")?.to_vec();
+    let mut fuzzy = false;
+    let mut with_scores = false;
+    let mut with_payloads = false;
+    let mut max: usize = 5;
+    while let Some(tok) = it.next() {
+        let up = ascii_upper(tok);
+        match up.as_slice() {
+            b"FUZZY" => fuzzy = true,
+            b"WITHSCORES" => with_scores = true,
+            b"WITHPAYLOADS" => with_payloads = true,
+            b"MAX" => {
+                let n_tok = it.next_required("FT.SUGGET: MAX expects a count")?;
+                let n = parse_unsigned(n_tok, "FT.SUGGET MAX")?;
+                if n == 0 {
+                    return Err(FtError::Syntax("FT.SUGGET MAX must be > 0".to_string()));
+                }
+                max = n;
+            }
+            other => {
+                return Err(FtError::Unsupported(format!(
+                    "FT.SUGGET option {}",
+                    String::from_utf8_lossy(other)
+                )));
+            }
+        }
+    }
+    Ok(SuggetRequest {
+        key,
+        prefix,
+        fuzzy,
+        with_scores,
+        with_payloads,
+        max,
+    })
+}
+
+// ---- FT.SUGDEL / FT.SUGLEN ---------------------------------------------
+
+fn parse_sugdel(rest: &[&[u8]]) -> Result<(Vec<u8>, Vec<u8>), FtError> {
+    let mut it = TokenCursor::new(rest);
+    let key = it.next_required("FT.SUGDEL: missing key")?.to_vec();
+    let suggestion = it.next_required("FT.SUGDEL: missing suggestion")?.to_vec();
+    if it.peek().is_some() {
+        return Err(FtError::Syntax(
+            "FT.SUGDEL: unexpected trailing tokens".to_string(),
+        ));
+    }
+    Ok((key, suggestion))
+}
+
+fn parse_suglen(rest: &[&[u8]]) -> Result<Vec<u8>, FtError> {
+    let mut it = TokenCursor::new(rest);
+    let key = it.next_required("FT.SUGLEN: missing key")?.to_vec();
+    if it.peek().is_some() {
+        return Err(FtError::Syntax(
+            "FT.SUGLEN: unexpected trailing tokens".to_string(),
+        ));
+    }
+    Ok(key)
+}
+
+fn parse_score(tok: &[u8], context: &str) -> Result<f64, FtError> {
+    let s =
+        std::str::from_utf8(tok).map_err(|_| FtError::Syntax(format!("{context}: not UTF-8")))?;
+    let parsed: f64 = s
+        .parse()
+        .map_err(|_| FtError::Syntax(format!("{context}: not a number ({s})")))?;
+    if !parsed.is_finite() {
+        return Err(FtError::Syntax(format!(
+            "{context}: must be a finite number"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn render_integer(value: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    let n = i64::try_from(value).unwrap_or(i64::MAX);
+    let _ = write!(&mut out, ":{n}\r\n");
+    out
+}
+
+fn render_sugget(
+    hits: &[crate::sugest::SuggestionHit],
+    with_scores: bool,
+    with_payloads: bool,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    // Each hit emits 1 + (score?) + (payload?) bulk strings
+    // into a flat array, matching the RediSearch wire shape.
+    let per_hit = 1 + usize::from(with_scores) + usize::from(with_payloads);
+    write_array_header(&mut out, hits.len() * per_hit);
+    for hit in hits {
+        write_bulk(&mut out, &hit.value);
+        if with_scores {
+            let s = match hit.score {
+                Some(v) => format_float_f64(v),
+                None => "0".to_string(),
+            };
+            write_bulk(&mut out, s.as_bytes());
+        }
+        if with_payloads {
+            match &hit.payload {
+                Some(bytes) => write_bulk(&mut out, bytes),
+                None => out.extend_from_slice(b"$-1\r\n"),
+            }
+        }
+    }
+    out
 }
 
 /// Parse and execute `args` in one call, returning the RESP
