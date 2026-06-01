@@ -162,8 +162,11 @@ listeners. Operators who want process isolation can run separate
 * Cross-DC realtime replication (riak_repl realtime queue + fullsync).
 * `riak admin handoff` style operator commands beyond what
   `dyn-admin handoff` exposes.
-* Object encoding fidelity at the byte level for vclock + sibling
-  serialization. The semantics are correct, the bytes-on-the-wire
-  are not always identical to Riak 2.9; clients that compare the
-  exact `X-Riak-Vclock` header byte-for-byte may need adjustment.
+* Object encoding fidelity at the byte level for causality-context
+  + sibling serialization. The semantics are correct, the
+  bytes-on-the-wire are not always identical to Riak 2.9; clients
+  that crack the per-object causality blob (Itc-encoded; the
+  blob travels in the same Riak header slot but with the dyniak
+  Itc shape) need a switched decoder. Clients that round-trip
+  the bytes opaquely keep working unchanged.
   The shape is documented under `docs/dyniak/wire-compat.md`.

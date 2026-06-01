@@ -117,7 +117,7 @@ The families and labels:
 | `aae_exchange_attempts_total` | counter | `peer_idx`, `dc`, `rack` | One increment per AAE sweep tick that selected this peer, regardless of outcome. |
 | `aae_exchange_success_total` | counter | `peer_idx`, `dc`, `rack` | One increment per exchange that completed without a transport error, regardless of whether divergences were found. |
 | `aae_exchange_divergent_keys_total` | counter | `peer_idx`, `dc`, `rack` | Cumulative count of divergent keys observed during exchanges with this peer. Sustained growth means the cluster is producing repair traffic. |
-| `aae_repair_dispatched_total` | counter | `peer_idx`, `dc`, `rack` | Cumulative count of repair tasks dispatched against this peer (winners + siblings). Outcomes that surfaced `AmbiguousVClock` or `PeerUnavailable` do NOT contribute. |
+| `aae_repair_dispatched_total` | counter | `peer_idx`, `dc`, `rack` | Cumulative count of repair tasks dispatched against this peer (winners + siblings). Outcomes that surfaced `AmbiguousClock` or `PeerUnavailable` do NOT contribute. |
 | `aae_tree_segments_dirty_gauge` | gauge | `peer_idx` | Current count of segments needing a rebuild. Values that stay non-zero across sweep cycles indicate a stuck rebuild. |
 | `aae_full_sweep_last_completed_seconds_gauge` | gauge | `peer_idx` | Wall-clock seconds since the UNIX epoch when this peer's most recent full sweep completed. Subtract from `time()` to get "seconds since". Zero means "never". |
 | `aae_snapshot_save_total` | counter | (none) | Cumulative count of snapshot writes. |

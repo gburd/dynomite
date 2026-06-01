@@ -11,22 +11,16 @@
 //! * Register: A assigns at t=1, B at t=2, merge picks B's value.
 //! * Flag: A enables, B disables concurrently, merge yields enabled.
 //!
-//! Plus vector-clock comparison checks for all four `VclockOrder`
-//! cases and PBC round-trip checks for the new `DtFetchReq/Resp`
-//! and `DtUpdateReq/Resp` messages.
+//! Plus interval-tree-clock comparison checks for all four
+//! `Ordering`-or-concurrent cases on [`Itc::partial_cmp_event`]
+//! and PBC round-trip checks for the new `DtFetchReq/Resp` and
+//! `DtUpdateReq/Resp` messages.
 
-// `Vclock` and `VclockOrder` are `#[deprecated]` in favour of
-// `DvvSet` / `DvvOrder` (see `docs/journal/2026-05-25-dvv-default.md`).
-// This integration test is the kept-for-archaeology coverage
-// for the legacy clock; the allowance is recorded in
-// `docs/journal/allowances.md`.
-#![allow(deprecated)]
+use std::cmp::Ordering;
 
 use prost::Message as _;
 
-use dyniak::datatypes::{
-    ActorId, Crdt, EwFlag, LwwRegister, OrSet, PnCounter, Vclock, VclockOrder,
-};
+use dyniak::datatypes::{ActorId, Crdt, EwFlag, Itc, LwwRegister, OrSet, PnCounter};
 use dyniak::proto::pb::{
     CounterOp, DtFetchReq, DtFetchResp, DtOp, DtUpdateReq, DtUpdateResp, DtValue, SetOp,
     DATA_TYPE_COUNTER, DATA_TYPE_SET, DT_FETCH_REQ_CODE, DT_FETCH_RESP_CODE, DT_UPDATE_REQ_CODE,
@@ -126,44 +120,50 @@ fn ewflag_enable_wins_concurrent_disable() {
     assert!(left.value(), "enable-wins flag is enabled after merge");
 }
 
-// ---- vector-clock comparison cases -----------------------------------------
+// ---- interval-tree-clock comparison cases ---------------------------------
+//
+// The previous Riak surface used a vector-clock / DVVSet-shaped
+// causality tracker; the production tracker is now
+// [`Itc`]. The four cases below pin the four observable
+// outcomes of [`Itc::partial_cmp_event`]: strict precedence in
+// either direction, equality, and concurrency (`None`).
 
 #[test]
-fn vclock_compare_equal() {
-    let mut a = Vclock::new();
-    let mut b = Vclock::new();
-    a.increment(&aid("p"));
-    b.increment(&aid("p"));
-    assert_eq!(a.compare(&b), VclockOrder::Equal);
+fn itc_compare_equal() {
+    let mut a = Itc::seed();
+    a.event();
+    a.event();
+    let b = a.clone();
+    assert_eq!(a.partial_cmp_event(&b), Some(Ordering::Equal));
+    // A peek shares the same event tree, so the clones are
+    // equal under partial_cmp_event regardless of authority.
+    assert_eq!(a.partial_cmp_event(&a.peek()), Some(Ordering::Equal));
 }
 
 #[test]
-fn vclock_compare_less() {
-    let mut a = Vclock::new();
-    let mut b = Vclock::new();
-    a.increment(&aid("p"));
-    b.increment(&aid("p"));
-    b.increment(&aid("p"));
-    assert_eq!(a.compare(&b), VclockOrder::Less);
+fn itc_compare_less() {
+    let mut a = Itc::seed();
+    let before = a.clone();
+    a.event();
+    assert_eq!(before.partial_cmp_event(&a), Some(Ordering::Less));
 }
 
 #[test]
-fn vclock_compare_greater() {
-    let mut a = Vclock::new();
-    let mut b = Vclock::new();
-    a.increment(&aid("p"));
-    a.increment(&aid("p"));
-    b.increment(&aid("p"));
-    assert_eq!(a.compare(&b), VclockOrder::Greater);
+fn itc_compare_greater() {
+    let mut a = Itc::seed();
+    let before = a.clone();
+    a.event();
+    a.event();
+    assert_eq!(a.partial_cmp_event(&before), Some(Ordering::Greater));
 }
 
 #[test]
-fn vclock_compare_concurrent() {
-    let mut a = Vclock::new();
-    let mut b = Vclock::new();
-    a.increment(&aid("p1"));
-    b.increment(&aid("p2"));
-    assert_eq!(a.compare(&b), VclockOrder::Concurrent);
+fn itc_compare_concurrent() {
+    let (mut a, mut b) = Itc::seed().fork();
+    a.event();
+    b.event();
+    assert_eq!(a.partial_cmp_event(&b), None);
+    assert_eq!(b.partial_cmp_event(&a), None);
 }
 
 // ---- PBC round trips for the new ops ---------------------------------------

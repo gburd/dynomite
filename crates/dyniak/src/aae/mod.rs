@@ -78,8 +78,8 @@ pub use crate::aae::metrics::{
 pub use crate::aae::noxu_fold::NoxuFoldError;
 pub use crate::aae::persist::{PersistError, MAX_FIELD_LEN, SNAPSHOT_MAGIC, SNAPSHOT_VERSION};
 pub use crate::aae::repair::{
-    LexicographicOrder, MpscRepairSink, Outcome, RepairDirection, RepairOutcome, RepairScheduler,
-    RepairSink, RepairTask, VClockOrder,
+    ClockOrder, ItcOrder, LexicographicOrder, MpscRepairSink, Outcome, RepairDirection,
+    RepairOutcome, RepairScheduler, RepairSink, RepairTask,
 };
 pub use crate::aae::scheduler::{Clock, MockClock, Scheduler, SweepPlan, SweepTick, SystemClock};
 pub use crate::aae::status::{

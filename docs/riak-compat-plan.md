@@ -183,7 +183,10 @@ body is parsed lazily by the op handler (some ops want JSON, some want
 raw bytes, some want multipart for siblings).
 
 **JSON encoding** of object metadata follows Riak's documented schema:
-`X-Riak-Vclock`, `X-Riak-Meta-*`, `X-Riak-Index-*-bin`,
+the `X-Riak-V`-clock header (the literal Riak header name kept for
+wire compatibility but carrying an Itc-encoded blob in the dyniak
+implementation; see `docs/parity.md` D4),
+`X-Riak-Meta-*`, `X-Riak-Index-*-bin`,
 `X-Riak-Index-*-int`, `Last-Modified`, `Content-Type`. We use `serde`
 + `serde_json` (already a dev-dep; promoted to a runtime dep behind
 the `riak-storage` feature gate in M1).
@@ -288,7 +291,8 @@ breaks human-friendly debugging via `cursor.scan_all_kv()`).
 ```text
 struct RiakObject {
     version: u8,                    // schema version, 1 today
-    vclock: VClock,                 // dotted version vector
+    clock: Itc,                     // interval tree clock; see
+                                    // crates/dyniak/src/datatypes/itc.rs
     siblings: Vec<Sibling>,         // 1..N entries; len > 1 only when allow_mult
     deleted: bool,                  // tombstone marker
     last_modified: u64,             // micros since epoch
@@ -303,8 +307,9 @@ enum IndexEntry {
     Bin { name: SmallString, value: Bytes },
     Int { name: SmallString, value: i64 },
 }
-struct VClock {
-    entries: Vec<(ActorId, u64, u64)>,  // (actor, counter, timestamp)
+struct Itc {
+    id: ItcIdTree,                  // event-issuing authority share
+    event: ItcEventTree,            // observed history
 }
 ```
 
@@ -721,7 +726,7 @@ days; with two parallel workers some milestones overlap (noted).
 ### M1 - Storage substrate scaffolding (5-7 days)
 
 * Create `crate::storage` module with the public types we need:
-  `NoxuStore`, `RiakObject`, `VClock`, `Sibling`, `IndexEntry`.
+  `NoxuStore`, `RiakObject`, `Itc`, `Sibling`, `IndexEntry`.
 * `NoxuStore::open(path)` opens an Environment, creates the
   `cluster_state` and `bucket_types` databases, scans for existing
   `vnode_<id>_objects` databases, and rebuilds the in-memory vnode

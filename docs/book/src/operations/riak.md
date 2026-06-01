@@ -235,48 +235,41 @@ full reference and migration playbook.
 
 ## Causality tracking
 
-The Riak surface tracks per-key causality with a Dotted
-Version Vector Set (DVVSet), the same scheme Riak 2.0 adopted
-upstream. DVVSet is the default for every Riak listener;
+The Riak surface tracks per-key causality with an Interval Tree
+Clock (ITC). ITC is the default for every Riak listener;
 operators do not normally need to think about it.
 
 What it does, in one paragraph: each per-key context blob the
 server returns to a client is a small encoded clock that
-records, per replica, the events the server has observed.
+records the causal history of the key as a pair of small trees
+(an id tree describing event-issuing authority shared between
+live actors and an event tree describing observed history).
 Clients echo the blob back on the next update so the server can
-make a correct merge / sibling decision. Classic vector
-clocks, which the previous implementation used, can mark two
-sequential writes from the same actor as concurrent in the
-presence of a sloppy-quorum interleaving where the
-coordinator's contiguous prefix has not yet propagated to the
-non-coordinator. DVVSet adds an explicit list of "dots" -- per-
-actor events whose predecessors have not yet been seen -- and
-folds those dots back into the contiguous vector clock as
-soon as the missing predecessors arrive. The on-the-wire shape
-of the context blob is opaque to clients (you round-trip the
-bytes verbatim), so the migration is transparent and existing
-client drivers continue to work without modification.
+make a correct merge / sibling decision. Compared with classic
+vector clocks, ITC scales with the population of currently-live
+actors instead of the population of every actor that has ever
+participated -- retired actors leave no residual cost in the
+clock. The on-the-wire shape of the context blob is opaque to
+clients (you round-trip the bytes verbatim), so a client that
+treats the context as opaque continues to work without
+modification. Clients that crack the blob and parse it as a
+Riak DVV need to switch decoders; the byte shape is documented
+as a deviation under `docs/parity.md` D4 and the "Causality
+clock divergence" ambiguity entry.
 
-The legacy `Vclock` API in `dyniak::datatypes::vclock` is
-deprecated but retained for archaeology and direct comparisons
-in the in-tree integration tests. Operator-visible behaviour is
-unchanged from a typical client's perspective: the same `R / W`
-quorum semantics, the same sibling presentation, the same
-`return_body` shape on `DtUpdateResp`. The only observable
-difference is that two sequential writes from the same actor
-no longer surface as siblings in the corner case where classic
-VVs would.
+Operator-visible behaviour is unchanged from a typical client's
+perspective: the same `R / W` quorum semantics, the same
+sibling presentation, the same `return_body` shape on
+`DtUpdateResp`.
 
 References:
 
-* Almeida, Baquero, Goncalves, Preguica, Fonte, "Dotted Version
-  Vectors: Logical Clocks for Optimistic Replication" (2010).
-* Goncalves, Almeida, Baquero, Fonte, "Scalable and Accurate
-  Causality Tracking for Eventually Consistent Stores" (2014).
+* Almeida, Baquero, Fonte, "Interval Tree Clocks: A Logical
+  Clock for Dynamic Systems" (2008).
 * The implementation lives in
-  `crates/dyniak/src/datatypes/dvv.rs`; the deviation is
-  recorded in `docs/parity.md` D4 and the design notes in
-  `docs/journal/2026-05-25-dvv-default.md`.
+  `crates/dyniak/src/datatypes/itc.rs`; the deviation is
+  recorded in `docs/parity.md` D4 and the migration notes in
+  `docs/journal/2026-06-01-dvv-to-itc.md`.
 ## Bucket properties
 
 Two operator-confirmed bucket-property knobs let Riak deployments

@@ -1070,6 +1070,31 @@ state machine. The streaming primitive
 entry point Stage 9 will use directly from the connection FSM
 when it spans buffers.
 
+### Causality clock divergence (dyniak)
+
+Upstream Riak 2.x carries the per-key causality clock as a
+Dotted Version Vector Set (DVVSet); the C Dynomite reference
+uses a classic actor-keyed vector clock for its internal
+`vclock` utility (and does not implement a CRDT-typed Riak
+surface at all). Neither shape scales gracefully under
+dynamic membership: both grow per-actor for every actor that
+has ever participated, and neither offers a forking primitive
+that survives actor retirement. dyniak ships an Interval Tree
+Clock ([`dyniak::datatypes::Itc`]) for this purpose; the ITC
+stamp is a pair of trees keyed by ownership share rather than
+by actor identity, and shrinks back as actors retire.
+
+The authoritative reference here is the project's chosen
+interpretation, not Riak's wire byte shape. The choice is
+recorded in the `D4` deviation entry above and the
+`docs/journal/2026-06-01-dvv-to-itc.md` migration note. The
+dyniak Riak protobuf context blob is opaque to clients; clients
+that round-trip the bytes verbatim continue to work with the
+new shape, while clients that crack the blob and parse it as a
+Riak DVV need to switch decoders. Tests pin the shape at the
+encode/decode seam in
+`crates/dyniak/src/proto/pb/datatypes.rs::tests::itc_*`.
+
 ## Deviations
 
 ### D0: Noxu 2i storage layout
@@ -1292,63 +1317,48 @@ Pinned by:
 - `crates/dynomite/benches/random_slicing.rs` (criterion
   comparison against the vnode dispatcher).
 
-### D4: Causality tracking: DVVSet over classic vector clocks
+### D4: Causality tracking: Interval Tree Clocks over classic vector clocks and DVV
 
-The Riak port tracks per-key causality with a Dotted Version
-Vector Set ([`dyniak::datatypes::DvvSet`]) instead of the
-classic vector-clock shape used by the C engine's `vclock`
-utility (the C code does not implement a CRDT-typed Riak; this
-deviation describes the choice made for the Rust Riak surface).
-The DVVSet variant is taken from Almeida, Baquero, Goncalves,
-Preguica and Fonte, "Dotted Version Vectors: Logical Clocks for
-Optimistic Replication" (2010), and the follow-up Goncalves,
-Almeida, Baquero and Fonte, "Scalable and Accurate Causality
-Tracking for Eventually Consistent Stores" (2014). The Riak
-codebase moved to a DVV-style scheme in 2.0 for the same
-false-concurrency reason; we inherit that choice as the
-default.
+The Riak port tracks per-key causality with an Interval Tree
+Clock ([`dyniak::datatypes::Itc`]) instead of a classic vector
+clock or a Dotted Version Vector Set. The C engine's `vclock`
+utility ships a per-actor highest-counter shape; upstream Riak
+2.x ships DVVSet; dyniak ships ITC for the reasons described
+in the "Causality clock divergence" entry under
+[Ambiguities](#ambiguities). The algorithm follows Almeida,
+Baquero, Fonte, "Interval Tree Clocks: A Logical Clock for
+Dynamic Systems" (2008).
 
-A classic vector clock per actor records only the highest
-sequence number observed for that actor and cannot represent
-gaps in the per-actor history. DVVSet pairs the contiguous
-vector clock with an explicit list of "dots" -- per-actor
-non-contiguous events whose predecessors have not yet been
-observed. The dot list is absorbed back into the vc the moment
-the missing predecessors arrive via sync, so the canonical
-form drifts back to a tight VV under steady state. Until then,
-the dot list is the receipt that distinguishes "I saw events
-1..=3 and the singleton 5" from "I saw events 1..=5".
+Classic vector clocks record one counter per actor that has
+ever participated in the cluster, which grows unboundedly under
+dynamic membership. DVVSet folds the per-actor history into a
+contiguous-prefix vector plus a dot list to repair
+false-concurrency artefacts in classic VVs, but it still keys
+per-actor and so still grows with the actor population. ITC
+shapes the clock as a pair of trees keyed by ownership share
+rather than by actor identity, so retired actors carry no
+residual cost; this is the property dyniak's dynamic-membership
+cluster model needs.
 
 The `RpbDtFetchResp.context` field stays opaque to clients
-per the Riak convention; the on-the-wire bytes change shape
-(see `docs/journal/2026-05-25-dvv-default.md` for the
-side-by-side wire-shape diff) but clients round-trip whatever
-the server hands back without parsing it, so the migration is
-transparent.
-
-The legacy [`Vclock`] type is retained for archaeology and
-direct in-test comparisons; it is `#[deprecated(since =
-"0.0.2")]` and any new call site outside the three documented
-ones (the re-export in `crates/dyniak/src/datatypes/mod.rs`,
-the module file `crates/dyniak/src/datatypes/vclock.rs`, and
-the integration test
-`crates/dyniak/tests/datatypes_round_trip.rs`) trips the
-deprecation lint and demands its own allowance entry.
+per the Riak convention; the on-the-wire bytes are now
+[`Itc::encode`]-shaped. Clients that round-trip the blob
+verbatim keep working without modification; clients that crack
+the blob and parse it as a Riak DVV need to switch decoders
+(see `docs/journal/2026-06-01-dvv-to-itc.md` for the call-site
+list).
 
 Pinned by:
-- `dyniak::datatypes::dvv::tests` (22 unit tests on the
-  algorithm).
-- `crates/dyniak/tests/dvv_properties.rs` (9 hegeltest
-  properties: single-actor sequential dominance, cross-actor
-  concurrency, merge associativity / commutativity /
-  idempotence, sync identity, dot absorption, encode
-  round-trip, compare totality).
-- `dyniak::proto::pb::datatypes::tests::dvvset_*` (3 tests
+- `dyniak::datatypes::itc::tests` (40+ unit tests on the
+  algorithm, including the four-state-machine paper example,
+  encode/decode round-trips, normalisation invariants, and the
+  causal partial-order axioms).
+- `dyniak::proto::pb::datatypes::tests::itc_*` (3 tests
   exercising the protobuf-context blob round trip on both
   fetch and update sides).
 - `crates/dyniak/src/aae/repair.rs::RepairTask::evaluate`
-  (now consumes `&[(Bytes, DvvSet)]`; the
-  `RepairOutcome::Winner` variant carries a `dvv: DvvSet`
+  (consumes `&[(Bytes, Itc)]`; the
+  `RepairOutcome::Winner` variant carries a `clock: Itc`
   field).
 ### D4: `chash_keyfun` per-bucket pre-hash shaping
 

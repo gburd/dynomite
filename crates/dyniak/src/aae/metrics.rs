@@ -135,7 +135,7 @@ impl AaeMetrics {
     /// once per exchange after the repair scheduler emits
     /// outcomes; `count` is the number of `Repaired`
     /// outcomes (winners + siblings). Outcomes that surface
-    /// `AmbiguousVClock` or `PeerUnavailable` do NOT add to
+    /// `AmbiguousClock` or `PeerUnavailable` do NOT add to
     /// this count; those are tracked elsewhere.
     pub fn record_repair_dispatched(&self, peer_idx: u32, dc: &str, rack: &str, count: u64) {
         if count == 0 {

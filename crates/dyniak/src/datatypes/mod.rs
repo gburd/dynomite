@@ -16,11 +16,12 @@
 //!   restricted to a singleton domain. Concurrent enable + disable
 //!   resolves to enabled.
 //!
-//! Per-key causality is tracked by [`DvvSet`] (the default for
-//! Riak mode; see the [`dvv`] module for the algorithm and the
-//! citations). The classic [`Vclock`] type is retained for
-//! archaeology and direct in-test comparisons but is
-//! `#[deprecated]` in favour of [`DvvSet`].
+//! Per-key causality is tracked by [`Itc`] (Interval Tree
+//! Clocks; see the [`itc`] module for the algorithm and the
+//! citations). ITC supersedes the earlier dotted-version-vector
+//! work; the algorithm scales with the live actor population
+//! rather than every actor that has ever existed, which is the
+//! property dyniak's dynamic-membership cluster model needs.
 //!
 //! # Actor-id mapping
 //!
@@ -45,11 +46,10 @@
 //! three on randomly generated states.
 
 pub mod counter;
-pub mod dvv;
 pub mod flag;
+pub mod itc;
 pub mod register;
 pub mod set;
-pub mod vclock;
 
 // Map and HyperLogLog land in the second CRDT slice; appended
 // below the original four-type block so parallel branches do
@@ -65,17 +65,10 @@ pub mod keyfun;
 use std::cmp::Ordering;
 
 pub use crate::datatypes::counter::PnCounter;
-pub use crate::datatypes::dvv::{DvvOrder, DvvSet};
 pub use crate::datatypes::flag::EwFlag;
+pub use crate::datatypes::itc::{Event as ItcEvent, Id as ItcId, Itc};
 pub use crate::datatypes::register::LwwRegister;
 pub use crate::datatypes::set::OrSet;
-// `Vclock` is `#[deprecated]` in favour of `DvvSet`. The lint
-// fires on this re-export because the legacy aliases are still
-// reachable from `dyniak::datatypes::*`. The allowance is
-// kept-for-archaeology and recorded in
-// `docs/journal/allowances.md` (2026-05-25 entry).
-#[allow(deprecated)]
-pub use crate::datatypes::vclock::{Vclock, VclockOrder};
 
 pub use crate::datatypes::hll::HyperLogLog;
 pub use crate::datatypes::map::{FieldKey, FieldType, FieldValue, Map, MapOp, NestedOp};

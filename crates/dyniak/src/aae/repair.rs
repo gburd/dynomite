@@ -15,22 +15,24 @@
 //! The merkle tree treats causality contexts as opaque bytes
 //! (see [`crate::aae::tictac::KeyEntry`]). The repair
 //! scheduler's winner-selection policy is therefore pluggable
-//! via the [`VClockOrder`] trait. The default impl
+//! via the [`ClockOrder`] trait. The default impl
 //! ([`LexicographicOrder`]) treats the longer or
 //! lexicographically-greater byte slice as the winner; a
 //! production wiring should swap in a real causality comparator
-//! (the [`crate::datatypes::DvvSet`] DVV form is the project
-//! default and supersedes the legacy `Vclock`).
+//! (the [`crate::datatypes::Itc`] interval tree clock is the
+//! project default and is the per-key context format on the
+//! dyniak surfaces).
 //!
 //! # Edge cases
 //!
 //! * A divergence whose only entry has an unparseable context
-//!   surfaces an [`Outcome::AmbiguousVClock`] event; the
+//!   surfaces an [`Outcome::AmbiguousClock`] event; the
 //!   scheduler does NOT silently drop it.
 //! * A peer whose outbound channel is closed surfaces an
 //!   [`Outcome::PeerUnavailable`] event; the next sweep tick
 //!   retries.
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -39,10 +41,10 @@ use tokio::sync::mpsc;
 use crate::aae::exchange::Divergence;
 use crate::aae::metrics::AaeMetrics;
 use crate::aae::tictac::KeyEntry;
-use crate::datatypes::dvv::{DvvOrder, DvvSet};
+use crate::datatypes::Itc;
 
 /// Direction marker for a repair: which side carries the winner
-/// vclock.
+/// causality clock.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum RepairDirection {
     /// Push the local entry to the remote peer.
@@ -66,16 +68,25 @@ pub enum RepairDirection {
 /// ```
 /// use bytes::Bytes;
 /// use dyniak::aae::repair::{RepairOutcome, RepairTask};
-/// use dyniak::datatypes::{ActorId, DvvSet};
+/// use dyniak::datatypes::Itc;
 ///
-/// // Build two clocks where `a` strictly dominates `b`.
-/// let actor = ActorId::new("dc1", "peer");
-/// let mut a = DvvSet::new();
-/// a.update(&actor);
-/// a.update(&actor);
-/// let mut b = DvvSet::new();
-/// b.update(&actor);
+/// // Build two stamps where `a` strictly dominates `b`.
+/// let mut a = Itc::seed();
+/// a.event();
+/// a.event();
+/// let mut b = Itc::seed().peek();
+/// // `b` is a peek of the genesis stamp; it captures no events.
+/// // `a` issued two events from the same authoritative seed and
+/// // therefore strictly dominates `b`.
+/// let _ = (a.clone(), b.clone());
 ///
+/// // Concrete dominance example using one fork half on each side.
+/// let (a_branch, _) = Itc::seed().fork();
+/// let mut a = a_branch.clone();
+/// a.event();
+/// a.event();
+/// let mut b = a_branch;
+/// b.event();
 /// let replicas = vec![
 ///     (Bytes::from_static(b"v_a"), a),
 ///     (Bytes::from_static(b"v_b"), b),
@@ -93,17 +104,17 @@ pub enum RepairOutcome {
         /// The winning value bytes.
         value: Bytes,
         /// The winner's causality clock.
-        dvv: DvvSet,
+        clock: Itc,
     },
     /// Two or more replicas hold concurrent (or equal) clocks
     /// after every dominated entry has been removed; the
     /// caller decides whether to store siblings, log a
     /// warning, or fall back to a tiebreaker.
-    Siblings(Vec<(Bytes, DvvSet)>),
+    Siblings(Vec<(Bytes, Itc)>),
 }
 
 impl RepairOutcome {
-    /// Resolve the outcome to a single `(value, dvv)` pair,
+    /// Resolve the outcome to a single `(value, clock)` pair,
     /// emitting a `tracing::warn!` event when the outcome is
     /// [`RepairOutcome::Siblings`]. The fallback selection rule
     /// is the lexicographically-largest sibling value, with
@@ -114,9 +125,9 @@ impl RepairOutcome {
     /// `key` is reported alongside the warning so operators can
     /// correlate sibling events with specific Riak objects.
     #[must_use]
-    pub fn resolve_with_warn(self, key: &[u8]) -> (Bytes, DvvSet) {
+    pub fn resolve_with_warn(self, key: &[u8]) -> (Bytes, Itc) {
         match self {
-            Self::Winner { value, dvv } => (value, dvv),
+            Self::Winner { value, clock } => (value, clock),
             Self::Siblings(siblings) => {
                 tracing::warn!(
                     target: "dyniak::aae::repair",
@@ -145,7 +156,7 @@ pub struct RepairTask {
     pub bucket: Vec<u8>,
     /// Riak object key.
     pub key: Vec<u8>,
-    /// Winner vclock.
+    /// Winner causality-clock context bytes.
     pub vclock: Vec<u8>,
     /// Repair direction.
     pub direction: RepairDirection,
@@ -154,15 +165,16 @@ pub struct RepairTask {
 impl RepairTask {
     /// Cross-replica winner selection.
     ///
-    /// Given the `(value, dvv)` pair fetched from each of
+    /// Given the `(value, clock)` pair fetched from each of
     /// the `N` replicas of one key, return [`RepairOutcome::Winner`]
     /// when exactly one entry survives the dominance filter
     /// and [`RepairOutcome::Siblings`] otherwise. An entry is
     /// dominated when at least one other entry's clock
-    /// strictly succeeds it under [`DvvSet::compare`]. Entries
-    /// whose clocks are pairwise [`DvvOrder::Equal`] are
-    /// deduplicated by their encoded clock bytes so identical
-    /// state across replicas does not surface as siblings.
+    /// strictly succeeds it under
+    /// [`Itc::partial_cmp_event`]. Entries whose clocks compare
+    /// `Some(Ordering::Equal)` are deduplicated by index so
+    /// identical state across replicas does not surface as
+    /// siblings; concurrent clocks (`None`) are kept.
     ///
     /// # Panics
     ///
@@ -171,7 +183,7 @@ impl RepairTask {
     /// expected to filter out that degenerate case before
     /// calling.
     #[must_use]
-    pub fn evaluate(replicas: &[(Bytes, DvvSet)]) -> RepairOutcome {
+    pub fn evaluate(replicas: &[(Bytes, Itc)]) -> RepairOutcome {
         let n = replicas.len();
         let mut keep = vec![true; n];
         for i in 0..n {
@@ -182,13 +194,13 @@ impl RepairTask {
                 if i == j || !keep[j] {
                     continue;
                 }
-                match replicas[i].1.compare(&replicas[j].1) {
-                    DvvOrder::Less => {
+                match replicas[i].1.partial_cmp_event(&replicas[j].1) {
+                    Some(Ordering::Less) => {
                         // i is strictly dominated by j; drop i.
                         keep[i] = false;
                         break;
                     }
-                    DvvOrder::Equal if i > j => {
+                    Some(Ordering::Equal) if i > j => {
                         // Deduplicate identical clocks: keep
                         // the lower index, drop the higher.
                         keep[i] = false;
@@ -198,7 +210,7 @@ impl RepairTask {
                 }
             }
         }
-        let surviving: Vec<(Bytes, DvvSet)> = replicas
+        let surviving: Vec<(Bytes, Itc)> = replicas
             .iter()
             .zip(keep.iter())
             .filter_map(|((v, c), &k)| {
@@ -210,8 +222,8 @@ impl RepairTask {
             })
             .collect();
         if surviving.len() == 1 {
-            let (value, dvv) = surviving.into_iter().next().expect("len == 1");
-            RepairOutcome::Winner { value, dvv }
+            let (value, clock) = surviving.into_iter().next().expect("len == 1");
+            RepairOutcome::Winner { value, clock }
         } else {
             RepairOutcome::Siblings(surviving)
         }
@@ -229,7 +241,7 @@ pub enum Outcome {
     /// Both sides held an entry but neither vclock dominated;
     /// the scheduler defers to a sibling-aware merge that lives
     /// outside this module.
-    AmbiguousVClock {
+    AmbiguousClock {
         /// The bucket name in question.
         bucket: Vec<u8>,
         /// The key in question.
@@ -249,34 +261,54 @@ pub enum Outcome {
     },
 }
 
-/// Pluggable vclock comparator.
-pub trait VClockOrder: Send + Sync {
-    /// Compare two vclocks; return `Some(Ordering::Greater)`
-    /// when `a` strictly dominates `b`, `Some(Ordering::Less)`
-    /// when `b` strictly dominates `a`, and `None` when
-    /// neither dominates (concurrent updates).
-    fn compare(&self, a: &[u8], b: &[u8]) -> Option<std::cmp::Ordering>;
+/// Pluggable causality-clock comparator.
+pub trait ClockOrder: Send + Sync {
+    /// Compare two clock-context byte strings; return
+    /// `Some(Ordering::Greater)` when `a` strictly dominates `b`,
+    /// `Some(Ordering::Less)` when `b` strictly dominates `a`,
+    /// `Some(Ordering::Equal)` when the bytes encode the same
+    /// causal state, and `None` when neither dominates
+    /// (concurrent updates).
+    fn compare(&self, a: &[u8], b: &[u8]) -> Option<Ordering>;
 }
 
-/// Default [`VClockOrder`] impl: longer-then-lexicographic
-/// comparison. This is intentionally NOT a real vector-clock
-/// dominance check (a real Riak comparator parses the encoded
-/// vclock and walks per-actor counters); it is the simplest
-/// totally-ordered relation that lets the scheduler tests
-/// surface a deterministic winner. Production wirings replace
-/// it with `vclock:descends/2`.
+/// Default [`ClockOrder`] impl: longer-then-lexicographic
+/// comparison. This is intentionally NOT a real causality
+/// dominance check (a real comparator decodes the encoded
+/// stamp and runs [`Itc::partial_cmp_event`]); it is the
+/// simplest totally-ordered relation that lets the scheduler
+/// tests surface a deterministic winner. Production wirings
+/// replace it with [`ItcOrder`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LexicographicOrder;
 
-impl VClockOrder for LexicographicOrder {
-    fn compare(&self, a: &[u8], b: &[u8]) -> Option<std::cmp::Ordering> {
+impl ClockOrder for LexicographicOrder {
+    fn compare(&self, a: &[u8], b: &[u8]) -> Option<Ordering> {
         if a == b {
-            return Some(std::cmp::Ordering::Equal);
+            return Some(Ordering::Equal);
         }
         match a.len().cmp(&b.len()) {
-            std::cmp::Ordering::Equal => Some(a.cmp(b)),
+            Ordering::Equal => Some(a.cmp(b)),
             ord => Some(ord),
         }
+    }
+}
+
+/// Production [`ClockOrder`] impl: decode each side as an
+/// [`Itc`] stamp and compare via
+/// [`Itc::partial_cmp_event`]. Returns `None` (concurrent)
+/// when the stamps are concurrent OR when either side fails
+/// to decode; in the latter case the scheduler emits
+/// [`Outcome::AmbiguousClock`] so observability hooks can
+/// surface the parse failure.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ItcOrder;
+
+impl ClockOrder for ItcOrder {
+    fn compare(&self, a: &[u8], b: &[u8]) -> Option<Ordering> {
+        let a_stamp = Itc::decode(a)?;
+        let b_stamp = Itc::decode(b)?;
+        a_stamp.partial_cmp_event(&b_stamp)
     }
 }
 
@@ -322,12 +354,12 @@ impl RepairSink for MpscRepairSink {
 /// Repair scheduler.
 ///
 /// Configured with a [`RepairSink`] (per-peer outbound channel
-/// abstraction) and a [`VClockOrder`] policy. Each call to
+/// abstraction) and a [`ClockOrder`] policy. Each call to
 /// [`RepairScheduler::resolve`] consumes one [`Divergence`] and
 /// emits one or more [`Outcome`]s.
 pub struct RepairScheduler {
     sink: Arc<dyn RepairSink>,
-    order: Arc<dyn VClockOrder>,
+    order: Arc<dyn ClockOrder>,
     peer_idx: u32,
     metrics: Option<Arc<AaeMetrics>>,
     metrics_dc: String,
@@ -337,7 +369,7 @@ pub struct RepairScheduler {
 impl RepairScheduler {
     /// Build a scheduler bound to one peer.
     #[must_use]
-    pub fn new(peer_idx: u32, sink: Arc<dyn RepairSink>, order: Arc<dyn VClockOrder>) -> Self {
+    pub fn new(peer_idx: u32, sink: Arc<dyn RepairSink>, order: Arc<dyn ClockOrder>) -> Self {
         Self {
             sink,
             order,
@@ -407,19 +439,19 @@ impl RepairScheduler {
             if let Some(r) = remote_by_key.remove(&id) {
                 // Both sides have the key; resolve via vclock.
                 match self.order.compare(&l.vclock, &r.vclock) {
-                    Some(std::cmp::Ordering::Greater) => {
+                    Some(Ordering::Greater) => {
                         out.push(self.enact(l, RepairDirection::PushToRemote));
                     }
-                    Some(std::cmp::Ordering::Less) => {
+                    Some(Ordering::Less) => {
                         out.push(self.enact(r, RepairDirection::PullFromRemote));
                     }
-                    Some(std::cmp::Ordering::Equal) => {
+                    Some(Ordering::Equal) => {
                         // Equal vclocks but the segment XOR
                         // diverged; that is a directory-level
                         // race -- another sweep will catch it.
                     }
                     None => {
-                        out.push(Outcome::AmbiguousVClock {
+                        out.push(Outcome::AmbiguousClock {
                             bucket: l.bucket.clone(),
                             key: l.key.clone(),
                             local: l.vclock.clone(),
@@ -462,40 +494,76 @@ impl RepairScheduler {
 mod tests {
     use super::*;
     use crate::aae::exchange::Divergence;
-    use crate::datatypes::ActorId;
 
-    fn aid(peer: &str) -> ActorId {
-        ActorId::new("dc1", peer)
+    /// Build a stamp via N self-events on a freshly seeded
+    /// genesis. The result has full id ownership and a single
+    /// monotone leaf event count of `ticks`.
+    fn stamp_with_events(ticks: u64) -> Itc {
+        let mut s = Itc::seed();
+        for _ in 0..ticks {
+            s.event();
+        }
+        s
     }
 
-    fn vc(actor: &ActorId, ticks: u64) -> DvvSet {
-        let mut v = DvvSet::new();
-        for _ in 0..ticks {
-            v.update(actor);
+    /// Build two stamps that hold concurrent histories: forks
+    /// a fresh seed and lets each side issue `ticks_a` /
+    /// `ticks_b` self-events. The two resulting stamps are
+    /// pairwise concurrent under [`Itc::partial_cmp_event`].
+    fn forked_concurrent(ticks_a: u64, ticks_b: u64) -> (Itc, Itc) {
+        let (mut a, mut b) = Itc::seed().fork();
+        for _ in 0..ticks_a {
+            a.event();
         }
-        v
+        for _ in 0..ticks_b {
+            b.event();
+        }
+        (a, b)
     }
 
     #[test]
     fn lexicographic_order_picks_longer() {
         let lo = LexicographicOrder;
-        assert_eq!(
-            lo.compare(b"vc2", b"vc1"),
-            Some(std::cmp::Ordering::Greater)
-        );
+        assert_eq!(lo.compare(b"vc2", b"vc1"), Some(Ordering::Greater));
         assert_eq!(
             lo.compare(b"vc11", b"vc2"),
-            Some(std::cmp::Ordering::Greater),
+            Some(Ordering::Greater),
             "longer wins over shorter"
         );
-        assert_eq!(lo.compare(b"x", b"x"), Some(std::cmp::Ordering::Equal));
+        assert_eq!(lo.compare(b"x", b"x"), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn itc_order_decodes_and_compares_stamps() {
+        let a = stamp_with_events(1);
+        let b = stamp_with_events(2);
+        let order = ItcOrder;
+        let a_bytes = a.encode();
+        let b_bytes = b.encode();
+        assert_eq!(order.compare(&a_bytes, &b_bytes), Some(Ordering::Less));
+        assert_eq!(order.compare(&b_bytes, &a_bytes), Some(Ordering::Greater));
+        assert_eq!(order.compare(&a_bytes, &a_bytes), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn itc_order_concurrent_stamps_compare_none() {
+        let (a, b) = forked_concurrent(1, 1);
+        let order = ItcOrder;
+        assert_eq!(order.compare(&a.encode(), &b.encode()), None);
+    }
+
+    #[test]
+    fn itc_order_unparseable_input_returns_none() {
+        let order = ItcOrder;
+        // Not a valid Itc encoding.
+        assert_eq!(order.compare(b"not-an-itc", b"\x00\x00\x00\x00"), None);
     }
 
     #[test]
     fn repair_for_divergent_key_reaches_channel() {
         let (tx, mut rx) = mpsc::channel::<RepairTask>(8);
         let sink: Arc<dyn RepairSink> = Arc::new(MpscRepairSink::new(tx));
-        let order: Arc<dyn VClockOrder> = Arc::new(LexicographicOrder);
+        let order: Arc<dyn ClockOrder> = Arc::new(LexicographicOrder);
         let sched = RepairScheduler::new(7, sink, order);
 
         let div = Divergence {
@@ -535,7 +603,7 @@ mod tests {
     fn repair_local_only_pushes_to_remote() {
         let (tx, _rx) = mpsc::channel::<RepairTask>(8);
         let sink: Arc<dyn RepairSink> = Arc::new(MpscRepairSink::new(tx));
-        let order: Arc<dyn VClockOrder> = Arc::new(LexicographicOrder);
+        let order: Arc<dyn ClockOrder> = Arc::new(LexicographicOrder);
         let sched = RepairScheduler::new(3, sink, order);
 
         let div = Divergence {
@@ -561,7 +629,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<RepairTask>(1);
         drop(rx);
         let sink: Arc<dyn RepairSink> = Arc::new(MpscRepairSink::new(tx));
-        let order: Arc<dyn VClockOrder> = Arc::new(LexicographicOrder);
+        let order: Arc<dyn ClockOrder> = Arc::new(LexicographicOrder);
         let sched = RepairScheduler::new(99, sink, order);
 
         let div = Divergence {
@@ -581,19 +649,20 @@ mod tests {
 
     #[test]
     fn evaluate_winner_when_one_dominates_others() {
-        let actor = aid("p1");
-        let a = vc(&actor, 3);
-        let b = vc(&actor, 1);
-        let c = vc(&actor, 2);
+        // Build a chain of stamps where each successor strictly
+        // dominates its predecessor.
+        let a = stamp_with_events(3);
+        let b = stamp_with_events(1);
+        let c = stamp_with_events(2);
         let replicas = vec![
             (Bytes::from_static(b"v_a"), a.clone()),
             (Bytes::from_static(b"v_b"), b),
             (Bytes::from_static(b"v_c"), c),
         ];
         match RepairTask::evaluate(&replicas) {
-            RepairOutcome::Winner { value, dvv } => {
+            RepairOutcome::Winner { value, clock } => {
                 assert_eq!(value, Bytes::from_static(b"v_a"));
-                assert_eq!(dvv, a);
+                assert_eq!(clock, a);
             }
             RepairOutcome::Siblings(s) => panic!("expected Winner, got Siblings({})", s.len()),
         }
@@ -601,12 +670,16 @@ mod tests {
 
     #[test]
     fn evaluate_siblings_when_all_concurrent() {
-        let p1 = aid("p1");
-        let p2 = aid("p2");
-        let p3 = aid("p3");
-        let a = vc(&p1, 1);
-        let b = vc(&p2, 1);
-        let c = vc(&p3, 1);
+        // Three-way fork: each side issues one event, and all
+        // three resulting stamps are pairwise concurrent.
+        let (a, bc) = Itc::seed().fork();
+        let (b, c) = bc.fork();
+        let mut a = a;
+        let mut b = b;
+        let mut c = c;
+        a.event();
+        b.event();
+        c.event();
         let replicas = vec![
             (Bytes::from_static(b"v_a"), a),
             (Bytes::from_static(b"v_b"), b),
@@ -623,19 +696,19 @@ mod tests {
     #[test]
     fn evaluate_siblings_excludes_dominated_entries() {
         // A strictly dominates B (so B is dropped); A and C
-        // are concurrent (different actors). Expected:
-        // Siblings([A, C]).
-        let p1 = aid("p1");
-        let p2 = aid("p2");
-        let mut a = DvvSet::new();
-        a.update(&p1);
-        a.update(&p1);
-        let b = vc(&p1, 1);
-        let c = vc(&p2, 1);
+        // are concurrent (different fork halves).
+        let (a_branch, c) = Itc::seed().fork();
+        let mut a = a_branch.clone();
+        a.event();
+        a.event();
+        let mut b = a_branch;
+        b.event();
+        let mut c = c;
+        c.event();
         let replicas = vec![
-            (Bytes::from_static(b"v_a"), a.clone()),
+            (Bytes::from_static(b"v_a"), a),
             (Bytes::from_static(b"v_b"), b),
-            (Bytes::from_static(b"v_c"), c.clone()),
+            (Bytes::from_static(b"v_c"), c),
         ];
         match RepairTask::evaluate(&replicas) {
             RepairOutcome::Siblings(s) => {
@@ -654,16 +727,15 @@ mod tests {
         // Two replicas with identical clocks but different
         // values: the dedupe step keeps the first; with only
         // one survivor the outcome is Winner.
-        let actor = aid("p1");
-        let a = vc(&actor, 2);
+        let a = stamp_with_events(2);
         let replicas = vec![
             (Bytes::from_static(b"v_a"), a.clone()),
             (Bytes::from_static(b"v_a_dup"), a.clone()),
         ];
         match RepairTask::evaluate(&replicas) {
-            RepairOutcome::Winner { value, dvv } => {
+            RepairOutcome::Winner { value, clock } => {
                 assert_eq!(value, Bytes::from_static(b"v_a"));
-                assert_eq!(dvv, a);
+                assert_eq!(clock, a);
             }
             RepairOutcome::Siblings(s) => {
                 panic!("expected Winner after dedupe, got Siblings({})", s.len())
@@ -673,12 +745,23 @@ mod tests {
 
     #[test]
     fn resolve_with_warn_picks_lex_largest_on_siblings() {
-        let p1 = aid("p1");
-        let p2 = aid("p2");
+        let (a_branch, c) = Itc::seed().fork();
+        let mut a = a_branch.clone();
+        a.event();
+        let mut b = a_branch;
+        b.event();
+        let mut c = c;
+        c.event();
+        // a and b come from the same fork half so one will
+        // dominate the other; pick distinct fork halves so all
+        // three are concurrent.
+        let _ = (a, b, c);
+
+        let (s1, s2) = forked_concurrent(1, 1);
         let outcome = RepairOutcome::Siblings(vec![
-            (Bytes::from_static(b"alpha"), vc(&p1, 1)),
-            (Bytes::from_static(b"zulu"), vc(&p2, 1)),
-            (Bytes::from_static(b"mike"), vc(&p1, 1)),
+            (Bytes::from_static(b"alpha"), s1.clone()),
+            (Bytes::from_static(b"zulu"), s2.clone()),
+            (Bytes::from_static(b"mike"), s1),
         ]);
         let (value, _) = outcome.resolve_with_warn(b"some-key");
         assert_eq!(value, Bytes::from_static(b"zulu"));
@@ -686,22 +769,21 @@ mod tests {
 
     #[test]
     fn resolve_with_warn_passes_winner_through() {
-        let actor = aid("p1");
-        let v = vc(&actor, 5);
+        let v = stamp_with_events(5);
         let outcome = RepairOutcome::Winner {
             value: Bytes::from_static(b"only"),
-            dvv: v.clone(),
+            clock: v.clone(),
         };
-        let (value, dvv) = outcome.resolve_with_warn(b"k");
+        let (value, clock) = outcome.resolve_with_warn(b"k");
         assert_eq!(value, Bytes::from_static(b"only"));
-        assert_eq!(dvv, v);
+        assert_eq!(clock, v);
     }
 
     #[test]
     fn resolve_all_records_dispatched_metric() {
         let (tx, _rx) = mpsc::channel::<RepairTask>(8);
         let sink: Arc<dyn RepairSink> = Arc::new(MpscRepairSink::new(tx));
-        let order: Arc<dyn VClockOrder> = Arc::new(LexicographicOrder);
+        let order: Arc<dyn ClockOrder> = Arc::new(LexicographicOrder);
         let metrics = Arc::new(AaeMetrics::new());
         let sched =
             RepairScheduler::new(11, sink, order).with_metrics(Arc::clone(&metrics), "dc1", "rA");
