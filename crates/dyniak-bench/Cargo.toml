@@ -7,7 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+homepage = "https://github.com/gburd/dynomite"
+documentation = "https://docs.rs/dyniak-bench"
+readme = "README.md"
+keywords = ["benchmark", "riak", "redis", "load-test", "basho-bench"]
+categories = ["command-line-utilities", "development-tools::profiling"]
 
 [lints.rust]
 unsafe_code = "forbid"

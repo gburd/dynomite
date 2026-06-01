@@ -85,7 +85,7 @@ wasm = ["riak", "dyniak/wasm"]
 
 [dependencies]
 dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.0.2" }
-dynomite-search = { path = "../dynomite-search", version = "0.0.2", optional = true }
+dynomite-search = { path = "../dynomite-search", version = "0.0.3", optional = true }
 dyniak = { path = "../dyniak", optional = true }
 clap = { workspace = true }
 tokio = { workspace = true }
