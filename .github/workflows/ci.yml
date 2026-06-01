@@ -35,11 +35,15 @@ jobs:
         run: |
           # Explicit -p list because `cargo fmt --all` reaches
           # into the noxu path-deps under some workspace shapes.
+          # Cargo PACKAGE names (some differ from lib names; lib
+          # `dynomite` lives in package `dynomite-engine`, etc.)
           cargo fmt \
-              -p dynomite -p dynomited -p dyn-hash-tool \
+              -p dynomite-engine -p dynomited -p dyn-hash-tool \
               -p dyn-encoding -p dyniak -p dyn-admin \
-              -p dyntext -p dynvec -p gen-fsm -p hashtree \
-              -p loom-tests -p sup -p throttle-core \
+              -p dynomite-text -p dynomite-vec -p dynomite-search \
+              -p gen-fsm -p dyn-hashtree \
+              -p loom-tests -p dyn-sup -p throttle-core \
+              -p tre-sys \
               -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings

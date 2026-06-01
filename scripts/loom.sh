@@ -37,4 +37,4 @@ export LOOM_MAX_BRANCHES
 # gated doctests (throttle-core, hashtree) pass --cfg loom
 # through RUSTDOCFLAGS so their bodies elide.
 RUSTFLAGS='--cfg loom' RUSTDOCFLAGS='--cfg loom' \
-    cargo test -p loom-tests -p throttle-core -p hashtree -p sup --release "$@"
+    cargo test -p loom-tests -p throttle-core -p dyn-hashtree -p dyn-sup --release "$@"

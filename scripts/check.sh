@@ -10,10 +10,12 @@ echo "==> rustfmt"
 # Restrict to our crates so the noxu path-deps pulled in by the
 # `riak-storage` feature do not leak into the format check.
 cargo fmt \
-    -p dynomite -p dynomited -p dyn-hash-tool \
+    -p dynomite-engine -p dynomited -p dyn-hash-tool \
     -p dyn-encoding -p dyniak -p dyn-admin \
-    -p dyntext -p dynvec -p gen-fsm -p hashtree \
-    -p loom-tests -p sup -p throttle-core \
+    -p dynomite-text -p dynomite-vec -p dynomite-search \
+    -p gen-fsm -p dyn-hashtree \
+    -p loom-tests -p dyn-sup -p throttle-core \
+    -p tre-sys \
     -- --check
 
 echo "==> clippy"
