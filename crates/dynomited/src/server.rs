@@ -146,6 +146,11 @@ impl ProxyKind {
 /// `quic` feature, [`Server::build`] returns a typed
 /// [`ServerError::BadConfig`] so the operator sees a clean
 /// error at startup rather than a silent fall-back.
+#[allow(
+    clippy::unused_async,
+    reason = "the QUIC arm at line ~187 awaits QuicProxy::bind; clippy only sees \
+              the active feature configuration and flags the no-await TCP-only build"
+)]
 async fn build_proxy(
     listen_addr: SocketAddr,
     dispatcher: Arc<ClusterDispatcher>,

@@ -1242,9 +1242,7 @@ mod tests {
     /// to a clean Error rather than allocating gigabytes.
     #[test]
     fn parse_oom_artifact_2026_06_02() {
-        let bytes = include_bytes!(
-            "../../../fuzz/seeds/dnode_parse/regression-oom-2026-06-02"
-        );
+        let bytes = include_bytes!("../../../fuzz/seeds/dnode_parse/regression-oom-2026-06-02");
         let mut p = DnodeParser::new();
         match p.step(bytes) {
             ParseStep::Error { .. } | ParseStep::HeaderDone { .. } => (),

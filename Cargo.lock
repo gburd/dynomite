@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "dyniak"
-version = "0.0.2"
+version = "0.1.0"
 dependencies = [
  "bytes",
  "ciborium",
@@ -1084,7 +1084,7 @@ dependencies = [
 
 [[package]]
 name = "dynomite-engine"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "aes",
  "ahash",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "dynomite-search"
-version = "0.0.3"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "dynomite-engine",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "dynomite-text"
-version = "0.0.2"
+version = "0.1.0"
 dependencies = [
  "bincode",
  "blake3",
@@ -1172,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "dynomite-vec"
-version = "0.0.2"
+version = "0.1.0"
 dependencies = [
  "bytes",
  "criterion",
