@@ -590,6 +590,7 @@ impl GossipHandler {
             let phi = p.failure_detector().phi(now);
             if let Some(m) = self.failure_metrics.as_ref() {
                 m.observe_phi(p.idx(), p.dc(), p.rack(), phi);
+                m.observe_threshold(p.idx(), p.dc(), p.rack(), self.threshold);
             }
             let target = if p.failure_detector().last_heartbeat().is_some() && phi <= self.threshold
             {
@@ -602,7 +603,7 @@ impl GossipHandler {
                 p.set_state(target, now_secs_wall());
                 transitions.push((p.idx(), target));
                 if let Some(m) = self.failure_metrics.as_ref() {
-                    m.record_peer_state_transition(p.idx(), p.dc(), p.rack(), prev, target);
+                    m.record_peer_state_transition_at(p.idx(), p.dc(), p.rack(), prev, target, now);
                 }
                 if let Some(ev) = self.events.as_ref() {
                     let ts = std::time::SystemTime::now();
@@ -965,6 +966,103 @@ mod tests {
             phi_entry.phi >= 0.0,
             "phi should be non-negative; got {}",
             phi_entry.phi
+        );
+    }
+
+    /// Simulate a peer flap (Normal -> Down -> Normal) and
+    /// confirm:
+    ///
+    /// * the transitions counter records exactly one
+    ///   Normal->Down and one Down->Normal entry,
+    /// * the dwell histogram captures at least one observation
+    ///   for both the Normal and Down state buckets,
+    /// * the threshold gauge is populated alongside the phi
+    ///   score so the operator can read both side by side.
+    #[test]
+    fn handler_flap_increments_transitions_and_records_dwell() {
+        let pool = handler_helpers::pool();
+        let metrics = std::sync::Arc::new(crate::stats::FailureMetrics::new());
+        let handler = GossipHandler::new(pool.clone())
+            .with_failure_metrics(metrics.clone())
+            .with_threshold(8.0);
+        let t0 = std::time::Instant::now();
+        // Phase 1: 100 steady heartbeats establish Normal.
+        for i in 0..100 {
+            let now = t0 + std::time::Duration::from_secs(i);
+            handler.record_heartbeat_pname("127.0.0.1:8102", now);
+            handler.evaluate(now);
+        }
+        // Phase 2: stop heartbeats; the next evaluate flips to
+        // Down.
+        let down_at = t0 + std::time::Duration::from_secs(160);
+        let trans1 = handler.evaluate(down_at);
+        assert_eq!(trans1, vec![(1, PeerState::Down)]);
+        // Phase 3: heartbeats resume; the next inbound message
+        // promotes the peer back to Normal (the snappy-promote
+        // path inside `record_heartbeat_pname`).
+        let up_at = down_at + std::time::Duration::from_secs(5);
+        handler.record_heartbeat_pname("127.0.0.1:8102", up_at);
+
+        let snap = metrics.snapshot();
+        // Exactly one Normal -> Down and one Down -> Normal
+        // since the start of the flap.
+        let n_to_d = snap
+            .peer_state_transitions
+            .iter()
+            .find(|t| t.from == PeerState::Normal && t.to == PeerState::Down)
+            .map_or(0, |t| t.count);
+        let d_to_n = snap
+            .peer_state_transitions
+            .iter()
+            .find(|t| t.from == PeerState::Down && t.to == PeerState::Normal)
+            .map_or(0, |t| t.count);
+        assert_eq!(
+            n_to_d, 1,
+            "expected exactly one Normal->Down transition, got: {:?}",
+            snap.peer_state_transitions
+        );
+        assert_eq!(
+            d_to_n, 2,
+            "expected exactly two Down->Normal transitions (initial promote + flap recover), got: {:?}",
+            snap.peer_state_transitions
+        );
+
+        // Dwell histogram must hold at least one observation
+        // in both Normal and Down state rows.
+        let normal_dwell = snap
+            .peer_state_dwell
+            .iter()
+            .find(|e| e.state == PeerState::Normal)
+            .expect("Normal dwell row missing");
+        let down_dwell = snap
+            .peer_state_dwell
+            .iter()
+            .find(|e| e.state == PeerState::Down)
+            .expect("Down dwell row missing");
+        assert!(
+            normal_dwell.count >= 1,
+            "Normal dwell row had no observations"
+        );
+        assert!(down_dwell.count >= 1, "Down dwell row had no observations");
+        // The +Inf bucket equals the per-state observation
+        // count for both rows.
+        assert_eq!(
+            *normal_dwell.bucket_counts.last().unwrap(),
+            normal_dwell.count
+        );
+        assert_eq!(*down_dwell.bucket_counts.last().unwrap(), down_dwell.count);
+
+        // Threshold gauge must be populated for the remote
+        // peer.
+        let thr_entry = snap
+            .peer_threshold
+            .iter()
+            .find(|t| t.peer_idx == 1)
+            .expect("gossip_phi_threshold_observed gauge should be populated");
+        assert!(
+            (thr_entry.threshold - 8.0).abs() < 1e-6,
+            "threshold gauge should mirror handler config (got {})",
+            thr_entry.threshold
         );
     }
 }

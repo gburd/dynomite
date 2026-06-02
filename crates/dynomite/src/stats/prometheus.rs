@@ -258,6 +258,8 @@ fn register_failure_metrics(registry: &Registry, failure: &FailureSnapshot) {
     register_failure_response_timeout(registry, failure);
     register_failure_peer_state(registry, failure);
     register_failure_phi(registry, failure);
+    register_failure_phi_threshold(registry, failure);
+    register_failure_dwell(registry, failure);
 }
 
 fn register_failure_no_targets(registry: &Registry, failure: &FailureSnapshot) {
@@ -430,6 +432,115 @@ fn register_failure_phi(registry: &Registry, failure: &FailureSnapshot) {
     registry
         .register(Box::new(gauge))
         .expect("invariant: gossip_phi_score registers cleanly");
+}
+
+fn register_failure_phi_threshold(registry: &Registry, failure: &FailureSnapshot) {
+    let gauge = IntGaugeVec::new(
+        Opts::new(
+            "gossip_phi_threshold_observed_milli",
+            "Phi-accrual threshold the failure detector last evaluated against the peer, \
+             scaled by 1000 (gauge units = thousandths). Use to confirm operator-tuned \
+             thresholds against the gossip handler's running config.",
+        ),
+        &["peer_idx", "dc", "rack"],
+    )
+    .expect("invariant: gossip_phi_threshold_observed descriptor is valid");
+    for entry in &failure.peer_threshold {
+        let value = phi_to_milli_clamped(entry.threshold);
+        gauge
+            .with_label_values(&[&entry.peer_idx.to_string(), &entry.dc, &entry.rack])
+            .set(value);
+    }
+    registry
+        .register(Box::new(gauge))
+        .expect("invariant: gossip_phi_threshold_observed registers cleanly");
+}
+
+fn register_failure_dwell(registry: &Registry, failure: &FailureSnapshot) {
+    use crate::stats::failure::DWELL_BUCKETS_SECONDS;
+    if failure.peer_state_dwell.is_empty() {
+        return;
+    }
+    // Cumulative bucket counts emitted as `peer_state_dwell_seconds_bucket{state, le}`.
+    let bucket_gauge = IntGaugeVec::new(
+        Opts::new(
+            "peer_state_dwell_seconds_bucket",
+            "Cumulative count of peer-state dwell observations whose duration is <= 'le', per state.",
+        ),
+        &["state", "le"],
+    )
+    .expect("invariant: peer_state_dwell_seconds_bucket descriptor is valid");
+    let count_gauge = IntGaugeVec::new(
+        Opts::new(
+            "peer_state_dwell_seconds_count",
+            "Total number of peer-state dwell observations recorded for the labelled state.",
+        ),
+        &["state"],
+    )
+    .expect("invariant: peer_state_dwell_seconds_count descriptor is valid");
+    let sum_gauge = IntGaugeVec::new(
+        Opts::new(
+            "peer_state_dwell_seconds_sum_milli",
+            "Sum of dwell observations in milliseconds per state. Divide by 1000 for seconds.",
+        ),
+        &["state"],
+    )
+    .expect("invariant: peer_state_dwell_seconds_sum descriptor is valid");
+    for entry in &failure.peer_state_dwell {
+        let state_label = entry.state.name();
+        let count = i64::try_from(entry.count).unwrap_or(i64::MAX);
+        count_gauge.with_label_values(&[state_label]).set(count);
+        let sum_milli = phi_to_milli_clamped(entry.sum_seconds);
+        sum_gauge.with_label_values(&[state_label]).set(sum_milli);
+        for (i, upper) in DWELL_BUCKETS_SECONDS.iter().enumerate() {
+            if let Some(c) = entry.bucket_counts.get(i) {
+                let val = i64::try_from(*c).unwrap_or(i64::MAX);
+                let le = format_le(*upper);
+                bucket_gauge.with_label_values(&[state_label, &le]).set(val);
+            }
+        }
+        if let Some(c) = entry.bucket_counts.last() {
+            let val = i64::try_from(*c).unwrap_or(i64::MAX);
+            bucket_gauge
+                .with_label_values(&[state_label, "+Inf"])
+                .set(val);
+        }
+    }
+    registry
+        .register(Box::new(bucket_gauge))
+        .expect("invariant: peer_state_dwell_seconds_bucket registers cleanly");
+    registry
+        .register(Box::new(count_gauge))
+        .expect("invariant: peer_state_dwell_seconds_count registers cleanly");
+    registry
+        .register(Box::new(sum_gauge))
+        .expect("invariant: peer_state_dwell_seconds_sum registers cleanly");
+}
+
+/// Format a bucket upper-bound for the `le` label. Whole-second
+/// boundaries are rendered without a fractional component so a
+/// dashboard cleanly groups buckets like `1` instead of `1.0`.
+fn format_le(upper: f64) -> String {
+    if upper.fract() == 0.0 && (0.0..1e15).contains(&upper) {
+        // Safe: the integer projection of a non-negative finite
+        // value below 10^15 fits in u64 and we only emit it for
+        // the label string.
+        let as_u64 = if (0.0..1e15).contains(&upper) {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "label rendering of a known finite, non-negative, sub-1e15 bucket boundary"
+            )]
+            {
+                upper as u64
+            }
+        } else {
+            0
+        };
+        format!("{as_u64}")
+    } else {
+        format!("{upper}")
+    }
 }
 
 /// Map a [`PeerState`] to the integer value the Prometheus gauge
@@ -777,6 +888,64 @@ mod tests {
         assert!(
             out.contains("gossip_phi_score_milli{dc=\"dc1\",peer_idx=\"3\",rack=\"rA\"} 4500"),
             "missing gossip_phi_score_milli row:\n{out}"
+        );
+    }
+
+    /// The new threshold gauge and per-state dwell histogram
+    /// must reach the wire when populated.
+    #[test]
+    fn render_prometheus_emits_threshold_and_dwell_rows() {
+        use crate::cluster::peer::PeerState;
+        use crate::stats::FailureMetrics;
+        use std::time::{Duration, Instant};
+
+        let metrics = FailureMetrics::new();
+        metrics.observe_threshold(2, "dc1", "rA", 8.0);
+        let t0 = Instant::now();
+        metrics.record_peer_state_transition_at(
+            2,
+            "dc1",
+            "rA",
+            PeerState::Unknown,
+            PeerState::Normal,
+            t0,
+        );
+        // 1.25s in Normal -> Down.
+        metrics.record_peer_state_transition_at(
+            2,
+            "dc1",
+            "rA",
+            PeerState::Normal,
+            PeerState::Down,
+            t0 + Duration::from_millis(1_250),
+        );
+
+        let mut snap = make_snap();
+        snap.failure = metrics.snapshot();
+        let out = render_prometheus(&snap);
+
+        assert!(
+            out.contains(
+                "gossip_phi_threshold_observed_milli{dc=\"dc1\",peer_idx=\"2\",rack=\"rA\"} 8000"
+            ),
+            "missing gossip_phi_threshold_observed_milli row:\n{out}"
+        );
+        assert!(
+            out.contains("peer_state_dwell_seconds_count{state=\"NORMAL\"} 1"),
+            "missing peer_state_dwell_seconds_count row:\n{out}"
+        );
+        assert!(
+            out.contains("peer_state_dwell_seconds_bucket{le=\"+Inf\",state=\"NORMAL\"} 1"),
+            "missing peer_state_dwell_seconds_bucket +Inf row:\n{out}"
+        );
+        // 1.25s falls in 5s bucket but not in 1s bucket.
+        assert!(
+            out.contains("peer_state_dwell_seconds_bucket{le=\"5\",state=\"NORMAL\"} 1"),
+            "missing peer_state_dwell_seconds_bucket le=5 row:\n{out}"
+        );
+        assert!(
+            out.contains("peer_state_dwell_seconds_bucket{le=\"1\",state=\"NORMAL\"} 0"),
+            "missing peer_state_dwell_seconds_bucket le=1 (should be 0):\n{out}"
         );
     }
 }

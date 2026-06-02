@@ -43,6 +43,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 
@@ -68,6 +69,22 @@ struct FailureInner {
     peer_state_transitions: HashMap<TransitionKey, u64>,
     peer_state_current: HashMap<u32, PeerStateRecord>,
     peer_phi: HashMap<u32, PhiRecord>,
+    /// Rolling threshold gauge per peer, populated by
+    /// [`FailureMetrics::observe_threshold`]. Exposed as the
+    /// `gossip_phi_threshold_observed{peer}` Prometheus gauge so
+    /// operators can confirm the configured threshold per peer
+    /// without reading the running config.
+    peer_threshold: HashMap<u32, ThresholdRecord>,
+    /// Per-peer instant of the last state change. Updated on
+    /// every [`FailureMetrics::record_peer_state_transition`]
+    /// call so the next transition can compute the dwell time
+    /// the peer spent in the from-state.
+    peer_last_change: HashMap<u32, Instant>,
+    /// Per-state dwell histogram, keyed by the state being
+    /// exited. The histogram uses the same exponential-style
+    /// bucketing the engine's other observation surfaces use
+    /// ([`DWELL_BUCKETS_SECONDS`]).
+    dwell_per_state: HashMap<PeerState, DwellAccumulator>,
 }
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
@@ -104,6 +121,66 @@ struct PhiRecord {
     /// Phi rounded to thousandths so the gauge survives the
     /// `i64` round-trip in the Prometheus encoder.
     phi_milli: i64,
+}
+
+#[derive(Debug, Clone)]
+struct ThresholdRecord {
+    dc: String,
+    rack: String,
+    /// Threshold rounded to thousandths so the gauge survives
+    /// the `i64` round-trip in the Prometheus encoder.
+    threshold_milli: i64,
+}
+
+/// Bucket boundaries for the `peer_state_dwell_seconds`
+/// histogram, in seconds. Picked to match the operator-facing
+/// SLO ranges every chaos run cares about: sub-second
+/// (transient flap), single-second to one minute (settling
+/// gossip), and minute-to-hour (long outage).
+pub const DWELL_BUCKETS_SECONDS: &[f64] = &[
+    0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1_800.0, 3_600.0,
+];
+
+/// Per-state dwell accumulator. Stores cumulative bucket
+/// counts (one slot per upper bound in [`DWELL_BUCKETS_SECONDS`]
+/// plus a final `+Inf` slot), the running sum of observations
+/// in seconds, and the total observation count.
+#[derive(Debug, Clone)]
+struct DwellAccumulator {
+    /// One slot per bucket boundary plus a final `+Inf` slot
+    /// (`DWELL_BUCKETS_SECONDS.len() + 1` entries).
+    bucket_counts: Vec<u64>,
+    sum_seconds: f64,
+    count: u64,
+}
+
+impl DwellAccumulator {
+    fn new() -> Self {
+        Self {
+            bucket_counts: vec![0; DWELL_BUCKETS_SECONDS.len() + 1],
+            sum_seconds: 0.0,
+            count: 0,
+        }
+    }
+
+    fn observe(&mut self, dwell_seconds: f64) {
+        let v = if dwell_seconds.is_nan() || dwell_seconds < 0.0 {
+            0.0
+        } else {
+            dwell_seconds
+        };
+        self.sum_seconds += v;
+        self.count = self.count.saturating_add(1);
+        // Cumulative buckets: increment every slot whose upper
+        // bound is >= v, plus the trailing +Inf slot.
+        let last = self.bucket_counts.len() - 1;
+        for (i, upper) in DWELL_BUCKETS_SECONDS.iter().enumerate() {
+            if v <= *upper {
+                self.bucket_counts[i] = self.bucket_counts[i].saturating_add(1);
+            }
+        }
+        self.bucket_counts[last] = self.bucket_counts[last].saturating_add(1);
+    }
 }
 
 impl FailureMetrics {
@@ -187,7 +264,10 @@ impl FailureMetrics {
 
     /// Record a peer-state transition. Increments
     /// `peer_state_transitions_total` by one and updates the
-    /// `peer_state_current` gauge to the new state.
+    /// `peer_state_current` gauge to the new state. Also
+    /// observes the dwell time the peer spent in `from` (when
+    /// a previous transition timestamp is available) into the
+    /// per-state `peer_state_dwell_seconds` histogram.
     pub fn record_peer_state_transition(
         &self,
         peer_idx: u32,
@@ -195,6 +275,21 @@ impl FailureMetrics {
         rack: &str,
         from: PeerState,
         to: PeerState,
+    ) {
+        self.record_peer_state_transition_at(peer_idx, dc, rack, from, to, Instant::now());
+    }
+
+    /// Variant of [`Self::record_peer_state_transition`] that
+    /// takes the wall-clock instant as a parameter. Lets tests
+    /// drive the dwell histogram without sleeping.
+    pub fn record_peer_state_transition_at(
+        &self,
+        peer_idx: u32,
+        dc: &str,
+        rack: &str,
+        from: PeerState,
+        to: PeerState,
+        now: Instant,
     ) {
         let key = TransitionKey { peer_idx, from, to };
         let mut inner = self.inner.lock();
@@ -207,6 +302,14 @@ impl FailureMetrics {
                 state: to,
             },
         );
+        if let Some(prev) = inner.peer_last_change.insert(peer_idx, now) {
+            let dwell = now.saturating_duration_since(prev).as_secs_f64();
+            let acc = inner
+                .dwell_per_state
+                .entry(from)
+                .or_insert_with(DwellAccumulator::new);
+            acc.observe(dwell);
+        }
     }
 
     /// Update the `peer_state_current` gauge without recording
@@ -238,6 +341,23 @@ impl FailureMetrics {
                 dc: dc.to_owned(),
                 rack: rack.to_owned(),
                 phi_milli,
+            },
+        );
+    }
+
+    /// Update the `gossip_phi_threshold_observed` gauge for a
+    /// peer. Mirrors [`Self::observe_phi`] in storage so the
+    /// operator can read the configured threshold next to the
+    /// computed phi without reading the running YAML.
+    pub fn observe_threshold(&self, peer_idx: u32, dc: &str, rack: &str, threshold: f64) {
+        let threshold_milli = phi_to_milli(threshold);
+        let mut inner = self.inner.lock();
+        inner.peer_threshold.insert(
+            peer_idx,
+            ThresholdRecord {
+                dc: dc.to_owned(),
+                rack: rack.to_owned(),
+                threshold_milli,
             },
         );
     }
@@ -314,6 +434,28 @@ impl FailureMetrics {
             })
             .collect();
         peer_phi.sort_by_key(|e| e.peer_idx);
+        let mut peer_threshold: Vec<ThresholdEntry> = inner
+            .peer_threshold
+            .iter()
+            .map(|(idx, rec)| ThresholdEntry {
+                peer_idx: *idx,
+                dc: rec.dc.clone(),
+                rack: rec.rack.clone(),
+                threshold: milli_to_phi(rec.threshold_milli),
+            })
+            .collect();
+        peer_threshold.sort_by_key(|e| e.peer_idx);
+        let mut peer_state_dwell: Vec<DwellEntry> = inner
+            .dwell_per_state
+            .iter()
+            .map(|(state, acc)| DwellEntry {
+                state: *state,
+                count: acc.count,
+                sum_seconds: acc.sum_seconds,
+                bucket_counts: acc.bucket_counts.clone(),
+            })
+            .collect();
+        peer_state_dwell.sort_by_key(|e| e.state as u8);
         FailureSnapshot {
             no_targets,
             peer_send_full,
@@ -324,6 +466,8 @@ impl FailureMetrics {
             peer_state_transitions,
             peer_state_current,
             peer_phi,
+            peer_threshold,
+            peer_state_dwell,
         }
     }
 }
@@ -486,6 +630,41 @@ pub struct PhiEntry {
     pub phi: f64,
 }
 
+/// A single labeled `gossip_phi_threshold_observed` gauge row.
+#[derive(Clone, Debug)]
+pub struct ThresholdEntry {
+    /// Peer index.
+    pub peer_idx: u32,
+    /// Datacenter of the peer.
+    pub dc: String,
+    /// Rack of the peer.
+    pub rack: String,
+    /// Threshold the failure detector last evaluated against
+    /// this peer (typically the cluster-wide configured
+    /// threshold, surfaced per peer so an operator viewing one
+    /// peer's panel sees its own threshold).
+    pub threshold: f64,
+}
+
+/// A single per-state row of the `peer_state_dwell_seconds`
+/// histogram. Holds the cumulative bucket counts (one slot per
+/// boundary in [`DWELL_BUCKETS_SECONDS`] plus a trailing `+Inf`
+/// slot), the running sum of observations in seconds, and the
+/// total observation count.
+#[derive(Clone, Debug)]
+pub struct DwellEntry {
+    /// State the peer was in when the dwell was observed.
+    pub state: PeerState,
+    /// Total number of dwell observations for this state.
+    pub count: u64,
+    /// Sum of all observed dwell durations in seconds.
+    pub sum_seconds: f64,
+    /// Cumulative bucket counts. Length is
+    /// `DWELL_BUCKETS_SECONDS.len() + 1`; the last entry is the
+    /// `+Inf` bucket (always equal to [`Self::count`]).
+    pub bucket_counts: Vec<u64>,
+}
+
 /// Immutable snapshot of every failure-cause metric.
 #[derive(Clone, Debug, Default)]
 pub struct FailureSnapshot {
@@ -507,6 +686,11 @@ pub struct FailureSnapshot {
     pub peer_state_current: Vec<PeerStateEntry>,
     /// `gossip_phi_score` gauge rows.
     pub peer_phi: Vec<PhiEntry>,
+    /// `gossip_phi_threshold_observed` gauge rows.
+    pub peer_threshold: Vec<ThresholdEntry>,
+    /// `peer_state_dwell_seconds` histogram rows, one per
+    /// observed [`PeerState`].
+    pub peer_state_dwell: Vec<DwellEntry>,
 }
 
 impl FailureSnapshot {
@@ -525,6 +709,8 @@ impl FailureSnapshot {
             && self.peer_state_transitions.is_empty()
             && self.peer_state_current.is_empty()
             && self.peer_phi.is_empty()
+            && self.peer_threshold.is_empty()
+            && self.peer_state_dwell.is_empty()
     }
 }
 
@@ -620,5 +806,105 @@ mod tests {
         assert!(m.snapshot().is_empty());
         m.record_backend_send_full();
         assert!(!m.snapshot().is_empty());
+    }
+
+    #[test]
+    fn observe_threshold_records_value_per_peer() {
+        let m = FailureMetrics::new();
+        m.observe_threshold(7, "dc1", "rA", 8.0);
+        m.observe_threshold(8, "dc2", "rB", 6.5);
+        let s = m.snapshot();
+        assert_eq!(s.peer_threshold.len(), 2);
+        assert!((s.peer_threshold[0].threshold - 8.0).abs() < 1e-9);
+        assert_eq!(s.peer_threshold[0].peer_idx, 7);
+        assert!((s.peer_threshold[1].threshold - 6.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dwell_histogram_records_observation_on_transition() {
+        // Drive a Normal->Down->Normal flap with controlled
+        // instants so the histogram observes deterministic
+        // dwell durations.
+        let m = FailureMetrics::new();
+        let t0 = Instant::now();
+        // First transition: no prior change time, so the
+        // accumulator stays empty but the timestamp is set.
+        m.record_peer_state_transition_at(
+            1,
+            "dc1",
+            "rA",
+            PeerState::Unknown,
+            PeerState::Normal,
+            t0,
+        );
+        // Spent 2.5 seconds in Normal -> 0.5..5 second bucket.
+        m.record_peer_state_transition_at(
+            1,
+            "dc1",
+            "rA",
+            PeerState::Normal,
+            PeerState::Down,
+            t0 + std::time::Duration::from_millis(2_500),
+        );
+        // Spent 45 seconds in Down -> 30..60 second bucket.
+        m.record_peer_state_transition_at(
+            1,
+            "dc1",
+            "rA",
+            PeerState::Down,
+            PeerState::Normal,
+            t0 + std::time::Duration::from_millis(2_500 + 45_000),
+        );
+        let s = m.snapshot();
+        let normal = s
+            .peer_state_dwell
+            .iter()
+            .find(|e| e.state == PeerState::Normal)
+            .expect("Normal dwell entry present");
+        assert_eq!(normal.count, 1);
+        assert!((normal.sum_seconds - 2.5).abs() < 1e-6);
+        let down = s
+            .peer_state_dwell
+            .iter()
+            .find(|e| e.state == PeerState::Down)
+            .expect("Down dwell entry present");
+        assert_eq!(down.count, 1);
+        assert!((down.sum_seconds - 45.0).abs() < 1e-6);
+        // The +Inf bucket equals the count.
+        assert_eq!(*normal.bucket_counts.last().unwrap(), normal.count);
+        assert_eq!(*down.bucket_counts.last().unwrap(), down.count);
+    }
+
+    #[test]
+    fn dwell_buckets_are_cumulative() {
+        let m = FailureMetrics::new();
+        let t0 = Instant::now();
+        m.record_peer_state_transition_at(
+            5,
+            "dc1",
+            "rA",
+            PeerState::Unknown,
+            PeerState::Normal,
+            t0,
+        );
+        // 0.05 second dwell falls in the smallest 0.1 bucket.
+        m.record_peer_state_transition_at(
+            5,
+            "dc1",
+            "rA",
+            PeerState::Normal,
+            PeerState::Down,
+            t0 + std::time::Duration::from_millis(50),
+        );
+        let s = m.snapshot();
+        let normal = s
+            .peer_state_dwell
+            .iter()
+            .find(|e| e.state == PeerState::Normal)
+            .expect("Normal dwell entry");
+        // Every bucket boundary >= 0.05 should hold count 1.
+        for bc in &normal.bucket_counts {
+            assert_eq!(*bc, 1, "every cumulative bucket sees the 0.05s observation");
+        }
     }
 }
