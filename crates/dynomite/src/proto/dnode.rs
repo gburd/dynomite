@@ -63,6 +63,25 @@ pub const HANDSHAKE_PLACEHOLDER_DATA: u8 = b'd';
 /// instead of `'d'` to disambiguate the two encoder flavours.
 pub const GOSSIP_PLACEHOLDER_DATA: u8 = b'a';
 
+/// Per-frame upper bound on a parser-accepted length field.
+///
+/// The on-the-wire DNODE header carries `mlen` and `plen` as ASCII
+/// decimal numerals that the streaming parser accumulates into a
+/// `u64` before casting to the wire's `u32`. Without an explicit
+/// cap on the accumulator, a single byte run of `1`s inflates
+/// `self.num` past `u32::MAX`; the silent truncation then drives
+/// [`Vec::reserve`] into a multi-gigabyte malloc (libfuzzer 1h soak
+/// finding 2026-06-02, captured at
+/// `crates/fuzz/seeds/dnode_parse/regression-oom-2026-06-02`).
+///
+/// 256 MiB is well above any legitimate DNODE frame on the wire
+/// today (the largest production payloads we have observed are a
+/// few hundred KiB) while staying well below an allocation that
+/// would produce a real OOM under typical RSS budgets. The parser
+/// surfaces [`ParseStep::Error`] the moment any DataLen or
+/// PayloadLen accumulator exceeds this bound.
+pub const MAX_DATA_LEN: u64 = 256 * 1024 * 1024;
+
 /// Parser state transitions.
 ///
 /// Each variant matches a state in the reference engine's
@@ -599,6 +618,13 @@ impl DnodeParser {
                     }
                     if ch.is_ascii_digit() {
                         self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        // Reject pathological-size length fields
+                        // before the cast to u32 wraps and a
+                        // downstream Vec::reserve allocates the
+                        // wrapped value as bytes. See MAX_DATA_LEN.
+                        if self.num > MAX_DATA_LEN {
+                            return ParseStep::Error { consumed: idx };
+                        }
                         idx += 1;
                         continue;
                     }
@@ -644,6 +670,9 @@ impl DnodeParser {
                 DynParseState::PayloadLen => {
                     if ch.is_ascii_digit() {
                         self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        if self.num > MAX_DATA_LEN {
+                            return ParseStep::Error { consumed: idx };
+                        }
                         idx += 1;
                         continue;
                     }
@@ -1187,6 +1216,39 @@ mod tests {
         match p.step(b"!nope") {
             ParseStep::Error { consumed } => assert_eq!(consumed, 0),
             other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// Regression for the libfuzzer 1h soak finding 2026-06-02:
+    /// a numeric DataLen field that exceeds [`MAX_DATA_LEN`]
+    /// must be rejected with `ParseStep::Error` BEFORE the
+    /// downstream `Vec::reserve` would convert the wrapped u32
+    /// into a multi-gigabyte malloc.
+    #[test]
+    fn parse_rejects_oversized_data_len() {
+        let mut p = DnodeParser::new();
+        // 11 ones drives self.num to 11_111_111_111, which casts
+        // to u32 as 2_521_176_519 (~2.4 GiB). Pre-fix the parser
+        // accepted this and called Vec::reserve(2_521_176_519).
+        let bytes = b"$2014$ 1 3 0 1 1 *11111111111 ";
+        match p.step(bytes) {
+            ParseStep::Error { consumed: _ } => (),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    /// Regression for the libfuzzer 1h soak finding 2026-06-02:
+    /// the captured 112-byte OOM artifact must drive `step()`
+    /// to a clean Error rather than allocating gigabytes.
+    #[test]
+    fn parse_oom_artifact_2026_06_02() {
+        let bytes = include_bytes!(
+            "../../../fuzz/seeds/dnode_parse/regression-oom-2026-06-02"
+        );
+        let mut p = DnodeParser::new();
+        match p.step(bytes) {
+            ParseStep::Error { .. } | ParseStep::HeaderDone { .. } => (),
+            ParseStep::NeedMore { .. } => panic!("unexpected NeedMore"),
         }
     }
 
