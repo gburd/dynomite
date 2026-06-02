@@ -522,7 +522,13 @@ fault_network_delay() {
         event fault_network_delay_skipped "{\"reason\":\"tc-netem-add-failed\"}"
         return 0
     fi
-    event fault_network_delay \
+    # P3-3.8 spec: emit `fault_network_delay_start` (with the
+    # selected delay + duration in the JSON detail) at install
+    # and `fault_network_delay_end` at cleanup. The legacy
+    # event name `fault_network_delay` is retired in favour of
+    # the `_start` suffix to match the other paired chaos
+    # events.
+    event fault_network_delay_start \
         "{\"dev\":\"$dev\",\"delay_ms\":$ms,\"duration\":$dur}"
     sleep "$dur"
     cleanup_network
@@ -573,16 +579,26 @@ cleanup_clock() {
 
 fault_clock_skew() {
     # Pick offset: 50% positive (+30..120s), 50% negative (-10s).
-    local offset
+    local offset offset_seconds
     if [ $(( RANDOM % 2 )) -eq 0 ]; then
-        offset="+$(( RANDOM % 91 + 30 ))s"
+        offset_seconds=$(( RANDOM % 91 + 30 ))
+        offset="+${offset_seconds}s"
         local sub="positive_skew"
     else
+        offset_seconds=-10
         offset="-10s"
         local sub="negative_skew"
     fi
     local dur=$(( RANDOM % 61 + 60 ))            # 60-120s
-    event fault_clock_skew "{\"offset\":\"$offset\",\"sub\":\"$sub\",\"duration\":$dur}"
+    # P3-3.8 spec: emit `fault_clock_skew_start` (with the
+    # signed seconds delta) on entry and `fault_clock_skew_end`
+    # on cleanup. The detail keeps the legacy `offset` /
+    # `sub` / `duration` fields and adds the spec'd `seconds`
+    # delta as a top-level int so the report generator can
+    # render the magnitude without re-parsing the offset
+    # string.
+    event fault_clock_skew_start \
+        "{\"offset\":\"$offset\",\"seconds\":$offset_seconds,\"sub\":\"$sub\",\"duration\":$dur}"
     echo "$offset" > "$CLOCK_SKEW_MARKER"
     # Kill and restart with FAKETIME set; start-host.sh wraps
     # the dynomited launch with the faketime prefix.
@@ -613,8 +629,36 @@ fault_clock_skew() {
 
 # ---------- disk faults ----------
 
+# Path conventions for the P3-3.8 disk-loop fault. The
+# loopback file holds a small ext4 image; the mount point is
+# under $ROOT so cleanup is local even if /scratch is
+# unwritable. A marker records the loop device the fault
+# attached so cleanup can detach idempotently.
+DISK_LOOP_DIR="$ROOT/disk-full"
+DISK_LOOP_IMG="$RUN/disk-full.img"
+DISK_LOOP_MARKER="$RUN/disk-full.loopdev"
+DISK_LOOP_SIZE_MB="${CHAOS_DISK_LOOP_MB:-64}"
+
 cleanup_disk() {
     rm -f "$BALLAST_FILE" "$BALLAST_FULL_FILE" 2>/dev/null || true
+    # P3-3.8: tear down a loop-mounted ext4 image if one is
+    # still attached from a previous fault_disk_loop run. We
+    # try umount first, then losetup -d, and finally remove
+    # the marker. Each step is idempotent and does not fail
+    # the trap when the loop has already been released.
+    if [ -d "$DISK_LOOP_DIR" ]; then
+        umount "$DISK_LOOP_DIR" 2>/dev/null || true
+        rmdir "$DISK_LOOP_DIR" 2>/dev/null || true
+    fi
+    if [ -f "$DISK_LOOP_MARKER" ]; then
+        local loopdev
+        loopdev=$(cat "$DISK_LOOP_MARKER" 2>/dev/null || true)
+        if [ -n "$loopdev" ]; then
+            losetup -d "$loopdev" 2>/dev/null || true
+        fi
+        rm -f "$DISK_LOOP_MARKER" 2>/dev/null || true
+    fi
+    rm -f "$DISK_LOOP_IMG" 2>/dev/null || true
     if [ -d "$CHAOS_CGROUP" ] && [ -f "$CHAOS_CGROUP/io.max" ]; then
         # Reset every device entry to "max". Reading io.max
         # returns one line per limited device; if no limits are
@@ -744,6 +788,88 @@ fault_disk_iolat() {
     event fault_disk_iolat_end "{}"
 }
 
+# fault_disk_loop
+#
+# P3-3.8: stand up a small loopback ext4 image (default 64 MiB,
+# overridable via CHAOS_DISK_LOOP_MB) under
+# `$ROOT/disk-full/`, fill it to ENOSPC, and hold the
+# situation for ~30 s before tearing the loop back down. The
+# fault is "active" for the operator's purposes the moment
+# the loop reports ENOSPC; production deployments that point
+# dynomited's optional ext-storage / hint-overflow / aae-tree
+# path at this directory observe the genuine "disk full" code
+# paths.
+#
+# Privileges: losetup + mkfs.ext4 + mount all need root or
+# CAP_SYS_ADMIN. Non-privileged hosts skip via
+# check_prereq_disk_loop's probe and pick_fault never selects
+# this sub-fault on those hosts; if the prereq probe missed
+# something (uncommon) each step here emits a
+# fault_disk_loop_skipped event and returns 0 cleanly.
+fault_disk_loop() {
+    local dur=30
+    local size_mb="$DISK_LOOP_SIZE_MB"
+    if ! command -v losetup >/dev/null 2>&1; then
+        event fault_disk_loop_skipped "{\"reason\":\"no-losetup\"}"
+        return 0
+    fi
+    if ! command -v mkfs.ext4 >/dev/null 2>&1; then
+        event fault_disk_loop_skipped "{\"reason\":\"no-mkfs-ext4\"}"
+        return 0
+    fi
+    if ! command -v mount >/dev/null 2>&1; then
+        event fault_disk_loop_skipped "{\"reason\":\"no-mount\"}"
+        return 0
+    fi
+    rm -f "$DISK_LOOP_IMG" "$DISK_LOOP_MARKER" 2>/dev/null || true
+    if ! dd if=/dev/zero of="$DISK_LOOP_IMG" bs=1M count="$size_mb" status=none 2>/dev/null; then
+        event fault_disk_loop_skipped \
+            "{\"reason\":\"image-create-failed\",\"size_mb\":$size_mb}"
+        return 0
+    fi
+    local loopdev
+    loopdev=$(losetup -f --show "$DISK_LOOP_IMG" 2>/dev/null || true)
+    if [ -z "$loopdev" ]; then
+        rm -f "$DISK_LOOP_IMG" 2>/dev/null || true
+        event fault_disk_loop_skipped "{\"reason\":\"losetup-attach-failed\"}"
+        return 0
+    fi
+    echo "$loopdev" > "$DISK_LOOP_MARKER"
+    if ! mkfs.ext4 -q -F "$loopdev" >/dev/null 2>&1; then
+        losetup -d "$loopdev" 2>/dev/null || true
+        rm -f "$DISK_LOOP_IMG" "$DISK_LOOP_MARKER" 2>/dev/null || true
+        event fault_disk_loop_skipped "{\"reason\":\"mkfs-failed\",\"loop\":\"$loopdev\"}"
+        return 0
+    fi
+    mkdir -p "$DISK_LOOP_DIR" 2>/dev/null || true
+    if ! mount "$loopdev" "$DISK_LOOP_DIR" 2>/dev/null; then
+        losetup -d "$loopdev" 2>/dev/null || true
+        rm -f "$DISK_LOOP_IMG" "$DISK_LOOP_MARKER" 2>/dev/null || true
+        rmdir "$DISK_LOOP_DIR" 2>/dev/null || true
+        event fault_disk_loop_skipped "{\"reason\":\"mount-failed\",\"loop\":\"$loopdev\"}"
+        return 0
+    fi
+    # Fill to ENOSPC. The dd rc is expected to be non-zero
+    # when the cap is reached; that is the success path.
+    dd if=/dev/zero of="$DISK_LOOP_DIR/filler.bin" bs=1M status=none 2>/dev/null || true
+    local filled_kb=0
+    if [ -f "$DISK_LOOP_DIR/filler.bin" ]; then
+        filled_kb=$(stat -c '%s' "$DISK_LOOP_DIR/filler.bin" 2>/dev/null || echo 0)
+        filled_kb=$(( filled_kb / 1024 ))
+    fi
+    event fault_disk_loop_start \
+        "{\"loop\":\"$loopdev\",\"mount\":\"$DISK_LOOP_DIR\",\"size_mb\":$size_mb,\"filled_kb\":$filled_kb,\"duration\":$dur}"
+    sleep "$dur"
+    # Idempotent teardown via cleanup_disk handles loop +
+    # mount + image + marker. Calling it directly here keeps
+    # the per-fault end event close to the active window.
+    umount "$DISK_LOOP_DIR" 2>/dev/null || true
+    losetup -d "$loopdev" 2>/dev/null || true
+    rmdir "$DISK_LOOP_DIR" 2>/dev/null || true
+    rm -f "$DISK_LOOP_IMG" "$DISK_LOOP_MARKER" 2>/dev/null || true
+    event fault_disk_loop_end "{\"loop\":\"$loopdev\"}"
+}
+
 # ---------- aggregate cleanup ----------
 
 cleanup_all() {
@@ -780,8 +906,8 @@ pick_fault() {
             printf 'fault_clock_skew'
             ;;
         disk)
-            local subs=(fault_disk_squeeze fault_disk_full fault_disk_iolat)
-            printf '%s' "${subs[$(( RANDOM % 3 ))]}"
+            local subs=(fault_disk_squeeze fault_disk_full fault_disk_iolat fault_disk_loop)
+            printf '%s' "${subs[$(( RANDOM % ${#subs[@]} ))]}"
             ;;
     esac
 }

@@ -399,6 +399,216 @@ smoke_disk_iolat() {
     record OK fault_disk_iolat
 }
 
+# ---------- P3-3.8 stubbed-event-shape smokes ----------
+#
+# These assert the new event names emitted by the
+# network/clock/disk fault classes without depending on
+# host privileges. Each test:
+#
+#   1. truncates $EVENTS so it can grep for exactly the
+#      events emitted in this call;
+#   2. installs shell fakes for the privileged commands
+#      (tc / losetup / mkfs.ext4 / mount, and the
+#      restart_dynomited helper for clock) on a stub PATH or
+#      via shell-function override;
+#   3. patches sleep to 1 s so the fault completes in test
+#      wallclock budget;
+#   4. invokes the real fault_* function out of the injector
+#      and asserts the resulting ndjson stream carries the
+#      expected event shape.
+#
+# The fakes write the args they were called with to a side
+# file ($STUB_LOG) so a follow-up regression can also assert
+# the fault used the expected qdisc / loopback shape.
+
+make_stub_path() {
+    local stub_dir="$1"
+    mkdir -p "$stub_dir"
+    # Common lifecycle: read STUB_LOG, log args, simulate any
+    # specific output the real binary returns. The fakes are
+    # `set -e` clean and exit 0.
+    cat > "$stub_dir/tc" <<'STUB'
+#!/usr/bin/env bash
+printf 'tc %s\n' "$*" >> "$STUB_LOG"
+exit 0
+STUB
+    cat > "$stub_dir/losetup" <<'STUB'
+#!/usr/bin/env bash
+printf 'losetup %s\n' "$*" >> "$STUB_LOG"
+# `losetup -f --show <img>` returns the loop device path on
+# stdout; the fake hands back a synthetic device the rest of
+# the fault routine can carry around.
+case "$1" in
+    -f)
+        printf '/dev/loop-stub\n'
+        ;;
+esac
+exit 0
+STUB
+    cat > "$stub_dir/mkfs.ext4" <<'STUB'
+#!/usr/bin/env bash
+printf 'mkfs.ext4 %s\n' "$*" >> "$STUB_LOG"
+exit 0
+STUB
+    cat > "$stub_dir/mount" <<'STUB'
+#!/usr/bin/env bash
+printf 'mount %s\n' "$*" >> "$STUB_LOG"
+exit 0
+STUB
+    cat > "$stub_dir/umount" <<'STUB'
+#!/usr/bin/env bash
+printf 'umount %s\n' "$*" >> "$STUB_LOG"
+exit 0
+STUB
+    cat > "$stub_dir/faketime" <<'STUB'
+#!/usr/bin/env bash
+printf 'faketime %s\n' "$*" >> "$STUB_LOG"
+shift  # drop the offset arg
+exec "$@"
+STUB
+    chmod +x "$stub_dir"/tc "$stub_dir"/losetup "$stub_dir"/mkfs.ext4 \
+        "$stub_dir"/mount "$stub_dir"/umount "$stub_dir"/faketime
+}
+
+smoke_network_delay_start_event() {
+    # Force the fault to run regardless of host privileges.
+    local saved_runnable="$RUNNABLE_NETWORK"
+    RUNNABLE_NETWORK=1
+
+    : > "$EVENTS"
+    local stub_dir="$TMPROOT/stub-network-delay"
+    local stub_log="$TMPROOT/stub-network-delay.log"
+    : > "$stub_log"
+    make_stub_path "$stub_dir"
+    export STUB_LOG="$stub_log"
+
+    # shellcheck disable=SC2329
+    sleep() { command sleep 0.05; }
+    PATH="$stub_dir:$PATH" fault_network_delay >/dev/null 2>&1 || true
+    unset -f sleep
+
+    RUNNABLE_NETWORK="$saved_runnable"
+
+    # Assertion 1: the event stream contains the new
+    # `fault_network_delay_start` kind.
+    if ! grep -q '"kind":"fault_network_delay_start"' "$EVENTS" 2>/dev/null; then
+        record FAIL fault_network_delay_start_event \
+            "expected kind=fault_network_delay_start in $EVENTS"
+        return 0
+    fi
+    # Assertion 2: the legacy unsuffixed name is gone.
+    if grep -q '"kind":"fault_network_delay"[^_]' "$EVENTS" 2>/dev/null; then
+        record FAIL fault_network_delay_start_event \
+            "legacy kind=fault_network_delay still emitted"
+        return 0
+    fi
+    # Assertion 3: the stubbed tc was called with the
+    # netem-delay shape the real fault would have used.
+    if ! grep -qE 'tc qdisc add dev '"$CHAOS_NETEM_DEV"' root netem delay [0-9]+ms' \
+            "$stub_log" 2>/dev/null; then
+        record FAIL fault_network_delay_start_event \
+            "tc was not called with the expected netem-delay args"
+        return 0
+    fi
+    record OK fault_network_delay_start_event
+}
+
+smoke_clock_skew_start_event() {
+    # The real fault_clock_skew calls dyn_pid + restart_dynomited;
+    # we have no dynomited, so we override both to no-ops.
+    local saved_runnable="$RUNNABLE_CLOCK"
+    RUNNABLE_CLOCK=1
+
+    : > "$EVENTS"
+    rm -f "$CLOCK_SKEW_MARKER" 2>/dev/null || true
+    local stub_log="$TMPROOT/stub-clock.log"
+    : > "$stub_log"
+    export STUB_LOG="$stub_log"
+
+    # Stub the helpers that drive process state.
+    # shellcheck disable=SC2329
+    dyn_pid() { return 1; }
+    # shellcheck disable=SC2329
+    restart_dynomited() {
+        printf 'restart_dynomited FAKETIME=%s\n' "${FAKETIME:-}" >> "$STUB_LOG"
+        return 0
+    }
+    # shellcheck disable=SC2329
+    sleep() { command sleep 0.05; }
+
+    fault_clock_skew >/dev/null 2>&1 || true
+
+    unset -f dyn_pid restart_dynomited sleep
+    RUNNABLE_CLOCK="$saved_runnable"
+
+    if ! grep -q '"kind":"fault_clock_skew_start"' "$EVENTS" 2>/dev/null; then
+        record FAIL fault_clock_skew_start_event \
+            "expected kind=fault_clock_skew_start in $EVENTS"
+        return 0
+    fi
+    # The seconds field must be a signed integer.
+    if ! grep -qE '"seconds":-?[0-9]+' "$EVENTS" 2>/dev/null; then
+        record FAIL fault_clock_skew_start_event \
+            "seconds field missing or not an int in event payload"
+        return 0
+    fi
+    # restart_dynomited was called with FAKETIME populated.
+    if ! grep -q 'restart_dynomited FAKETIME=' "$stub_log" 2>/dev/null; then
+        record FAIL fault_clock_skew_start_event \
+            "restart_dynomited stub never invoked"
+        return 0
+    fi
+    record OK fault_clock_skew_start_event
+}
+
+smoke_disk_loop_start_event() {
+    : > "$EVENTS"
+    local stub_dir="$TMPROOT/stub-disk-loop"
+    local stub_log="$TMPROOT/stub-disk-loop.log"
+    : > "$stub_log"
+    make_stub_path "$stub_dir"
+    export STUB_LOG="$stub_log"
+
+    # Override compute_ballast_kb / dd we don't reuse here;
+    # fault_disk_loop's dd is the only real binary we need
+    # to trim, and a 1-MiB image is plenty for the smoke.
+    CHAOS_DISK_LOOP_MB=1
+    DISK_LOOP_SIZE_MB=1
+
+    # shellcheck disable=SC2329
+    sleep() { command sleep 0.05; }
+    PATH="$stub_dir:$PATH" fault_disk_loop >/dev/null 2>&1 || true
+    unset -f sleep
+
+    if ! grep -q '"kind":"fault_disk_loop_start"' "$EVENTS" 2>/dev/null; then
+        record FAIL fault_disk_loop_start_event \
+            "expected kind=fault_disk_loop_start in $EVENTS"
+        return 0
+    fi
+    # The stubbed binaries each got at least one call.
+    for tool in losetup mkfs.ext4 mount; do
+        if ! grep -q "^$tool " "$stub_log" 2>/dev/null; then
+            record FAIL fault_disk_loop_start_event \
+                "$tool fake never invoked"
+            return 0
+        fi
+    done
+    # Assertion: the loop device captured by the marker is the
+    # synthetic /dev/loop-stub from the losetup fake.
+    if ! grep -q '"loop":"/dev/loop-stub"' "$EVENTS" 2>/dev/null; then
+        record FAIL fault_disk_loop_start_event \
+            "event detail did not capture the stub loop device"
+        return 0
+    fi
+    # The mount target lives under $ROOT/disk-full.
+    if ! grep -q "\"mount\":\"$ROOT/disk-full\"" "$EVENTS" 2>/dev/null; then
+        record FAIL fault_disk_loop_start_event \
+            "mount path not under \$ROOT/disk-full"
+        return 0
+    fi
+    record OK fault_disk_loop_start_event
+}
+
 # ---------- process (limited; no real dynomited) ----------
 
 smoke_process_pause() {
@@ -433,6 +643,15 @@ smoke_clock_skew
 smoke_disk_squeeze
 smoke_disk_full
 smoke_disk_iolat
+
+# P3-3.8 stubbed event-shape assertions. These run regardless
+# of host privileges because every privileged binary is
+# replaced with a shell fake on a stub PATH (or, for the clock
+# fault, by overriding the helper functions inside the
+# injector).
+smoke_network_delay_start_event
+smoke_clock_skew_start_event
+smoke_disk_loop_start_event
 
 # Final "host clean" check: nothing the injector left behind.
 LEAKS=()
