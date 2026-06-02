@@ -13,7 +13,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::endpoint::ConfListen;
-use super::enums::{ConsistencyLevel, DataStore, Distribution, HashType, SecureServerOption};
+use super::enums::{
+    ConsistencyLevel, DataStore, Distribution, HashType, SecureServerOption, Transport,
+};
 use super::error::ConfError;
 use super::server::{ConfDynSeed, ConfServer};
 use super::tokens::TokenList;
@@ -466,6 +468,35 @@ pub struct ConfPool {
     /// under the default build.
     #[serde(default)]
     pub riak: Option<ConfRiak>,
+
+    /// `transport:` - selects the network stack the proxy
+    /// listener binds. `tcp` is the historical default and is
+    /// the only option a build without the `quic` Cargo
+    /// feature satisfies. `quic` requires the engine's `quic`
+    /// feature and a server cert / key pair supplied via
+    /// [`Self::quic_cert_file`] and [`Self::quic_key_file`];
+    /// the listener binds a UDP socket and serves the
+    /// configured datastore protocol over a single QUIC
+    /// bidirectional stream per accepted connection.
+    ///
+    /// When unset (the default), the engine selects
+    /// [`Transport::Tcp`].
+    #[serde(default)]
+    pub transport: Option<Transport>,
+
+    /// `quic_cert_file:` - PEM certificate chain path used by
+    /// the QUIC listener when `transport: quic` is selected.
+    /// Required when [`Self::transport`] resolves to
+    /// [`Transport::Quic`]; ignored otherwise.
+    #[serde(default)]
+    pub quic_cert_file: Option<PathBuf>,
+
+    /// `quic_key_file:` - PEM private-key path matching
+    /// [`Self::quic_cert_file`]. Required when
+    /// [`Self::transport`] resolves to [`Transport::Quic`];
+    /// ignored otherwise.
+    #[serde(default)]
+    pub quic_key_file: Option<PathBuf>,
 }
 
 /// Optional Riak-mode listener / AAE knobs.
@@ -1136,10 +1167,11 @@ impl ConfPool {
         self.apply_hinted_handoff_defaults();
     }
 
-    /// Fill in the hinted-handoff knobs. Factored out of
-    /// [`Self::apply_defaults`] to keep the parent method under
-    /// the project's per-function line budget while still
-    /// covering every hinted-handoff key with a default.
+    /// Fill in the hinted-handoff knobs and the transport
+    /// selector. Factored out of [`Self::apply_defaults`] to
+    /// keep the parent method under the project's per-function
+    /// line budget while still covering every recently-added
+    /// key with a default.
     fn apply_hinted_handoff_defaults(&mut self) {
         if self.enable_hinted_handoff.is_none() {
             self.enable_hinted_handoff = Some(defaults::ENABLE_HINTED_HANDOFF);
@@ -1152,6 +1184,9 @@ impl ConfPool {
         }
         if self.hint_drain_interval_ms.is_none() {
             self.hint_drain_interval_ms = Some(defaults::HINT_DRAIN_INTERVAL_MS);
+        }
+        if self.transport.is_none() {
+            self.transport = Some(Transport::default());
         }
     }
 
@@ -1225,6 +1260,7 @@ impl ConfPool {
         self.validate_bucket_types()?;
         self.validate_hinted_handoff()?;
         self.validate_peer_tls()?;
+        self.validate_transport()?;
         if let Some(r) = &self.riak {
             r.validate()?;
         }
@@ -1454,6 +1490,39 @@ impl ConfPool {
             profile.validate(dc)?;
         }
         Ok(())
+    }
+
+    /// Cross-check the `transport:` selection against the
+    /// QUIC cert / key knobs.
+    ///
+    /// `transport: quic` requires both [`Self::quic_cert_file`]
+    /// and [`Self::quic_key_file`] to be set; the QUIC listener
+    /// in `dynomite::net::quic::QuicConfig` cannot bind without
+    /// a server cert chain and matching private key. The fields
+    /// are tolerated (but ignored) when `transport: tcp` so
+    /// operators can switch transports by toggling a single
+    /// directive without rewriting the whole pool block.
+    fn validate_transport(&self) -> Result<(), ConfError> {
+        let resolved = self.transport.unwrap_or_default();
+        if resolved != Transport::Quic {
+            return Ok(());
+        }
+        match (
+            self.quic_cert_file.as_deref(),
+            self.quic_key_file.as_deref(),
+        ) {
+            (Some(_), Some(_)) => Ok(()),
+            (None, _) => Err(ConfError::BadServer {
+                field: "quic_cert_file",
+                value: String::new(),
+                reason: "transport: quic requires quic_cert_file to be set".into(),
+            }),
+            (Some(_), None) => Err(ConfError::BadServer {
+                field: "quic_key_file",
+                value: String::new(),
+                reason: "transport: quic requires quic_key_file to be set".into(),
+            }),
+        }
     }
 }
 
@@ -2455,5 +2524,79 @@ peer_tls_profiles:
         let dumped = serde_yaml::to_string(&p).unwrap();
         let p2: ConfPool = serde_yaml::from_str(&dumped).unwrap();
         assert_eq!(p2.peer_tls_profiles, p.peer_tls_profiles);
+    }
+
+    #[test]
+    fn transport_default_is_tcp_after_finalize() {
+        let mut p = pool();
+        p.apply_defaults();
+        assert_eq!(p.transport, Some(Transport::Tcp));
+        assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn transport_quic_yaml_round_trip() {
+        let yaml = r"
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+transport: quic
+quic_cert_file: /tmp/test.crt
+quic_key_file: /tmp/test.key
+";
+        let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.transport, Some(Transport::Quic));
+        assert_eq!(
+            p.quic_cert_file.as_deref(),
+            Some(std::path::Path::new("/tmp/test.crt"))
+        );
+        assert_eq!(
+            p.quic_key_file.as_deref(),
+            Some(std::path::Path::new("/tmp/test.key"))
+        );
+        let dumped = serde_yaml::to_string(&p).unwrap();
+        let p2: ConfPool = serde_yaml::from_str(&dumped).unwrap();
+        assert_eq!(p2.transport, p.transport);
+        assert_eq!(p2.quic_cert_file, p.quic_cert_file);
+        assert_eq!(p2.quic_key_file, p.quic_key_file);
+    }
+
+    #[test]
+    fn transport_quic_requires_cert_and_key() {
+        let mut p = pool();
+        p.transport = Some(Transport::Quic);
+        p.apply_defaults();
+        let err = p.validate("p").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "quic_cert_file",
+                ..
+            }
+        ));
+        p.quic_cert_file = Some(std::path::PathBuf::from("/tmp/c.pem"));
+        let err = p.validate("p").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfError::BadServer {
+                field: "quic_key_file",
+                ..
+            }
+        ));
+        p.quic_key_file = Some(std::path::PathBuf::from("/tmp/k.pem"));
+        assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn transport_tcp_ignores_quic_files() {
+        let mut p = pool();
+        p.transport = Some(Transport::Tcp);
+        // Setting cert / key under TCP is tolerated; the
+        // listener is plain TCP so the QUIC knobs are simply
+        // unused.
+        p.quic_cert_file = Some(std::path::PathBuf::from("/tmp/c.pem"));
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok());
     }
 }

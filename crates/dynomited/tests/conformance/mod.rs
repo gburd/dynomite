@@ -193,6 +193,13 @@ pub struct NodeSpec {
     /// Extra YAML keys to splice into `dyn_o_mite:` (e.g.
     /// consistency overrides for a multi-rack test).
     pub extra: Vec<(String, String)>,
+    /// Optional override for the TCP port the harness probes
+    /// to decide that a freshly-spawned `dynomited` is ready.
+    /// Defaults to `listen_port`. Tests that bind the proxy
+    /// listener over a non-TCP transport (e.g. QUIC) point
+    /// this at `dyn_listen_port` because the harness's
+    /// readiness probe speaks plain TCP.
+    pub readiness_port: Option<u16>,
 }
 
 impl NodeSpec {
@@ -215,6 +222,7 @@ impl NodeSpec {
             token: token.into(),
             seeds: Vec::new(),
             extra: Vec::new(),
+            readiness_port: None,
         }
     }
 
@@ -288,10 +296,14 @@ impl DynomitedNode {
         cmd.process_group(0);
         let child = cmd.spawn()?;
 
-        // Wait for the client-listen port to bind. This is the
-        // most reliable readiness probe because it is the last
-        // socket bound in `Server::build`.
-        if !wait_for_listen(spec.listen_port, Instant::now() + DEFAULT_TIMEOUT) {
+        // Wait for the readiness port to bind. By default this
+        // is the client-listen port (the last socket
+        // `Server::build` binds for TCP-transport pools); when
+        // the spec overrides `readiness_port` (e.g. QUIC pools
+        // whose proxy listener is UDP and not visible to a TCP
+        // probe), the probe targets the override instead.
+        let probe_port = spec.readiness_port.unwrap_or(spec.listen_port);
+        if !wait_for_listen(probe_port, Instant::now() + DEFAULT_TIMEOUT) {
             let mut node = Self {
                 spec,
                 config_path,
@@ -385,7 +397,8 @@ impl DynomitedNode {
                 .stderr(Stdio::from(log_err));
             cmd.process_group(0);
             let mut child = cmd.spawn()?;
-            if wait_for_listen(self.spec.listen_port, Instant::now() + DEFAULT_TIMEOUT) {
+            let probe_port = self.spec.readiness_port.unwrap_or(self.spec.listen_port);
+            if wait_for_listen(probe_port, Instant::now() + DEFAULT_TIMEOUT) {
                 self.child = Some(child);
                 return Ok(());
             }

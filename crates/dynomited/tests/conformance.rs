@@ -52,5 +52,9 @@ mod multi_dc;
 #[path = "conformance/quic_transport.rs"]
 mod quic_transport;
 
+#[cfg(feature = "quic")]
+#[path = "conformance/quic_three_node.rs"]
+mod quic_three_node;
+
 #[path = "conformance/python_harness.rs"]
 mod python_harness;

@@ -317,8 +317,11 @@ impl Server {
             .take()
             .unwrap_or_else(|| Box::new(LoggingMetricsSink::new(pool_name.clone())));
 
-        let (listen_listener, listen_addr) = bind_listener(pool.listen.as_ref()).await?;
-        let (dyn_listener, dyn_listen_addr) = bind_listener(pool.dyn_listen.as_ref()).await?;
+        let transport = pool.transport.unwrap_or_default();
+        let (listen_listener, listen_addr) =
+            bind_listener(pool.listen.as_ref(), transport, &pool).await?;
+        let (dyn_listener, dyn_listen_addr) =
+            bind_listener(pool.dyn_listen.as_ref(), transport, &pool).await?;
 
         let inner = Arc::new(ServerInner {
             pool: cluster.clone(),
@@ -795,6 +798,8 @@ fn peers_from_seeds(cfg: &PoolConfig, seeds: &[ConfDynSeed], start_idx: u32) -> 
 
 async fn bind_listener(
     listen: Option<&crate::conf::ConfListen>,
+    transport: crate::conf::Transport,
+    #[cfg_attr(not(feature = "quic"), allow(unused_variables))] pool: &crate::conf::ConfPool,
 ) -> Result<(Option<TcpListener>, Option<SocketAddr>), EmbedError> {
     let Some(l) = listen else {
         return Ok((None, None));
@@ -808,9 +813,61 @@ async fn bind_listener(
     let Ok(_addr) = addr_str.parse::<SocketAddr>() else {
         return Ok((None, None));
     };
-    let listener = TcpListener::bind(&addr_str).await?;
-    let local = listener.local_addr()?;
-    Ok((Some(listener), Some(local)))
+    match transport {
+        crate::conf::Transport::Tcp => {
+            let listener = TcpListener::bind(&addr_str).await?;
+            let local = listener.local_addr()?;
+            Ok((Some(listener), Some(local)))
+        }
+        #[cfg(feature = "quic")]
+        crate::conf::Transport::Quic => {
+            // The embedded server's accept loop is a stub today
+            // (see `accept_loop` below): it logs and closes
+            // every accepted client. We still bind the QUIC
+            // listener up-front so the embedder sees a clean
+            // bind error if the cert / key paths are bad,
+            // mirroring the TCP path's eager-bind contract;
+            // dropping the listener here is fine because
+            // production QUIC traffic flows through the
+            // `dynomited` binary, not the embedded harness.
+            let cert = pool
+                .quic_cert_file
+                .as_ref()
+                .and_then(|p| p.to_str().map(str::to_owned))
+                .ok_or_else(|| {
+                    EmbedError::Build(
+                        "transport: quic requires quic_cert_file (UTF-8 path)".to_string(),
+                    )
+                })?;
+            let key = pool
+                .quic_key_file
+                .as_ref()
+                .and_then(|p| p.to_str().map(str::to_owned))
+                .ok_or_else(|| {
+                    EmbedError::Build(
+                        "transport: quic requires quic_key_file (UTF-8 path)".to_string(),
+                    )
+                })?;
+            let cfg = crate::net::QuicConfig::server_with_cert_paths(cert, key);
+            let parsed: SocketAddr = addr_str.parse().map_err(|e: std::net::AddrParseError| {
+                EmbedError::Build(format!("invalid quic listen address {addr_str}: {e}"))
+            })?;
+            let listener = crate::net::QuicListener::bind(parsed, cfg).await?;
+            let local = listener.local_addr();
+            // The QUIC listener is dropped on this scope exit;
+            // the in-process embedder does not yet drive a
+            // QUIC accept loop. Return `None` for the listener
+            // so the existing TCP-flavoured accept_loop is
+            // skipped, but report the local address for
+            // observability.
+            drop(listener);
+            Ok((None, Some(local)))
+        }
+        #[cfg(not(feature = "quic"))]
+        crate::conf::Transport::Quic => Err(EmbedError::Build(
+            "transport: quic requires the engine's `quic` Cargo feature".to_string(),
+        )),
+    }
 }
 
 // removed unused try_bind helper

@@ -59,6 +59,9 @@ pub mod tls;
 #[cfg(feature = "quic")]
 pub mod quic;
 
+#[cfg(feature = "quic")]
+pub use self::quic::{connect as quic_connect, QuicConfig, QuicListener, QuicProxy, QuicTransport};
+
 use std::io;
 
 use thiserror::Error;

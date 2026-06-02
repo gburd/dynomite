@@ -40,6 +40,90 @@ macro_rules! string_enum_serde {
 string_enum_serde!(SecureServerOption);
 string_enum_serde!(HashType);
 string_enum_serde!(Distribution);
+string_enum_serde!(Transport);
+
+/// Transport selected by the pool's `transport:` directive.
+///
+/// Controls which network stack the proxy listener binds.
+/// `Tcp` is the historical default and the only option a build
+/// without the `quic` Cargo feature can satisfy.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::Transport;
+/// assert_eq!(Transport::parse("tcp").unwrap(), Transport::Tcp);
+/// assert_eq!(Transport::parse("quic").unwrap(), Transport::Quic);
+/// assert_eq!(Transport::default(), Transport::Tcp);
+/// ```
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum Transport {
+    /// TCP transport. The historical default and the only
+    /// option compiled in when the `quic` Cargo feature is
+    /// off.
+    Tcp,
+    /// QUIC transport. Requires the `quic` Cargo feature on
+    /// the engine and a server cert / key pair supplied via
+    /// the pool's `quic_cert_file:` and `quic_key_file:`
+    /// directives.
+    Quic,
+}
+
+impl Default for Transport {
+    fn default() -> Self {
+        Self::Tcp
+    }
+}
+
+impl Transport {
+    /// Parse a `transport:` value (case-insensitive).
+    ///
+    /// # Errors
+    /// Returns [`ConfError::BadServer`] when the value is
+    /// not a recognised transport.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Transport;
+    /// assert_eq!(Transport::parse("TCP").unwrap(), Transport::Tcp);
+    /// assert!(Transport::parse("http").is_err());
+    /// ```
+    pub fn parse(s: &str) -> Result<Self, ConfError> {
+        match s.to_ascii_lowercase().as_str() {
+            "tcp" => Ok(Transport::Tcp),
+            "quic" => Ok(Transport::Quic),
+            other => Err(ConfError::BadServer {
+                field: "transport",
+                value: other.to_string(),
+                reason: "transport must be 'tcp' or 'quic'".to_string(),
+            }),
+        }
+    }
+
+    /// Render back to the canonical YAML name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Transport;
+    /// assert_eq!(Transport::Tcp.as_str(), "tcp");
+    /// assert_eq!(Transport::Quic.as_str(), "quic");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Transport::Tcp => "tcp",
+            Transport::Quic => "quic",
+        }
+    }
+}
+
+impl fmt::Display for Transport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Distribution algorithm selected by the pool's `distribution:`
 /// directive.
@@ -612,5 +696,28 @@ mod tests {
         let raw = serde_yaml::to_string(&Distribution::RandomSlicing).unwrap();
         let parsed: Distribution = serde_yaml::from_str(&raw).unwrap();
         assert_eq!(parsed, Distribution::RandomSlicing);
+    }
+
+    #[test]
+    fn transport_round_trip() {
+        for &name in &["tcp", "quic"] {
+            assert_eq!(Transport::parse(name).unwrap().as_str(), name);
+        }
+        // Case-insensitive parse.
+        assert_eq!(Transport::parse("QUIC").unwrap(), Transport::Quic);
+        assert_eq!(Transport::parse("Tcp").unwrap(), Transport::Tcp);
+        assert!(Transport::parse("http").is_err());
+    }
+
+    #[test]
+    fn transport_default_is_tcp() {
+        assert_eq!(Transport::default(), Transport::Tcp);
+    }
+
+    #[test]
+    fn transport_yaml_round_trip() {
+        let raw = serde_yaml::to_string(&Transport::Quic).unwrap();
+        let parsed: Transport = serde_yaml::from_str(&raw).unwrap();
+        assert_eq!(parsed, Transport::Quic);
     }
 }

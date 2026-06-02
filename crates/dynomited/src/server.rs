@@ -63,7 +63,7 @@ use dynomite::cluster::dispatch::ClusterDispatcher;
 use dynomite::cluster::hints::HintStore;
 use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
-use dynomite::conf::{ConfDynSeed, ConfListen, ConfPool, Config, EndpointKind};
+use dynomite::conf::{ConfDynSeed, ConfListen, ConfPool, Config, EndpointKind, Transport};
 use dynomite::core::log::reopen_on_sighup;
 use dynomite::hashkit::DynToken;
 use dynomite::io::reactor::{ConnRole, TcpTransport};
@@ -108,6 +108,91 @@ pub enum ServerError {
     Signals(io::Error),
 }
 
+/// Either-or wrapper around the proxy listener so the
+/// [`Server`] can hold a TCP or QUIC listener under one field.
+///
+/// The TCP variant is built unconditionally; the QUIC variant
+/// is feature-gated and only constructed when the pool's
+/// `transport: quic` directive is set and the binary was built
+/// with the `quic` Cargo feature.
+enum ProxyKind {
+    /// Plain TCP proxy (the historical default).
+    Tcp(Proxy),
+    /// QUIC proxy. Constructed only when the engine's `quic`
+    /// feature is on and the pool is configured for it.
+    #[cfg(feature = "quic")]
+    Quic(dynomite::net::QuicProxy),
+}
+
+impl ProxyKind {
+    async fn run(
+        self,
+        cancel: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    ) -> Result<(), NetError> {
+        match self {
+            ProxyKind::Tcp(p) => p.run(cancel).await,
+            #[cfg(feature = "quic")]
+            ProxyKind::Quic(p) => p.run(cancel).await,
+        }
+    }
+}
+
+/// Build the [`ProxyKind`] for the given listen address.
+///
+/// Branches on the pool's `transport:` directive: TCP is the
+/// default; QUIC is selected when `transport: quic` is set
+/// AND the engine was built with the `quic` Cargo feature.
+/// When `transport: quic` is requested but the binary lacks the
+/// `quic` feature, [`Server::build`] returns a typed
+/// [`ServerError::BadConfig`] so the operator sees a clean
+/// error at startup rather than a silent fall-back.
+async fn build_proxy(
+    listen_addr: SocketAddr,
+    dispatcher: Arc<ClusterDispatcher>,
+    data_store: dynomite::conf::DataStore,
+    conf_pool: &ConfPool,
+) -> Result<ProxyKind, ServerError> {
+    let transport = conf_pool.transport.unwrap_or_default();
+    match transport {
+        Transport::Tcp => {
+            let p = Proxy::bind(listen_addr, dispatcher)
+                .map_err(ServerError::Net)?
+                .with_data_store(data_store);
+            Ok(ProxyKind::Tcp(p))
+        }
+        #[cfg(feature = "quic")]
+        Transport::Quic => {
+            let cert = conf_pool
+                .quic_cert_file
+                .as_ref()
+                .and_then(|p| p.to_str().map(str::to_owned))
+                .ok_or(ServerError::BadConfig {
+                    field: "quic_cert_file",
+                    reason: "transport: quic requires quic_cert_file (UTF-8 path)".into(),
+                })?;
+            let key = conf_pool
+                .quic_key_file
+                .as_ref()
+                .and_then(|p| p.to_str().map(str::to_owned))
+                .ok_or(ServerError::BadConfig {
+                    field: "quic_key_file",
+                    reason: "transport: quic requires quic_key_file (UTF-8 path)".into(),
+                })?;
+            let cfg = dynomite::net::QuicConfig::server_with_cert_paths(cert, key);
+            let p = dynomite::net::QuicProxy::bind(listen_addr, dispatcher, cfg)
+                .await
+                .map_err(ServerError::Net)?
+                .with_data_store(data_store);
+            Ok(ProxyKind::Quic(p))
+        }
+        #[cfg(not(feature = "quic"))]
+        Transport::Quic => Err(ServerError::BadConfig {
+            field: "transport",
+            reason: "transport: quic requires the engine's `quic` Cargo feature".into(),
+        }),
+    }
+}
+
 /// Top-level Dynomite server.
 ///
 /// Constructed by [`Server::build`] from a validated
@@ -133,7 +218,7 @@ pub struct Server {
     pool_name: String,
     pool: Arc<ServerPool>,
     dispatcher: Arc<ClusterDispatcher>,
-    proxy: Proxy,
+    proxy: ProxyKind,
     dnode_proxy: Option<DnodeProxy>,
     stats: Option<StatsServer>,
     backend_handle: Option<JoinHandle<Result<(), NetError>>>,
@@ -576,9 +661,13 @@ impl Server {
 
         let dispatcher = Arc::new(dispatcher);
 
-        let proxy = Proxy::bind(listen_addr, dispatcher.clone())
-            .map_err(ServerError::Net)?
-            .with_data_store(pool_config.data_store);
+        let proxy = build_proxy(
+            listen_addr,
+            dispatcher.clone(),
+            pool_config.data_store,
+            &conf_pool,
+        )
+        .await?;
 
         // Resolve peer-plane TLS knobs once at startup. When
         // both `peer_tls_cert` and `peer_tls_key` are set we build

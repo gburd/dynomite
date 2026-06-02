@@ -43,8 +43,14 @@ use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
 use tokio_util::sync::PollSender;
+use tracing::Instrument as _;
 
+use crate::conf::DataStore;
 use crate::io::reactor::{ConnRole, Transport};
+use crate::net::client::{client_loop, ClientHandler};
+use crate::net::conn::Conn;
+use crate::net::dispatcher::Dispatcher;
+use crate::net::NetError;
 
 const STREAM_ID: u64 = 0;
 const MAX_DATAGRAM_SIZE: usize = 1350;
@@ -473,6 +479,149 @@ fn spawn_driver(
             join: Mutex::new(Some(task)),
             closed,
         }),
+    }
+}
+
+/// QUIC client-plane proxy listener.
+///
+/// Mirrors the [`crate::net::Proxy`] role for QUIC: every
+/// accepted [`QuicTransport`] is wrapped in a [`Conn`] and
+/// driven through the same [`client_loop`] the TCP path uses.
+/// The accept loop is single-threaded by design (the QUIC
+/// listener owns one UDP socket and serialises Initial-packet
+/// processing) but each accepted connection is spawned onto
+/// its own task so client_loops run concurrently.
+///
+/// # Examples
+///
+/// ```ignore
+/// use std::net::SocketAddr;
+/// use std::sync::Arc;
+/// use dynomite::net::quic::{QuicConfig, QuicProxy};
+/// use dynomite::net::NoopDispatcher;
+///
+/// # async fn build() {
+/// let cfg = QuicConfig::server_with_cert_paths("/tmp/c.pem", "/tmp/k.pem");
+/// let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+/// let _proxy = QuicProxy::bind(addr, Arc::new(NoopDispatcher), cfg).await.unwrap();
+/// # }
+/// ```
+pub struct QuicProxy {
+    listener: QuicListener,
+    dispatcher: Arc<dyn Dispatcher>,
+    data_store: DataStore,
+    response_capacity: usize,
+}
+
+impl QuicProxy {
+    /// Bind a QUIC proxy listener to the given address.
+    ///
+    /// The supplied [`QuicConfig`] must carry a server
+    /// certificate chain and matching private key; the QUIC
+    /// stack rejects unconfigured server roles at handshake
+    /// time.
+    ///
+    /// # Errors
+    /// Forwarded from the underlying [`QuicListener::bind`] /
+    /// `tokio::net::UdpSocket::bind` calls.
+    pub async fn bind<A: Into<SocketAddr>>(
+        addr: A,
+        dispatcher: Arc<dyn Dispatcher>,
+        config: QuicConfig,
+    ) -> Result<Self, NetError> {
+        let listener = QuicListener::bind(addr.into(), config)
+            .await
+            .map_err(NetError::Io)?;
+        Ok(Self {
+            listener,
+            dispatcher,
+            data_store: DataStore::Redis,
+            response_capacity: 64,
+        })
+    }
+
+    /// Override the datastore the per-client FSMs will parse.
+    /// Defaults to [`DataStore::Redis`].
+    #[must_use]
+    pub fn with_data_store(mut self, ds: DataStore) -> Self {
+        self.data_store = ds;
+        self
+    }
+
+    /// Override the response-channel capacity per accepted
+    /// connection.
+    #[must_use]
+    pub fn with_response_capacity(mut self, n: usize) -> Self {
+        self.response_capacity = n.max(1);
+        self
+    }
+
+    /// Local address of the bound UDP socket.
+    #[must_use]
+    pub fn local_addr(&self) -> SocketAddr {
+        self.listener.local_addr()
+    }
+
+    /// Drive the accept loop until the supplied cancel future
+    /// resolves.
+    ///
+    /// Each accepted [`QuicTransport`] is tagged
+    /// [`ConnRole::Client`] and handed to a per-connection
+    /// [`client_loop`] task.
+    ///
+    /// # Errors
+    /// Forwarded from the listener accept call.
+    #[tracing::instrument(
+        name = "quic_proxy.run",
+        skip_all,
+        fields(local = %self.listener.local_addr()),
+    )]
+    pub async fn run(
+        self,
+        cancel: Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    ) -> Result<(), NetError> {
+        let mut cancel = cancel;
+        let mut clients: Vec<JoinHandle<Result<(), NetError>>> = Vec::new();
+        let listener = self.listener;
+        loop {
+            tokio::select! {
+                () = &mut cancel => break,
+                res = listener.accept() => {
+                    let transport = match res {
+                        Ok(t) => t,
+                        Err(e) => return Err(NetError::Io(e)),
+                    };
+                    let role = ConnRole::Client;
+                    let peer = transport.peer_addr_socket();
+                    let conn_transport: Box<dyn Transport> = Box::new(transport);
+                    let conn = Conn::new(conn_transport, role);
+                    let dispatcher = Arc::clone(&self.dispatcher);
+                    let cap = self.response_capacity;
+                    let ds = self.data_store;
+                    tracing::debug!(?peer, "quic_proxy accepted client");
+                    let accept_span = tracing::info_span!(
+                        "client.accept",
+                        peer = %peer,
+                    );
+                    let handle = tokio::spawn(
+                        async move {
+                            let (tx, rx) = mpsc::channel(cap);
+                            let handler = ClientHandler::new(dispatcher, tx, ds);
+                            client_loop(conn, handler, rx).await
+                        }
+                        .instrument(accept_span),
+                    );
+                    clients.push(handle);
+                }
+            }
+            clients.retain(|h| !h.is_finished());
+        }
+        for h in clients {
+            // Match the TCP path's drain budget; see
+            // `Proxy::run` for the rationale.
+            let _ = tokio::time::timeout(Duration::from_millis(250), h).await;
+        }
+        Ok(())
     }
 }
 

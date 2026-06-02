@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use crate::conf::{
     ConfDynSeed, ConfListen, ConfPool, ConfServer, Config, ConsistencyLevel, DataStore, HashType,
-    SecureServerOption, Servers, TokenList,
+    SecureServerOption, Servers, TokenList, Transport,
 };
 use crate::embed::error::EmbedError;
 use crate::embed::hooks::{
@@ -219,6 +219,44 @@ impl ServerBuilder {
     #[must_use]
     pub fn secure_server_option(mut self, opt: SecureServerOption) -> Self {
         self.pool.secure_server_option = Some(opt.as_str().to_string());
+        self
+    }
+
+    /// `transport:` - select the proxy listener's network
+    /// stack. Defaults to [`Transport::Tcp`].
+    ///
+    /// `Transport::Quic` requires the engine's `quic` Cargo
+    /// feature; the validator rejects the selection without
+    /// matching `quic_cert_file:` and `quic_key_file:` paths
+    /// (see [`Self::quic_cert_file`] and [`Self::quic_key_file`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::embed::ServerBuilder;
+    /// use dynomite::conf::Transport;
+    /// let _b = ServerBuilder::new("p").transport(Transport::Tcp);
+    /// ```
+    #[must_use]
+    pub fn transport(mut self, t: Transport) -> Self {
+        self.pool.transport = Some(t);
+        self
+    }
+
+    /// `quic_cert_file:` - PEM certificate chain path used by
+    /// the QUIC listener. Required when `transport: quic` is
+    /// selected; ignored under TCP.
+    #[must_use]
+    pub fn quic_cert_file(mut self, path: impl AsRef<Path>) -> Self {
+        self.pool.quic_cert_file = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// `quic_key_file:` - PEM private-key path matching
+    /// [`Self::quic_cert_file`].
+    #[must_use]
+    pub fn quic_key_file(mut self, path: impl AsRef<Path>) -> Self {
+        self.pool.quic_key_file = Some(path.as_ref().to_path_buf());
         self
     }
 
