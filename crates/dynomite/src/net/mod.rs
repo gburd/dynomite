@@ -110,6 +110,12 @@ pub enum NetError {
     /// TLS-handshake or load-time error.
     #[error("tls error: {0}")]
     Tls(String),
+    /// Authentication handshake (e.g. Redis `AUTH`) rejected by
+    /// the peer. Carries the trimmed reply text so operators can
+    /// distinguish `-NOAUTH`, `-ERR invalid password`, and
+    /// similar variants without parsing the formatted message.
+    #[error("authentication rejected: {0}")]
+    Auth(String),
 }
 
 impl From<crate::net::tls::TlsError> for NetError {

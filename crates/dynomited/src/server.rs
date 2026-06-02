@@ -1380,7 +1380,7 @@ async fn redis_auth_handshake(
         Ok(())
     } else {
         let msg = String::from_utf8_lossy(buf.trim_ascii_end()).to_string();
-        Err(NetError::Parse(format!("AUTH rejected: {msg}")))
+        Err(NetError::Auth(msg))
     }
 }
 
@@ -1625,6 +1625,7 @@ pub fn classify_reconnect_reason(err: &NetError) -> &'static str {
         NetError::Io(_) => "io",
         NetError::Closed => "closed",
         NetError::Tls(_) => "tls",
+        NetError::Auth(_) => "auth_failed",
         NetError::Dnode(_) => "dnode",
         NetError::Ejected | NetError::PoolExhausted | NetError::PoolShutdown => "other",
     }
@@ -2708,8 +2709,15 @@ mod tests {
         let err = redis_auth_handshake(&mut stream, "wrong", Duration::from_secs(2))
             .await
             .expect_err("AUTH should fail on -ERR");
+        assert!(
+            matches!(err, NetError::Auth(_)),
+            "expected NetError::Auth, got {err:?}"
+        );
         let msg = format!("{err}");
-        assert!(msg.contains("AUTH rejected"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("authentication rejected"),
+            "unexpected error: {msg}"
+        );
         assert!(
             msg.contains("invalid password"),
             "error did not propagate server message: {msg}"
