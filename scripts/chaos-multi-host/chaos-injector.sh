@@ -135,6 +135,57 @@ json_string_escape() {
         | sed 's/\v/\\n/g'
 }
 
+# Base64-encode the contents of a file (or empty string when the
+# file is missing). Uses the portable `base64` binary in single-
+# line mode. The output is ASCII-only so it can be spliced
+# between double quotes in JSON without further escaping; the
+# decode side is a one-liner in any language.
+base64_file() {
+    local path="$1"
+    if [ ! -f "$path" ]; then
+        printf ''
+        return 0
+    fi
+    if base64 --help 2>&1 | grep -q -- '-w'; then
+        # GNU coreutils: -w0 disables wrapping.
+        tail -n 50 "$path" 2>/dev/null | base64 -w0 2>/dev/null || printf ''
+    else
+        # BSD/macOS base64: no -w flag; output is one line by
+        # default for stdin <= 76 bytes, multi-line otherwise.
+        # Re-flatten via `tr` to be safe.
+        tail -n 50 "$path" 2>/dev/null | base64 2>/dev/null | tr -d '\n' || printf ''
+    fi
+}
+
+# Emit a `restart_failed_detail` event to the chaos-events
+# stream. Carries the dynomited stderr and log tails (last 50
+# lines each) base64-encoded so embedded ASCII-control bytes
+# (a real failure mode: dynomited's stderr can include the raw
+# bytes a panicked socket dumped) cannot break JSON parsing on
+# the report side.
+#
+# The shape matches the post-chaos queue P3-1.3 spec exactly:
+#   {"event":"restart_failed_detail",
+#    "host":"<dc-name>",
+#    "rc":<int>,
+#    "stderr_tail":"<base64>",
+#    "log_tail":"<base64>",
+#    "timestamp":"<RFC3339>"}
+#
+# The line ALSO carries `kind` and `ts` aliases so the existing
+# event consumers (live-status.sh, generate-report.py's
+# parse_chaos_events) keep working without a schema split.
+emit_restart_failed_detail() {
+    local rc="$1"
+    local stderr_b64 log_b64 ts
+    stderr_b64=$(base64_file "$LOGS/dynomited-$DC_NAME.stderr")
+    log_b64=$(base64_file "$LOGS/dynomited-$DC_NAME.log")
+    ts=$(stamp)
+    printf '{"event":"restart_failed_detail","kind":"restart_failed_detail","host":"%s","rc":%d,"stderr_tail":"%s","log_tail":"%s","timestamp":"%s","ts":"%s"}\n' \
+        "$DC_NAME" "$rc" "$stderr_b64" "$log_b64" "$ts" "$ts" \
+        >> "$EVENTS"
+}
+
 file_sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" 2>/dev/null | awk '{print $1}'
@@ -318,6 +369,17 @@ restart_dynomited() {
         tail_blob=$(json_string_escape "$(tail -n 50 "$restart_log" 2>/dev/null || true)")
         event "$fail_event" \
             "{\"reason\":\"start-host.sh-nonzero\",\"rc\":$rc,\"tail\":\"$tail_blob\"}"
+        # P3-1.3: emit the structured `restart_failed_detail`
+        # event alongside the legacy `restart_failed` payload
+        # so the report generator can classify the residual
+        # failures (port-collision / backend-down /
+        # crash-mid-startup / unknown). The detail event
+        # carries the dynomited stderr+log tails, not the
+        # start-host.sh restart-log, because start-host.sh's
+        # output is mostly its own progress trace; the
+        # actionable diagnostic is what dynomited itself
+        # printed before exiting.
+        emit_restart_failed_detail "$rc"
     fi
 }
 

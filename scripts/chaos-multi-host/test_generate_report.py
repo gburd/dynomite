@@ -345,6 +345,229 @@ class FullRunSynthesisTests(unittest.TestCase):
         self.assertIn("`abcdef1234567`", md)
 
 
+class RestartFailedClassifierTests(unittest.TestCase):
+    """P3-1.3: classifier + extractor unit tests."""
+
+    def test_port_collision(self):
+        stderr_tail = (
+            "==> failure mode: dynomited (pid=12345) CRASHED mid-startup\n"
+            "some prior line\n"
+            "thread 'main' panicked at: Address already in use (os error 98)\n"
+        )
+        # Two patterns hit; port-collision wins because it is
+        # earlier in the matcher list.
+        self.assertEqual(
+            GR.chaos_restart_failed_class(stderr_tail, ""),
+            "port-collision",
+        )
+
+    def test_backend_down(self):
+        stderr = (
+            "==> ERROR: backend on 17100 did not respond to redis "
+            "protocol probe within 6 seconds\n"
+            "==> the port may be bound by a stale process\n"
+        )
+        self.assertEqual(
+            GR.chaos_restart_failed_class(stderr, ""),
+            "backend-down",
+        )
+
+    def test_crash_mid_startup(self):
+        log_tail = (
+            "INFO  starting dynomited\n"
+            "thread 'tokio-runtime-worker' panicked at "
+            "'invariant: ring cover', src/cluster.rs:42\n"
+            "stack backtrace:\n"
+            "   0: rust_begin_unwind\n"
+        )
+        self.assertEqual(
+            GR.chaos_restart_failed_class("", log_tail),
+            "crash-mid-startup",
+        )
+
+    def test_unknown_when_blob_is_empty(self):
+        self.assertEqual(
+            GR.chaos_restart_failed_class("", ""),
+            "unknown",
+        )
+
+    def test_unknown_when_no_pattern_matches(self):
+        self.assertEqual(
+            GR.chaos_restart_failed_class(
+                "some completely unrelated noise\nmore noise",
+                "and more noise here too",
+            ),
+            "unknown",
+        )
+
+    def test_extract_skips_non_detail_events(self):
+        events = [
+            {"kind": "restart", "detail": {}},
+            {"kind": "restart_failed", "detail": {"tail": "address already in use"}},
+            {"kind": "pause_start", "detail": {}},
+        ]
+        ctr = GR.extract_restart_failed_classes(events)
+        # No restart_failed_detail events present.
+        self.assertEqual(sum(ctr.values()), 0)
+
+    def test_extract_decodes_base64_and_classifies(self):
+        import base64 as b64
+        events = [
+            {
+                "event": "restart_failed_detail",
+                "kind": "restart_failed_detail",
+                "host": "dc-floki",
+                "rc": 1,
+                "stderr_tail": b64.b64encode(
+                    b"bind: Address already in use\n"
+                ).decode(),
+                "log_tail": b64.b64encode(b"").decode(),
+                "timestamp": "2026-06-01T00:00:00Z",
+            },
+            {
+                "event": "restart_failed_detail",
+                "kind": "restart_failed_detail",
+                "host": "dc-floki",
+                "rc": 1,
+                "stderr_tail": b64.b64encode(
+                    b"backend on 17100 did not respond\n"
+                ).decode(),
+                "log_tail": b64.b64encode(b"").decode(),
+                "timestamp": "2026-06-01T00:00:01Z",
+            },
+            {
+                "event": "restart_failed_detail",
+                "kind": "restart_failed_detail",
+                "host": "dc-floki",
+                "rc": 1,
+                "stderr_tail": b64.b64encode(b"").decode(),
+                "log_tail": b64.b64encode(
+                    b"thread 'main' panicked at 'oops'\nstack backtrace:\n"
+                ).decode(),
+                "timestamp": "2026-06-01T00:00:02Z",
+            },
+            {
+                "event": "restart_failed_detail",
+                "kind": "restart_failed_detail",
+                "host": "dc-floki",
+                "rc": 1,
+                "stderr_tail": b64.b64encode(b"random unparseable noise\n").decode(),
+                "log_tail": b64.b64encode(b"").decode(),
+                "timestamp": "2026-06-01T00:00:03Z",
+            },
+        ]
+        ctr = GR.extract_restart_failed_classes(events)
+        self.assertEqual(ctr["port-collision"], 1)
+        self.assertEqual(ctr["backend-down"], 1)
+        self.assertEqual(ctr["crash-mid-startup"], 1)
+        self.assertEqual(ctr["unknown"], 1)
+
+    def test_extract_ignores_corrupt_base64(self):
+        events = [
+            {
+                "event": "restart_failed_detail",
+                "kind": "restart_failed_detail",
+                "host": "dc-floki",
+                "rc": 1,
+                "stderr_tail": "!!!not-valid-base64!!!",
+                "log_tail": None,
+                "timestamp": "2026-06-01T00:00:00Z",
+            },
+        ]
+        ctr = GR.extract_restart_failed_classes(events)
+        # Corrupt blob decodes to empty -> unknown bucket.
+        self.assertEqual(ctr["unknown"], 1)
+        self.assertEqual(sum(ctr.values()), 1)
+
+
+class RestartFailedClassReportTests(unittest.TestCase):
+    """P3-1.3: end-to-end render_report includes the new section."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="chaos-class-report-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _b64(self, s: str) -> str:
+        import base64 as b64
+        return b64.b64encode(s.encode()).decode()
+
+    def test_classes_table_renders_when_events_present(self):
+        hosts = ["dc-floki", "dc-arnold"]
+        wrows = {h: _make_workload_rows(h, "redis", 10, 0, 4) for h in hosts}
+        crows = {
+            "dc-floki": [
+                {
+                    "event": "restart_failed_detail",
+                    "kind": "restart_failed_detail",
+                    "host": "dc-floki",
+                    "rc": 1,
+                    "stderr_tail": self._b64("bind: Address already in use\n"),
+                    "log_tail": self._b64(""),
+                    "timestamp": "2026-06-01T00:00:00Z",
+                    "ts": "2026-06-01T00:00:00Z",
+                },
+                {
+                    "event": "restart_failed_detail",
+                    "kind": "restart_failed_detail",
+                    "host": "dc-floki",
+                    "rc": 1,
+                    "stderr_tail": self._b64("thread 'main' panicked at\n"),
+                    "log_tail": self._b64(""),
+                    "timestamp": "2026-06-01T00:00:01Z",
+                    "ts": "2026-06-01T00:00:01Z",
+                },
+            ],
+            "dc-arnold": [
+                {
+                    "event": "restart_failed_detail",
+                    "kind": "restart_failed_detail",
+                    "host": "dc-arnold",
+                    "rc": 1,
+                    "stderr_tail": self._b64(
+                        "backend on 17100 did not respond\n"
+                    ),
+                    "log_tail": self._b64(""),
+                    "timestamp": "2026-06-01T00:00:02Z",
+                    "ts": "2026-06-01T00:00:02Z",
+                },
+            ],
+        }
+        run_dir = _make_run_dir(
+            self.tmp, "pass9-redis-20260909-000000Z", hosts,
+            mode="redis", workload_per_host=wrows, chaos_per_host=crows,
+        )
+        md = GR.render_report(run_dir)
+        self.assertIn("Restart-failed class breakdown", md)
+        # Per-host counts present.
+        self.assertIn("`dc-floki`", md)
+        self.assertIn("`dc-arnold`", md)
+        # Aggregate row reflects 2+1 = 3 classified events.
+        self.assertIn("**aggregate**", md)
+        # The per-class column headers are visible.
+        self.assertIn("port-collision", md)
+        self.assertIn("backend-down", md)
+        self.assertIn("crash-mid-startup", md)
+
+    def test_classes_section_omitted_when_no_detail_events(self):
+        hosts = ["dc-floki"]
+        wrows = {h: _make_workload_rows(h, "redis", 10, 0, 4) for h in hosts}
+        # Standard events but NO restart_failed_detail rows.
+        crows = {
+            "dc-floki": [
+                {"ts": "x", "host": "dc-floki", "kind": "restart",
+                 "detail": {}},
+            ],
+        }
+        run_dir = _make_run_dir(
+            self.tmp, "pass9-redis-20261010-000000Z", hosts,
+            mode="redis", workload_per_host=wrows, chaos_per_host=crows,
+        )
+        md = GR.render_report(run_dir)
+        self.assertNotIn("Restart-failed class breakdown", md)
+
+
 class Pass1RegressionTest(unittest.TestCase):
     """Regression: re-derive the hand-curated pass-1 numbers."""
 

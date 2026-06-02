@@ -281,6 +281,122 @@ def parse_metrics_snapshot(run_dir: Path):
         return None
 
 
+# ---------- restart_failed classification (P3-1.3) ----------
+
+# Regex set for classifying captured restart_failed_detail tails.
+# The classifier walks the matchers in declaration order; the
+# first hit wins. Each regex is anchored on a single line and
+# applied with re.IGNORECASE plus re.MULTILINE so it can hit
+# anywhere in the multi-line tail.
+#
+# port-collision        - dynomited or its backend tried to bind
+#                         a port already held by another
+#                         process. Common during chaos because
+#                         the kernel can lag in reaping a
+#                         SIGKILL'd dynomited and its TCP
+#                         listener.
+# backend-down          - the redis or memcached backend that
+#                         dynomited's data_store points at was
+#                         not reachable when start-host.sh
+#                         probed it. The chaos-injector's
+#                         redis-bounce racy with the next start.
+# crash-mid-startup     - dynomited spawned, opened files,
+#                         emitted a fatal log line, and exited
+#                         non-zero. start-host.sh ALSO emits
+#                         the literal phrase "CRASHED" in this
+#                         case.
+# unknown               - everything else; pinpoints residual
+#                         categories the operator may need to
+#                         add to this list.
+RESTART_FAILED_CLASS_PATTERNS = [
+    ("port-collision", re.compile(
+        r"(?:address (?:already )?in use"
+        r"|already in use"
+        r"|EADDRINUSE"
+        r"|bind:\s*Address already in use"
+        r"|cannot bind to\s*[^\n]+already)",
+        re.IGNORECASE | re.MULTILINE,
+    )),
+    ("backend-down", re.compile(
+        r"(?:backend on \d+ did not respond"
+        r"|connection refused"
+        r"|ECONNREFUSED"
+        r"|protocol probe within"
+        r"|backend probe failed"
+        r"|redis-server.*not on PATH"
+        r"|memcached.*not on PATH)",
+        re.IGNORECASE | re.MULTILINE,
+    )),
+    ("crash-mid-startup", re.compile(
+        r"(?:CRASHED mid-startup"
+        r"|panicked at"
+        r"|fatal runtime error"
+        r"|thread '[^']*' panicked"
+        r"|RUST_BACKTRACE"
+        r"|stack backtrace:"
+        r"|signal: 11, SIGSEGV"
+        r"|fatal:\s*[^\n]+\bdynomited\b)",
+        re.IGNORECASE | re.MULTILINE,
+    )),
+]
+
+
+def chaos_restart_failed_class(stderr_tail: str, log_tail: str) -> str:
+    """Classify a restart_failed_detail event into one of:
+
+    ``port-collision``, ``backend-down``, ``crash-mid-startup``,
+    or ``unknown``.
+
+    Walks ``RESTART_FAILED_CLASS_PATTERNS`` in order against the
+    concatenated stderr+log tail. The first regex that matches
+    decides the class; ``unknown`` is the residual bucket.
+    Inputs may be ``None`` or the empty string; both are handled
+    as if no diagnostic was captured.
+    """
+    blob = "\n".join(s for s in (stderr_tail, log_tail) if s)
+    if not blob:
+        return "unknown"
+    for label, pat in RESTART_FAILED_CLASS_PATTERNS:
+        if pat.search(blob):
+            return label
+    return "unknown"
+
+
+def _b64_decode_safe(blob) -> str:
+    """Best-effort base64 decode.
+
+    The chaos-injector emits base64-encoded tails; corrupt or
+    missing inputs decode to the empty string so the classifier
+    routes them to ``unknown`` rather than blowing up the report.
+    """
+    if not isinstance(blob, str) or not blob:
+        return ""
+    try:
+        import base64
+        return base64.b64decode(blob, validate=False).decode(
+            "utf-8", errors="replace"
+        )
+    except Exception:
+        return ""
+
+
+def extract_restart_failed_classes(events):
+    """Iterate ``restart_failed_detail`` events and return a Counter
+    of class labels. Events without the new shape are ignored.
+    """
+    counter = collections.Counter()
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        ev_type = ev.get("event") or ev.get("kind")
+        if ev_type != "restart_failed_detail":
+            continue
+        stderr_tail = _b64_decode_safe(ev.get("stderr_tail", ""))
+        log_tail = _b64_decode_safe(ev.get("log_tail", ""))
+        counter[chaos_restart_failed_class(stderr_tail, log_tail)] += 1
+    return counter
+
+
 # ---------- helpers ----------
 
 
@@ -478,6 +594,48 @@ def render_report(run_dir: Path) -> str:
             f"{fmt_int(kinds.get('restart', 0))} |"
         )
     lines.append("")
+
+    # ---- 5b. P3-1.3 restart_failed_detail per-class breakdown ----
+    classes_by_host = {}
+    grand_classes = collections.Counter()
+    any_classified = False
+    for label in host_labels:
+        ctr = extract_restart_failed_classes(per_host[label]["events"])
+        classes_by_host[label] = ctr
+        grand_classes.update(ctr)
+        if sum(ctr.values()) > 0:
+            any_classified = True
+    if any_classified:
+        lines.append("### Restart-failed class breakdown (P3-1.3)")
+        lines.append("")
+        lines.append(
+            "Classes are derived from the `restart_failed_detail` "
+            "events' base64-encoded `stderr_tail` + `log_tail` via "
+            "`chaos_restart_failed_class`. See the regex block in "
+            "`scripts/chaos-multi-host/generate-report.py` for the "
+            "matchers."
+        )
+        lines.append("")
+        class_columns = [
+            "port-collision", "backend-down", "crash-mid-startup", "unknown",
+        ]
+        header = "| host | " + " | ".join(class_columns) + " | total |"
+        sep = "|---|" + "---:|" * (len(class_columns) + 1)
+        lines.append(header)
+        lines.append(sep)
+        for label in host_labels:
+            ctr = classes_by_host[label]
+            row = [f"`{label}`"]
+            for c in class_columns:
+                row.append(fmt_int(ctr.get(c, 0)))
+            row.append(fmt_int(sum(ctr.values())))
+            lines.append("| " + " | ".join(row) + " |")
+        agg_row = ["**aggregate**"]
+        for c in class_columns:
+            agg_row.append(f"**{fmt_int(grand_classes.get(c, 0))}**")
+        agg_row.append(f"**{fmt_int(sum(grand_classes.values()))}**")
+        lines.append("| " + " | ".join(agg_row) + " |")
+        lines.append("")
 
     # ---- 6. P3-2.5 metrics snapshot ----
     metrics = parse_metrics_snapshot(run_dir)
