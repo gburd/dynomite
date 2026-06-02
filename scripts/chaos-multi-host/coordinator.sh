@@ -441,8 +441,14 @@ start_injector() {
     local runner=("$@")
     log "starting chaos-injector on $label"
     local rc=0
+    # Plumb the operator-selected fault classes through to the
+    # remote injector. The injector's MODE_FAULTS env knob picks
+    # which fault families to exercise; without this pass-through,
+    # the remote always runs the default (process-only) regardless
+    # of what the operator set in their shell.
+    local mf="${MODE_FAULTS:-process}"
     "${runner[@]}" bash -s <<EOF || rc=$?
-nohup $bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/chaos-injector.sh $label \\
+MODE_FAULTS=$mf nohup $bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/chaos-injector.sh $label \\
     > /scratch/dynomite-chaos/logs/injector-$label.stderr 2>&1 < /dev/null &
 echo \$! > /scratch/dynomite-chaos/run/injector.pid
 EOF
