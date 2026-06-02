@@ -17,7 +17,14 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 # excludes these process-spawning integration binaries;
 # `scripts/check.sh` runs them under the `conformance` profile
 # (test-threads=1) where they belong.
-default-filter = "not (binary(conformance) | binary(differential) | binary(integration))"
+# All these binaries spawn real `dynomited` + `redis-server`
+# processes. Running them in parallel with the rest of the
+# workspace races on ephemeral-port allocation and on
+# `dynomited`'s tokio-runtime startup window. The default
+# profile excludes them; `scripts/check.sh` runs them under
+# the `conformance` profile (test-threads=1) where they
+# belong.
+default-filter = "not (binary(conformance) | binary(differential) | binary(integration) | binary(ft_wire) | binary(ft_filter_wire) | binary(ft_extensions_wire) | binary(ft_search_distributed_wire) | binary(ft_suggest_wire) | binary(ft_text_wire) | binary(observability) | binary(sighup_reload) | binary(entropy_runloop) | binary(regression_busy_loop) | binary(cli) | binary(riak))"
 
 [profile.conformance]
 # Conformance scenarios spawn real `dynomited` and `redis-server`
