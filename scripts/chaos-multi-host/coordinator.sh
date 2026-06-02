@@ -440,6 +440,19 @@ start_injector() {
     local bash_path="$1"; shift
     local runner=("$@")
     log "starting chaos-injector on $label"
+    # P3-3.9 phase 5: when the differential rig is active,
+    # tell the chaos-injector to fan SIGSTOP/SIGCONT/SIGKILL
+    # out to BOTH the Rust dynomited and the C `dynomite`
+    # reference proxy via the INJECT_C_PROXY_TOO env knob.
+    # The chaos-injector reads the knob from start-args (if
+    # the caller wrote it there) or from its own environment;
+    # we use the env-prefix path because it lives entirely on
+    # this side of the SSH boundary and does not require the
+    # remote start-host.sh to know about phase-5 wiring.
+    local injector_env=""
+    if [ "$MODE" = "differential" ]; then
+        injector_env="INJECT_C_PROXY_TOO=1 "
+    fi
     local rc=0
     # Plumb the operator-selected fault classes through to the
     # remote injector. The injector's MODE_FAULTS env knob picks
@@ -448,7 +461,7 @@ start_injector() {
     # of what the operator set in their shell.
     local mf="${MODE_FAULTS:-process}"
     "${runner[@]}" bash -s <<EOF || rc=$?
-MODE_FAULTS=$mf nohup $bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/chaos-injector.sh $label \\
+MODE_FAULTS=$mf ${injector_env}nohup $bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/chaos-injector.sh $label \\
     > /scratch/dynomite-chaos/logs/injector-$label.stderr 2>&1 < /dev/null &
 echo \$! > /scratch/dynomite-chaos/run/injector.pid
 EOF

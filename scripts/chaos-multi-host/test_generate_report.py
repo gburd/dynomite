@@ -262,14 +262,105 @@ class FullRunSynthesisTests(unittest.TestCase):
         self.assertIn("Chaos events by kind", md)
         self.assertIn("_(no events)_", md)
         # Stability indicator row should also be all zeros.
-        # Find the dc-floki row in the stability section.
+        # P3-3.9 phase 5 added two `_c` paired columns
+        # (recovery_restart_c, fault_kill_c) so the regex
+        # captures seven groups now.
         stab_match = re.search(
-            r"\| `dc-floki` \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \|",
+            r"\| `dc-floki` \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \|",
             md,
         )
         self.assertIsNotNone(stab_match)
         if stab_match:
-            self.assertEqual(stab_match.groups(), ("0", "0", "0", "0", "0"))
+            self.assertEqual(
+                stab_match.groups(),
+                ("0", "0", "0", "0", "0", "0", "0"),
+            )
+
+    def test_phase5_paired_c_events_in_stability_table(self):
+        """P3-3.9 phase 5: `_c` events show up in the per-host
+        stability table.
+
+        Synthesises a small NDJSON stream containing the new
+        ``fault_kill_c``, ``recovery_restart_c``,
+        ``fault_pause_start_c``, and ``fault_pause_end_c``
+        events alongside the existing Rust-side counterparts
+        and asserts:
+
+        * The per-host stability table has the new
+          ``recovery_restart_c`` and ``fault_kill_c`` columns.
+        * The per-host row carries the synthesised counts.
+        * The dynamic ``Chaos events by kind`` histogram
+          surfaces every paired event kind without the report
+          generator needing a hardcoded list.
+        """
+        hosts = ["dc-floki", "dc-arnold"]
+        wrows = {h: _make_workload_rows(h, "redis", 10, 0, 4) for h in hosts}
+        # dc-floki: 3 kills + 3 paired _c kills, 1 recovery + 1 paired _c.
+        # dc-arnold: pause-start/end pair on each side, no kill.
+        crows = {
+            "dc-floki": _make_chaos_rows("dc-floki", {
+                "kill": 3,
+                "fault_kill_c": 3,
+                "recovery_restart": 1,
+                "recovery_restart_c": 1,
+            }),
+            "dc-arnold": _make_chaos_rows("dc-arnold", {
+                "pause_start": 2,
+                "pause_end": 2,
+                "fault_pause_start_c": 2,
+                "fault_pause_end_c": 2,
+            }),
+        }
+        run_dir = _make_run_dir(
+            self.tmp, "pass9-differential-20261111-000000Z", hosts,
+            mode="redis", workload_per_host=wrows, chaos_per_host=crows,
+        )
+        md = GR.render_report(run_dir)
+
+        # The stability-table header carries the new columns.
+        self.assertIn("recovery_restart_c", md)
+        self.assertIn("fault_kill_c", md)
+
+        # dc-floki row: 7 numeric columns matching the new
+        # header layout. The columns are:
+        # restart_failed, recovery_restart, recovery_restart_c,
+        # redis_bounce, kill, fault_kill_c, restart.
+        floki_match = re.search(
+            r"\| `dc-floki` \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \|",
+            md,
+        )
+        self.assertIsNotNone(floki_match)
+        if floki_match:
+            (
+                restart_failed,
+                recovery_restart,
+                recovery_restart_c,
+                redis_bounce,
+                kill,
+                fault_kill_c,
+                restart,
+            ) = floki_match.groups()
+            self.assertEqual(restart_failed, "0")
+            self.assertEqual(recovery_restart, "1")
+            self.assertEqual(recovery_restart_c, "1")
+            self.assertEqual(redis_bounce, "0")
+            self.assertEqual(kill, "3")
+            self.assertEqual(fault_kill_c, "3")
+            self.assertEqual(restart, "0")
+
+        # The dynamic chaos-events-by-kind histogram surfaces
+        # the pause-pair `_c` events even though they are NOT
+        # in the static stability columns. We expect a row
+        # whose first cell is `fault_pause_start_c` and an
+        # aggregate of 2 (only dc-arnold emitted them).
+        self.assertIn("`fault_pause_start_c`", md)
+        self.assertIn("`fault_pause_end_c`", md)
+        # Aggregate count for fault_pause_start_c is 2.
+        pair_row = re.search(
+            r"\| `fault_pause_start_c` \|[^\n]*\*\*2\*\*",
+            md,
+        )
+        self.assertIsNotNone(pair_row)
 
     def test_metrics_snapshot_section(self):
         """When metrics-*.json is present it shows up in the report."""

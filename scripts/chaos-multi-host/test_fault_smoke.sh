@@ -60,6 +60,9 @@ CHAOS_CGROUP="${CHAOS_CGROUP:-/sys/fs/cgroup/chaos-iolat-smoke-dc}"
 CLOCK_SKEW_MARKER="$RUN/clock-skew-active"
 BALLAST_FILE="$RUN/chaos-ballast"
 BALLAST_FULL_FILE="$RUN/chaos-ballast-full"
+# P3-3.9 phase 5: pidfile path consulted by kill_both_proxies
+# when INJECT_C_PROXY_TOO=1.
+C_PROXY_PIDFILE="$RUN/dynomite-c.pid"
 
 # Required by the injector but not used by sourceable tests.
 TOKENS="0"
@@ -86,7 +89,8 @@ export DC_NAME ROOT RUN LOGS EVENTS MODE CHAOS_NETEM_DEV CHAOS_CGROUP \
        DATASTORE_PORT DYN_LISTEN_PORT CLIENT_LISTEN_PORT STATS_LISTEN_PORT \
        START_ARGS_FILE MODE_FAULTS MODE_FAULTS_EXPLICIT \
        RUNNABLE_PROCESS RUNNABLE_NETWORK RUNNABLE_CLOCK RUNNABLE_DISK \
-       IS_CLASS_PROCESS IS_CLASS_NETWORK IS_CLASS_CLOCK IS_CLASS_DISK
+       IS_CLASS_PROCESS IS_CLASS_NETWORK IS_CLASS_CLOCK IS_CLASS_DISK \
+       C_PROXY_PIDFILE
 
 # Source the library form. The script's __CHAOS_SOURCED guard
 # stops it from calling main; we call individual fault_*
@@ -628,10 +632,206 @@ smoke_process_pause() {
     fi
 }
 
+# ---------- P3-3.9 phase 5: dual-proxy fault smoke ----------
+#
+# Stand up two trapping background processes that record the
+# signals they receive, write their pids into the Rust and C
+# pidfiles respectively, and verify kill_both_proxies
+# delivers SIGTERM to BOTH when INJECT_C_PROXY_TOO=1. A
+# parallel sub-test asserts the env-knob gate works: with
+# INJECT_C_PROXY_TOO=0 only the Rust pid receives the signal
+# even when the C pidfile exists.
+#
+# The trap helper writes a single-line marker to a per-pid
+# log file when SIGTERM lands. The smoke greps for the
+# marker rather than racing the kernel reaper.
+smoke_phase5_kill_both_proxies() {
+    local rust_marker="$RUN/phase5-rust.caught"
+    local c_marker="$RUN/phase5-c.caught"
+    local rust_done="$RUN/phase5-rust.done"
+    local c_done="$RUN/phase5-c.done"
+    local rust_pidfile="$RUN/dynomited.pid"
+    rm -f "$rust_marker" "$c_marker" "$rust_done" "$c_done"
+    rm -f "$rust_pidfile" "$C_PROXY_PIDFILE"
+
+    # Two trap-loops. Each catches SIGTERM, writes its
+    # marker, and exits cleanly. SIGUSR1 is an escape hatch
+    # the test uses to reap the process if the kill never
+    # lands. The 30-second loop bound caps the smoke's
+    # wallclock cost on a wedged host.
+    bash -c '
+        marker="$1"; done="$2"
+        trap "echo CAUGHT > \"$marker\"; touch \"$done\"; exit 0" TERM
+        trap "touch \"$done\"; exit 0" USR1
+        for _ in $(seq 1 300); do
+            sleep 0.1
+            [ -f "$done" ] && break
+        done
+    ' _ "$rust_marker" "$rust_done" &
+    local rust_pid=$!
+    bash -c '
+        marker="$1"; done="$2"
+        trap "echo CAUGHT > \"$marker\"; touch \"$done\"; exit 0" TERM
+        trap "touch \"$done\"; exit 0" USR1
+        for _ in $(seq 1 300); do
+            sleep 0.1
+            [ -f "$done" ] && break
+        done
+    ' _ "$c_marker" "$c_done" &
+    local c_pid=$!
+
+    echo "$rust_pid" > "$rust_pidfile"
+    echo "$c_pid" > "$C_PROXY_PIDFILE"
+
+    # Give the trap handlers a beat to install before we
+    # send the signal; without it the kill races bash's
+    # builtin trap installation and SIGTERM defaults to
+    # immediate exit (no marker written).
+    command sleep 0.2
+
+    # Sub-test A: gate is on. Both pids must be signalled.
+    INJECT_C_PROXY_TOO=1 kill_both_proxies TERM || true
+
+    # Wait up to 3 s for both markers to appear.
+    local i landed_rust=0 landed_c=0
+    for i in $(seq 1 30); do
+        [ -f "$rust_marker" ] && landed_rust=1
+        [ -f "$c_marker" ] && landed_c=1
+        if [ "$landed_rust" = 1 ] && [ "$landed_c" = 1 ]; then
+            break
+        fi
+        command sleep 0.1
+    done
+
+    # Force-reap any survivor so the test cannot hang.
+    kill -USR1 "$rust_pid" 2>/dev/null || true
+    kill -USR1 "$c_pid" 2>/dev/null || true
+    wait "$rust_pid" 2>/dev/null || true
+    wait "$c_pid" 2>/dev/null || true
+
+    if [ "$landed_rust" != 1 ]; then
+        rm -f "$rust_marker" "$c_marker" "$rust_pidfile" "$C_PROXY_PIDFILE"
+        record FAIL phase5_kill_both_proxies "Rust dynomited.pid did not receive SIGTERM"
+        return 0
+    fi
+    if [ "$landed_c" != 1 ]; then
+        rm -f "$rust_marker" "$c_marker" "$rust_pidfile" "$C_PROXY_PIDFILE"
+        record FAIL phase5_kill_both_proxies "C dynomite-c.pid did not receive SIGTERM (INJECT_C_PROXY_TOO=1)"
+        return 0
+    fi
+    rm -f "$rust_marker" "$c_marker" "$rust_done" "$c_done"
+
+    # Sub-test B: gate is off. The C pidfile is still on
+    # disk but only the Rust process must receive the
+    # signal. Spawn fresh trap-loops because the previous
+    # ones were reaped above.
+    bash -c '
+        marker="$1"; done="$2"
+        trap "echo CAUGHT > \"$marker\"; touch \"$done\"; exit 0" TERM
+        trap "touch \"$done\"; exit 0" USR1
+        for _ in $(seq 1 300); do
+            sleep 0.1
+            [ -f "$done" ] && break
+        done
+    ' _ "$rust_marker" "$rust_done" &
+    rust_pid=$!
+    bash -c '
+        marker="$1"; done="$2"
+        trap "echo CAUGHT > \"$marker\"; touch \"$done\"; exit 0" TERM
+        trap "touch \"$done\"; exit 0" USR1
+        for _ in $(seq 1 300); do
+            sleep 0.1
+            [ -f "$done" ] && break
+        done
+    ' _ "$c_marker" "$c_done" &
+    c_pid=$!
+
+    echo "$rust_pid" > "$rust_pidfile"
+    echo "$c_pid" > "$C_PROXY_PIDFILE"
+    command sleep 0.2
+
+    INJECT_C_PROXY_TOO=0 kill_both_proxies TERM || true
+
+    local landed_rust2=0 landed_c2=0
+    for i in $(seq 1 30); do
+        [ -f "$rust_marker" ] && landed_rust2=1
+        [ -f "$c_marker" ] && landed_c2=1
+        if [ "$landed_rust2" = 1 ]; then
+            break
+        fi
+        command sleep 0.1
+    done
+
+    # Brief settle before the negative assertion: if the C
+    # process was going to be hit we want to give the kernel
+    # the chance to deliver. 200 ms is a generous bound.
+    command sleep 0.2
+    [ -f "$c_marker" ] && landed_c2=1
+
+    kill -USR1 "$rust_pid" 2>/dev/null || true
+    kill -USR1 "$c_pid" 2>/dev/null || true
+    wait "$rust_pid" 2>/dev/null || true
+    wait "$c_pid" 2>/dev/null || true
+
+    if [ "$landed_rust2" != 1 ]; then
+        rm -f "$rust_marker" "$c_marker" "$rust_pidfile" "$C_PROXY_PIDFILE"
+        record FAIL phase5_kill_both_proxies "Rust pid not signalled with INJECT_C_PROXY_TOO=0"
+        return 0
+    fi
+    if [ "$landed_c2" = 1 ]; then
+        rm -f "$rust_marker" "$c_marker" "$rust_pidfile" "$C_PROXY_PIDFILE"
+        record FAIL phase5_kill_both_proxies "C pid signalled even though INJECT_C_PROXY_TOO=0"
+        return 0
+    fi
+
+    rm -f "$rust_marker" "$c_marker" "$rust_pidfile" "$C_PROXY_PIDFILE" "$rust_done" "$c_done"
+    record OK phase5_kill_both_proxies
+}
+
+# Sub-smoke: c_dyn_pid honours both the env knob and the
+# pidfile presence check. Pure pidfile/env logic; no signals.
+smoke_phase5_c_dyn_pid_gating() {
+    rm -f "$C_PROXY_PIDFILE"
+    # No pidfile -> 1 regardless of env.
+    if INJECT_C_PROXY_TOO=1 c_dyn_pid >/dev/null 2>&1; then
+        record FAIL phase5_c_dyn_pid_gating "c_dyn_pid returned 0 with no pidfile"
+        return 0
+    fi
+    # Pidfile with a long-lived pid; env off -> 1.
+    bash -c 'trap : TERM; sleep 5' &
+    local helper_pid=$!
+    echo "$helper_pid" > "$C_PROXY_PIDFILE"
+    if INJECT_C_PROXY_TOO=0 c_dyn_pid >/dev/null 2>&1; then
+        kill -KILL "$helper_pid" 2>/dev/null || true
+        wait "$helper_pid" 2>/dev/null || true
+        rm -f "$C_PROXY_PIDFILE"
+        record FAIL phase5_c_dyn_pid_gating "c_dyn_pid returned 0 with INJECT_C_PROXY_TOO=0"
+        return 0
+    fi
+    # Env on + live pid -> 0.
+    if ! INJECT_C_PROXY_TOO=1 c_dyn_pid >/dev/null 2>&1; then
+        kill -KILL "$helper_pid" 2>/dev/null || true
+        wait "$helper_pid" 2>/dev/null || true
+        rm -f "$C_PROXY_PIDFILE"
+        record FAIL phase5_c_dyn_pid_gating "c_dyn_pid returned 1 with INJECT_C_PROXY_TOO=1 + live pid"
+        return 0
+    fi
+    kill -KILL "$helper_pid" 2>/dev/null || true
+    wait "$helper_pid" 2>/dev/null || true
+    rm -f "$C_PROXY_PIDFILE"
+    record OK phase5_c_dyn_pid_gating
+}
+
 # ---------- run ----------
 
 note "==> running smokes"
 smoke_process_pause
+
+# P3-3.9 phase 5: dual-proxy fault smokes. These run on every
+# host because they only use trapping bash subshells and
+# pidfile bookkeeping; no privileged operations.
+smoke_phase5_c_dyn_pid_gating
+smoke_phase5_kill_both_proxies
 
 smoke_network_partition
 smoke_network_delay

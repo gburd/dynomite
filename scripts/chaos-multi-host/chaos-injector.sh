@@ -102,6 +102,15 @@ if [ "$__CHAOS_SOURCED" = "0" ]; then
     CLOCK_SKEW_MARKER="$RUN/clock-skew-active"
     BALLAST_FILE="$RUN/chaos-ballast"
     BALLAST_FULL_FILE="$RUN/chaos-ballast-full"
+
+    # P3-3.9 phase 5: pidfile of the C `dynomite` reference
+    # proxy that start-host.sh writes when MODE=differential.
+    # Process faults consult this file (gated by the
+    # INJECT_C_PROXY_TOO env knob) so SIGSTOP/SIGCONT/SIGKILL
+    # land on both proxies in lockstep. The knob defaults to
+    # off; non-differential runs see no behavioural change.
+    C_PROXY_PIDFILE="${C_PROXY_PIDFILE:-$RUN/dynomite-c.pid}"
+    INJECT_C_PROXY_TOO="${INJECT_C_PROXY_TOO:-0}"
 fi
 
 # Runnable-class sets are populated by check_prereqs once the
@@ -204,6 +213,61 @@ dyn_pid() {
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             printf '%s' "$pid"; return 0
         fi
+    fi
+    return 1
+}
+
+# c_dyn_pid: read the C `dynomite` reference proxy's pidfile
+# when phase-5 dual-fault injection is enabled. Echoes the pid
+# and returns 0 when INJECT_C_PROXY_TOO=1 AND the pidfile
+# exists AND the recorded pid is alive; returns 1 (and emits
+# nothing) otherwise. The silent-skip semantics are part of
+# the P3-3.9 phase-5 contract: a non-differential run leaves
+# the pidfile absent, and the helper must not log or fault
+# when the env knob is off.
+c_dyn_pid() {
+    if [ "${INJECT_C_PROXY_TOO:-0}" != "1" ]; then
+        return 1
+    fi
+    if [ ! -f "$C_PROXY_PIDFILE" ]; then
+        return 1
+    fi
+    local pid
+    pid=$(cat "$C_PROXY_PIDFILE" 2>/dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        printf '%s' "$pid"
+        return 0
+    fi
+    return 1
+}
+
+# kill_both_proxies <signal>: send <signal> to the Rust
+# `dynomited` and (when INJECT_C_PROXY_TOO=1) the C `dynomite`
+# reference proxy. Each pidfile is consulted independently;
+# missing pidfiles are skipped silently so a single-binary
+# run sees the same observable behaviour as before phase 5.
+# Returns 0 if at least one signal landed, non-zero if
+# neither pidfile was readable.
+#
+# <signal> is passed through to `kill` without the leading
+# dash (the helper supplies it). The accepted spellings are
+# the same as `kill` itself: STOP, CONT, KILL, TERM, etc.
+kill_both_proxies() {
+    local sig="$1"
+    local landed=0
+    local pid cpid
+    if pid=$(dyn_pid); then
+        if kill "-$sig" "$pid" 2>/dev/null; then
+            landed=1
+        fi
+    fi
+    if cpid=$(c_dyn_pid); then
+        if kill "-$sig" "$cpid" 2>/dev/null; then
+            landed=1
+        fi
+    fi
+    if [ "$landed" = "1" ]; then
+        return 0
     fi
     return 1
 }
@@ -389,10 +453,22 @@ fault_process_pause() {
     if pid=$(dyn_pid); then
         local dur=$(( RANDOM % 11 + 5 ))
         event fault_process_pause "{\"pid\":$pid,\"duration\":$dur}"
-        kill -STOP "$pid" 2>/dev/null || true
+        # P3-3.9 phase 5: pair the Rust event with a `_c`
+        # variant when the C reference proxy is being faulted
+        # in lockstep. Sampled BEFORE kill_both_proxies so the
+        # event captures the C pid even if the SIGSTOP races
+        # the kernel teardown of the process.
+        local cpid_pause=""
+        if cpid_pause=$(c_dyn_pid); then
+            event fault_pause_start_c "{\"pid\":$cpid_pause,\"duration\":$dur}"
+        fi
+        kill_both_proxies STOP || true
         sleep "$dur"
-        kill -CONT "$pid" 2>/dev/null || true
+        kill_both_proxies CONT || true
         event fault_process_pause_end "{\"pid\":$pid,\"duration\":$dur}"
+        if [ -n "$cpid_pause" ]; then
+            event fault_pause_end_c "{\"pid\":$cpid_pause,\"duration\":$dur}"
+        fi
     else
         event fault_process_pause_skipped "{\"reason\":\"no-dynomited\"}"
     fi
@@ -401,8 +477,20 @@ fault_process_pause() {
 fault_process_kill() {
     if pid=$(dyn_pid); then
         event fault_process_kill "{\"pid\":$pid}"
-        kill -KILL "$pid" 2>/dev/null || true
-        # Wait for the kernel to reap before restart.
+        # P3-3.9 phase 5: emit `fault_kill_c` alongside the
+        # Rust event when a C proxy is in scope. Sample the
+        # pid before the kill so the event payload carries
+        # the live pid; the kernel may reap quickly.
+        local cpid_kill=""
+        if cpid_kill=$(c_dyn_pid); then
+            event fault_kill_c "{\"pid\":$cpid_kill}"
+        fi
+        kill_both_proxies KILL || true
+        # Wait for the kernel to reap the Rust pid before
+        # restart. We do not block on the C pid: start-host.sh
+        # in MODE=differential respawns both proxies, and a
+        # slow C reap would only delay the Rust restart
+        # without changing the observable schedule.
         for _ in $(seq 1 50); do
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.1
@@ -416,6 +504,12 @@ fault_process_kill() {
 }
 
 fault_process_redis_bounce() {
+    # P3-3.9 phase 5 note: the redis-bounce path targets the
+    # SHARED backend datastore (one redis-server per host that
+    # both proxies front in MODE=differential). A single
+    # bounce is therefore observable to both the Rust and C
+    # proxies without any per-proxy duplication; we do NOT
+    # emit a paired `_c` event here for that reason.
     if id=$(redis_pid); then
         event fault_process_redis_bounce "{\"id\":\"$id\",\"mode\":\"$MODE\"}"
         case "$id" in
@@ -601,9 +695,16 @@ fault_clock_skew() {
         "{\"offset\":\"$offset\",\"seconds\":$offset_seconds,\"sub\":\"$sub\",\"duration\":$dur}"
     echo "$offset" > "$CLOCK_SKEW_MARKER"
     # Kill and restart with FAKETIME set; start-host.sh wraps
-    # the dynomited launch with the faketime prefix.
+    # the dynomited launch with the faketime prefix. P3-3.9
+    # phase 5: the kill is delivered to both proxies in
+    # lockstep when INJECT_C_PROXY_TOO=1 so the differential
+    # rig observes identical recovery windows on both sides.
+    # The C reference does not honour the FAKETIME prefix
+    # (start-host.sh applies the wrapper only to the Rust
+    # binary), but killing it in lockstep keeps the restart
+    # cycle shape symmetric.
     if pid=$(dyn_pid); then
-        kill -KILL "$pid" 2>/dev/null || true
+        kill_both_proxies KILL || true
         for _ in $(seq 1 50); do
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.1
@@ -616,7 +717,7 @@ fault_clock_skew() {
     # restarting normally.
     cleanup_clock
     if pid=$(dyn_pid); then
-        kill -KILL "$pid" 2>/dev/null || true
+        kill_both_proxies KILL || true
         for _ in $(seq 1 50); do
             kill -0 "$pid" 2>/dev/null || break
             sleep 0.1
@@ -925,9 +1026,29 @@ scheduler_unified() {
         event scheduler_fire "{\"fault\":\"$f\"}"
         "$f"
         # Check dynomited is still up; if the fault left it
-        # down, recover.
+        # down, recover. P3-3.9 phase 5: also check the C
+        # proxy in differential mode and emit
+        # `recovery_restart_c` so the report can attribute
+        # the recovery to the correct binary. Both proxies
+        # come back via the same start-host.sh invocation
+        # (start-host.sh in MODE=differential brings up both),
+        # so a single restart_dynomited call is sufficient.
+        local rust_down=0 c_down=0
         if ! dyn_pid >/dev/null; then
-            event scheduler_recovery "{}"
+            rust_down=1
+        fi
+        if [ "${INJECT_C_PROXY_TOO:-0}" = "1" ] \
+                && [ -f "$C_PROXY_PIDFILE" ] \
+                && ! c_dyn_pid >/dev/null; then
+            c_down=1
+        fi
+        if [ "$rust_down" = "1" ] || [ "$c_down" = "1" ]; then
+            if [ "$rust_down" = "1" ]; then
+                event scheduler_recovery "{}"
+            fi
+            if [ "$c_down" = "1" ]; then
+                event recovery_restart_c "{}"
+            fi
             restart_dynomited scheduler_recovery_failed
         fi
     done
@@ -947,10 +1068,20 @@ scheduler_legacy() {
             if pid=$(dyn_pid); then
                 local DUR=$(( RANDOM % 11 + 5 ))
                 event pause_start "{\"pid\":$pid,\"duration\":$DUR}"
-                kill -STOP "$pid" 2>/dev/null || true
+                # P3-3.9 phase 5: paired `_c` events when the
+                # C reference proxy is being faulted in
+                # lockstep.
+                local CPID_PAUSE=""
+                if CPID_PAUSE=$(c_dyn_pid); then
+                    event fault_pause_start_c "{\"pid\":$CPID_PAUSE,\"duration\":$DUR}"
+                fi
+                kill_both_proxies STOP || true
                 sleep "$DUR"
-                kill -CONT "$pid" 2>/dev/null || true
+                kill_both_proxies CONT || true
                 event pause_end "{\"pid\":$pid,\"duration\":$DUR}"
+                if [ -n "$CPID_PAUSE" ]; then
+                    event fault_pause_end_c "{\"pid\":$CPID_PAUSE,\"duration\":$DUR}"
+                fi
             else
                 event pause_skipped "{\"reason\":\"no-dynomited\"}"
             fi
@@ -959,7 +1090,13 @@ scheduler_legacy() {
         if [ "$NOW" -ge "$NEXT_KILL" ]; then
             if pid=$(dyn_pid); then
                 event kill "{\"pid\":$pid}"
-                kill -KILL "$pid" 2>/dev/null || true
+                # P3-3.9 phase 5: emit `fault_kill_c` when
+                # the C proxy is being killed in lockstep.
+                local CPID_KILL=""
+                if CPID_KILL=$(c_dyn_pid); then
+                    event fault_kill_c "{\"pid\":$CPID_KILL}"
+                fi
+                kill_both_proxies KILL || true
                 for _ in $(seq 1 50); do
                     kill -0 "$pid" 2>/dev/null || break
                     sleep 0.1
@@ -974,16 +1111,47 @@ scheduler_legacy() {
             NEXT_REDIS_BOUNCE=$(( $(date +%s) + (RANDOM % 600 + 1200) ))
         fi
         # Independent recovery: hysteresis-debounced restart of
-        # a missing dynomited.
+        # a missing dynomited. P3-3.9 phase 5: when the C
+        # proxy is being driven in lockstep we additionally
+        # emit `recovery_restart_c` whenever the C pidfile
+        # tracker indicates the C process is gone. Both
+        # proxies come back via the same start-host.sh
+        # invocation, so a single restart_dynomited call
+        # respawns both.
+        local rust_down=0 c_down=0
         if ! dyn_pid >/dev/null; then
+            rust_down=1
+        fi
+        if [ "${INJECT_C_PROXY_TOO:-0}" = "1" ] \
+                && [ -f "$C_PROXY_PIDFILE" ] \
+                && ! c_dyn_pid >/dev/null; then
+            c_down=1
+        fi
+        if [ "$rust_down" = "1" ]; then
             if [ "$MISSING_STREAK" -ge 1 ]; then
                 event recovery_restart "{\"streak\":$MISSING_STREAK}"
+                if [ "$c_down" = "1" ]; then
+                    event recovery_restart_c "{\"streak\":$MISSING_STREAK}"
+                fi
                 restart_dynomited recovery_restart_failed
                 MISSING_STREAK=0
             else
                 MISSING_STREAK=$(( MISSING_STREAK + 1 ))
             fi
         else
+            if [ "$c_down" = "1" ]; then
+                # Rust is up but C is gone (rare; possible if
+                # an out-of-band kill landed only on C).
+                # Surface the event and let restart_dynomited
+                # bring C back via start-host.sh. The Rust
+                # process is left running; start-host.sh has
+                # to tolerate that or it fails to bind, in
+                # which case the next loop iteration will
+                # observe rust_down=1 and the standard
+                # recovery_restart fires.
+                event recovery_restart_c "{}"
+                restart_dynomited recovery_restart_failed
+            fi
             MISSING_STREAK=0
         fi
         sleep 5

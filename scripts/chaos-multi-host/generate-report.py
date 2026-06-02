@@ -579,18 +579,30 @@ def render_report(run_dir: Path) -> str:
     # ---- 5. per-host stability indicators ----
     lines.append("## Per-host stability indicators")
     lines.append("")
+    # P3-3.9 phase 5: the chaos-injector's process faults can
+    # now hit BOTH the Rust dynomited and the C `dynomite`
+    # reference proxy in lockstep when MODE=differential is
+    # active. Paired `_c` events (`fault_kill_c`,
+    # `recovery_restart_c`, `fault_pause_start_c`, and
+    # `fault_pause_end_c`) record which proxy was hit. The
+    # per-host stability table below adds two columns next to
+    # the existing `kill` and `recovery_restart` counters so
+    # the report attributes faults to the correct binary.
+    # The columns are zero on non-differential runs.
     lines.append(
-        "| host | restart_failed | recovery_restart | redis_bounce | "
-        "kill | restart |"
+        "| host | restart_failed | recovery_restart | recovery_restart_c | "
+        "redis_bounce | kill | fault_kill_c | restart |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
     for label in host_labels:
         kinds = per_host[label]["kinds"]
         lines.append(
             f"| `{label}` | {fmt_int(kinds.get('restart_failed', 0))} | "
             f"{fmt_int(kinds.get('recovery_restart', 0))} | "
+            f"{fmt_int(kinds.get('recovery_restart_c', 0))} | "
             f"{fmt_int(kinds.get('redis_bounce', 0))} | "
             f"{fmt_int(kinds.get('kill', 0))} | "
+            f"{fmt_int(kinds.get('fault_kill_c', 0))} | "
             f"{fmt_int(kinds.get('restart', 0))} |"
         )
     lines.append("")
