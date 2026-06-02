@@ -1,0 +1,288 @@
+pub mod tre_sys
+pub enum tre_sys::ExecOutcome
+pub tre_sys::ExecOutcome::Error(core::ffi::primitives::c_int)
+pub tre_sys::ExecOutcome::Match(tre_sys::SafeMatch)
+pub tre_sys::ExecOutcome::NoMatch
+impl core::clone::Clone for tre_sys::ExecOutcome
+pub fn tre_sys::ExecOutcome::clone(&self) -> tre_sys::ExecOutcome
+impl core::cmp::Eq for tre_sys::ExecOutcome
+impl core::cmp::PartialEq for tre_sys::ExecOutcome
+pub fn tre_sys::ExecOutcome::eq(&self, &tre_sys::ExecOutcome) -> bool
+impl core::fmt::Debug for tre_sys::ExecOutcome
+pub fn tre_sys::ExecOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tre_sys::ExecOutcome
+impl core::marker::StructuralPartialEq for tre_sys::ExecOutcome
+impl core::marker::Freeze for tre_sys::ExecOutcome
+impl core::marker::Send for tre_sys::ExecOutcome
+impl core::marker::Sync for tre_sys::ExecOutcome
+impl core::marker::Unpin for tre_sys::ExecOutcome
+impl core::marker::UnsafeUnpin for tre_sys::ExecOutcome
+impl core::panic::unwind_safe::RefUnwindSafe for tre_sys::ExecOutcome
+impl core::panic::unwind_safe::UnwindSafe for tre_sys::ExecOutcome
+impl<T, U> core::convert::Into<U> for tre_sys::ExecOutcome where U: core::convert::From<T>
+pub fn tre_sys::ExecOutcome::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for tre_sys::ExecOutcome where U: core::convert::Into<T>
+pub type tre_sys::ExecOutcome::Error = core::convert::Infallible
+pub fn tre_sys::ExecOutcome::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for tre_sys::ExecOutcome where U: core::convert::TryFrom<T>
+pub type tre_sys::ExecOutcome::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn tre_sys::ExecOutcome::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for tre_sys::ExecOutcome where T: core::clone::Clone
+pub type tre_sys::ExecOutcome::Owned = T
+pub fn tre_sys::ExecOutcome::clone_into(&self, &mut T)
+pub fn tre_sys::ExecOutcome::to_owned(&self) -> T
+impl<T> core::any::Any for tre_sys::ExecOutcome where T: 'static + ?core::marker::Sized
+pub fn tre_sys::ExecOutcome::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for tre_sys::ExecOutcome where T: ?core::marker::Sized
+pub fn tre_sys::ExecOutcome::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for tre_sys::ExecOutcome where T: ?core::marker::Sized
+pub fn tre_sys::ExecOutcome::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for tre_sys::ExecOutcome where T: core::clone::Clone
+pub unsafe fn tre_sys::ExecOutcome::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for tre_sys::ExecOutcome
+pub fn tre_sys::ExecOutcome::from(T) -> T
+pub struct tre_sys::OwnedRegex
+impl tre_sys::OwnedRegex
+pub fn tre_sys::OwnedRegex::as_raw(&self) -> &tre_sys::regex_t
+pub fn tre_sys::OwnedRegex::nsub(&self) -> usize
+impl core::fmt::Debug for tre_sys::OwnedRegex
+pub fn tre_sys::OwnedRegex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for tre_sys::OwnedRegex
+pub fn tre_sys::OwnedRegex::drop(&mut self)
+impl core::marker::Freeze for tre_sys::OwnedRegex
+impl !core::marker::Send for tre_sys::OwnedRegex
+impl !core::marker::Sync for tre_sys::OwnedRegex
+impl core::marker::Unpin for tre_sys::OwnedRegex
+impl core::marker::UnsafeUnpin for tre_sys::OwnedRegex
+impl core::panic::unwind_safe::RefUnwindSafe for tre_sys::OwnedRegex
+impl core::panic::unwind_safe::UnwindSafe for tre_sys::OwnedRegex
+impl<T, U> core::convert::Into<U> for tre_sys::OwnedRegex where U: core::convert::From<T>
+pub fn tre_sys::OwnedRegex::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for tre_sys::OwnedRegex where U: core::convert::Into<T>
+pub type tre_sys::OwnedRegex::Error = core::convert::Infallible
+pub fn tre_sys::OwnedRegex::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for tre_sys::OwnedRegex where U: core::convert::TryFrom<T>
+pub type tre_sys::OwnedRegex::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn tre_sys::OwnedRegex::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for tre_sys::OwnedRegex where T: 'static + ?core::marker::Sized
+pub fn tre_sys::OwnedRegex::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for tre_sys::OwnedRegex where T: ?core::marker::Sized
+pub fn tre_sys::OwnedRegex::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for tre_sys::OwnedRegex where T: ?core::marker::Sized
+pub fn tre_sys::OwnedRegex::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for tre_sys::OwnedRegex
+pub fn tre_sys::OwnedRegex::from(T) -> T
+pub struct tre_sys::SafeMatch
+pub tre_sys::SafeMatch::cost: i32
+pub tre_sys::SafeMatch::num_del: i32
+pub tre_sys::SafeMatch::num_ins: i32
+pub tre_sys::SafeMatch::num_subst: i32
+impl core::clone::Clone for tre_sys::SafeMatch
+pub fn tre_sys::SafeMatch::clone(&self) -> tre_sys::SafeMatch
+impl core::cmp::Eq for tre_sys::SafeMatch
+impl core::cmp::PartialEq for tre_sys::SafeMatch
+pub fn tre_sys::SafeMatch::eq(&self, &tre_sys::SafeMatch) -> bool
+impl core::fmt::Debug for tre_sys::SafeMatch
+pub fn tre_sys::SafeMatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tre_sys::SafeMatch
+impl core::marker::StructuralPartialEq for tre_sys::SafeMatch
+impl core::marker::Freeze for tre_sys::SafeMatch
+impl core::marker::Send for tre_sys::SafeMatch
+impl core::marker::Sync for tre_sys::SafeMatch
+impl core::marker::Unpin for tre_sys::SafeMatch
+impl core::marker::UnsafeUnpin for tre_sys::SafeMatch
+impl core::panic::unwind_safe::RefUnwindSafe for tre_sys::SafeMatch
+impl core::panic::unwind_safe::UnwindSafe for tre_sys::SafeMatch
+impl<T, U> core::convert::Into<U> for tre_sys::SafeMatch where U: core::convert::From<T>
+pub fn tre_sys::SafeMatch::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for tre_sys::SafeMatch where U: core::convert::Into<T>
+pub type tre_sys::SafeMatch::Error = core::convert::Infallible
+pub fn tre_sys::SafeMatch::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for tre_sys::SafeMatch where U: core::convert::TryFrom<T>
+pub type tre_sys::SafeMatch::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn tre_sys::SafeMatch::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for tre_sys::SafeMatch where T: core::clone::Clone
+pub type tre_sys::SafeMatch::Owned = T
+pub fn tre_sys::SafeMatch::clone_into(&self, &mut T)
+pub fn tre_sys::SafeMatch::to_owned(&self) -> T
+impl<T> core::any::Any for tre_sys::SafeMatch where T: 'static + ?core::marker::Sized
+pub fn tre_sys::SafeMatch::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for tre_sys::SafeMatch where T: ?core::marker::Sized
+pub fn tre_sys::SafeMatch::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for tre_sys::SafeMatch where T: ?core::marker::Sized
+pub fn tre_sys::SafeMatch::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for tre_sys::SafeMatch where T: core::clone::Clone
+pub unsafe fn tre_sys::SafeMatch::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for tre_sys::SafeMatch
+pub fn tre_sys::SafeMatch::from(T) -> T
+#[repr(C)] pub struct tre_sys::regamatch_t
+pub tre_sys::regamatch_t::cost: core::ffi::primitives::c_int
+pub tre_sys::regamatch_t::nmatch: libc::unix::size_t
+pub tre_sys::regamatch_t::num_del: core::ffi::primitives::c_int
+pub tre_sys::regamatch_t::num_ins: core::ffi::primitives::c_int
+pub tre_sys::regamatch_t::num_subst: core::ffi::primitives::c_int
+pub tre_sys::regamatch_t::pmatch: *mut tre_sys::regmatch_t
+impl core::fmt::Debug for tre_sys::regamatch_t
+pub fn tre_sys::regamatch_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for tre_sys::regamatch_t
+impl !core::marker::Send for tre_sys::regamatch_t
+impl !core::marker::Sync for tre_sys::regamatch_t
+impl core::marker::Unpin for tre_sys::regamatch_t
+impl core::marker::UnsafeUnpin for tre_sys::regamatch_t
+impl core::panic::unwind_safe::RefUnwindSafe for tre_sys::regamatch_t
+impl core::panic::unwind_safe::UnwindSafe for tre_sys::regamatch_t
+impl<T, U> core::convert::Into<U> for tre_sys::regamatch_t where U: core::convert::From<T>
+pub fn tre_sys::regamatch_t::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for tre_sys::regamatch_t where U: core::convert::Into<T>
+pub type tre_sys::regamatch_t::Error = core::convert::Infallible
+pub fn tre_sys::regamatch_t::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for tre_sys::regamatch_t where U: core::convert::TryFrom<T>
+pub type tre_sys::regamatch_t::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn tre_sys::regamatch_t::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for tre_sys::regamatch_t where T: 'static + ?core::marker::Sized
+pub fn tre_sys::regamatch_t::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for tre_sys::regamatch_t where T: ?core::marker::Sized
+pub fn tre_sys::regamatch_t::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for tre_sys::regamatch_t where T: ?core::marker::Sized
+pub fn tre_sys::regamatch_t::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for tre_sys::regamatch_t
+pub fn tre_sys::regamatch_t::from(T) -> T
+#[repr(C)] pub struct tre_sys::regaparams_t
+pub tre_sys::regaparams_t::cost_del: core::ffi::primitives::c_int
+pub tre_sys::regaparams_t::cost_ins: core::ffi::primitives::c_int
+pub tre_sys::regaparams_t::cost_subst: core::ffi::primitives::c_int
+pub tre_sys::regaparams_t::max_cost: core::ffi::primitives::c_int
+pub tre_sys::regaparams_t::max_del: core::ffi::primitives::c_int
+pub tre_sys::regaparams_t::max_err: core::ffi::primitives::c_int
+pub tre_sys::regaparams_t::max_ins: core::ffi::primitives::c_int
+pub tre_sys::regaparams_t::max_subst: core::ffi::primitives::c_int
+impl core::clone::Clone for tre_sys::regaparams_t
+pub fn tre_sys::regaparams_t::clone(&self) -> tre_sys::regaparams_t
+impl core::fmt::Debug for tre_sys::regaparams_t
+pub fn tre_sys::regaparams_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tre_sys::regaparams_t
+impl core::marker::Freeze for tre_sys::regaparams_t
+impl core::marker::Send for tre_sys::regaparams_t
+impl core::marker::Sync for tre_sys::regaparams_t
+impl core::marker::Unpin for tre_sys::regaparams_t
+impl core::marker::UnsafeUnpin for tre_sys::regaparams_t
+impl core::panic::unwind_safe::RefUnwindSafe for tre_sys::regaparams_t
+impl core::panic::unwind_safe::UnwindSafe for tre_sys::regaparams_t
+impl<T, U> core::convert::Into<U> for tre_sys::regaparams_t where U: core::convert::From<T>
+pub fn tre_sys::regaparams_t::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for tre_sys::regaparams_t where U: core::convert::Into<T>
+pub type tre_sys::regaparams_t::Error = core::convert::Infallible
+pub fn tre_sys::regaparams_t::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for tre_sys::regaparams_t where U: core::convert::TryFrom<T>
+pub type tre_sys::regaparams_t::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn tre_sys::regaparams_t::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for tre_sys::regaparams_t where T: core::clone::Clone
+pub type tre_sys::regaparams_t::Owned = T
+pub fn tre_sys::regaparams_t::clone_into(&self, &mut T)
+pub fn tre_sys::regaparams_t::to_owned(&self) -> T
+impl<T> core::any::Any for tre_sys::regaparams_t where T: 'static + ?core::marker::Sized
+pub fn tre_sys::regaparams_t::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for tre_sys::regaparams_t where T: ?core::marker::Sized
+pub fn tre_sys::regaparams_t::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for tre_sys::regaparams_t where T: ?core::marker::Sized
+pub fn tre_sys::regaparams_t::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for tre_sys::regaparams_t where T: core::clone::Clone
+pub unsafe fn tre_sys::regaparams_t::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for tre_sys::regaparams_t
+pub fn tre_sys::regaparams_t::from(T) -> T
+#[repr(C)] pub struct tre_sys::regex_t
+pub tre_sys::regex_t::re_nsub: libc::unix::size_t
+pub tre_sys::regex_t::value: *mut core::ffi::c_void
+impl core::fmt::Debug for tre_sys::regex_t
+pub fn tre_sys::regex_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for tre_sys::regex_t
+impl !core::marker::Send for tre_sys::regex_t
+impl !core::marker::Sync for tre_sys::regex_t
+impl core::marker::Unpin for tre_sys::regex_t
+impl core::marker::UnsafeUnpin for tre_sys::regex_t
+impl core::panic::unwind_safe::RefUnwindSafe for tre_sys::regex_t
+impl core::panic::unwind_safe::UnwindSafe for tre_sys::regex_t
+impl<T, U> core::convert::Into<U> for tre_sys::regex_t where U: core::convert::From<T>
+pub fn tre_sys::regex_t::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for tre_sys::regex_t where U: core::convert::Into<T>
+pub type tre_sys::regex_t::Error = core::convert::Infallible
+pub fn tre_sys::regex_t::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for tre_sys::regex_t where U: core::convert::TryFrom<T>
+pub type tre_sys::regex_t::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn tre_sys::regex_t::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for tre_sys::regex_t where T: 'static + ?core::marker::Sized
+pub fn tre_sys::regex_t::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for tre_sys::regex_t where T: ?core::marker::Sized
+pub fn tre_sys::regex_t::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for tre_sys::regex_t where T: ?core::marker::Sized
+pub fn tre_sys::regex_t::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for tre_sys::regex_t
+pub fn tre_sys::regex_t::from(T) -> T
+#[repr(C)] pub struct tre_sys::regmatch_t
+pub tre_sys::regmatch_t::rm_eo: tre_sys::regoff_t
+pub tre_sys::regmatch_t::rm_so: tre_sys::regoff_t
+impl core::clone::Clone for tre_sys::regmatch_t
+pub fn tre_sys::regmatch_t::clone(&self) -> tre_sys::regmatch_t
+impl core::fmt::Debug for tre_sys::regmatch_t
+pub fn tre_sys::regmatch_t::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tre_sys::regmatch_t
+impl core::marker::Freeze for tre_sys::regmatch_t
+impl core::marker::Send for tre_sys::regmatch_t
+impl core::marker::Sync for tre_sys::regmatch_t
+impl core::marker::Unpin for tre_sys::regmatch_t
+impl core::marker::UnsafeUnpin for tre_sys::regmatch_t
+impl core::panic::unwind_safe::RefUnwindSafe for tre_sys::regmatch_t
+impl core::panic::unwind_safe::UnwindSafe for tre_sys::regmatch_t
+impl<T, U> core::convert::Into<U> for tre_sys::regmatch_t where U: core::convert::From<T>
+pub fn tre_sys::regmatch_t::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for tre_sys::regmatch_t where U: core::convert::Into<T>
+pub type tre_sys::regmatch_t::Error = core::convert::Infallible
+pub fn tre_sys::regmatch_t::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for tre_sys::regmatch_t where U: core::convert::TryFrom<T>
+pub type tre_sys::regmatch_t::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn tre_sys::regmatch_t::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for tre_sys::regmatch_t where T: core::clone::Clone
+pub type tre_sys::regmatch_t::Owned = T
+pub fn tre_sys::regmatch_t::clone_into(&self, &mut T)
+pub fn tre_sys::regmatch_t::to_owned(&self) -> T
+impl<T> core::any::Any for tre_sys::regmatch_t where T: 'static + ?core::marker::Sized
+pub fn tre_sys::regmatch_t::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for tre_sys::regmatch_t where T: ?core::marker::Sized
+pub fn tre_sys::regmatch_t::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for tre_sys::regmatch_t where T: ?core::marker::Sized
+pub fn tre_sys::regmatch_t::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for tre_sys::regmatch_t where T: core::clone::Clone
+pub unsafe fn tre_sys::regmatch_t::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for tre_sys::regmatch_t
+pub fn tre_sys::regmatch_t::from(T) -> T
+pub const tre_sys::REG_BADBR: core::ffi::primitives::c_int
+pub const tre_sys::REG_BADPAT: core::ffi::primitives::c_int
+pub const tre_sys::REG_BADRPT: core::ffi::primitives::c_int
+pub const tre_sys::REG_EBRACE: core::ffi::primitives::c_int
+pub const tre_sys::REG_EBRACK: core::ffi::primitives::c_int
+pub const tre_sys::REG_ECOLLATE: core::ffi::primitives::c_int
+pub const tre_sys::REG_ECTYPE: core::ffi::primitives::c_int
+pub const tre_sys::REG_EESCAPE: core::ffi::primitives::c_int
+pub const tre_sys::REG_EPAREN: core::ffi::primitives::c_int
+pub const tre_sys::REG_ERANGE: core::ffi::primitives::c_int
+pub const tre_sys::REG_ESPACE: core::ffi::primitives::c_int
+pub const tre_sys::REG_ESUBREG: core::ffi::primitives::c_int
+pub const tre_sys::REG_EXTENDED: core::ffi::primitives::c_int
+pub const tre_sys::REG_ICASE: core::ffi::primitives::c_int
+pub const tre_sys::REG_NEWLINE: core::ffi::primitives::c_int
+pub const tre_sys::REG_NOMATCH: core::ffi::primitives::c_int
+pub const tre_sys::REG_NOSUB: core::ffi::primitives::c_int
+pub const tre_sys::REG_OK: core::ffi::primitives::c_int
+pub fn tre_sys::compile(&[u8], core::ffi::primitives::c_int) -> core::result::Result<tre_sys::OwnedRegex, core::ffi::primitives::c_int>
+pub fn tre_sys::default_regaparams() -> tre_sys::regaparams_t
+pub fn tre_sys::empty_regex_t() -> tre_sys::regex_t
+pub fn tre_sys::safe_reganexec(&tre_sys::regex_t, &[u8], tre_sys::regaparams_t, core::ffi::primitives::c_int) -> tre_sys::ExecOutcome
+pub fn tre_sys::safe_regerror(core::ffi::primitives::c_int, core::option::Option<&tre_sys::regex_t>) -> alloc::string::String
+pub fn tre_sys::safe_regfree(&mut tre_sys::regex_t)
+pub fn tre_sys::safe_regncomp(&mut tre_sys::regex_t, &[u8], core::ffi::primitives::c_int) -> core::result::Result<(), core::ffi::primitives::c_int>
+pub unsafe c fn tre_sys::tre_reganexec(*const tre_sys::regex_t, *const core::ffi::primitives::c_char, libc::unix::size_t, *mut tre_sys::regamatch_t, tre_sys::regaparams_t, core::ffi::primitives::c_int) -> core::ffi::primitives::c_int
+pub unsafe c fn tre_sys::tre_regaparams_default(*mut tre_sys::regaparams_t)
+pub unsafe c fn tre_sys::tre_regerror(core::ffi::primitives::c_int, *const tre_sys::regex_t, *mut core::ffi::primitives::c_char, libc::unix::size_t) -> libc::unix::size_t
+pub unsafe c fn tre_sys::tre_regfree(*mut tre_sys::regex_t)
+pub unsafe c fn tre_sys::tre_regncomp(*mut tre_sys::regex_t, *const core::ffi::primitives::c_char, libc::unix::size_t, core::ffi::primitives::c_int) -> core::ffi::primitives::c_int
+pub type tre_sys::regoff_t = core::ffi::primitives::c_int

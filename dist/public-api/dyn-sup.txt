@@ -1,0 +1,611 @@
+pub mod sup
+pub mod sup::atomics
+pub struct sup::atomics::BackoffState
+impl sup::atomics::BackoffState
+pub fn sup::atomics::BackoffState::failures(&self) -> u32
+pub fn sup::atomics::BackoffState::new(sup::BackoffSpec, u64) -> Self
+pub fn sup::atomics::BackoffState::next_delay(&self) -> core::time::Duration
+pub fn sup::atomics::BackoffState::observe_failure(&self)
+pub fn sup::atomics::BackoffState::observe_success(&self)
+pub fn sup::atomics::BackoffState::spec(&self) -> &sup::BackoffSpec
+impl !core::marker::Freeze for sup::atomics::BackoffState
+impl core::marker::Send for sup::atomics::BackoffState
+impl core::marker::Sync for sup::atomics::BackoffState
+impl core::marker::Unpin for sup::atomics::BackoffState
+impl core::marker::UnsafeUnpin for sup::atomics::BackoffState
+impl core::panic::unwind_safe::RefUnwindSafe for sup::atomics::BackoffState
+impl core::panic::unwind_safe::UnwindSafe for sup::atomics::BackoffState
+impl<T, U> core::convert::Into<U> for sup::atomics::BackoffState where U: core::convert::From<T>
+pub fn sup::atomics::BackoffState::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::atomics::BackoffState where U: core::convert::Into<T>
+pub type sup::atomics::BackoffState::Error = core::convert::Infallible
+pub fn sup::atomics::BackoffState::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::atomics::BackoffState where U: core::convert::TryFrom<T>
+pub type sup::atomics::BackoffState::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::atomics::BackoffState::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for sup::atomics::BackoffState where T: 'static + ?core::marker::Sized
+pub fn sup::atomics::BackoffState::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::atomics::BackoffState where T: ?core::marker::Sized
+pub fn sup::atomics::BackoffState::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::atomics::BackoffState where T: ?core::marker::Sized
+pub fn sup::atomics::BackoffState::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for sup::atomics::BackoffState
+pub fn sup::atomics::BackoffState::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::atomics::BackoffState
+impl<T> tracing::instrument::WithSubscriber for sup::atomics::BackoffState
+pub struct sup::atomics::ChildIdAllocator
+impl sup::atomics::ChildIdAllocator
+pub fn sup::atomics::ChildIdAllocator::new() -> Self
+pub fn sup::atomics::ChildIdAllocator::next(&self) -> u64
+impl core::default::Default for sup::atomics::ChildIdAllocator
+pub fn sup::atomics::ChildIdAllocator::default() -> Self
+impl !core::marker::Freeze for sup::atomics::ChildIdAllocator
+impl core::marker::Send for sup::atomics::ChildIdAllocator
+impl core::marker::Sync for sup::atomics::ChildIdAllocator
+impl core::marker::Unpin for sup::atomics::ChildIdAllocator
+impl core::marker::UnsafeUnpin for sup::atomics::ChildIdAllocator
+impl core::panic::unwind_safe::RefUnwindSafe for sup::atomics::ChildIdAllocator
+impl core::panic::unwind_safe::UnwindSafe for sup::atomics::ChildIdAllocator
+impl<T, U> core::convert::Into<U> for sup::atomics::ChildIdAllocator where U: core::convert::From<T>
+pub fn sup::atomics::ChildIdAllocator::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::atomics::ChildIdAllocator where U: core::convert::Into<T>
+pub type sup::atomics::ChildIdAllocator::Error = core::convert::Infallible
+pub fn sup::atomics::ChildIdAllocator::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::atomics::ChildIdAllocator where U: core::convert::TryFrom<T>
+pub type sup::atomics::ChildIdAllocator::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::atomics::ChildIdAllocator::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for sup::atomics::ChildIdAllocator where T: 'static + ?core::marker::Sized
+pub fn sup::atomics::ChildIdAllocator::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::atomics::ChildIdAllocator where T: ?core::marker::Sized
+pub fn sup::atomics::ChildIdAllocator::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::atomics::ChildIdAllocator where T: ?core::marker::Sized
+pub fn sup::atomics::ChildIdAllocator::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for sup::atomics::ChildIdAllocator
+pub fn sup::atomics::ChildIdAllocator::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::atomics::ChildIdAllocator
+impl<T> tracing::instrument::WithSubscriber for sup::atomics::ChildIdAllocator
+pub struct sup::atomics::FailureCounter
+impl sup::atomics::FailureCounter
+pub fn sup::atomics::FailureCounter::count(&self) -> u32
+pub fn sup::atomics::FailureCounter::new() -> Self
+pub fn sup::atomics::FailureCounter::observe_failure(&self) -> u32
+pub fn sup::atomics::FailureCounter::reset(&self)
+impl core::default::Default for sup::atomics::FailureCounter
+pub fn sup::atomics::FailureCounter::default() -> Self
+impl !core::marker::Freeze for sup::atomics::FailureCounter
+impl core::marker::Send for sup::atomics::FailureCounter
+impl core::marker::Sync for sup::atomics::FailureCounter
+impl core::marker::Unpin for sup::atomics::FailureCounter
+impl core::marker::UnsafeUnpin for sup::atomics::FailureCounter
+impl core::panic::unwind_safe::RefUnwindSafe for sup::atomics::FailureCounter
+impl core::panic::unwind_safe::UnwindSafe for sup::atomics::FailureCounter
+impl<T, U> core::convert::Into<U> for sup::atomics::FailureCounter where U: core::convert::From<T>
+pub fn sup::atomics::FailureCounter::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::atomics::FailureCounter where U: core::convert::Into<T>
+pub type sup::atomics::FailureCounter::Error = core::convert::Infallible
+pub fn sup::atomics::FailureCounter::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::atomics::FailureCounter where U: core::convert::TryFrom<T>
+pub type sup::atomics::FailureCounter::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::atomics::FailureCounter::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for sup::atomics::FailureCounter where T: 'static + ?core::marker::Sized
+pub fn sup::atomics::FailureCounter::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::atomics::FailureCounter where T: ?core::marker::Sized
+pub fn sup::atomics::FailureCounter::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::atomics::FailureCounter where T: ?core::marker::Sized
+pub fn sup::atomics::FailureCounter::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for sup::atomics::FailureCounter
+pub fn sup::atomics::FailureCounter::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::atomics::FailureCounter
+impl<T> tracing::instrument::WithSubscriber for sup::atomics::FailureCounter
+pub enum sup::ChildExit
+pub sup::ChildExit::Cancelled
+pub sup::ChildExit::Err(alloc::string::String)
+pub sup::ChildExit::Ok
+pub sup::ChildExit::Panic(alloc::string::String)
+impl sup::ChildExit
+pub fn sup::ChildExit::is_abnormal(&self) -> bool
+impl core::clone::Clone for sup::ChildExit
+pub fn sup::ChildExit::clone(&self) -> sup::ChildExit
+impl core::fmt::Debug for sup::ChildExit
+pub fn sup::ChildExit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for sup::ChildExit
+impl core::marker::Send for sup::ChildExit
+impl core::marker::Sync for sup::ChildExit
+impl core::marker::Unpin for sup::ChildExit
+impl core::marker::UnsafeUnpin for sup::ChildExit
+impl core::panic::unwind_safe::RefUnwindSafe for sup::ChildExit
+impl core::panic::unwind_safe::UnwindSafe for sup::ChildExit
+impl<T, U> core::convert::Into<U> for sup::ChildExit where U: core::convert::From<T>
+pub fn sup::ChildExit::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::ChildExit where U: core::convert::Into<T>
+pub type sup::ChildExit::Error = core::convert::Infallible
+pub fn sup::ChildExit::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::ChildExit where U: core::convert::TryFrom<T>
+pub type sup::ChildExit::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::ChildExit::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for sup::ChildExit where T: core::clone::Clone
+pub type sup::ChildExit::Owned = T
+pub fn sup::ChildExit::clone_into(&self, &mut T)
+pub fn sup::ChildExit::to_owned(&self) -> T
+impl<T> core::any::Any for sup::ChildExit where T: 'static + ?core::marker::Sized
+pub fn sup::ChildExit::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::ChildExit where T: ?core::marker::Sized
+pub fn sup::ChildExit::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::ChildExit where T: ?core::marker::Sized
+pub fn sup::ChildExit::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for sup::ChildExit where T: core::clone::Clone
+pub unsafe fn sup::ChildExit::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for sup::ChildExit
+pub fn sup::ChildExit::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::ChildExit
+impl<T> tracing::instrument::WithSubscriber for sup::ChildExit
+pub enum sup::RestartPolicy
+pub sup::RestartPolicy::Permanent
+pub sup::RestartPolicy::Temporary
+pub sup::RestartPolicy::Transient
+impl core::clone::Clone for sup::RestartPolicy
+pub fn sup::RestartPolicy::clone(&self) -> sup::RestartPolicy
+impl core::cmp::Eq for sup::RestartPolicy
+impl core::cmp::PartialEq for sup::RestartPolicy
+pub fn sup::RestartPolicy::eq(&self, &sup::RestartPolicy) -> bool
+impl core::fmt::Debug for sup::RestartPolicy
+pub fn sup::RestartPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for sup::RestartPolicy
+impl core::marker::StructuralPartialEq for sup::RestartPolicy
+impl core::marker::Freeze for sup::RestartPolicy
+impl core::marker::Send for sup::RestartPolicy
+impl core::marker::Sync for sup::RestartPolicy
+impl core::marker::Unpin for sup::RestartPolicy
+impl core::marker::UnsafeUnpin for sup::RestartPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for sup::RestartPolicy
+impl core::panic::unwind_safe::UnwindSafe for sup::RestartPolicy
+impl<T, U> core::convert::Into<U> for sup::RestartPolicy where U: core::convert::From<T>
+pub fn sup::RestartPolicy::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::RestartPolicy where U: core::convert::Into<T>
+pub type sup::RestartPolicy::Error = core::convert::Infallible
+pub fn sup::RestartPolicy::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::RestartPolicy where U: core::convert::TryFrom<T>
+pub type sup::RestartPolicy::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::RestartPolicy::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for sup::RestartPolicy where T: core::clone::Clone
+pub type sup::RestartPolicy::Owned = T
+pub fn sup::RestartPolicy::clone_into(&self, &mut T)
+pub fn sup::RestartPolicy::to_owned(&self) -> T
+impl<T> core::any::Any for sup::RestartPolicy where T: 'static + ?core::marker::Sized
+pub fn sup::RestartPolicy::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::RestartPolicy where T: ?core::marker::Sized
+pub fn sup::RestartPolicy::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::RestartPolicy where T: ?core::marker::Sized
+pub fn sup::RestartPolicy::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for sup::RestartPolicy where T: core::clone::Clone
+pub unsafe fn sup::RestartPolicy::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for sup::RestartPolicy
+pub fn sup::RestartPolicy::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::RestartPolicy
+impl<T> tracing::instrument::WithSubscriber for sup::RestartPolicy
+pub enum sup::RestartStrategy
+pub sup::RestartStrategy::OneForAll
+pub sup::RestartStrategy::OneForOne
+pub sup::RestartStrategy::RestForOne
+pub sup::RestartStrategy::SimpleOneForOne
+pub sup::RestartStrategy::SimpleOneForOne::max_children: usize
+impl core::clone::Clone for sup::RestartStrategy
+pub fn sup::RestartStrategy::clone(&self) -> sup::RestartStrategy
+impl core::cmp::Eq for sup::RestartStrategy
+impl core::cmp::PartialEq for sup::RestartStrategy
+pub fn sup::RestartStrategy::eq(&self, &sup::RestartStrategy) -> bool
+impl core::fmt::Debug for sup::RestartStrategy
+pub fn sup::RestartStrategy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for sup::RestartStrategy
+impl core::marker::StructuralPartialEq for sup::RestartStrategy
+impl core::marker::Freeze for sup::RestartStrategy
+impl core::marker::Send for sup::RestartStrategy
+impl core::marker::Sync for sup::RestartStrategy
+impl core::marker::Unpin for sup::RestartStrategy
+impl core::marker::UnsafeUnpin for sup::RestartStrategy
+impl core::panic::unwind_safe::RefUnwindSafe for sup::RestartStrategy
+impl core::panic::unwind_safe::UnwindSafe for sup::RestartStrategy
+impl<T, U> core::convert::Into<U> for sup::RestartStrategy where U: core::convert::From<T>
+pub fn sup::RestartStrategy::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::RestartStrategy where U: core::convert::Into<T>
+pub type sup::RestartStrategy::Error = core::convert::Infallible
+pub fn sup::RestartStrategy::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::RestartStrategy where U: core::convert::TryFrom<T>
+pub type sup::RestartStrategy::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::RestartStrategy::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for sup::RestartStrategy where T: core::clone::Clone
+pub type sup::RestartStrategy::Owned = T
+pub fn sup::RestartStrategy::clone_into(&self, &mut T)
+pub fn sup::RestartStrategy::to_owned(&self) -> T
+impl<T> core::any::Any for sup::RestartStrategy where T: 'static + ?core::marker::Sized
+pub fn sup::RestartStrategy::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::RestartStrategy where T: ?core::marker::Sized
+pub fn sup::RestartStrategy::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::RestartStrategy where T: ?core::marker::Sized
+pub fn sup::RestartStrategy::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for sup::RestartStrategy where T: core::clone::Clone
+pub unsafe fn sup::RestartStrategy::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for sup::RestartStrategy
+pub fn sup::RestartStrategy::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::RestartStrategy
+impl<T> tracing::instrument::WithSubscriber for sup::RestartStrategy
+pub enum sup::SupError
+pub sup::SupError::Child
+pub sup::SupError::Child::message: alloc::string::String
+pub sup::SupError::Child::name: alloc::string::String
+pub sup::SupError::ChildLimitReached
+pub sup::SupError::NotRunning
+pub sup::SupError::Panic
+pub sup::SupError::Panic::name: alloc::string::String
+pub sup::SupError::Panic::payload: alloc::string::String
+pub sup::SupError::ShutdownTimeout
+pub sup::SupError::ShutdownTimeout::remaining: usize
+impl core::error::Error for sup::SupError
+impl core::fmt::Debug for sup::SupError
+pub fn sup::SupError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for sup::SupError
+pub fn sup::SupError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for sup::SupError
+impl core::marker::Send for sup::SupError
+impl core::marker::Sync for sup::SupError
+impl core::marker::Unpin for sup::SupError
+impl core::marker::UnsafeUnpin for sup::SupError
+impl core::panic::unwind_safe::RefUnwindSafe for sup::SupError
+impl core::panic::unwind_safe::UnwindSafe for sup::SupError
+impl<T, U> core::convert::Into<U> for sup::SupError where U: core::convert::From<T>
+pub fn sup::SupError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::SupError where U: core::convert::Into<T>
+pub type sup::SupError::Error = core::convert::Infallible
+pub fn sup::SupError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::SupError where U: core::convert::TryFrom<T>
+pub type sup::SupError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::SupError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for sup::SupError where T: core::fmt::Display + ?core::marker::Sized
+pub fn sup::SupError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for sup::SupError where T: 'static + ?core::marker::Sized
+pub fn sup::SupError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::SupError where T: ?core::marker::Sized
+pub fn sup::SupError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::SupError where T: ?core::marker::Sized
+pub fn sup::SupError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for sup::SupError
+pub fn sup::SupError::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::SupError
+impl<T> tracing::instrument::WithSubscriber for sup::SupError
+pub enum sup::SupExit
+pub sup::SupExit::AllChildrenStopped
+pub sup::SupExit::Shutdown
+pub sup::SupExit::ShutdownTimeout
+pub sup::SupExit::ShutdownTimeout::remaining: usize
+impl core::clone::Clone for sup::SupExit
+pub fn sup::SupExit::clone(&self) -> sup::SupExit
+impl core::cmp::Eq for sup::SupExit
+impl core::cmp::PartialEq for sup::SupExit
+pub fn sup::SupExit::eq(&self, &sup::SupExit) -> bool
+impl core::fmt::Debug for sup::SupExit
+pub fn sup::SupExit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for sup::SupExit
+impl core::marker::Freeze for sup::SupExit
+impl core::marker::Send for sup::SupExit
+impl core::marker::Sync for sup::SupExit
+impl core::marker::Unpin for sup::SupExit
+impl core::marker::UnsafeUnpin for sup::SupExit
+impl core::panic::unwind_safe::RefUnwindSafe for sup::SupExit
+impl core::panic::unwind_safe::UnwindSafe for sup::SupExit
+impl<T, U> core::convert::Into<U> for sup::SupExit where U: core::convert::From<T>
+pub fn sup::SupExit::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::SupExit where U: core::convert::Into<T>
+pub type sup::SupExit::Error = core::convert::Infallible
+pub fn sup::SupExit::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::SupExit where U: core::convert::TryFrom<T>
+pub type sup::SupExit::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::SupExit::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for sup::SupExit where T: core::clone::Clone
+pub type sup::SupExit::Owned = T
+pub fn sup::SupExit::clone_into(&self, &mut T)
+pub fn sup::SupExit::to_owned(&self) -> T
+impl<T> core::any::Any for sup::SupExit where T: 'static + ?core::marker::Sized
+pub fn sup::SupExit::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::SupExit where T: ?core::marker::Sized
+pub fn sup::SupExit::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::SupExit where T: ?core::marker::Sized
+pub fn sup::SupExit::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for sup::SupExit where T: core::clone::Clone
+pub unsafe fn sup::SupExit::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for sup::SupExit
+pub fn sup::SupExit::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::SupExit
+impl<T> tracing::instrument::WithSubscriber for sup::SupExit
+pub struct sup::BackoffSpec
+pub sup::BackoffSpec::factor: f64
+pub sup::BackoffSpec::jitter: f64
+pub sup::BackoffSpec::max: core::time::Duration
+pub sup::BackoffSpec::start: core::time::Duration
+impl sup::BackoffSpec
+pub fn sup::BackoffSpec::fixed(core::time::Duration, core::time::Duration, f64) -> Self
+impl core::clone::Clone for sup::BackoffSpec
+pub fn sup::BackoffSpec::clone(&self) -> sup::BackoffSpec
+impl core::default::Default for sup::BackoffSpec
+pub fn sup::BackoffSpec::default() -> Self
+impl core::fmt::Debug for sup::BackoffSpec
+pub fn sup::BackoffSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for sup::BackoffSpec
+impl core::marker::Freeze for sup::BackoffSpec
+impl core::marker::Send for sup::BackoffSpec
+impl core::marker::Sync for sup::BackoffSpec
+impl core::marker::Unpin for sup::BackoffSpec
+impl core::marker::UnsafeUnpin for sup::BackoffSpec
+impl core::panic::unwind_safe::RefUnwindSafe for sup::BackoffSpec
+impl core::panic::unwind_safe::UnwindSafe for sup::BackoffSpec
+impl<T, U> core::convert::Into<U> for sup::BackoffSpec where U: core::convert::From<T>
+pub fn sup::BackoffSpec::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::BackoffSpec where U: core::convert::Into<T>
+pub type sup::BackoffSpec::Error = core::convert::Infallible
+pub fn sup::BackoffSpec::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::BackoffSpec where U: core::convert::TryFrom<T>
+pub type sup::BackoffSpec::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::BackoffSpec::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for sup::BackoffSpec where T: core::clone::Clone
+pub type sup::BackoffSpec::Owned = T
+pub fn sup::BackoffSpec::clone_into(&self, &mut T)
+pub fn sup::BackoffSpec::to_owned(&self) -> T
+impl<T> core::any::Any for sup::BackoffSpec where T: 'static + ?core::marker::Sized
+pub fn sup::BackoffSpec::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::BackoffSpec where T: ?core::marker::Sized
+pub fn sup::BackoffSpec::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::BackoffSpec where T: ?core::marker::Sized
+pub fn sup::BackoffSpec::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for sup::BackoffSpec where T: core::clone::Clone
+pub unsafe fn sup::BackoffSpec::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for sup::BackoffSpec
+pub fn sup::BackoffSpec::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::BackoffSpec
+impl<T> tracing::instrument::WithSubscriber for sup::BackoffSpec
+pub struct sup::BackoffState
+impl sup::atomics::BackoffState
+pub fn sup::atomics::BackoffState::failures(&self) -> u32
+pub fn sup::atomics::BackoffState::new(sup::BackoffSpec, u64) -> Self
+pub fn sup::atomics::BackoffState::next_delay(&self) -> core::time::Duration
+pub fn sup::atomics::BackoffState::observe_failure(&self)
+pub fn sup::atomics::BackoffState::observe_success(&self)
+pub fn sup::atomics::BackoffState::spec(&self) -> &sup::BackoffSpec
+impl !core::marker::Freeze for sup::atomics::BackoffState
+impl core::marker::Send for sup::atomics::BackoffState
+impl core::marker::Sync for sup::atomics::BackoffState
+impl core::marker::Unpin for sup::atomics::BackoffState
+impl core::marker::UnsafeUnpin for sup::atomics::BackoffState
+impl core::panic::unwind_safe::RefUnwindSafe for sup::atomics::BackoffState
+impl core::panic::unwind_safe::UnwindSafe for sup::atomics::BackoffState
+impl<T, U> core::convert::Into<U> for sup::atomics::BackoffState where U: core::convert::From<T>
+pub fn sup::atomics::BackoffState::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::atomics::BackoffState where U: core::convert::Into<T>
+pub type sup::atomics::BackoffState::Error = core::convert::Infallible
+pub fn sup::atomics::BackoffState::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::atomics::BackoffState where U: core::convert::TryFrom<T>
+pub type sup::atomics::BackoffState::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::atomics::BackoffState::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for sup::atomics::BackoffState where T: 'static + ?core::marker::Sized
+pub fn sup::atomics::BackoffState::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::atomics::BackoffState where T: ?core::marker::Sized
+pub fn sup::atomics::BackoffState::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::atomics::BackoffState where T: ?core::marker::Sized
+pub fn sup::atomics::BackoffState::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for sup::atomics::BackoffState
+pub fn sup::atomics::BackoffState::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::atomics::BackoffState
+impl<T> tracing::instrument::WithSubscriber for sup::atomics::BackoffState
+pub struct sup::ChildId(_)
+impl core::clone::Clone for sup::ChildId
+pub fn sup::ChildId::clone(&self) -> sup::ChildId
+impl core::cmp::Eq for sup::ChildId
+impl core::cmp::PartialEq for sup::ChildId
+pub fn sup::ChildId::eq(&self, &sup::ChildId) -> bool
+impl core::fmt::Debug for sup::ChildId
+pub fn sup::ChildId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for sup::ChildId
+pub fn sup::ChildId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for sup::ChildId
+pub fn sup::ChildId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for sup::ChildId
+impl core::marker::StructuralPartialEq for sup::ChildId
+impl core::marker::Freeze for sup::ChildId
+impl core::marker::Send for sup::ChildId
+impl core::marker::Sync for sup::ChildId
+impl core::marker::Unpin for sup::ChildId
+impl core::marker::UnsafeUnpin for sup::ChildId
+impl core::panic::unwind_safe::RefUnwindSafe for sup::ChildId
+impl core::panic::unwind_safe::UnwindSafe for sup::ChildId
+impl<T, U> core::convert::Into<U> for sup::ChildId where U: core::convert::From<T>
+pub fn sup::ChildId::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::ChildId where U: core::convert::Into<T>
+pub type sup::ChildId::Error = core::convert::Infallible
+pub fn sup::ChildId::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::ChildId where U: core::convert::TryFrom<T>
+pub type sup::ChildId::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::ChildId::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for sup::ChildId where T: core::clone::Clone
+pub type sup::ChildId::Owned = T
+pub fn sup::ChildId::clone_into(&self, &mut T)
+pub fn sup::ChildId::to_owned(&self) -> T
+impl<T> alloc::string::ToString for sup::ChildId where T: core::fmt::Display + ?core::marker::Sized
+pub fn sup::ChildId::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for sup::ChildId where T: 'static + ?core::marker::Sized
+pub fn sup::ChildId::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::ChildId where T: ?core::marker::Sized
+pub fn sup::ChildId::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::ChildId where T: ?core::marker::Sized
+pub fn sup::ChildId::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for sup::ChildId where T: core::clone::Clone
+pub unsafe fn sup::ChildId::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for sup::ChildId
+pub fn sup::ChildId::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::ChildId
+impl<T> tracing::instrument::WithSubscriber for sup::ChildId
+pub struct sup::ChildIdAllocator
+impl sup::atomics::ChildIdAllocator
+pub fn sup::atomics::ChildIdAllocator::new() -> Self
+pub fn sup::atomics::ChildIdAllocator::next(&self) -> u64
+impl core::default::Default for sup::atomics::ChildIdAllocator
+pub fn sup::atomics::ChildIdAllocator::default() -> Self
+impl !core::marker::Freeze for sup::atomics::ChildIdAllocator
+impl core::marker::Send for sup::atomics::ChildIdAllocator
+impl core::marker::Sync for sup::atomics::ChildIdAllocator
+impl core::marker::Unpin for sup::atomics::ChildIdAllocator
+impl core::marker::UnsafeUnpin for sup::atomics::ChildIdAllocator
+impl core::panic::unwind_safe::RefUnwindSafe for sup::atomics::ChildIdAllocator
+impl core::panic::unwind_safe::UnwindSafe for sup::atomics::ChildIdAllocator
+impl<T, U> core::convert::Into<U> for sup::atomics::ChildIdAllocator where U: core::convert::From<T>
+pub fn sup::atomics::ChildIdAllocator::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::atomics::ChildIdAllocator where U: core::convert::Into<T>
+pub type sup::atomics::ChildIdAllocator::Error = core::convert::Infallible
+pub fn sup::atomics::ChildIdAllocator::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::atomics::ChildIdAllocator where U: core::convert::TryFrom<T>
+pub type sup::atomics::ChildIdAllocator::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::atomics::ChildIdAllocator::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for sup::atomics::ChildIdAllocator where T: 'static + ?core::marker::Sized
+pub fn sup::atomics::ChildIdAllocator::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::atomics::ChildIdAllocator where T: ?core::marker::Sized
+pub fn sup::atomics::ChildIdAllocator::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::atomics::ChildIdAllocator where T: ?core::marker::Sized
+pub fn sup::atomics::ChildIdAllocator::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for sup::atomics::ChildIdAllocator
+pub fn sup::atomics::ChildIdAllocator::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::atomics::ChildIdAllocator
+impl<T> tracing::instrument::WithSubscriber for sup::atomics::ChildIdAllocator
+pub struct sup::ChildSpec<S: sup::Supervised>
+pub sup::ChildSpec::backoff: sup::BackoffSpec
+pub sup::ChildSpec::restart: sup::RestartPolicy
+pub sup::ChildSpec::spec: S
+impl<S> core::marker::Freeze for sup::ChildSpec<S> where S: core::marker::Freeze
+impl<S> core::marker::Send for sup::ChildSpec<S>
+impl<S> core::marker::Sync for sup::ChildSpec<S> where S: core::marker::Sync
+impl<S> core::marker::Unpin for sup::ChildSpec<S> where S: core::marker::Unpin
+impl<S> core::marker::UnsafeUnpin for sup::ChildSpec<S> where S: core::marker::UnsafeUnpin
+impl<S> core::panic::unwind_safe::RefUnwindSafe for sup::ChildSpec<S> where S: core::panic::unwind_safe::RefUnwindSafe
+impl<S> core::panic::unwind_safe::UnwindSafe for sup::ChildSpec<S> where S: core::panic::unwind_safe::UnwindSafe
+impl<T, U> core::convert::Into<U> for sup::ChildSpec<S> where U: core::convert::From<T>
+pub fn sup::ChildSpec<S>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::ChildSpec<S> where U: core::convert::Into<T>
+pub type sup::ChildSpec<S>::Error = core::convert::Infallible
+pub fn sup::ChildSpec<S>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::ChildSpec<S> where U: core::convert::TryFrom<T>
+pub type sup::ChildSpec<S>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::ChildSpec<S>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for sup::ChildSpec<S> where T: 'static + ?core::marker::Sized
+pub fn sup::ChildSpec<S>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::ChildSpec<S> where T: ?core::marker::Sized
+pub fn sup::ChildSpec<S>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::ChildSpec<S> where T: ?core::marker::Sized
+pub fn sup::ChildSpec<S>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for sup::ChildSpec<S>
+pub fn sup::ChildSpec<S>::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::ChildSpec<S>
+impl<T> tracing::instrument::WithSubscriber for sup::ChildSpec<S>
+pub struct sup::FailureCounter
+impl sup::atomics::FailureCounter
+pub fn sup::atomics::FailureCounter::count(&self) -> u32
+pub fn sup::atomics::FailureCounter::new() -> Self
+pub fn sup::atomics::FailureCounter::observe_failure(&self) -> u32
+pub fn sup::atomics::FailureCounter::reset(&self)
+impl core::default::Default for sup::atomics::FailureCounter
+pub fn sup::atomics::FailureCounter::default() -> Self
+impl !core::marker::Freeze for sup::atomics::FailureCounter
+impl core::marker::Send for sup::atomics::FailureCounter
+impl core::marker::Sync for sup::atomics::FailureCounter
+impl core::marker::Unpin for sup::atomics::FailureCounter
+impl core::marker::UnsafeUnpin for sup::atomics::FailureCounter
+impl core::panic::unwind_safe::RefUnwindSafe for sup::atomics::FailureCounter
+impl core::panic::unwind_safe::UnwindSafe for sup::atomics::FailureCounter
+impl<T, U> core::convert::Into<U> for sup::atomics::FailureCounter where U: core::convert::From<T>
+pub fn sup::atomics::FailureCounter::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::atomics::FailureCounter where U: core::convert::Into<T>
+pub type sup::atomics::FailureCounter::Error = core::convert::Infallible
+pub fn sup::atomics::FailureCounter::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::atomics::FailureCounter where U: core::convert::TryFrom<T>
+pub type sup::atomics::FailureCounter::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::atomics::FailureCounter::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for sup::atomics::FailureCounter where T: 'static + ?core::marker::Sized
+pub fn sup::atomics::FailureCounter::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::atomics::FailureCounter where T: ?core::marker::Sized
+pub fn sup::atomics::FailureCounter::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::atomics::FailureCounter where T: ?core::marker::Sized
+pub fn sup::atomics::FailureCounter::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for sup::atomics::FailureCounter
+pub fn sup::atomics::FailureCounter::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::atomics::FailureCounter
+impl<T> tracing::instrument::WithSubscriber for sup::atomics::FailureCounter
+pub struct sup::Supervisor
+impl sup::Supervisor
+pub fn sup::Supervisor::add_child<S: sup::Supervised>(&mut self, sup::ChildSpec<S>) -> sup::ChildId
+pub fn sup::Supervisor::handle(&self) -> sup::SupervisorHandle
+pub fn sup::Supervisor::new(sup::RestartStrategy) -> Self
+pub async fn sup::Supervisor::run(self) -> sup::SupExit
+pub async fn sup::Supervisor::shutdown(&self) -> core::result::Result<(), sup::SupError>
+pub fn sup::Supervisor::try_add_child<S: sup::Supervised>(&mut self, sup::ChildSpec<S>) -> core::result::Result<sup::ChildId, sup::SupError>
+pub fn sup::Supervisor::with_shutdown_timeout(self, core::time::Duration) -> Self
+impl !core::marker::Freeze for sup::Supervisor
+impl core::marker::Send for sup::Supervisor
+impl !core::marker::Sync for sup::Supervisor
+impl core::marker::Unpin for sup::Supervisor
+impl core::marker::UnsafeUnpin for sup::Supervisor
+impl !core::panic::unwind_safe::RefUnwindSafe for sup::Supervisor
+impl !core::panic::unwind_safe::UnwindSafe for sup::Supervisor
+impl<T, U> core::convert::Into<U> for sup::Supervisor where U: core::convert::From<T>
+pub fn sup::Supervisor::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::Supervisor where U: core::convert::Into<T>
+pub type sup::Supervisor::Error = core::convert::Infallible
+pub fn sup::Supervisor::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::Supervisor where U: core::convert::TryFrom<T>
+pub type sup::Supervisor::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::Supervisor::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for sup::Supervisor where T: 'static + ?core::marker::Sized
+pub fn sup::Supervisor::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::Supervisor where T: ?core::marker::Sized
+pub fn sup::Supervisor::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::Supervisor where T: ?core::marker::Sized
+pub fn sup::Supervisor::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for sup::Supervisor
+pub fn sup::Supervisor::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::Supervisor
+impl<T> tracing::instrument::WithSubscriber for sup::Supervisor
+pub struct sup::SupervisorHandle
+impl sup::SupervisorHandle
+pub fn sup::SupervisorHandle::is_finished(&self) -> bool
+pub async fn sup::SupervisorHandle::shutdown(&self) -> core::result::Result<(), sup::SupError>
+impl core::clone::Clone for sup::SupervisorHandle
+pub fn sup::SupervisorHandle::clone(&self) -> sup::SupervisorHandle
+impl core::marker::Freeze for sup::SupervisorHandle
+impl core::marker::Send for sup::SupervisorHandle
+impl core::marker::Sync for sup::SupervisorHandle
+impl core::marker::Unpin for sup::SupervisorHandle
+impl core::marker::UnsafeUnpin for sup::SupervisorHandle
+impl !core::panic::unwind_safe::RefUnwindSafe for sup::SupervisorHandle
+impl !core::panic::unwind_safe::UnwindSafe for sup::SupervisorHandle
+impl<T, U> core::convert::Into<U> for sup::SupervisorHandle where U: core::convert::From<T>
+pub fn sup::SupervisorHandle::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for sup::SupervisorHandle where U: core::convert::Into<T>
+pub type sup::SupervisorHandle::Error = core::convert::Infallible
+pub fn sup::SupervisorHandle::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for sup::SupervisorHandle where U: core::convert::TryFrom<T>
+pub type sup::SupervisorHandle::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn sup::SupervisorHandle::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for sup::SupervisorHandle where T: core::clone::Clone
+pub type sup::SupervisorHandle::Owned = T
+pub fn sup::SupervisorHandle::clone_into(&self, &mut T)
+pub fn sup::SupervisorHandle::to_owned(&self) -> T
+impl<T> core::any::Any for sup::SupervisorHandle where T: 'static + ?core::marker::Sized
+pub fn sup::SupervisorHandle::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for sup::SupervisorHandle where T: ?core::marker::Sized
+pub fn sup::SupervisorHandle::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for sup::SupervisorHandle where T: ?core::marker::Sized
+pub fn sup::SupervisorHandle::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for sup::SupervisorHandle where T: core::clone::Clone
+pub unsafe fn sup::SupervisorHandle::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for sup::SupervisorHandle
+pub fn sup::SupervisorHandle::from(T) -> T
+impl<T> tracing::instrument::Instrument for sup::SupervisorHandle
+impl<T> tracing::instrument::WithSubscriber for sup::SupervisorHandle
+pub trait sup::Supervised: core::marker::Send + 'static
+pub type sup::Supervised::Output: core::marker::Send + 'static
+pub fn sup::Supervised::name(&self) -> &str
+pub fn sup::Supervised::run(&mut self) -> impl core::future::future::Future<Output = core::result::Result<Self::Output, sup::SupError>> + core::marker::Send

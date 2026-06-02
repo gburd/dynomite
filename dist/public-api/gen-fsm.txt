@@ -1,0 +1,297 @@
+pub mod gen_fsm
+pub enum gen_fsm::Action<H: gen_fsm::FsmHandler>
+pub gen_fsm::Action::CancelGenericTimeout(&'static str)
+pub gen_fsm::Action::CancelStateTimeout
+pub gen_fsm::Action::PostInternal(<H as gen_fsm::FsmHandler>::Event)
+pub gen_fsm::Action::Postpone
+pub gen_fsm::Action::Reply(gen_fsm::ReplyHandle<<H as gen_fsm::FsmHandler>::Reply>, <H as gen_fsm::FsmHandler>::Reply)
+pub gen_fsm::Action::SetEventTimeout(core::time::Duration)
+pub gen_fsm::Action::SetGenericTimeout(&'static str, core::time::Duration)
+pub gen_fsm::Action::SetStateTimeout(core::time::Duration)
+impl<H: gen_fsm::FsmHandler> gen_fsm::Action<H>
+pub const fn gen_fsm::Action<H>::cancel_generic_timeout(&'static str) -> Self
+pub const fn gen_fsm::Action<H>::cancel_state_timeout() -> Self
+pub fn gen_fsm::Action<H>::post_internal(<H as gen_fsm::FsmHandler>::Event) -> Self
+pub const fn gen_fsm::Action<H>::postpone() -> Self
+pub fn gen_fsm::Action<H>::reply(gen_fsm::ReplyHandle<<H as gen_fsm::FsmHandler>::Reply>, <H as gen_fsm::FsmHandler>::Reply) -> Self
+pub const fn gen_fsm::Action<H>::set_event_timeout(core::time::Duration) -> Self
+pub const fn gen_fsm::Action<H>::set_generic_timeout(&'static str, core::time::Duration) -> Self
+pub const fn gen_fsm::Action<H>::set_state_timeout(core::time::Duration) -> Self
+impl<H: gen_fsm::FsmHandler> core::fmt::Debug for gen_fsm::Action<H>
+pub fn gen_fsm::Action<H>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<H> core::marker::Freeze for gen_fsm::Action<H> where <H as gen_fsm::FsmHandler>::Reply: core::marker::Freeze, <H as gen_fsm::FsmHandler>::Event: core::marker::Freeze
+impl<H> core::marker::Send for gen_fsm::Action<H>
+impl<H> core::marker::Sync for gen_fsm::Action<H> where <H as gen_fsm::FsmHandler>::Reply: core::marker::Sync, <H as gen_fsm::FsmHandler>::Event: core::marker::Sync
+impl<H> core::marker::Unpin for gen_fsm::Action<H> where <H as gen_fsm::FsmHandler>::Reply: core::marker::Unpin, <H as gen_fsm::FsmHandler>::Event: core::marker::Unpin
+impl<H> core::marker::UnsafeUnpin for gen_fsm::Action<H> where <H as gen_fsm::FsmHandler>::Reply: core::marker::UnsafeUnpin, <H as gen_fsm::FsmHandler>::Event: core::marker::UnsafeUnpin
+impl<H> !core::panic::unwind_safe::RefUnwindSafe for gen_fsm::Action<H>
+impl<H> !core::panic::unwind_safe::UnwindSafe for gen_fsm::Action<H>
+impl<T, U> core::convert::Into<U> for gen_fsm::Action<H> where U: core::convert::From<T>
+pub fn gen_fsm::Action<H>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for gen_fsm::Action<H> where U: core::convert::Into<T>
+pub type gen_fsm::Action<H>::Error = core::convert::Infallible
+pub fn gen_fsm::Action<H>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for gen_fsm::Action<H> where U: core::convert::TryFrom<T>
+pub type gen_fsm::Action<H>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn gen_fsm::Action<H>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for gen_fsm::Action<H> where T: 'static + ?core::marker::Sized
+pub fn gen_fsm::Action<H>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for gen_fsm::Action<H> where T: ?core::marker::Sized
+pub fn gen_fsm::Action<H>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for gen_fsm::Action<H> where T: ?core::marker::Sized
+pub fn gen_fsm::Action<H>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for gen_fsm::Action<H>
+pub fn gen_fsm::Action<H>::from(T) -> T
+pub enum gen_fsm::DriverError
+pub gen_fsm::DriverError::ReplyDropped
+pub gen_fsm::DriverError::Stopped
+impl core::error::Error for gen_fsm::DriverError
+impl core::fmt::Debug for gen_fsm::DriverError
+pub fn gen_fsm::DriverError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for gen_fsm::DriverError
+pub fn gen_fsm::DriverError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for gen_fsm::DriverError
+impl core::marker::Send for gen_fsm::DriverError
+impl core::marker::Sync for gen_fsm::DriverError
+impl core::marker::Unpin for gen_fsm::DriverError
+impl core::marker::UnsafeUnpin for gen_fsm::DriverError
+impl core::panic::unwind_safe::RefUnwindSafe for gen_fsm::DriverError
+impl core::panic::unwind_safe::UnwindSafe for gen_fsm::DriverError
+impl<T, U> core::convert::Into<U> for gen_fsm::DriverError where U: core::convert::From<T>
+pub fn gen_fsm::DriverError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for gen_fsm::DriverError where U: core::convert::Into<T>
+pub type gen_fsm::DriverError::Error = core::convert::Infallible
+pub fn gen_fsm::DriverError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for gen_fsm::DriverError where U: core::convert::TryFrom<T>
+pub type gen_fsm::DriverError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn gen_fsm::DriverError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for gen_fsm::DriverError where T: core::fmt::Display + ?core::marker::Sized
+pub fn gen_fsm::DriverError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for gen_fsm::DriverError where T: 'static + ?core::marker::Sized
+pub fn gen_fsm::DriverError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for gen_fsm::DriverError where T: ?core::marker::Sized
+pub fn gen_fsm::DriverError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for gen_fsm::DriverError where T: ?core::marker::Sized
+pub fn gen_fsm::DriverError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for gen_fsm::DriverError
+pub fn gen_fsm::DriverError::from(T) -> T
+pub enum gen_fsm::EventType
+pub gen_fsm::EventType::Call
+pub gen_fsm::EventType::Cast
+pub gen_fsm::EventType::Info
+pub gen_fsm::EventType::Internal
+pub gen_fsm::EventType::Timeout(gen_fsm::TimeoutKind)
+impl core::clone::Clone for gen_fsm::EventType
+pub fn gen_fsm::EventType::clone(&self) -> gen_fsm::EventType
+impl core::cmp::Eq for gen_fsm::EventType
+impl core::cmp::PartialEq for gen_fsm::EventType
+pub fn gen_fsm::EventType::eq(&self, &gen_fsm::EventType) -> bool
+impl core::fmt::Debug for gen_fsm::EventType
+pub fn gen_fsm::EventType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for gen_fsm::EventType
+impl core::marker::StructuralPartialEq for gen_fsm::EventType
+impl core::marker::Freeze for gen_fsm::EventType
+impl core::marker::Send for gen_fsm::EventType
+impl core::marker::Sync for gen_fsm::EventType
+impl core::marker::Unpin for gen_fsm::EventType
+impl core::marker::UnsafeUnpin for gen_fsm::EventType
+impl core::panic::unwind_safe::RefUnwindSafe for gen_fsm::EventType
+impl core::panic::unwind_safe::UnwindSafe for gen_fsm::EventType
+impl<T, U> core::convert::Into<U> for gen_fsm::EventType where U: core::convert::From<T>
+pub fn gen_fsm::EventType::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for gen_fsm::EventType where U: core::convert::Into<T>
+pub type gen_fsm::EventType::Error = core::convert::Infallible
+pub fn gen_fsm::EventType::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for gen_fsm::EventType where U: core::convert::TryFrom<T>
+pub type gen_fsm::EventType::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn gen_fsm::EventType::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for gen_fsm::EventType where T: core::clone::Clone
+pub type gen_fsm::EventType::Owned = T
+pub fn gen_fsm::EventType::clone_into(&self, &mut T)
+pub fn gen_fsm::EventType::to_owned(&self) -> T
+impl<T> core::any::Any for gen_fsm::EventType where T: 'static + ?core::marker::Sized
+pub fn gen_fsm::EventType::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for gen_fsm::EventType where T: ?core::marker::Sized
+pub fn gen_fsm::EventType::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for gen_fsm::EventType where T: ?core::marker::Sized
+pub fn gen_fsm::EventType::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for gen_fsm::EventType where T: core::clone::Clone
+pub unsafe fn gen_fsm::EventType::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for gen_fsm::EventType
+pub fn gen_fsm::EventType::from(T) -> T
+pub enum gen_fsm::StopReason<H: gen_fsm::FsmHandler>
+pub gen_fsm::StopReason::Closed
+pub gen_fsm::StopReason::Handler(<H as gen_fsm::FsmHandler>::Stop)
+impl<H: core::fmt::Debug + gen_fsm::FsmHandler> core::fmt::Debug for gen_fsm::StopReason<H> where <H as gen_fsm::FsmHandler>::Stop: core::fmt::Debug
+pub fn gen_fsm::StopReason<H>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<H> core::marker::Freeze for gen_fsm::StopReason<H> where <H as gen_fsm::FsmHandler>::Stop: core::marker::Freeze
+impl<H> core::marker::Send for gen_fsm::StopReason<H>
+impl<H> core::marker::Sync for gen_fsm::StopReason<H> where <H as gen_fsm::FsmHandler>::Stop: core::marker::Sync
+impl<H> core::marker::Unpin for gen_fsm::StopReason<H> where <H as gen_fsm::FsmHandler>::Stop: core::marker::Unpin
+impl<H> core::marker::UnsafeUnpin for gen_fsm::StopReason<H> where <H as gen_fsm::FsmHandler>::Stop: core::marker::UnsafeUnpin
+impl<H> core::panic::unwind_safe::RefUnwindSafe for gen_fsm::StopReason<H> where <H as gen_fsm::FsmHandler>::Stop: core::panic::unwind_safe::RefUnwindSafe
+impl<H> core::panic::unwind_safe::UnwindSafe for gen_fsm::StopReason<H> where <H as gen_fsm::FsmHandler>::Stop: core::panic::unwind_safe::UnwindSafe
+impl<T, U> core::convert::Into<U> for gen_fsm::StopReason<H> where U: core::convert::From<T>
+pub fn gen_fsm::StopReason<H>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for gen_fsm::StopReason<H> where U: core::convert::Into<T>
+pub type gen_fsm::StopReason<H>::Error = core::convert::Infallible
+pub fn gen_fsm::StopReason<H>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for gen_fsm::StopReason<H> where U: core::convert::TryFrom<T>
+pub type gen_fsm::StopReason<H>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn gen_fsm::StopReason<H>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for gen_fsm::StopReason<H> where T: 'static + ?core::marker::Sized
+pub fn gen_fsm::StopReason<H>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for gen_fsm::StopReason<H> where T: ?core::marker::Sized
+pub fn gen_fsm::StopReason<H>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for gen_fsm::StopReason<H> where T: ?core::marker::Sized
+pub fn gen_fsm::StopReason<H>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for gen_fsm::StopReason<H>
+pub fn gen_fsm::StopReason<H>::from(T) -> T
+pub enum gen_fsm::TimeoutKind
+pub gen_fsm::TimeoutKind::Event
+pub gen_fsm::TimeoutKind::Generic(&'static str)
+pub gen_fsm::TimeoutKind::State
+impl core::clone::Clone for gen_fsm::TimeoutKind
+pub fn gen_fsm::TimeoutKind::clone(&self) -> gen_fsm::TimeoutKind
+impl core::cmp::Eq for gen_fsm::TimeoutKind
+impl core::cmp::PartialEq for gen_fsm::TimeoutKind
+pub fn gen_fsm::TimeoutKind::eq(&self, &gen_fsm::TimeoutKind) -> bool
+impl core::fmt::Debug for gen_fsm::TimeoutKind
+pub fn gen_fsm::TimeoutKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for gen_fsm::TimeoutKind
+impl core::marker::StructuralPartialEq for gen_fsm::TimeoutKind
+impl core::marker::Freeze for gen_fsm::TimeoutKind
+impl core::marker::Send for gen_fsm::TimeoutKind
+impl core::marker::Sync for gen_fsm::TimeoutKind
+impl core::marker::Unpin for gen_fsm::TimeoutKind
+impl core::marker::UnsafeUnpin for gen_fsm::TimeoutKind
+impl core::panic::unwind_safe::RefUnwindSafe for gen_fsm::TimeoutKind
+impl core::panic::unwind_safe::UnwindSafe for gen_fsm::TimeoutKind
+impl<T, U> core::convert::Into<U> for gen_fsm::TimeoutKind where U: core::convert::From<T>
+pub fn gen_fsm::TimeoutKind::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for gen_fsm::TimeoutKind where U: core::convert::Into<T>
+pub type gen_fsm::TimeoutKind::Error = core::convert::Infallible
+pub fn gen_fsm::TimeoutKind::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for gen_fsm::TimeoutKind where U: core::convert::TryFrom<T>
+pub type gen_fsm::TimeoutKind::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn gen_fsm::TimeoutKind::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for gen_fsm::TimeoutKind where T: core::clone::Clone
+pub type gen_fsm::TimeoutKind::Owned = T
+pub fn gen_fsm::TimeoutKind::clone_into(&self, &mut T)
+pub fn gen_fsm::TimeoutKind::to_owned(&self) -> T
+impl<T> core::any::Any for gen_fsm::TimeoutKind where T: 'static + ?core::marker::Sized
+pub fn gen_fsm::TimeoutKind::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for gen_fsm::TimeoutKind where T: ?core::marker::Sized
+pub fn gen_fsm::TimeoutKind::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for gen_fsm::TimeoutKind where T: ?core::marker::Sized
+pub fn gen_fsm::TimeoutKind::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for gen_fsm::TimeoutKind where T: core::clone::Clone
+pub unsafe fn gen_fsm::TimeoutKind::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for gen_fsm::TimeoutKind
+pub fn gen_fsm::TimeoutKind::from(T) -> T
+pub enum gen_fsm::Transition<H: gen_fsm::FsmHandler>
+pub gen_fsm::Transition::Keep(alloc::vec::Vec<gen_fsm::Action<H>>)
+pub gen_fsm::Transition::Next(<H as gen_fsm::FsmHandler>::State, alloc::vec::Vec<gen_fsm::Action<H>>)
+pub gen_fsm::Transition::Stop(<H as gen_fsm::FsmHandler>::Stop)
+impl<H: gen_fsm::FsmHandler> core::fmt::Debug for gen_fsm::Transition<H> where <H as gen_fsm::FsmHandler>::State: core::fmt::Debug, <H as gen_fsm::FsmHandler>::Stop: core::fmt::Debug
+pub fn gen_fsm::Transition<H>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<H> core::marker::Freeze for gen_fsm::Transition<H> where <H as gen_fsm::FsmHandler>::State: core::marker::Freeze, <H as gen_fsm::FsmHandler>::Stop: core::marker::Freeze
+impl<H> core::marker::Send for gen_fsm::Transition<H>
+impl<H> core::marker::Sync for gen_fsm::Transition<H> where <H as gen_fsm::FsmHandler>::State: core::marker::Sync, <H as gen_fsm::FsmHandler>::Stop: core::marker::Sync, <H as gen_fsm::FsmHandler>::Reply: core::marker::Sync, <H as gen_fsm::FsmHandler>::Event: core::marker::Sync
+impl<H> core::marker::Unpin for gen_fsm::Transition<H> where <H as gen_fsm::FsmHandler>::State: core::marker::Unpin, <H as gen_fsm::FsmHandler>::Stop: core::marker::Unpin, <H as gen_fsm::FsmHandler>::Reply: core::marker::Unpin, <H as gen_fsm::FsmHandler>::Event: core::marker::Unpin
+impl<H> core::marker::UnsafeUnpin for gen_fsm::Transition<H> where <H as gen_fsm::FsmHandler>::State: core::marker::UnsafeUnpin, <H as gen_fsm::FsmHandler>::Stop: core::marker::UnsafeUnpin
+impl<H> !core::panic::unwind_safe::RefUnwindSafe for gen_fsm::Transition<H>
+impl<H> !core::panic::unwind_safe::UnwindSafe for gen_fsm::Transition<H>
+impl<T, U> core::convert::Into<U> for gen_fsm::Transition<H> where U: core::convert::From<T>
+pub fn gen_fsm::Transition<H>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for gen_fsm::Transition<H> where U: core::convert::Into<T>
+pub type gen_fsm::Transition<H>::Error = core::convert::Infallible
+pub fn gen_fsm::Transition<H>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for gen_fsm::Transition<H> where U: core::convert::TryFrom<T>
+pub type gen_fsm::Transition<H>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn gen_fsm::Transition<H>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for gen_fsm::Transition<H> where T: 'static + ?core::marker::Sized
+pub fn gen_fsm::Transition<H>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for gen_fsm::Transition<H> where T: ?core::marker::Sized
+pub fn gen_fsm::Transition<H>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for gen_fsm::Transition<H> where T: ?core::marker::Sized
+pub fn gen_fsm::Transition<H>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for gen_fsm::Transition<H>
+pub fn gen_fsm::Transition<H>::from(T) -> T
+pub struct gen_fsm::FsmDriver<H: gen_fsm::FsmHandler>
+impl<H: gen_fsm::FsmHandler> gen_fsm::FsmDriver<H>
+pub async fn gen_fsm::FsmDriver<H>::call(&self, <H as gen_fsm::FsmHandler>::Event) -> core::result::Result<<H as gen_fsm::FsmHandler>::Reply, gen_fsm::DriverError>
+pub async fn gen_fsm::FsmDriver<H>::cast(&self, <H as gen_fsm::FsmHandler>::Event)
+pub async fn gen_fsm::FsmDriver<H>::cast_checked(&self, <H as gen_fsm::FsmHandler>::Event) -> core::result::Result<(), gen_fsm::DriverError>
+pub async fn gen_fsm::FsmDriver<H>::info(&self, <H as gen_fsm::FsmHandler>::Event) -> core::result::Result<(), gen_fsm::DriverError>
+pub async fn gen_fsm::FsmDriver<H>::join(self) -> core::result::Result<gen_fsm::StopReason<H>, gen_fsm::DriverError>
+pub fn gen_fsm::FsmDriver<H>::start(H) -> Self
+impl<H: gen_fsm::FsmHandler> core::clone::Clone for gen_fsm::FsmDriver<H>
+pub fn gen_fsm::FsmDriver<H>::clone(&self) -> Self
+impl<H> core::marker::Freeze for gen_fsm::FsmDriver<H>
+impl<H> core::marker::Send for gen_fsm::FsmDriver<H>
+impl<H> core::marker::Sync for gen_fsm::FsmDriver<H>
+impl<H> core::marker::Unpin for gen_fsm::FsmDriver<H>
+impl<H> core::marker::UnsafeUnpin for gen_fsm::FsmDriver<H>
+impl<H> core::panic::unwind_safe::RefUnwindSafe for gen_fsm::FsmDriver<H>
+impl<H> core::panic::unwind_safe::UnwindSafe for gen_fsm::FsmDriver<H>
+impl<T, U> core::convert::Into<U> for gen_fsm::FsmDriver<H> where U: core::convert::From<T>
+pub fn gen_fsm::FsmDriver<H>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for gen_fsm::FsmDriver<H> where U: core::convert::Into<T>
+pub type gen_fsm::FsmDriver<H>::Error = core::convert::Infallible
+pub fn gen_fsm::FsmDriver<H>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for gen_fsm::FsmDriver<H> where U: core::convert::TryFrom<T>
+pub type gen_fsm::FsmDriver<H>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn gen_fsm::FsmDriver<H>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for gen_fsm::FsmDriver<H> where T: core::clone::Clone
+pub type gen_fsm::FsmDriver<H>::Owned = T
+pub fn gen_fsm::FsmDriver<H>::clone_into(&self, &mut T)
+pub fn gen_fsm::FsmDriver<H>::to_owned(&self) -> T
+impl<T> core::any::Any for gen_fsm::FsmDriver<H> where T: 'static + ?core::marker::Sized
+pub fn gen_fsm::FsmDriver<H>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for gen_fsm::FsmDriver<H> where T: ?core::marker::Sized
+pub fn gen_fsm::FsmDriver<H>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for gen_fsm::FsmDriver<H> where T: ?core::marker::Sized
+pub fn gen_fsm::FsmDriver<H>::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for gen_fsm::FsmDriver<H> where T: core::clone::Clone
+pub unsafe fn gen_fsm::FsmDriver<H>::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for gen_fsm::FsmDriver<H>
+pub fn gen_fsm::FsmDriver<H>::from(T) -> T
+pub struct gen_fsm::ReplyHandle<R>(_)
+impl<R> gen_fsm::ReplyHandle<R>
+pub fn gen_fsm::ReplyHandle<R>::is_closed(&self) -> bool
+pub fn gen_fsm::ReplyHandle<R>::send(self, R)
+impl<R> core::fmt::Debug for gen_fsm::ReplyHandle<R>
+pub fn gen_fsm::ReplyHandle<R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<R> core::marker::Freeze for gen_fsm::ReplyHandle<R>
+impl<R> core::marker::Send for gen_fsm::ReplyHandle<R> where R: core::marker::Send
+impl<R> core::marker::Sync for gen_fsm::ReplyHandle<R> where R: core::marker::Send
+impl<R> core::marker::Unpin for gen_fsm::ReplyHandle<R>
+impl<R> core::marker::UnsafeUnpin for gen_fsm::ReplyHandle<R>
+impl<R> !core::panic::unwind_safe::RefUnwindSafe for gen_fsm::ReplyHandle<R>
+impl<R> !core::panic::unwind_safe::UnwindSafe for gen_fsm::ReplyHandle<R>
+impl<T, U> core::convert::Into<U> for gen_fsm::ReplyHandle<R> where U: core::convert::From<T>
+pub fn gen_fsm::ReplyHandle<R>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for gen_fsm::ReplyHandle<R> where U: core::convert::Into<T>
+pub type gen_fsm::ReplyHandle<R>::Error = core::convert::Infallible
+pub fn gen_fsm::ReplyHandle<R>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for gen_fsm::ReplyHandle<R> where U: core::convert::TryFrom<T>
+pub type gen_fsm::ReplyHandle<R>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn gen_fsm::ReplyHandle<R>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for gen_fsm::ReplyHandle<R> where T: 'static + ?core::marker::Sized
+pub fn gen_fsm::ReplyHandle<R>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for gen_fsm::ReplyHandle<R> where T: ?core::marker::Sized
+pub fn gen_fsm::ReplyHandle<R>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for gen_fsm::ReplyHandle<R> where T: ?core::marker::Sized
+pub fn gen_fsm::ReplyHandle<R>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for gen_fsm::ReplyHandle<R>
+pub fn gen_fsm::ReplyHandle<R>::from(T) -> T
+pub trait gen_fsm::FsmHandler: core::marker::Sized + core::marker::Send + 'static
+pub type gen_fsm::FsmHandler::Event: core::marker::Send + 'static
+pub type gen_fsm::FsmHandler::Reply: core::marker::Send + 'static
+pub type gen_fsm::FsmHandler::State: core::marker::Copy + core::fmt::Debug + core::cmp::PartialEq + core::cmp::Eq + core::marker::Send + 'static
+pub type gen_fsm::FsmHandler::Stop: core::fmt::Debug + core::marker::Send + 'static
+pub fn gen_fsm::FsmHandler::handle(&mut self, Self::State, gen_fsm::EventType, Self::Event) -> gen_fsm::Transition<Self>
+pub fn gen_fsm::FsmHandler::initial(&self) -> Self::State
+pub fn gen_fsm::FsmHandler::on_enter(&mut self, Self::State) -> gen_fsm::Transition<Self>
+pub fn gen_fsm::FsmHandler::on_timeout(&mut self, Self::State, gen_fsm::TimeoutKind) -> gen_fsm::Transition<Self>

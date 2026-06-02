@@ -1,0 +1,127 @@
+pub mod hashtree
+#[non_exhaustive] pub enum hashtree::HashTreeError
+pub hashtree::HashTreeError::BadShape(alloc::string::String)
+pub hashtree::HashTreeError::Decode(alloc::string::String)
+pub hashtree::HashTreeError::Io(std::io::error::Error)
+impl core::convert::From<std::io::error::Error> for hashtree::HashTreeError
+pub fn hashtree::HashTreeError::from(std::io::error::Error) -> Self
+impl core::error::Error for hashtree::HashTreeError
+pub fn hashtree::HashTreeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for hashtree::HashTreeError
+pub fn hashtree::HashTreeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for hashtree::HashTreeError
+pub fn hashtree::HashTreeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for hashtree::HashTreeError
+impl core::marker::Send for hashtree::HashTreeError
+impl core::marker::Sync for hashtree::HashTreeError
+impl core::marker::Unpin for hashtree::HashTreeError
+impl core::marker::UnsafeUnpin for hashtree::HashTreeError
+impl !core::panic::unwind_safe::RefUnwindSafe for hashtree::HashTreeError
+impl !core::panic::unwind_safe::UnwindSafe for hashtree::HashTreeError
+impl<T, U> core::convert::Into<U> for hashtree::HashTreeError where U: core::convert::From<T>
+pub fn hashtree::HashTreeError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for hashtree::HashTreeError where U: core::convert::Into<T>
+pub type hashtree::HashTreeError::Error = core::convert::Infallible
+pub fn hashtree::HashTreeError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for hashtree::HashTreeError where U: core::convert::TryFrom<T>
+pub type hashtree::HashTreeError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn hashtree::HashTreeError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for hashtree::HashTreeError where T: core::fmt::Display + ?core::marker::Sized
+pub fn hashtree::HashTreeError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for hashtree::HashTreeError where T: 'static + ?core::marker::Sized
+pub fn hashtree::HashTreeError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for hashtree::HashTreeError where T: ?core::marker::Sized
+pub fn hashtree::HashTreeError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for hashtree::HashTreeError where T: ?core::marker::Sized
+pub fn hashtree::HashTreeError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for hashtree::HashTreeError
+pub fn hashtree::HashTreeError::from(T) -> T
+pub struct hashtree::HashTree
+impl hashtree::HashTree
+pub fn hashtree::HashTree::depth(&self) -> usize
+pub fn hashtree::HashTree::diff(&self, &Self) -> alloc::vec::Vec<usize>
+pub fn hashtree::HashTree::fanout(&self) -> usize
+pub fn hashtree::HashTree::fold_segment<F: core::ops::function::FnMut(&[u8], &hashtree::Hash)>(&self, usize, F)
+pub fn hashtree::HashTree::insert(&mut self, &[u8], hashtree::Hash)
+pub fn hashtree::HashTree::new(usize, usize) -> Self
+pub fn hashtree::HashTree::remove(&mut self, &[u8])
+pub fn hashtree::HashTree::root(&self) -> hashtree::Hash
+pub fn hashtree::HashTree::segment_count(&self) -> usize
+pub fn hashtree::HashTree::segment_for(&self, &[u8]) -> usize
+pub fn hashtree::HashTree::segment_hash(&self, usize) -> hashtree::Hash
+pub fn hashtree::HashTree::snapshot_from_reader<R: std::io::Read>(&mut R) -> core::result::Result<Self, hashtree::HashTreeError>
+pub fn hashtree::HashTree::snapshot_to_writer<W: std::io::Write>(&self, &mut W) -> core::result::Result<(), hashtree::HashTreeError>
+impl core::clone::Clone for hashtree::HashTree
+pub fn hashtree::HashTree::clone(&self) -> hashtree::HashTree
+impl core::fmt::Debug for hashtree::HashTree
+pub fn hashtree::HashTree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for hashtree::HashTree
+impl core::marker::Send for hashtree::HashTree
+impl core::marker::Sync for hashtree::HashTree
+impl core::marker::Unpin for hashtree::HashTree
+impl core::marker::UnsafeUnpin for hashtree::HashTree
+impl core::panic::unwind_safe::RefUnwindSafe for hashtree::HashTree
+impl core::panic::unwind_safe::UnwindSafe for hashtree::HashTree
+impl<T, U> core::convert::Into<U> for hashtree::HashTree where U: core::convert::From<T>
+pub fn hashtree::HashTree::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for hashtree::HashTree where U: core::convert::Into<T>
+pub type hashtree::HashTree::Error = core::convert::Infallible
+pub fn hashtree::HashTree::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for hashtree::HashTree where U: core::convert::TryFrom<T>
+pub type hashtree::HashTree::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn hashtree::HashTree::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for hashtree::HashTree where T: core::clone::Clone
+pub type hashtree::HashTree::Owned = T
+pub fn hashtree::HashTree::clone_into(&self, &mut T)
+pub fn hashtree::HashTree::to_owned(&self) -> T
+impl<T> core::any::Any for hashtree::HashTree where T: 'static + ?core::marker::Sized
+pub fn hashtree::HashTree::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for hashtree::HashTree where T: ?core::marker::Sized
+pub fn hashtree::HashTree::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for hashtree::HashTree where T: ?core::marker::Sized
+pub fn hashtree::HashTree::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for hashtree::HashTree where T: core::clone::Clone
+pub unsafe fn hashtree::HashTree::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for hashtree::HashTree
+pub fn hashtree::HashTree::from(T) -> T
+pub struct hashtree::Segment
+impl hashtree::Segment
+pub fn hashtree::Segment::is_empty(&self) -> bool
+pub fn hashtree::Segment::len(&self) -> usize
+impl core::clone::Clone for hashtree::Segment
+pub fn hashtree::Segment::clone(&self) -> hashtree::Segment
+impl core::default::Default for hashtree::Segment
+pub fn hashtree::Segment::default() -> hashtree::Segment
+impl core::fmt::Debug for hashtree::Segment
+pub fn hashtree::Segment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl !core::marker::Freeze for hashtree::Segment
+impl core::marker::Send for hashtree::Segment
+impl core::marker::Sync for hashtree::Segment
+impl core::marker::Unpin for hashtree::Segment
+impl core::marker::UnsafeUnpin for hashtree::Segment
+impl core::panic::unwind_safe::RefUnwindSafe for hashtree::Segment
+impl core::panic::unwind_safe::UnwindSafe for hashtree::Segment
+impl<T, U> core::convert::Into<U> for hashtree::Segment where U: core::convert::From<T>
+pub fn hashtree::Segment::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for hashtree::Segment where U: core::convert::Into<T>
+pub type hashtree::Segment::Error = core::convert::Infallible
+pub fn hashtree::Segment::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for hashtree::Segment where U: core::convert::TryFrom<T>
+pub type hashtree::Segment::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn hashtree::Segment::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for hashtree::Segment where T: core::clone::Clone
+pub type hashtree::Segment::Owned = T
+pub fn hashtree::Segment::clone_into(&self, &mut T)
+pub fn hashtree::Segment::to_owned(&self) -> T
+impl<T> core::any::Any for hashtree::Segment where T: 'static + ?core::marker::Sized
+pub fn hashtree::Segment::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for hashtree::Segment where T: ?core::marker::Sized
+pub fn hashtree::Segment::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for hashtree::Segment where T: ?core::marker::Sized
+pub fn hashtree::Segment::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for hashtree::Segment where T: core::clone::Clone
+pub unsafe fn hashtree::Segment::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for hashtree::Segment
+pub fn hashtree::Segment::from(T) -> T
+pub const hashtree::ZERO_HASH: hashtree::Hash
+pub type hashtree::Hash = [u8; 32]

@@ -1,0 +1,1142 @@
+pub mod dyntext
+pub mod dyntext::bloom
+pub struct dyntext::bloom::BloomFilter
+impl dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::contains(&self, &[u8]) -> bool
+pub fn dyntext::bloom::BloomFilter::false_positive_rate(&self, usize) -> f64
+pub fn dyntext::bloom::BloomFilter::hash_count(&self) -> u8
+pub fn dyntext::bloom::BloomFilter::insert(&mut self, &[u8])
+pub fn dyntext::bloom::BloomFilter::n_bits(&self) -> u64
+pub fn dyntext::bloom::BloomFilter::with_size_and_fp_rate(usize, f64) -> Self
+impl core::clone::Clone for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::clone(&self) -> dyntext::bloom::BloomFilter
+impl core::fmt::Debug for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for dyntext::bloom::BloomFilter
+impl core::marker::Send for dyntext::bloom::BloomFilter
+impl core::marker::Sync for dyntext::bloom::BloomFilter
+impl core::marker::Unpin for dyntext::bloom::BloomFilter
+impl core::marker::UnsafeUnpin for dyntext::bloom::BloomFilter
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::bloom::BloomFilter
+impl core::panic::unwind_safe::UnwindSafe for dyntext::bloom::BloomFilter
+impl<T, U> core::convert::Into<U> for dyntext::bloom::BloomFilter where U: core::convert::From<T>
+pub fn dyntext::bloom::BloomFilter::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::bloom::BloomFilter where U: core::convert::Into<T>
+pub type dyntext::bloom::BloomFilter::Error = core::convert::Infallible
+pub fn dyntext::bloom::BloomFilter::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::bloom::BloomFilter where U: core::convert::TryFrom<T>
+pub type dyntext::bloom::BloomFilter::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::bloom::BloomFilter::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::bloom::BloomFilter where T: core::clone::Clone
+pub type dyntext::bloom::BloomFilter::Owned = T
+pub fn dyntext::bloom::BloomFilter::clone_into(&self, &mut T)
+pub fn dyntext::bloom::BloomFilter::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::bloom::BloomFilter where T: 'static + ?core::marker::Sized
+pub fn dyntext::bloom::BloomFilter::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::bloom::BloomFilter where T: ?core::marker::Sized
+pub fn dyntext::bloom::BloomFilter::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::bloom::BloomFilter where T: ?core::marker::Sized
+pub fn dyntext::bloom::BloomFilter::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::bloom::BloomFilter where T: core::clone::Clone
+pub unsafe fn dyntext::bloom::BloomFilter::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::bloom::BloomFilter
+pub type dyntext::bloom::BloomFilter::Init = T
+pub const dyntext::bloom::BloomFilter::ALIGN: usize
+pub unsafe fn dyntext::bloom::BloomFilter::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::bloom::BloomFilter::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::bloom::BloomFilter::drop(usize)
+pub unsafe fn dyntext::bloom::BloomFilter::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::bloom::BloomFilter
+impl<T> serde_core::de::DeserializeOwned for dyntext::bloom::BloomFilter where T: for<'de> serde_core::de::Deserialize<'de>
+pub mod dyntext::index
+pub struct dyntext::index::IndexedDoc
+pub dyntext::index::IndexedDoc::bloom: dyntext::bloom::BloomFilter
+pub dyntext::index::IndexedDoc::text: alloc::vec::Vec<u8>
+impl core::clone::Clone for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::clone(&self) -> dyntext::index::IndexedDoc
+impl core::fmt::Debug for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for dyntext::index::IndexedDoc
+impl core::marker::Send for dyntext::index::IndexedDoc
+impl core::marker::Sync for dyntext::index::IndexedDoc
+impl core::marker::Unpin for dyntext::index::IndexedDoc
+impl core::marker::UnsafeUnpin for dyntext::index::IndexedDoc
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::index::IndexedDoc
+impl core::panic::unwind_safe::UnwindSafe for dyntext::index::IndexedDoc
+impl<T, U> core::convert::Into<U> for dyntext::index::IndexedDoc where U: core::convert::From<T>
+pub fn dyntext::index::IndexedDoc::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::index::IndexedDoc where U: core::convert::Into<T>
+pub type dyntext::index::IndexedDoc::Error = core::convert::Infallible
+pub fn dyntext::index::IndexedDoc::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::index::IndexedDoc where U: core::convert::TryFrom<T>
+pub type dyntext::index::IndexedDoc::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::index::IndexedDoc::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::index::IndexedDoc where T: core::clone::Clone
+pub type dyntext::index::IndexedDoc::Owned = T
+pub fn dyntext::index::IndexedDoc::clone_into(&self, &mut T)
+pub fn dyntext::index::IndexedDoc::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::index::IndexedDoc where T: 'static + ?core::marker::Sized
+pub fn dyntext::index::IndexedDoc::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::index::IndexedDoc where T: ?core::marker::Sized
+pub fn dyntext::index::IndexedDoc::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::index::IndexedDoc where T: ?core::marker::Sized
+pub fn dyntext::index::IndexedDoc::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::index::IndexedDoc where T: core::clone::Clone
+pub unsafe fn dyntext::index::IndexedDoc::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::index::IndexedDoc
+pub type dyntext::index::IndexedDoc::Init = T
+pub const dyntext::index::IndexedDoc::ALIGN: usize
+pub unsafe fn dyntext::index::IndexedDoc::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::index::IndexedDoc::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::index::IndexedDoc::drop(usize)
+pub unsafe fn dyntext::index::IndexedDoc::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::index::IndexedDoc
+impl<T> serde_core::de::DeserializeOwned for dyntext::index::IndexedDoc where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct dyntext::index::TextIndex
+impl dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::doc_count(&self) -> usize
+pub fn dyntext::index::TextIndex::docs(&self) -> &alloc::collections::btree::map::BTreeMap<u32, dyntext::index::IndexedDoc>
+pub fn dyntext::index::TextIndex::insert(&mut self, alloc::vec::Vec<u8>) -> u32
+pub fn dyntext::index::TextIndex::new() -> Self
+pub fn dyntext::index::TextIndex::postings(&self) -> &dyntext::postings::Postings
+pub fn dyntext::index::TextIndex::remove(&mut self, u32) -> core::option::Option<alloc::vec::Vec<u8>>
+pub fn dyntext::index::TextIndex::search_regex(&self, &str) -> core::result::Result<alloc::vec::Vec<u32>, dyntext::regex_ast::RegexError>
+pub fn dyntext::index::TextIndex::search_regex_approx(&self, &str, u16) -> core::result::Result<alloc::vec::Vec<u32>, dyntext::tre::TreError>
+pub fn dyntext::index::TextIndex::search_substring(&self, &[u8]) -> alloc::vec::Vec<u32>
+impl core::clone::Clone for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::clone(&self) -> dyntext::index::TextIndex
+impl core::default::Default for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::default() -> Self
+impl core::fmt::Debug for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for dyntext::index::TextIndex
+impl core::marker::Send for dyntext::index::TextIndex
+impl core::marker::Sync for dyntext::index::TextIndex
+impl core::marker::Unpin for dyntext::index::TextIndex
+impl core::marker::UnsafeUnpin for dyntext::index::TextIndex
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::index::TextIndex
+impl core::panic::unwind_safe::UnwindSafe for dyntext::index::TextIndex
+impl<T, U> core::convert::Into<U> for dyntext::index::TextIndex where U: core::convert::From<T>
+pub fn dyntext::index::TextIndex::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::index::TextIndex where U: core::convert::Into<T>
+pub type dyntext::index::TextIndex::Error = core::convert::Infallible
+pub fn dyntext::index::TextIndex::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::index::TextIndex where U: core::convert::TryFrom<T>
+pub type dyntext::index::TextIndex::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::index::TextIndex::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::index::TextIndex where T: core::clone::Clone
+pub type dyntext::index::TextIndex::Owned = T
+pub fn dyntext::index::TextIndex::clone_into(&self, &mut T)
+pub fn dyntext::index::TextIndex::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::index::TextIndex where T: 'static + ?core::marker::Sized
+pub fn dyntext::index::TextIndex::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::index::TextIndex where T: ?core::marker::Sized
+pub fn dyntext::index::TextIndex::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::index::TextIndex where T: ?core::marker::Sized
+pub fn dyntext::index::TextIndex::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::index::TextIndex where T: core::clone::Clone
+pub unsafe fn dyntext::index::TextIndex::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::index::TextIndex
+pub type dyntext::index::TextIndex::Init = T
+pub const dyntext::index::TextIndex::ALIGN: usize
+pub unsafe fn dyntext::index::TextIndex::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::index::TextIndex::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::index::TextIndex::drop(usize)
+pub unsafe fn dyntext::index::TextIndex::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::index::TextIndex
+impl<T> serde_core::de::DeserializeOwned for dyntext::index::TextIndex where T: for<'de> serde_core::de::Deserialize<'de>
+pub const dyntext::index::MIN_TRIGRAM_QUERY_LEN: usize
+pub mod dyntext::postings
+pub struct dyntext::postings::Postings
+impl dyntext::postings::Postings
+pub fn dyntext::postings::Postings::insert(&mut self, u64, u32)
+pub fn dyntext::postings::Postings::intersect(&self, &[u64]) -> roaring::bitmap::RoaringBitmap
+pub fn dyntext::postings::Postings::is_empty(&self) -> bool
+pub fn dyntext::postings::Postings::len(&self) -> usize
+pub fn dyntext::postings::Postings::lookup(&self, u64) -> core::option::Option<&roaring::bitmap::RoaringBitmap>
+pub fn dyntext::postings::Postings::new() -> Self
+pub fn dyntext::postings::Postings::remove(&mut self, u64, u32)
+pub fn dyntext::postings::Postings::union(&self, &[u64]) -> roaring::bitmap::RoaringBitmap
+impl core::clone::Clone for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::clone(&self) -> dyntext::postings::Postings
+impl core::default::Default for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::default() -> dyntext::postings::Postings
+impl core::fmt::Debug for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for dyntext::postings::Postings
+impl core::marker::Send for dyntext::postings::Postings
+impl core::marker::Sync for dyntext::postings::Postings
+impl core::marker::Unpin for dyntext::postings::Postings
+impl core::marker::UnsafeUnpin for dyntext::postings::Postings
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::postings::Postings
+impl core::panic::unwind_safe::UnwindSafe for dyntext::postings::Postings
+impl<T, U> core::convert::Into<U> for dyntext::postings::Postings where U: core::convert::From<T>
+pub fn dyntext::postings::Postings::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::postings::Postings where U: core::convert::Into<T>
+pub type dyntext::postings::Postings::Error = core::convert::Infallible
+pub fn dyntext::postings::Postings::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::postings::Postings where U: core::convert::TryFrom<T>
+pub type dyntext::postings::Postings::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::postings::Postings::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::postings::Postings where T: core::clone::Clone
+pub type dyntext::postings::Postings::Owned = T
+pub fn dyntext::postings::Postings::clone_into(&self, &mut T)
+pub fn dyntext::postings::Postings::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::postings::Postings where T: 'static + ?core::marker::Sized
+pub fn dyntext::postings::Postings::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::postings::Postings where T: ?core::marker::Sized
+pub fn dyntext::postings::Postings::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::postings::Postings where T: ?core::marker::Sized
+pub fn dyntext::postings::Postings::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::postings::Postings where T: core::clone::Clone
+pub unsafe fn dyntext::postings::Postings::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::postings::Postings
+pub type dyntext::postings::Postings::Init = T
+pub const dyntext::postings::Postings::ALIGN: usize
+pub unsafe fn dyntext::postings::Postings::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::postings::Postings::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::postings::Postings::drop(usize)
+pub unsafe fn dyntext::postings::Postings::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::postings::Postings
+impl<T> serde_core::de::DeserializeOwned for dyntext::postings::Postings where T: for<'de> serde_core::de::Deserialize<'de>
+pub mod dyntext::prefix_extract
+pub fn dyntext::prefix_extract::anchored_prefix(&dyntext::regex_ast::Ast) -> core::option::Option<alloc::vec::Vec<u8>>
+pub fn dyntext::prefix_extract::extract_literal_runs(&dyntext::regex_ast::Ast) -> alloc::vec::Vec<alloc::vec::Vec<u8>>
+pub fn dyntext::prefix_extract::has_top_level_start_anchor(&dyntext::regex_ast::Ast) -> bool
+pub fn dyntext::prefix_extract::required_trigram_hashes(&dyntext::regex_ast::Ast) -> alloc::vec::Vec<u64>
+pub fn dyntext::prefix_extract::required_trigrams(&dyntext::regex_ast::Ast) -> alloc::vec::Vec<[u8; 3]>
+pub mod dyntext::regex_ast
+pub enum dyntext::regex_ast::Ast
+pub dyntext::regex_ast::Ast::Alt(alloc::vec::Vec<dyntext::regex_ast::Ast>)
+pub dyntext::regex_ast::Ast::Anchor
+pub dyntext::regex_ast::Ast::AnyChar
+pub dyntext::regex_ast::Ast::Concat(alloc::vec::Vec<dyntext::regex_ast::Ast>)
+pub dyntext::regex_ast::Ast::Empty
+pub dyntext::regex_ast::Ast::Literal(alloc::vec::Vec<u8>)
+pub dyntext::regex_ast::Ast::Repeat
+pub dyntext::regex_ast::Ast::Repeat::max: core::option::Option<u32>
+pub dyntext::regex_ast::Ast::Repeat::min: u32
+pub dyntext::regex_ast::Ast::Repeat::sub: alloc::boxed::Box<dyntext::regex_ast::Ast>
+impl dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::parse(&str) -> core::result::Result<Self, dyntext::regex_ast::RegexError>
+impl core::clone::Clone for dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::clone(&self) -> dyntext::regex_ast::Ast
+impl core::cmp::Eq for dyntext::regex_ast::Ast
+impl core::cmp::PartialEq for dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::eq(&self, &dyntext::regex_ast::Ast) -> bool
+impl core::fmt::Debug for dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for dyntext::regex_ast::Ast
+impl core::marker::Freeze for dyntext::regex_ast::Ast
+impl core::marker::Send for dyntext::regex_ast::Ast
+impl core::marker::Sync for dyntext::regex_ast::Ast
+impl core::marker::Unpin for dyntext::regex_ast::Ast
+impl core::marker::UnsafeUnpin for dyntext::regex_ast::Ast
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::regex_ast::Ast
+impl core::panic::unwind_safe::UnwindSafe for dyntext::regex_ast::Ast
+impl<T, U> core::convert::Into<U> for dyntext::regex_ast::Ast where U: core::convert::From<T>
+pub fn dyntext::regex_ast::Ast::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::regex_ast::Ast where U: core::convert::Into<T>
+pub type dyntext::regex_ast::Ast::Error = core::convert::Infallible
+pub fn dyntext::regex_ast::Ast::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::regex_ast::Ast where U: core::convert::TryFrom<T>
+pub type dyntext::regex_ast::Ast::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::regex_ast::Ast::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::regex_ast::Ast where T: core::clone::Clone
+pub type dyntext::regex_ast::Ast::Owned = T
+pub fn dyntext::regex_ast::Ast::clone_into(&self, &mut T)
+pub fn dyntext::regex_ast::Ast::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::regex_ast::Ast where T: 'static + ?core::marker::Sized
+pub fn dyntext::regex_ast::Ast::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::regex_ast::Ast where T: ?core::marker::Sized
+pub fn dyntext::regex_ast::Ast::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::regex_ast::Ast where T: ?core::marker::Sized
+pub fn dyntext::regex_ast::Ast::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::regex_ast::Ast where T: core::clone::Clone
+pub unsafe fn dyntext::regex_ast::Ast::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::regex_ast::Ast
+pub type dyntext::regex_ast::Ast::Init = T
+pub const dyntext::regex_ast::Ast::ALIGN: usize
+pub unsafe fn dyntext::regex_ast::Ast::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::regex_ast::Ast::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::regex_ast::Ast::drop(usize)
+pub unsafe fn dyntext::regex_ast::Ast::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::regex_ast::Ast
+pub enum dyntext::regex_ast::RegexError
+pub dyntext::regex_ast::RegexError::Parse(alloc::string::String)
+pub dyntext::regex_ast::RegexError::PrefixUnsupported(&'static str)
+impl core::error::Error for dyntext::regex_ast::RegexError
+impl core::fmt::Debug for dyntext::regex_ast::RegexError
+pub fn dyntext::regex_ast::RegexError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for dyntext::regex_ast::RegexError
+pub fn dyntext::regex_ast::RegexError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for dyntext::regex_ast::RegexError
+impl core::marker::Send for dyntext::regex_ast::RegexError
+impl core::marker::Sync for dyntext::regex_ast::RegexError
+impl core::marker::Unpin for dyntext::regex_ast::RegexError
+impl core::marker::UnsafeUnpin for dyntext::regex_ast::RegexError
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::regex_ast::RegexError
+impl core::panic::unwind_safe::UnwindSafe for dyntext::regex_ast::RegexError
+impl<T, U> core::convert::Into<U> for dyntext::regex_ast::RegexError where U: core::convert::From<T>
+pub fn dyntext::regex_ast::RegexError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::regex_ast::RegexError where U: core::convert::Into<T>
+pub type dyntext::regex_ast::RegexError::Error = core::convert::Infallible
+pub fn dyntext::regex_ast::RegexError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::regex_ast::RegexError where U: core::convert::TryFrom<T>
+pub type dyntext::regex_ast::RegexError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::regex_ast::RegexError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for dyntext::regex_ast::RegexError where T: core::fmt::Display + ?core::marker::Sized
+pub fn dyntext::regex_ast::RegexError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for dyntext::regex_ast::RegexError where T: 'static + ?core::marker::Sized
+pub fn dyntext::regex_ast::RegexError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::regex_ast::RegexError where T: ?core::marker::Sized
+pub fn dyntext::regex_ast::RegexError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::regex_ast::RegexError where T: ?core::marker::Sized
+pub fn dyntext::regex_ast::RegexError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyntext::regex_ast::RegexError
+pub fn dyntext::regex_ast::RegexError::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::regex_ast::RegexError
+pub type dyntext::regex_ast::RegexError::Init = T
+pub const dyntext::regex_ast::RegexError::ALIGN: usize
+pub unsafe fn dyntext::regex_ast::RegexError::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::regex_ast::RegexError::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::regex_ast::RegexError::drop(usize)
+pub unsafe fn dyntext::regex_ast::RegexError::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::regex_ast::RegexError
+pub fn dyntext::regex_ast::parse(&str) -> core::result::Result<dyntext::regex_ast::Ast, dyntext::regex_ast::RegexError>
+pub mod dyntext::tiling
+pub struct dyntext::tiling::ApproxFilter
+pub dyntext::tiling::ApproxFilter::min_required: usize
+pub dyntext::tiling::ApproxFilter::trigrams: alloc::vec::Vec<u64>
+impl dyntext::tiling::ApproxFilter
+pub fn dyntext::tiling::ApproxFilter::build(&dyntext::regex_ast::Ast, u16) -> Self
+pub fn dyntext::tiling::ApproxFilter::candidates(&self, &dyntext::postings::Postings) -> alloc::vec::Vec<u32>
+pub fn dyntext::tiling::ApproxFilter::is_active(&self) -> bool
+pub fn dyntext::tiling::ApproxFilter::passes(&self, &dyntext::bloom::BloomFilter) -> bool
+impl core::clone::Clone for dyntext::tiling::ApproxFilter
+pub fn dyntext::tiling::ApproxFilter::clone(&self) -> dyntext::tiling::ApproxFilter
+impl core::fmt::Debug for dyntext::tiling::ApproxFilter
+pub fn dyntext::tiling::ApproxFilter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for dyntext::tiling::ApproxFilter
+impl core::marker::Send for dyntext::tiling::ApproxFilter
+impl core::marker::Sync for dyntext::tiling::ApproxFilter
+impl core::marker::Unpin for dyntext::tiling::ApproxFilter
+impl core::marker::UnsafeUnpin for dyntext::tiling::ApproxFilter
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tiling::ApproxFilter
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tiling::ApproxFilter
+impl<T, U> core::convert::Into<U> for dyntext::tiling::ApproxFilter where U: core::convert::From<T>
+pub fn dyntext::tiling::ApproxFilter::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tiling::ApproxFilter where U: core::convert::Into<T>
+pub type dyntext::tiling::ApproxFilter::Error = core::convert::Infallible
+pub fn dyntext::tiling::ApproxFilter::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tiling::ApproxFilter where U: core::convert::TryFrom<T>
+pub type dyntext::tiling::ApproxFilter::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tiling::ApproxFilter::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::tiling::ApproxFilter where T: core::clone::Clone
+pub type dyntext::tiling::ApproxFilter::Owned = T
+pub fn dyntext::tiling::ApproxFilter::clone_into(&self, &mut T)
+pub fn dyntext::tiling::ApproxFilter::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::tiling::ApproxFilter where T: 'static + ?core::marker::Sized
+pub fn dyntext::tiling::ApproxFilter::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tiling::ApproxFilter where T: ?core::marker::Sized
+pub fn dyntext::tiling::ApproxFilter::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tiling::ApproxFilter where T: ?core::marker::Sized
+pub fn dyntext::tiling::ApproxFilter::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::tiling::ApproxFilter where T: core::clone::Clone
+pub unsafe fn dyntext::tiling::ApproxFilter::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::tiling::ApproxFilter
+pub fn dyntext::tiling::ApproxFilter::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tiling::ApproxFilter
+pub type dyntext::tiling::ApproxFilter::Init = T
+pub const dyntext::tiling::ApproxFilter::ALIGN: usize
+pub unsafe fn dyntext::tiling::ApproxFilter::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tiling::ApproxFilter::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tiling::ApproxFilter::drop(usize)
+pub unsafe fn dyntext::tiling::ApproxFilter::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tiling::ApproxFilter
+pub mod dyntext::tre
+pub enum dyntext::tre::TreError
+pub dyntext::tre::TreError::Compile(alloc::string::String)
+pub dyntext::tre::TreError::Internal(alloc::string::String)
+pub dyntext::tre::TreError::InvalidOptions(alloc::string::String)
+impl core::error::Error for dyntext::tre::TreError
+impl core::fmt::Debug for dyntext::tre::TreError
+pub fn dyntext::tre::TreError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for dyntext::tre::TreError
+pub fn dyntext::tre::TreError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for dyntext::tre::TreError
+impl core::marker::Send for dyntext::tre::TreError
+impl core::marker::Sync for dyntext::tre::TreError
+impl core::marker::Unpin for dyntext::tre::TreError
+impl core::marker::UnsafeUnpin for dyntext::tre::TreError
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tre::TreError
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tre::TreError
+impl<T, U> core::convert::Into<U> for dyntext::tre::TreError where U: core::convert::From<T>
+pub fn dyntext::tre::TreError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tre::TreError where U: core::convert::Into<T>
+pub type dyntext::tre::TreError::Error = core::convert::Infallible
+pub fn dyntext::tre::TreError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tre::TreError where U: core::convert::TryFrom<T>
+pub type dyntext::tre::TreError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tre::TreError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for dyntext::tre::TreError where T: core::fmt::Display + ?core::marker::Sized
+pub fn dyntext::tre::TreError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for dyntext::tre::TreError where T: 'static + ?core::marker::Sized
+pub fn dyntext::tre::TreError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tre::TreError where T: ?core::marker::Sized
+pub fn dyntext::tre::TreError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tre::TreError where T: ?core::marker::Sized
+pub fn dyntext::tre::TreError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyntext::tre::TreError
+pub fn dyntext::tre::TreError::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tre::TreError
+pub type dyntext::tre::TreError::Init = T
+pub const dyntext::tre::TreError::ALIGN: usize
+pub unsafe fn dyntext::tre::TreError::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tre::TreError::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tre::TreError::drop(usize)
+pub unsafe fn dyntext::tre::TreError::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tre::TreError
+pub struct dyntext::tre::TreCompiledPattern
+impl dyntext::tre::TreCompiledPattern
+pub fn dyntext::tre::TreCompiledPattern::compile(&[u8], dyntext::tre::TreMatchOpts) -> core::result::Result<Self, dyntext::tre::TreError>
+pub fn dyntext::tre::TreCompiledPattern::is_match(&self, &[u8]) -> bool
+pub fn dyntext::tre::TreCompiledPattern::matches(&self, &[u8]) -> core::option::Option<dyntext::tre::TreMatch>
+pub fn dyntext::tre::TreCompiledPattern::opts(&self) -> dyntext::tre::TreMatchOpts
+impl core::fmt::Debug for dyntext::tre::TreCompiledPattern
+pub fn dyntext::tre::TreCompiledPattern::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for dyntext::tre::TreCompiledPattern
+impl !core::marker::Send for dyntext::tre::TreCompiledPattern
+impl !core::marker::Sync for dyntext::tre::TreCompiledPattern
+impl core::marker::Unpin for dyntext::tre::TreCompiledPattern
+impl core::marker::UnsafeUnpin for dyntext::tre::TreCompiledPattern
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tre::TreCompiledPattern
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tre::TreCompiledPattern
+impl<T, U> core::convert::Into<U> for dyntext::tre::TreCompiledPattern where U: core::convert::From<T>
+pub fn dyntext::tre::TreCompiledPattern::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tre::TreCompiledPattern where U: core::convert::Into<T>
+pub type dyntext::tre::TreCompiledPattern::Error = core::convert::Infallible
+pub fn dyntext::tre::TreCompiledPattern::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tre::TreCompiledPattern where U: core::convert::TryFrom<T>
+pub type dyntext::tre::TreCompiledPattern::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tre::TreCompiledPattern::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyntext::tre::TreCompiledPattern where T: 'static + ?core::marker::Sized
+pub fn dyntext::tre::TreCompiledPattern::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tre::TreCompiledPattern where T: ?core::marker::Sized
+pub fn dyntext::tre::TreCompiledPattern::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tre::TreCompiledPattern where T: ?core::marker::Sized
+pub fn dyntext::tre::TreCompiledPattern::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyntext::tre::TreCompiledPattern
+pub fn dyntext::tre::TreCompiledPattern::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tre::TreCompiledPattern
+pub type dyntext::tre::TreCompiledPattern::Init = T
+pub const dyntext::tre::TreCompiledPattern::ALIGN: usize
+pub unsafe fn dyntext::tre::TreCompiledPattern::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tre::TreCompiledPattern::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tre::TreCompiledPattern::drop(usize)
+pub unsafe fn dyntext::tre::TreCompiledPattern::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tre::TreCompiledPattern
+pub struct dyntext::tre::TreMatch
+pub dyntext::tre::TreMatch::cost: u32
+pub dyntext::tre::TreMatch::end: usize
+pub dyntext::tre::TreMatch::n_del: u32
+pub dyntext::tre::TreMatch::n_ins: u32
+pub dyntext::tre::TreMatch::n_subst: u32
+pub dyntext::tre::TreMatch::start: usize
+impl core::clone::Clone for dyntext::tre::TreMatch
+pub fn dyntext::tre::TreMatch::clone(&self) -> dyntext::tre::TreMatch
+impl core::cmp::Eq for dyntext::tre::TreMatch
+impl core::cmp::PartialEq for dyntext::tre::TreMatch
+pub fn dyntext::tre::TreMatch::eq(&self, &dyntext::tre::TreMatch) -> bool
+impl core::fmt::Debug for dyntext::tre::TreMatch
+pub fn dyntext::tre::TreMatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for dyntext::tre::TreMatch
+impl core::marker::StructuralPartialEq for dyntext::tre::TreMatch
+impl core::marker::Freeze for dyntext::tre::TreMatch
+impl core::marker::Send for dyntext::tre::TreMatch
+impl core::marker::Sync for dyntext::tre::TreMatch
+impl core::marker::Unpin for dyntext::tre::TreMatch
+impl core::marker::UnsafeUnpin for dyntext::tre::TreMatch
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tre::TreMatch
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tre::TreMatch
+impl<T, U> core::convert::Into<U> for dyntext::tre::TreMatch where U: core::convert::From<T>
+pub fn dyntext::tre::TreMatch::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tre::TreMatch where U: core::convert::Into<T>
+pub type dyntext::tre::TreMatch::Error = core::convert::Infallible
+pub fn dyntext::tre::TreMatch::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tre::TreMatch where U: core::convert::TryFrom<T>
+pub type dyntext::tre::TreMatch::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tre::TreMatch::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::tre::TreMatch where T: core::clone::Clone
+pub type dyntext::tre::TreMatch::Owned = T
+pub fn dyntext::tre::TreMatch::clone_into(&self, &mut T)
+pub fn dyntext::tre::TreMatch::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::tre::TreMatch where T: 'static + ?core::marker::Sized
+pub fn dyntext::tre::TreMatch::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tre::TreMatch where T: ?core::marker::Sized
+pub fn dyntext::tre::TreMatch::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tre::TreMatch where T: ?core::marker::Sized
+pub fn dyntext::tre::TreMatch::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::tre::TreMatch where T: core::clone::Clone
+pub unsafe fn dyntext::tre::TreMatch::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::tre::TreMatch
+pub fn dyntext::tre::TreMatch::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tre::TreMatch
+pub type dyntext::tre::TreMatch::Init = T
+pub const dyntext::tre::TreMatch::ALIGN: usize
+pub unsafe fn dyntext::tre::TreMatch::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tre::TreMatch::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tre::TreMatch::drop(usize)
+pub unsafe fn dyntext::tre::TreMatch::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tre::TreMatch
+pub struct dyntext::tre::TreMatchOpts
+pub dyntext::tre::TreMatchOpts::case_insensitive: bool
+pub dyntext::tre::TreMatchOpts::cost_del: u16
+pub dyntext::tre::TreMatchOpts::cost_ins: u16
+pub dyntext::tre::TreMatchOpts::cost_subst: u16
+pub dyntext::tre::TreMatchOpts::max_cost: u16
+pub dyntext::tre::TreMatchOpts::max_errors: u16
+impl core::clone::Clone for dyntext::tre::TreMatchOpts
+pub fn dyntext::tre::TreMatchOpts::clone(&self) -> dyntext::tre::TreMatchOpts
+impl core::default::Default for dyntext::tre::TreMatchOpts
+pub fn dyntext::tre::TreMatchOpts::default() -> Self
+impl core::fmt::Debug for dyntext::tre::TreMatchOpts
+pub fn dyntext::tre::TreMatchOpts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for dyntext::tre::TreMatchOpts
+impl core::marker::Freeze for dyntext::tre::TreMatchOpts
+impl core::marker::Send for dyntext::tre::TreMatchOpts
+impl core::marker::Sync for dyntext::tre::TreMatchOpts
+impl core::marker::Unpin for dyntext::tre::TreMatchOpts
+impl core::marker::UnsafeUnpin for dyntext::tre::TreMatchOpts
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tre::TreMatchOpts
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tre::TreMatchOpts
+impl<T, U> core::convert::Into<U> for dyntext::tre::TreMatchOpts where U: core::convert::From<T>
+pub fn dyntext::tre::TreMatchOpts::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tre::TreMatchOpts where U: core::convert::Into<T>
+pub type dyntext::tre::TreMatchOpts::Error = core::convert::Infallible
+pub fn dyntext::tre::TreMatchOpts::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tre::TreMatchOpts where U: core::convert::TryFrom<T>
+pub type dyntext::tre::TreMatchOpts::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tre::TreMatchOpts::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::tre::TreMatchOpts where T: core::clone::Clone
+pub type dyntext::tre::TreMatchOpts::Owned = T
+pub fn dyntext::tre::TreMatchOpts::clone_into(&self, &mut T)
+pub fn dyntext::tre::TreMatchOpts::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::tre::TreMatchOpts where T: 'static + ?core::marker::Sized
+pub fn dyntext::tre::TreMatchOpts::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tre::TreMatchOpts where T: ?core::marker::Sized
+pub fn dyntext::tre::TreMatchOpts::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tre::TreMatchOpts where T: ?core::marker::Sized
+pub fn dyntext::tre::TreMatchOpts::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::tre::TreMatchOpts where T: core::clone::Clone
+pub unsafe fn dyntext::tre::TreMatchOpts::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::tre::TreMatchOpts
+pub fn dyntext::tre::TreMatchOpts::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tre::TreMatchOpts
+pub type dyntext::tre::TreMatchOpts::Init = T
+pub const dyntext::tre::TreMatchOpts::ALIGN: usize
+pub unsafe fn dyntext::tre::TreMatchOpts::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tre::TreMatchOpts::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tre::TreMatchOpts::drop(usize)
+pub unsafe fn dyntext::tre::TreMatchOpts::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tre::TreMatchOpts
+pub mod dyntext::trigram
+pub const dyntext::trigram::PAD_LEFT: u8
+pub const dyntext::trigram::PAD_RIGHT: u8
+pub const dyntext::trigram::TRIGRAM_LEN: usize
+pub fn dyntext::trigram::extract_query_trigram_set(&[u8]) -> alloc::vec::Vec<u64>
+pub fn dyntext::trigram::extract_query_trigrams(&[u8]) -> alloc::vec::Vec<u64>
+pub fn dyntext::trigram::extract_trigram_set(&[u8]) -> alloc::vec::Vec<u64>
+pub fn dyntext::trigram::extract_trigrams(&[u8]) -> alloc::vec::Vec<u64>
+pub fn dyntext::trigram::hash_trigram(&[u8]) -> u64
+pub enum dyntext::RegexAst
+pub dyntext::RegexAst::Alt(alloc::vec::Vec<dyntext::regex_ast::Ast>)
+pub dyntext::RegexAst::Anchor
+pub dyntext::RegexAst::AnyChar
+pub dyntext::RegexAst::Concat(alloc::vec::Vec<dyntext::regex_ast::Ast>)
+pub dyntext::RegexAst::Empty
+pub dyntext::RegexAst::Literal(alloc::vec::Vec<u8>)
+pub dyntext::RegexAst::Repeat
+pub dyntext::RegexAst::Repeat::max: core::option::Option<u32>
+pub dyntext::RegexAst::Repeat::min: u32
+pub dyntext::RegexAst::Repeat::sub: alloc::boxed::Box<dyntext::regex_ast::Ast>
+impl dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::parse(&str) -> core::result::Result<Self, dyntext::regex_ast::RegexError>
+impl core::clone::Clone for dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::clone(&self) -> dyntext::regex_ast::Ast
+impl core::cmp::Eq for dyntext::regex_ast::Ast
+impl core::cmp::PartialEq for dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::eq(&self, &dyntext::regex_ast::Ast) -> bool
+impl core::fmt::Debug for dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for dyntext::regex_ast::Ast
+impl core::marker::Freeze for dyntext::regex_ast::Ast
+impl core::marker::Send for dyntext::regex_ast::Ast
+impl core::marker::Sync for dyntext::regex_ast::Ast
+impl core::marker::Unpin for dyntext::regex_ast::Ast
+impl core::marker::UnsafeUnpin for dyntext::regex_ast::Ast
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::regex_ast::Ast
+impl core::panic::unwind_safe::UnwindSafe for dyntext::regex_ast::Ast
+impl<T, U> core::convert::Into<U> for dyntext::regex_ast::Ast where U: core::convert::From<T>
+pub fn dyntext::regex_ast::Ast::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::regex_ast::Ast where U: core::convert::Into<T>
+pub type dyntext::regex_ast::Ast::Error = core::convert::Infallible
+pub fn dyntext::regex_ast::Ast::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::regex_ast::Ast where U: core::convert::TryFrom<T>
+pub type dyntext::regex_ast::Ast::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::regex_ast::Ast::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::regex_ast::Ast where T: core::clone::Clone
+pub type dyntext::regex_ast::Ast::Owned = T
+pub fn dyntext::regex_ast::Ast::clone_into(&self, &mut T)
+pub fn dyntext::regex_ast::Ast::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::regex_ast::Ast where T: 'static + ?core::marker::Sized
+pub fn dyntext::regex_ast::Ast::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::regex_ast::Ast where T: ?core::marker::Sized
+pub fn dyntext::regex_ast::Ast::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::regex_ast::Ast where T: ?core::marker::Sized
+pub fn dyntext::regex_ast::Ast::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::regex_ast::Ast where T: core::clone::Clone
+pub unsafe fn dyntext::regex_ast::Ast::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::regex_ast::Ast
+pub fn dyntext::regex_ast::Ast::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::regex_ast::Ast
+pub type dyntext::regex_ast::Ast::Init = T
+pub const dyntext::regex_ast::Ast::ALIGN: usize
+pub unsafe fn dyntext::regex_ast::Ast::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::regex_ast::Ast::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::regex_ast::Ast::drop(usize)
+pub unsafe fn dyntext::regex_ast::Ast::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::regex_ast::Ast
+pub enum dyntext::RegexError
+pub dyntext::RegexError::Parse(alloc::string::String)
+pub dyntext::RegexError::PrefixUnsupported(&'static str)
+impl core::error::Error for dyntext::regex_ast::RegexError
+impl core::fmt::Debug for dyntext::regex_ast::RegexError
+pub fn dyntext::regex_ast::RegexError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for dyntext::regex_ast::RegexError
+pub fn dyntext::regex_ast::RegexError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for dyntext::regex_ast::RegexError
+impl core::marker::Send for dyntext::regex_ast::RegexError
+impl core::marker::Sync for dyntext::regex_ast::RegexError
+impl core::marker::Unpin for dyntext::regex_ast::RegexError
+impl core::marker::UnsafeUnpin for dyntext::regex_ast::RegexError
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::regex_ast::RegexError
+impl core::panic::unwind_safe::UnwindSafe for dyntext::regex_ast::RegexError
+impl<T, U> core::convert::Into<U> for dyntext::regex_ast::RegexError where U: core::convert::From<T>
+pub fn dyntext::regex_ast::RegexError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::regex_ast::RegexError where U: core::convert::Into<T>
+pub type dyntext::regex_ast::RegexError::Error = core::convert::Infallible
+pub fn dyntext::regex_ast::RegexError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::regex_ast::RegexError where U: core::convert::TryFrom<T>
+pub type dyntext::regex_ast::RegexError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::regex_ast::RegexError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for dyntext::regex_ast::RegexError where T: core::fmt::Display + ?core::marker::Sized
+pub fn dyntext::regex_ast::RegexError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for dyntext::regex_ast::RegexError where T: 'static + ?core::marker::Sized
+pub fn dyntext::regex_ast::RegexError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::regex_ast::RegexError where T: ?core::marker::Sized
+pub fn dyntext::regex_ast::RegexError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::regex_ast::RegexError where T: ?core::marker::Sized
+pub fn dyntext::regex_ast::RegexError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyntext::regex_ast::RegexError
+pub fn dyntext::regex_ast::RegexError::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::regex_ast::RegexError
+pub type dyntext::regex_ast::RegexError::Init = T
+pub const dyntext::regex_ast::RegexError::ALIGN: usize
+pub unsafe fn dyntext::regex_ast::RegexError::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::regex_ast::RegexError::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::regex_ast::RegexError::drop(usize)
+pub unsafe fn dyntext::regex_ast::RegexError::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::regex_ast::RegexError
+pub enum dyntext::TreError
+pub dyntext::TreError::Compile(alloc::string::String)
+pub dyntext::TreError::Internal(alloc::string::String)
+pub dyntext::TreError::InvalidOptions(alloc::string::String)
+impl core::error::Error for dyntext::tre::TreError
+impl core::fmt::Debug for dyntext::tre::TreError
+pub fn dyntext::tre::TreError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for dyntext::tre::TreError
+pub fn dyntext::tre::TreError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for dyntext::tre::TreError
+impl core::marker::Send for dyntext::tre::TreError
+impl core::marker::Sync for dyntext::tre::TreError
+impl core::marker::Unpin for dyntext::tre::TreError
+impl core::marker::UnsafeUnpin for dyntext::tre::TreError
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tre::TreError
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tre::TreError
+impl<T, U> core::convert::Into<U> for dyntext::tre::TreError where U: core::convert::From<T>
+pub fn dyntext::tre::TreError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tre::TreError where U: core::convert::Into<T>
+pub type dyntext::tre::TreError::Error = core::convert::Infallible
+pub fn dyntext::tre::TreError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tre::TreError where U: core::convert::TryFrom<T>
+pub type dyntext::tre::TreError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tre::TreError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for dyntext::tre::TreError where T: core::fmt::Display + ?core::marker::Sized
+pub fn dyntext::tre::TreError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for dyntext::tre::TreError where T: 'static + ?core::marker::Sized
+pub fn dyntext::tre::TreError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tre::TreError where T: ?core::marker::Sized
+pub fn dyntext::tre::TreError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tre::TreError where T: ?core::marker::Sized
+pub fn dyntext::tre::TreError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyntext::tre::TreError
+pub fn dyntext::tre::TreError::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tre::TreError
+pub type dyntext::tre::TreError::Init = T
+pub const dyntext::tre::TreError::ALIGN: usize
+pub unsafe fn dyntext::tre::TreError::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tre::TreError::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tre::TreError::drop(usize)
+pub unsafe fn dyntext::tre::TreError::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tre::TreError
+pub struct dyntext::ApproxFilter
+pub dyntext::ApproxFilter::min_required: usize
+pub dyntext::ApproxFilter::trigrams: alloc::vec::Vec<u64>
+impl dyntext::tiling::ApproxFilter
+pub fn dyntext::tiling::ApproxFilter::build(&dyntext::regex_ast::Ast, u16) -> Self
+pub fn dyntext::tiling::ApproxFilter::candidates(&self, &dyntext::postings::Postings) -> alloc::vec::Vec<u32>
+pub fn dyntext::tiling::ApproxFilter::is_active(&self) -> bool
+pub fn dyntext::tiling::ApproxFilter::passes(&self, &dyntext::bloom::BloomFilter) -> bool
+impl core::clone::Clone for dyntext::tiling::ApproxFilter
+pub fn dyntext::tiling::ApproxFilter::clone(&self) -> dyntext::tiling::ApproxFilter
+impl core::fmt::Debug for dyntext::tiling::ApproxFilter
+pub fn dyntext::tiling::ApproxFilter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for dyntext::tiling::ApproxFilter
+impl core::marker::Send for dyntext::tiling::ApproxFilter
+impl core::marker::Sync for dyntext::tiling::ApproxFilter
+impl core::marker::Unpin for dyntext::tiling::ApproxFilter
+impl core::marker::UnsafeUnpin for dyntext::tiling::ApproxFilter
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tiling::ApproxFilter
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tiling::ApproxFilter
+impl<T, U> core::convert::Into<U> for dyntext::tiling::ApproxFilter where U: core::convert::From<T>
+pub fn dyntext::tiling::ApproxFilter::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tiling::ApproxFilter where U: core::convert::Into<T>
+pub type dyntext::tiling::ApproxFilter::Error = core::convert::Infallible
+pub fn dyntext::tiling::ApproxFilter::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tiling::ApproxFilter where U: core::convert::TryFrom<T>
+pub type dyntext::tiling::ApproxFilter::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tiling::ApproxFilter::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::tiling::ApproxFilter where T: core::clone::Clone
+pub type dyntext::tiling::ApproxFilter::Owned = T
+pub fn dyntext::tiling::ApproxFilter::clone_into(&self, &mut T)
+pub fn dyntext::tiling::ApproxFilter::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::tiling::ApproxFilter where T: 'static + ?core::marker::Sized
+pub fn dyntext::tiling::ApproxFilter::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tiling::ApproxFilter where T: ?core::marker::Sized
+pub fn dyntext::tiling::ApproxFilter::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tiling::ApproxFilter where T: ?core::marker::Sized
+pub fn dyntext::tiling::ApproxFilter::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::tiling::ApproxFilter where T: core::clone::Clone
+pub unsafe fn dyntext::tiling::ApproxFilter::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::tiling::ApproxFilter
+pub fn dyntext::tiling::ApproxFilter::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tiling::ApproxFilter
+pub type dyntext::tiling::ApproxFilter::Init = T
+pub const dyntext::tiling::ApproxFilter::ALIGN: usize
+pub unsafe fn dyntext::tiling::ApproxFilter::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tiling::ApproxFilter::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tiling::ApproxFilter::drop(usize)
+pub unsafe fn dyntext::tiling::ApproxFilter::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tiling::ApproxFilter
+pub struct dyntext::BloomFilter
+impl dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::contains(&self, &[u8]) -> bool
+pub fn dyntext::bloom::BloomFilter::false_positive_rate(&self, usize) -> f64
+pub fn dyntext::bloom::BloomFilter::hash_count(&self) -> u8
+pub fn dyntext::bloom::BloomFilter::insert(&mut self, &[u8])
+pub fn dyntext::bloom::BloomFilter::n_bits(&self) -> u64
+pub fn dyntext::bloom::BloomFilter::with_size_and_fp_rate(usize, f64) -> Self
+impl core::clone::Clone for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::clone(&self) -> dyntext::bloom::BloomFilter
+impl core::fmt::Debug for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for dyntext::bloom::BloomFilter
+impl core::marker::Send for dyntext::bloom::BloomFilter
+impl core::marker::Sync for dyntext::bloom::BloomFilter
+impl core::marker::Unpin for dyntext::bloom::BloomFilter
+impl core::marker::UnsafeUnpin for dyntext::bloom::BloomFilter
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::bloom::BloomFilter
+impl core::panic::unwind_safe::UnwindSafe for dyntext::bloom::BloomFilter
+impl<T, U> core::convert::Into<U> for dyntext::bloom::BloomFilter where U: core::convert::From<T>
+pub fn dyntext::bloom::BloomFilter::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::bloom::BloomFilter where U: core::convert::Into<T>
+pub type dyntext::bloom::BloomFilter::Error = core::convert::Infallible
+pub fn dyntext::bloom::BloomFilter::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::bloom::BloomFilter where U: core::convert::TryFrom<T>
+pub type dyntext::bloom::BloomFilter::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::bloom::BloomFilter::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::bloom::BloomFilter where T: core::clone::Clone
+pub type dyntext::bloom::BloomFilter::Owned = T
+pub fn dyntext::bloom::BloomFilter::clone_into(&self, &mut T)
+pub fn dyntext::bloom::BloomFilter::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::bloom::BloomFilter where T: 'static + ?core::marker::Sized
+pub fn dyntext::bloom::BloomFilter::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::bloom::BloomFilter where T: ?core::marker::Sized
+pub fn dyntext::bloom::BloomFilter::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::bloom::BloomFilter where T: ?core::marker::Sized
+pub fn dyntext::bloom::BloomFilter::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::bloom::BloomFilter where T: core::clone::Clone
+pub unsafe fn dyntext::bloom::BloomFilter::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::bloom::BloomFilter
+pub fn dyntext::bloom::BloomFilter::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::bloom::BloomFilter
+pub type dyntext::bloom::BloomFilter::Init = T
+pub const dyntext::bloom::BloomFilter::ALIGN: usize
+pub unsafe fn dyntext::bloom::BloomFilter::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::bloom::BloomFilter::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::bloom::BloomFilter::drop(usize)
+pub unsafe fn dyntext::bloom::BloomFilter::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::bloom::BloomFilter
+impl<T> serde_core::de::DeserializeOwned for dyntext::bloom::BloomFilter where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct dyntext::IndexedDoc
+pub dyntext::IndexedDoc::bloom: dyntext::bloom::BloomFilter
+pub dyntext::IndexedDoc::text: alloc::vec::Vec<u8>
+impl core::clone::Clone for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::clone(&self) -> dyntext::index::IndexedDoc
+impl core::fmt::Debug for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for dyntext::index::IndexedDoc
+impl core::marker::Send for dyntext::index::IndexedDoc
+impl core::marker::Sync for dyntext::index::IndexedDoc
+impl core::marker::Unpin for dyntext::index::IndexedDoc
+impl core::marker::UnsafeUnpin for dyntext::index::IndexedDoc
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::index::IndexedDoc
+impl core::panic::unwind_safe::UnwindSafe for dyntext::index::IndexedDoc
+impl<T, U> core::convert::Into<U> for dyntext::index::IndexedDoc where U: core::convert::From<T>
+pub fn dyntext::index::IndexedDoc::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::index::IndexedDoc where U: core::convert::Into<T>
+pub type dyntext::index::IndexedDoc::Error = core::convert::Infallible
+pub fn dyntext::index::IndexedDoc::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::index::IndexedDoc where U: core::convert::TryFrom<T>
+pub type dyntext::index::IndexedDoc::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::index::IndexedDoc::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::index::IndexedDoc where T: core::clone::Clone
+pub type dyntext::index::IndexedDoc::Owned = T
+pub fn dyntext::index::IndexedDoc::clone_into(&self, &mut T)
+pub fn dyntext::index::IndexedDoc::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::index::IndexedDoc where T: 'static + ?core::marker::Sized
+pub fn dyntext::index::IndexedDoc::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::index::IndexedDoc where T: ?core::marker::Sized
+pub fn dyntext::index::IndexedDoc::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::index::IndexedDoc where T: ?core::marker::Sized
+pub fn dyntext::index::IndexedDoc::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::index::IndexedDoc where T: core::clone::Clone
+pub unsafe fn dyntext::index::IndexedDoc::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::index::IndexedDoc
+pub fn dyntext::index::IndexedDoc::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::index::IndexedDoc
+pub type dyntext::index::IndexedDoc::Init = T
+pub const dyntext::index::IndexedDoc::ALIGN: usize
+pub unsafe fn dyntext::index::IndexedDoc::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::index::IndexedDoc::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::index::IndexedDoc::drop(usize)
+pub unsafe fn dyntext::index::IndexedDoc::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::index::IndexedDoc
+impl<T> serde_core::de::DeserializeOwned for dyntext::index::IndexedDoc where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct dyntext::Postings
+impl dyntext::postings::Postings
+pub fn dyntext::postings::Postings::insert(&mut self, u64, u32)
+pub fn dyntext::postings::Postings::intersect(&self, &[u64]) -> roaring::bitmap::RoaringBitmap
+pub fn dyntext::postings::Postings::is_empty(&self) -> bool
+pub fn dyntext::postings::Postings::len(&self) -> usize
+pub fn dyntext::postings::Postings::lookup(&self, u64) -> core::option::Option<&roaring::bitmap::RoaringBitmap>
+pub fn dyntext::postings::Postings::new() -> Self
+pub fn dyntext::postings::Postings::remove(&mut self, u64, u32)
+pub fn dyntext::postings::Postings::union(&self, &[u64]) -> roaring::bitmap::RoaringBitmap
+impl core::clone::Clone for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::clone(&self) -> dyntext::postings::Postings
+impl core::default::Default for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::default() -> dyntext::postings::Postings
+impl core::fmt::Debug for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for dyntext::postings::Postings
+impl core::marker::Send for dyntext::postings::Postings
+impl core::marker::Sync for dyntext::postings::Postings
+impl core::marker::Unpin for dyntext::postings::Postings
+impl core::marker::UnsafeUnpin for dyntext::postings::Postings
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::postings::Postings
+impl core::panic::unwind_safe::UnwindSafe for dyntext::postings::Postings
+impl<T, U> core::convert::Into<U> for dyntext::postings::Postings where U: core::convert::From<T>
+pub fn dyntext::postings::Postings::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::postings::Postings where U: core::convert::Into<T>
+pub type dyntext::postings::Postings::Error = core::convert::Infallible
+pub fn dyntext::postings::Postings::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::postings::Postings where U: core::convert::TryFrom<T>
+pub type dyntext::postings::Postings::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::postings::Postings::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::postings::Postings where T: core::clone::Clone
+pub type dyntext::postings::Postings::Owned = T
+pub fn dyntext::postings::Postings::clone_into(&self, &mut T)
+pub fn dyntext::postings::Postings::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::postings::Postings where T: 'static + ?core::marker::Sized
+pub fn dyntext::postings::Postings::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::postings::Postings where T: ?core::marker::Sized
+pub fn dyntext::postings::Postings::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::postings::Postings where T: ?core::marker::Sized
+pub fn dyntext::postings::Postings::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::postings::Postings where T: core::clone::Clone
+pub unsafe fn dyntext::postings::Postings::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::postings::Postings
+pub fn dyntext::postings::Postings::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::postings::Postings
+pub type dyntext::postings::Postings::Init = T
+pub const dyntext::postings::Postings::ALIGN: usize
+pub unsafe fn dyntext::postings::Postings::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::postings::Postings::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::postings::Postings::drop(usize)
+pub unsafe fn dyntext::postings::Postings::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::postings::Postings
+impl<T> serde_core::de::DeserializeOwned for dyntext::postings::Postings where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct dyntext::TextIndex
+impl dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::doc_count(&self) -> usize
+pub fn dyntext::index::TextIndex::docs(&self) -> &alloc::collections::btree::map::BTreeMap<u32, dyntext::index::IndexedDoc>
+pub fn dyntext::index::TextIndex::insert(&mut self, alloc::vec::Vec<u8>) -> u32
+pub fn dyntext::index::TextIndex::new() -> Self
+pub fn dyntext::index::TextIndex::postings(&self) -> &dyntext::postings::Postings
+pub fn dyntext::index::TextIndex::remove(&mut self, u32) -> core::option::Option<alloc::vec::Vec<u8>>
+pub fn dyntext::index::TextIndex::search_regex(&self, &str) -> core::result::Result<alloc::vec::Vec<u32>, dyntext::regex_ast::RegexError>
+pub fn dyntext::index::TextIndex::search_regex_approx(&self, &str, u16) -> core::result::Result<alloc::vec::Vec<u32>, dyntext::tre::TreError>
+pub fn dyntext::index::TextIndex::search_substring(&self, &[u8]) -> alloc::vec::Vec<u32>
+impl core::clone::Clone for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::clone(&self) -> dyntext::index::TextIndex
+impl core::default::Default for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::default() -> Self
+impl core::fmt::Debug for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for dyntext::index::TextIndex
+impl core::marker::Send for dyntext::index::TextIndex
+impl core::marker::Sync for dyntext::index::TextIndex
+impl core::marker::Unpin for dyntext::index::TextIndex
+impl core::marker::UnsafeUnpin for dyntext::index::TextIndex
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::index::TextIndex
+impl core::panic::unwind_safe::UnwindSafe for dyntext::index::TextIndex
+impl<T, U> core::convert::Into<U> for dyntext::index::TextIndex where U: core::convert::From<T>
+pub fn dyntext::index::TextIndex::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::index::TextIndex where U: core::convert::Into<T>
+pub type dyntext::index::TextIndex::Error = core::convert::Infallible
+pub fn dyntext::index::TextIndex::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::index::TextIndex where U: core::convert::TryFrom<T>
+pub type dyntext::index::TextIndex::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::index::TextIndex::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::index::TextIndex where T: core::clone::Clone
+pub type dyntext::index::TextIndex::Owned = T
+pub fn dyntext::index::TextIndex::clone_into(&self, &mut T)
+pub fn dyntext::index::TextIndex::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::index::TextIndex where T: 'static + ?core::marker::Sized
+pub fn dyntext::index::TextIndex::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::index::TextIndex where T: ?core::marker::Sized
+pub fn dyntext::index::TextIndex::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::index::TextIndex where T: ?core::marker::Sized
+pub fn dyntext::index::TextIndex::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::index::TextIndex where T: core::clone::Clone
+pub unsafe fn dyntext::index::TextIndex::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::index::TextIndex
+pub fn dyntext::index::TextIndex::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::index::TextIndex
+pub type dyntext::index::TextIndex::Init = T
+pub const dyntext::index::TextIndex::ALIGN: usize
+pub unsafe fn dyntext::index::TextIndex::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::index::TextIndex::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::index::TextIndex::drop(usize)
+pub unsafe fn dyntext::index::TextIndex::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::index::TextIndex
+impl<T> serde_core::de::DeserializeOwned for dyntext::index::TextIndex where T: for<'de> serde_core::de::Deserialize<'de>
+pub struct dyntext::TreCompiledPattern
+impl dyntext::tre::TreCompiledPattern
+pub fn dyntext::tre::TreCompiledPattern::compile(&[u8], dyntext::tre::TreMatchOpts) -> core::result::Result<Self, dyntext::tre::TreError>
+pub fn dyntext::tre::TreCompiledPattern::is_match(&self, &[u8]) -> bool
+pub fn dyntext::tre::TreCompiledPattern::matches(&self, &[u8]) -> core::option::Option<dyntext::tre::TreMatch>
+pub fn dyntext::tre::TreCompiledPattern::opts(&self) -> dyntext::tre::TreMatchOpts
+impl core::fmt::Debug for dyntext::tre::TreCompiledPattern
+pub fn dyntext::tre::TreCompiledPattern::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for dyntext::tre::TreCompiledPattern
+impl !core::marker::Send for dyntext::tre::TreCompiledPattern
+impl !core::marker::Sync for dyntext::tre::TreCompiledPattern
+impl core::marker::Unpin for dyntext::tre::TreCompiledPattern
+impl core::marker::UnsafeUnpin for dyntext::tre::TreCompiledPattern
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tre::TreCompiledPattern
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tre::TreCompiledPattern
+impl<T, U> core::convert::Into<U> for dyntext::tre::TreCompiledPattern where U: core::convert::From<T>
+pub fn dyntext::tre::TreCompiledPattern::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tre::TreCompiledPattern where U: core::convert::Into<T>
+pub type dyntext::tre::TreCompiledPattern::Error = core::convert::Infallible
+pub fn dyntext::tre::TreCompiledPattern::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tre::TreCompiledPattern where U: core::convert::TryFrom<T>
+pub type dyntext::tre::TreCompiledPattern::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tre::TreCompiledPattern::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyntext::tre::TreCompiledPattern where T: 'static + ?core::marker::Sized
+pub fn dyntext::tre::TreCompiledPattern::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tre::TreCompiledPattern where T: ?core::marker::Sized
+pub fn dyntext::tre::TreCompiledPattern::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tre::TreCompiledPattern where T: ?core::marker::Sized
+pub fn dyntext::tre::TreCompiledPattern::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyntext::tre::TreCompiledPattern
+pub fn dyntext::tre::TreCompiledPattern::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tre::TreCompiledPattern
+pub type dyntext::tre::TreCompiledPattern::Init = T
+pub const dyntext::tre::TreCompiledPattern::ALIGN: usize
+pub unsafe fn dyntext::tre::TreCompiledPattern::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tre::TreCompiledPattern::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tre::TreCompiledPattern::drop(usize)
+pub unsafe fn dyntext::tre::TreCompiledPattern::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tre::TreCompiledPattern
+pub struct dyntext::TreMatch
+pub dyntext::TreMatch::cost: u32
+pub dyntext::TreMatch::end: usize
+pub dyntext::TreMatch::n_del: u32
+pub dyntext::TreMatch::n_ins: u32
+pub dyntext::TreMatch::n_subst: u32
+pub dyntext::TreMatch::start: usize
+impl core::clone::Clone for dyntext::tre::TreMatch
+pub fn dyntext::tre::TreMatch::clone(&self) -> dyntext::tre::TreMatch
+impl core::cmp::Eq for dyntext::tre::TreMatch
+impl core::cmp::PartialEq for dyntext::tre::TreMatch
+pub fn dyntext::tre::TreMatch::eq(&self, &dyntext::tre::TreMatch) -> bool
+impl core::fmt::Debug for dyntext::tre::TreMatch
+pub fn dyntext::tre::TreMatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for dyntext::tre::TreMatch
+impl core::marker::StructuralPartialEq for dyntext::tre::TreMatch
+impl core::marker::Freeze for dyntext::tre::TreMatch
+impl core::marker::Send for dyntext::tre::TreMatch
+impl core::marker::Sync for dyntext::tre::TreMatch
+impl core::marker::Unpin for dyntext::tre::TreMatch
+impl core::marker::UnsafeUnpin for dyntext::tre::TreMatch
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tre::TreMatch
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tre::TreMatch
+impl<T, U> core::convert::Into<U> for dyntext::tre::TreMatch where U: core::convert::From<T>
+pub fn dyntext::tre::TreMatch::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tre::TreMatch where U: core::convert::Into<T>
+pub type dyntext::tre::TreMatch::Error = core::convert::Infallible
+pub fn dyntext::tre::TreMatch::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tre::TreMatch where U: core::convert::TryFrom<T>
+pub type dyntext::tre::TreMatch::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tre::TreMatch::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::tre::TreMatch where T: core::clone::Clone
+pub type dyntext::tre::TreMatch::Owned = T
+pub fn dyntext::tre::TreMatch::clone_into(&self, &mut T)
+pub fn dyntext::tre::TreMatch::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::tre::TreMatch where T: 'static + ?core::marker::Sized
+pub fn dyntext::tre::TreMatch::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tre::TreMatch where T: ?core::marker::Sized
+pub fn dyntext::tre::TreMatch::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tre::TreMatch where T: ?core::marker::Sized
+pub fn dyntext::tre::TreMatch::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::tre::TreMatch where T: core::clone::Clone
+pub unsafe fn dyntext::tre::TreMatch::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::tre::TreMatch
+pub fn dyntext::tre::TreMatch::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tre::TreMatch
+pub type dyntext::tre::TreMatch::Init = T
+pub const dyntext::tre::TreMatch::ALIGN: usize
+pub unsafe fn dyntext::tre::TreMatch::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tre::TreMatch::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tre::TreMatch::drop(usize)
+pub unsafe fn dyntext::tre::TreMatch::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tre::TreMatch
+pub struct dyntext::TreMatchOpts
+pub dyntext::TreMatchOpts::case_insensitive: bool
+pub dyntext::TreMatchOpts::cost_del: u16
+pub dyntext::TreMatchOpts::cost_ins: u16
+pub dyntext::TreMatchOpts::cost_subst: u16
+pub dyntext::TreMatchOpts::max_cost: u16
+pub dyntext::TreMatchOpts::max_errors: u16
+impl core::clone::Clone for dyntext::tre::TreMatchOpts
+pub fn dyntext::tre::TreMatchOpts::clone(&self) -> dyntext::tre::TreMatchOpts
+impl core::default::Default for dyntext::tre::TreMatchOpts
+pub fn dyntext::tre::TreMatchOpts::default() -> Self
+impl core::fmt::Debug for dyntext::tre::TreMatchOpts
+pub fn dyntext::tre::TreMatchOpts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for dyntext::tre::TreMatchOpts
+impl core::marker::Freeze for dyntext::tre::TreMatchOpts
+impl core::marker::Send for dyntext::tre::TreMatchOpts
+impl core::marker::Sync for dyntext::tre::TreMatchOpts
+impl core::marker::Unpin for dyntext::tre::TreMatchOpts
+impl core::marker::UnsafeUnpin for dyntext::tre::TreMatchOpts
+impl core::panic::unwind_safe::RefUnwindSafe for dyntext::tre::TreMatchOpts
+impl core::panic::unwind_safe::UnwindSafe for dyntext::tre::TreMatchOpts
+impl<T, U> core::convert::Into<U> for dyntext::tre::TreMatchOpts where U: core::convert::From<T>
+pub fn dyntext::tre::TreMatchOpts::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyntext::tre::TreMatchOpts where U: core::convert::Into<T>
+pub type dyntext::tre::TreMatchOpts::Error = core::convert::Infallible
+pub fn dyntext::tre::TreMatchOpts::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyntext::tre::TreMatchOpts where U: core::convert::TryFrom<T>
+pub type dyntext::tre::TreMatchOpts::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyntext::tre::TreMatchOpts::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyntext::tre::TreMatchOpts where T: core::clone::Clone
+pub type dyntext::tre::TreMatchOpts::Owned = T
+pub fn dyntext::tre::TreMatchOpts::clone_into(&self, &mut T)
+pub fn dyntext::tre::TreMatchOpts::to_owned(&self) -> T
+impl<T> core::any::Any for dyntext::tre::TreMatchOpts where T: 'static + ?core::marker::Sized
+pub fn dyntext::tre::TreMatchOpts::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyntext::tre::TreMatchOpts where T: ?core::marker::Sized
+pub fn dyntext::tre::TreMatchOpts::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyntext::tre::TreMatchOpts where T: ?core::marker::Sized
+pub fn dyntext::tre::TreMatchOpts::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyntext::tre::TreMatchOpts where T: core::clone::Clone
+pub unsafe fn dyntext::tre::TreMatchOpts::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyntext::tre::TreMatchOpts
+pub fn dyntext::tre::TreMatchOpts::from(T) -> T
+impl<T> crossbeam_epoch::atomic::Pointable for dyntext::tre::TreMatchOpts
+pub type dyntext::tre::TreMatchOpts::Init = T
+pub const dyntext::tre::TreMatchOpts::ALIGN: usize
+pub unsafe fn dyntext::tre::TreMatchOpts::deref<'a>(usize) -> &'a T
+pub unsafe fn dyntext::tre::TreMatchOpts::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn dyntext::tre::TreMatchOpts::drop(usize)
+pub unsafe fn dyntext::tre::TreMatchOpts::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+impl<T> either::into_either::IntoEither for dyntext::tre::TreMatchOpts
+pub const dyntext::MIN_TRIGRAM_QUERY_LEN: usize
+pub fn dyntext::anchored_prefix(&dyntext::regex_ast::Ast) -> core::option::Option<alloc::vec::Vec<u8>>
+pub fn dyntext::extract_literal_runs(&dyntext::regex_ast::Ast) -> alloc::vec::Vec<alloc::vec::Vec<u8>>
+pub fn dyntext::extract_query_trigram_set(&[u8]) -> alloc::vec::Vec<u64>
+pub fn dyntext::extract_query_trigrams(&[u8]) -> alloc::vec::Vec<u64>
+pub fn dyntext::extract_trigram_set(&[u8]) -> alloc::vec::Vec<u64>
+pub fn dyntext::extract_trigrams(&[u8]) -> alloc::vec::Vec<u64>
+pub fn dyntext::has_top_level_start_anchor(&dyntext::regex_ast::Ast) -> bool
+pub fn dyntext::hash_trigram(&[u8]) -> u64
+pub fn dyntext::parse_regex(&str) -> core::result::Result<dyntext::regex_ast::Ast, dyntext::regex_ast::RegexError>
+pub fn dyntext::required_trigram_hashes(&dyntext::regex_ast::Ast) -> alloc::vec::Vec<u64>
+pub fn dyntext::required_trigrams(&dyntext::regex_ast::Ast) -> alloc::vec::Vec<[u8; 3]>

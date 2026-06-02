@@ -1,0 +1,159 @@
+pub mod throttle_core
+pub enum throttle_core::ThrottleError
+pub throttle_core::ThrottleError::RequestExceedsCapacity
+pub throttle_core::ThrottleError::RequestExceedsCapacity::capacity: u64
+pub throttle_core::ThrottleError::RequestExceedsCapacity::requested: u64
+pub throttle_core::ThrottleError::ZeroRefillExhausted
+pub throttle_core::ThrottleError::ZeroRefillExhausted::available: u64
+pub throttle_core::ThrottleError::ZeroRefillExhausted::requested: u64
+impl core::cmp::Eq for throttle_core::ThrottleError
+impl core::cmp::PartialEq for throttle_core::ThrottleError
+pub fn throttle_core::ThrottleError::eq(&self, &throttle_core::ThrottleError) -> bool
+impl core::error::Error for throttle_core::ThrottleError
+impl core::fmt::Debug for throttle_core::ThrottleError
+pub fn throttle_core::ThrottleError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for throttle_core::ThrottleError
+pub fn throttle_core::ThrottleError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for throttle_core::ThrottleError
+impl core::marker::Freeze for throttle_core::ThrottleError
+impl core::marker::Send for throttle_core::ThrottleError
+impl core::marker::Sync for throttle_core::ThrottleError
+impl core::marker::Unpin for throttle_core::ThrottleError
+impl core::marker::UnsafeUnpin for throttle_core::ThrottleError
+impl core::panic::unwind_safe::RefUnwindSafe for throttle_core::ThrottleError
+impl core::panic::unwind_safe::UnwindSafe for throttle_core::ThrottleError
+impl<T, U> core::convert::Into<U> for throttle_core::ThrottleError where U: core::convert::From<T>
+pub fn throttle_core::ThrottleError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for throttle_core::ThrottleError where U: core::convert::Into<T>
+pub type throttle_core::ThrottleError::Error = core::convert::Infallible
+pub fn throttle_core::ThrottleError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for throttle_core::ThrottleError where U: core::convert::TryFrom<T>
+pub type throttle_core::ThrottleError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn throttle_core::ThrottleError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for throttle_core::ThrottleError where T: core::fmt::Display + ?core::marker::Sized
+pub fn throttle_core::ThrottleError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for throttle_core::ThrottleError where T: 'static + ?core::marker::Sized
+pub fn throttle_core::ThrottleError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for throttle_core::ThrottleError where T: ?core::marker::Sized
+pub fn throttle_core::ThrottleError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for throttle_core::ThrottleError where T: ?core::marker::Sized
+pub fn throttle_core::ThrottleError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for throttle_core::ThrottleError
+pub fn throttle_core::ThrottleError::from(T) -> T
+pub struct throttle_core::ManualClock
+impl throttle_core::ManualClock
+pub fn throttle_core::ManualClock::advance(&self, core::time::Duration)
+pub fn throttle_core::ManualClock::new() -> Self
+impl core::default::Default for throttle_core::ManualClock
+pub fn throttle_core::ManualClock::default() -> Self
+impl core::fmt::Debug for throttle_core::ManualClock
+pub fn throttle_core::ManualClock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl throttle_core::Clock for throttle_core::ManualClock
+pub fn throttle_core::ManualClock::now(&self) -> std::time::Instant
+impl !core::marker::Freeze for throttle_core::ManualClock
+impl core::marker::Send for throttle_core::ManualClock
+impl core::marker::Sync for throttle_core::ManualClock
+impl core::marker::Unpin for throttle_core::ManualClock
+impl core::marker::UnsafeUnpin for throttle_core::ManualClock
+impl core::panic::unwind_safe::RefUnwindSafe for throttle_core::ManualClock
+impl core::panic::unwind_safe::UnwindSafe for throttle_core::ManualClock
+impl<T, U> core::convert::Into<U> for throttle_core::ManualClock where U: core::convert::From<T>
+pub fn throttle_core::ManualClock::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for throttle_core::ManualClock where U: core::convert::Into<T>
+pub type throttle_core::ManualClock::Error = core::convert::Infallible
+pub fn throttle_core::ManualClock::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for throttle_core::ManualClock where U: core::convert::TryFrom<T>
+pub type throttle_core::ManualClock::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn throttle_core::ManualClock::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for throttle_core::ManualClock where T: 'static + ?core::marker::Sized
+pub fn throttle_core::ManualClock::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for throttle_core::ManualClock where T: ?core::marker::Sized
+pub fn throttle_core::ManualClock::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for throttle_core::ManualClock where T: ?core::marker::Sized
+pub fn throttle_core::ManualClock::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for throttle_core::ManualClock
+pub fn throttle_core::ManualClock::from(T) -> T
+pub struct throttle_core::SystemClock
+impl core::clone::Clone for throttle_core::SystemClock
+pub fn throttle_core::SystemClock::clone(&self) -> throttle_core::SystemClock
+impl core::default::Default for throttle_core::SystemClock
+pub fn throttle_core::SystemClock::default() -> throttle_core::SystemClock
+impl core::fmt::Debug for throttle_core::SystemClock
+pub fn throttle_core::SystemClock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for throttle_core::SystemClock
+impl throttle_core::Clock for throttle_core::SystemClock
+pub fn throttle_core::SystemClock::now(&self) -> std::time::Instant
+impl core::marker::Freeze for throttle_core::SystemClock
+impl core::marker::Send for throttle_core::SystemClock
+impl core::marker::Sync for throttle_core::SystemClock
+impl core::marker::Unpin for throttle_core::SystemClock
+impl core::marker::UnsafeUnpin for throttle_core::SystemClock
+impl core::panic::unwind_safe::RefUnwindSafe for throttle_core::SystemClock
+impl core::panic::unwind_safe::UnwindSafe for throttle_core::SystemClock
+impl<T, U> core::convert::Into<U> for throttle_core::SystemClock where U: core::convert::From<T>
+pub fn throttle_core::SystemClock::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for throttle_core::SystemClock where U: core::convert::Into<T>
+pub type throttle_core::SystemClock::Error = core::convert::Infallible
+pub fn throttle_core::SystemClock::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for throttle_core::SystemClock where U: core::convert::TryFrom<T>
+pub type throttle_core::SystemClock::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn throttle_core::SystemClock::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for throttle_core::SystemClock where T: core::clone::Clone
+pub type throttle_core::SystemClock::Owned = T
+pub fn throttle_core::SystemClock::clone_into(&self, &mut T)
+pub fn throttle_core::SystemClock::to_owned(&self) -> T
+impl<T> core::any::Any for throttle_core::SystemClock where T: 'static + ?core::marker::Sized
+pub fn throttle_core::SystemClock::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for throttle_core::SystemClock where T: ?core::marker::Sized
+pub fn throttle_core::SystemClock::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for throttle_core::SystemClock where T: ?core::marker::Sized
+pub fn throttle_core::SystemClock::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for throttle_core::SystemClock where T: core::clone::Clone
+pub unsafe fn throttle_core::SystemClock::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for throttle_core::SystemClock
+pub fn throttle_core::SystemClock::from(T) -> T
+pub struct throttle_core::Throttle<C: throttle_core::Clock>
+impl throttle_core::Throttle<throttle_core::SystemClock>
+pub fn throttle_core::Throttle<throttle_core::SystemClock>::new(u64, u64) -> Self
+impl<C: throttle_core::Clock> throttle_core::Throttle<C>
+pub fn throttle_core::Throttle<C>::acquire_blocking(&self, u64) -> core::result::Result<(), throttle_core::ThrottleError>
+pub fn throttle_core::Throttle<C>::available(&self) -> u64
+pub fn throttle_core::Throttle<C>::capacity(&self) -> u64
+pub fn throttle_core::Throttle<C>::refill_per_sec(&self) -> u64
+pub fn throttle_core::Throttle<C>::try_acquire(&self, u64) -> bool
+pub fn throttle_core::Throttle<C>::with_clock(u64, u64, C) -> Self
+impl<C: throttle_core::Clock> core::fmt::Debug for throttle_core::Throttle<C>
+pub fn throttle_core::Throttle<C>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<C> !core::marker::Freeze for throttle_core::Throttle<C>
+impl<C> core::marker::Send for throttle_core::Throttle<C>
+impl<C> core::marker::Sync for throttle_core::Throttle<C>
+impl<C> core::marker::Unpin for throttle_core::Throttle<C> where C: core::marker::Unpin
+impl<C> core::marker::UnsafeUnpin for throttle_core::Throttle<C> where C: core::marker::UnsafeUnpin
+impl<C> core::panic::unwind_safe::RefUnwindSafe for throttle_core::Throttle<C> where C: core::panic::unwind_safe::RefUnwindSafe
+impl<C> core::panic::unwind_safe::UnwindSafe for throttle_core::Throttle<C> where C: core::panic::unwind_safe::UnwindSafe
+impl<T, U> core::convert::Into<U> for throttle_core::Throttle<C> where U: core::convert::From<T>
+pub fn throttle_core::Throttle<C>::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for throttle_core::Throttle<C> where U: core::convert::Into<T>
+pub type throttle_core::Throttle<C>::Error = core::convert::Infallible
+pub fn throttle_core::Throttle<C>::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for throttle_core::Throttle<C> where U: core::convert::TryFrom<T>
+pub type throttle_core::Throttle<C>::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn throttle_core::Throttle<C>::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for throttle_core::Throttle<C> where T: 'static + ?core::marker::Sized
+pub fn throttle_core::Throttle<C>::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for throttle_core::Throttle<C> where T: ?core::marker::Sized
+pub fn throttle_core::Throttle<C>::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for throttle_core::Throttle<C> where T: ?core::marker::Sized
+pub fn throttle_core::Throttle<C>::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for throttle_core::Throttle<C>
+pub fn throttle_core::Throttle<C>::from(T) -> T
+pub trait throttle_core::Clock: core::marker::Send + core::marker::Sync
+pub fn throttle_core::Clock::now(&self) -> std::time::Instant
+impl throttle_core::Clock for throttle_core::ManualClock
+pub fn throttle_core::ManualClock::now(&self) -> std::time::Instant
+impl throttle_core::Clock for throttle_core::SystemClock
+pub fn throttle_core::SystemClock::now(&self) -> std::time::Instant
+impl<C: throttle_core::Clock + ?core::marker::Sized> throttle_core::Clock for &C
+pub fn &C::now(&self) -> std::time::Instant
+impl<C: throttle_core::Clock + ?core::marker::Sized> throttle_core::Clock for alloc::sync::Arc<C>
+pub fn alloc::sync::Arc<C>::now(&self) -> std::time::Instant

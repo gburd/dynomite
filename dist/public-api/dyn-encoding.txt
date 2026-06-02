@@ -1,0 +1,512 @@
+pub mod dyn_encoding
+pub enum dyn_encoding::CodecError
+pub dyn_encoding::CodecError::Decode(alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>)
+pub dyn_encoding::CodecError::Encode(alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>)
+pub dyn_encoding::CodecError::TypeMismatch
+pub dyn_encoding::CodecError::TypeMismatch::expected: dyn_encoding::WireTypeId
+pub dyn_encoding::CodecError::UnknownTypeId(dyn_encoding::WireTypeId)
+impl dyn_encoding::CodecError
+pub fn dyn_encoding::CodecError::decode_failure<E>(E) -> Self where E: core::convert::Into<alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>>
+pub fn dyn_encoding::CodecError::encode_failure<E>(E) -> Self where E: core::convert::Into<alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>>
+impl core::error::Error for dyn_encoding::CodecError
+pub fn dyn_encoding::CodecError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for dyn_encoding::CodecError
+pub fn dyn_encoding::CodecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for dyn_encoding::CodecError
+pub fn dyn_encoding::CodecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for dyn_encoding::CodecError
+impl core::marker::Send for dyn_encoding::CodecError
+impl core::marker::Sync for dyn_encoding::CodecError
+impl core::marker::Unpin for dyn_encoding::CodecError
+impl core::marker::UnsafeUnpin for dyn_encoding::CodecError
+impl !core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::CodecError
+impl !core::panic::unwind_safe::UnwindSafe for dyn_encoding::CodecError
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::CodecError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::CodecError where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::CodecError where U: core::convert::From<T>
+pub fn dyn_encoding::CodecError::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::CodecError where U: core::convert::Into<T>
+pub type dyn_encoding::CodecError::Error = core::convert::Infallible
+pub fn dyn_encoding::CodecError::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::CodecError where U: core::convert::TryFrom<T>
+pub type dyn_encoding::CodecError::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::CodecError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::string::ToString for dyn_encoding::CodecError where T: core::fmt::Display + ?core::marker::Sized
+pub fn dyn_encoding::CodecError::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for dyn_encoding::CodecError where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::CodecError::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::CodecError where T: ?core::marker::Sized
+pub fn dyn_encoding::CodecError::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::CodecError where T: ?core::marker::Sized
+pub fn dyn_encoding::CodecError::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyn_encoding::CodecError
+pub fn dyn_encoding::CodecError::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::CodecError
+impl<T> tap::conv::TryConv for dyn_encoding::CodecError
+impl<T> tap::pipe::Pipe for dyn_encoding::CodecError where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::CodecError
+impl<T> wyz::fmt::FmtForward for dyn_encoding::CodecError
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::CodecError where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::CodecError where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::CodecError::vzip(self) -> V
+pub struct dyn_encoding::BebopCodec
+impl dyn_encoding::BebopCodec
+pub fn dyn_encoding::BebopCodec::new() -> Self
+pub fn dyn_encoding::BebopCodec::register<T>(&mut self) -> &mut Self where T: dyn_encoding::BebopWire + 'static
+pub fn dyn_encoding::BebopCodec::registered_type_count(&self) -> usize
+impl core::default::Default for dyn_encoding::BebopCodec
+pub fn dyn_encoding::BebopCodec::default() -> dyn_encoding::BebopCodec
+impl dyn_encoding::WireCodec for dyn_encoding::BebopCodec
+pub fn dyn_encoding::BebopCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::BebopCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::BebopCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl core::marker::Freeze for dyn_encoding::BebopCodec
+impl core::marker::Send for dyn_encoding::BebopCodec
+impl core::marker::Sync for dyn_encoding::BebopCodec
+impl core::marker::Unpin for dyn_encoding::BebopCodec
+impl core::marker::UnsafeUnpin for dyn_encoding::BebopCodec
+impl !core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::BebopCodec
+impl !core::panic::unwind_safe::UnwindSafe for dyn_encoding::BebopCodec
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::BebopCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::BebopCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::BebopCodec where U: core::convert::From<T>
+pub fn dyn_encoding::BebopCodec::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::BebopCodec where U: core::convert::Into<T>
+pub type dyn_encoding::BebopCodec::Error = core::convert::Infallible
+pub fn dyn_encoding::BebopCodec::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::BebopCodec where U: core::convert::TryFrom<T>
+pub type dyn_encoding::BebopCodec::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::BebopCodec::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyn_encoding::BebopCodec where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::BebopCodec::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::BebopCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::BebopCodec::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::BebopCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::BebopCodec::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyn_encoding::BebopCodec
+pub fn dyn_encoding::BebopCodec::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::BebopCodec
+impl<T> tap::conv::TryConv for dyn_encoding::BebopCodec
+impl<T> tap::pipe::Pipe for dyn_encoding::BebopCodec where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::BebopCodec
+impl<T> wyz::fmt::FmtForward for dyn_encoding::BebopCodec
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::BebopCodec where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::BebopCodec where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::BebopCodec::vzip(self) -> V
+pub struct dyn_encoding::BsonCodec
+impl dyn_encoding::BsonCodec
+pub fn dyn_encoding::BsonCodec::new() -> Self
+pub fn dyn_encoding::BsonCodec::register<T>(&mut self) -> &mut Self where T: dyn_encoding::WireValue + serde_core::ser::Serialize + serde_core::de::DeserializeOwned
+pub fn dyn_encoding::BsonCodec::registered_type_count(&self) -> usize
+impl core::default::Default for dyn_encoding::BsonCodec
+pub fn dyn_encoding::BsonCodec::default() -> dyn_encoding::BsonCodec
+impl dyn_encoding::WireCodec for dyn_encoding::BsonCodec
+pub fn dyn_encoding::BsonCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::BsonCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::BsonCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl core::marker::Freeze for dyn_encoding::BsonCodec
+impl core::marker::Send for dyn_encoding::BsonCodec
+impl core::marker::Sync for dyn_encoding::BsonCodec
+impl core::marker::Unpin for dyn_encoding::BsonCodec
+impl core::marker::UnsafeUnpin for dyn_encoding::BsonCodec
+impl !core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::BsonCodec
+impl !core::panic::unwind_safe::UnwindSafe for dyn_encoding::BsonCodec
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::BsonCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::BsonCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::BsonCodec where U: core::convert::From<T>
+pub fn dyn_encoding::BsonCodec::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::BsonCodec where U: core::convert::Into<T>
+pub type dyn_encoding::BsonCodec::Error = core::convert::Infallible
+pub fn dyn_encoding::BsonCodec::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::BsonCodec where U: core::convert::TryFrom<T>
+pub type dyn_encoding::BsonCodec::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::BsonCodec::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyn_encoding::BsonCodec where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::BsonCodec::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::BsonCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::BsonCodec::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::BsonCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::BsonCodec::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyn_encoding::BsonCodec
+pub fn dyn_encoding::BsonCodec::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::BsonCodec
+impl<T> tap::conv::TryConv for dyn_encoding::BsonCodec
+impl<T> tap::pipe::Pipe for dyn_encoding::BsonCodec where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::BsonCodec
+impl<T> wyz::fmt::FmtForward for dyn_encoding::BsonCodec
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::BsonCodec where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::BsonCodec where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::BsonCodec::vzip(self) -> V
+pub struct dyn_encoding::CapnpCodec
+impl dyn_encoding::CapnpCodec
+pub fn dyn_encoding::CapnpCodec::new() -> Self
+pub fn dyn_encoding::CapnpCodec::register<T>(&mut self) -> &mut Self where T: dyn_encoding::CapnpWire + 'static
+pub fn dyn_encoding::CapnpCodec::registered_type_count(&self) -> usize
+impl core::default::Default for dyn_encoding::CapnpCodec
+pub fn dyn_encoding::CapnpCodec::default() -> dyn_encoding::CapnpCodec
+impl dyn_encoding::WireCodec for dyn_encoding::CapnpCodec
+pub fn dyn_encoding::CapnpCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::CapnpCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::CapnpCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl core::marker::Freeze for dyn_encoding::CapnpCodec
+impl core::marker::Send for dyn_encoding::CapnpCodec
+impl core::marker::Sync for dyn_encoding::CapnpCodec
+impl core::marker::Unpin for dyn_encoding::CapnpCodec
+impl core::marker::UnsafeUnpin for dyn_encoding::CapnpCodec
+impl !core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::CapnpCodec
+impl !core::panic::unwind_safe::UnwindSafe for dyn_encoding::CapnpCodec
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::CapnpCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::CapnpCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::CapnpCodec where U: core::convert::From<T>
+pub fn dyn_encoding::CapnpCodec::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::CapnpCodec where U: core::convert::Into<T>
+pub type dyn_encoding::CapnpCodec::Error = core::convert::Infallible
+pub fn dyn_encoding::CapnpCodec::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::CapnpCodec where U: core::convert::TryFrom<T>
+pub type dyn_encoding::CapnpCodec::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::CapnpCodec::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyn_encoding::CapnpCodec where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::CapnpCodec::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::CapnpCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::CapnpCodec::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::CapnpCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::CapnpCodec::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyn_encoding::CapnpCodec
+pub fn dyn_encoding::CapnpCodec::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::CapnpCodec
+impl<T> tap::conv::TryConv for dyn_encoding::CapnpCodec
+impl<T> tap::pipe::Pipe for dyn_encoding::CapnpCodec where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::CapnpCodec
+impl<T> wyz::fmt::FmtForward for dyn_encoding::CapnpCodec
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::CapnpCodec where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::CapnpCodec where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::CapnpCodec::vzip(self) -> V
+pub struct dyn_encoding::CborCodec
+impl dyn_encoding::CborCodec
+pub fn dyn_encoding::CborCodec::new() -> Self
+pub fn dyn_encoding::CborCodec::register<T>(&mut self) -> &mut Self where T: dyn_encoding::WireValue + serde_core::ser::Serialize + serde_core::de::DeserializeOwned
+pub fn dyn_encoding::CborCodec::registered_type_count(&self) -> usize
+impl core::default::Default for dyn_encoding::CborCodec
+pub fn dyn_encoding::CborCodec::default() -> dyn_encoding::CborCodec
+impl dyn_encoding::WireCodec for dyn_encoding::CborCodec
+pub fn dyn_encoding::CborCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::CborCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::CborCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl core::marker::Freeze for dyn_encoding::CborCodec
+impl core::marker::Send for dyn_encoding::CborCodec
+impl core::marker::Sync for dyn_encoding::CborCodec
+impl core::marker::Unpin for dyn_encoding::CborCodec
+impl core::marker::UnsafeUnpin for dyn_encoding::CborCodec
+impl !core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::CborCodec
+impl !core::panic::unwind_safe::UnwindSafe for dyn_encoding::CborCodec
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::CborCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::CborCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::CborCodec where U: core::convert::From<T>
+pub fn dyn_encoding::CborCodec::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::CborCodec where U: core::convert::Into<T>
+pub type dyn_encoding::CborCodec::Error = core::convert::Infallible
+pub fn dyn_encoding::CborCodec::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::CborCodec where U: core::convert::TryFrom<T>
+pub type dyn_encoding::CborCodec::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::CborCodec::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyn_encoding::CborCodec where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::CborCodec::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::CborCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::CborCodec::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::CborCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::CborCodec::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyn_encoding::CborCodec
+pub fn dyn_encoding::CborCodec::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::CborCodec
+impl<T> tap::conv::TryConv for dyn_encoding::CborCodec
+impl<T> tap::pipe::Pipe for dyn_encoding::CborCodec where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::CborCodec
+impl<T> wyz::fmt::FmtForward for dyn_encoding::CborCodec
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::CborCodec where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::CborCodec where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::CborCodec::vzip(self) -> V
+pub struct dyn_encoding::CodecRegistry
+impl dyn_encoding::CodecRegistry
+pub fn dyn_encoding::CodecRegistry::content_types(&self) -> impl core::iter::traits::iterator::Iterator<Item = &'static str> + '_
+pub fn dyn_encoding::CodecRegistry::for_content_type(&self, &str) -> core::option::Option<&dyn dyn_encoding::WireCodec>
+pub fn dyn_encoding::CodecRegistry::new() -> Self
+pub fn dyn_encoding::CodecRegistry::register<C: dyn_encoding::WireCodec + 'static>(&mut self, C)
+pub fn dyn_encoding::CodecRegistry::with_baseline() -> Self
+impl core::default::Default for dyn_encoding::CodecRegistry
+pub fn dyn_encoding::CodecRegistry::default() -> Self
+impl core::marker::Freeze for dyn_encoding::CodecRegistry
+impl core::marker::Send for dyn_encoding::CodecRegistry
+impl core::marker::Sync for dyn_encoding::CodecRegistry
+impl core::marker::Unpin for dyn_encoding::CodecRegistry
+impl core::marker::UnsafeUnpin for dyn_encoding::CodecRegistry
+impl !core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::CodecRegistry
+impl !core::panic::unwind_safe::UnwindSafe for dyn_encoding::CodecRegistry
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::CodecRegistry where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::CodecRegistry where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::CodecRegistry where U: core::convert::From<T>
+pub fn dyn_encoding::CodecRegistry::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::CodecRegistry where U: core::convert::Into<T>
+pub type dyn_encoding::CodecRegistry::Error = core::convert::Infallible
+pub fn dyn_encoding::CodecRegistry::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::CodecRegistry where U: core::convert::TryFrom<T>
+pub type dyn_encoding::CodecRegistry::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::CodecRegistry::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyn_encoding::CodecRegistry where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::CodecRegistry::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::CodecRegistry where T: ?core::marker::Sized
+pub fn dyn_encoding::CodecRegistry::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::CodecRegistry where T: ?core::marker::Sized
+pub fn dyn_encoding::CodecRegistry::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyn_encoding::CodecRegistry
+pub fn dyn_encoding::CodecRegistry::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::CodecRegistry
+impl<T> tap::conv::TryConv for dyn_encoding::CodecRegistry
+impl<T> tap::pipe::Pipe for dyn_encoding::CodecRegistry where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::CodecRegistry
+impl<T> wyz::fmt::FmtForward for dyn_encoding::CodecRegistry
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::CodecRegistry where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::CodecRegistry where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::CodecRegistry::vzip(self) -> V
+pub struct dyn_encoding::FlatbuffersCodec
+impl dyn_encoding::FlatbuffersCodec
+pub fn dyn_encoding::FlatbuffersCodec::new() -> Self
+pub fn dyn_encoding::FlatbuffersCodec::register<T>(&mut self) -> &mut Self where T: dyn_encoding::FlatbuffersWire + 'static
+pub fn dyn_encoding::FlatbuffersCodec::registered_type_count(&self) -> usize
+impl core::default::Default for dyn_encoding::FlatbuffersCodec
+pub fn dyn_encoding::FlatbuffersCodec::default() -> dyn_encoding::FlatbuffersCodec
+impl dyn_encoding::WireCodec for dyn_encoding::FlatbuffersCodec
+pub fn dyn_encoding::FlatbuffersCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::FlatbuffersCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::FlatbuffersCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl core::marker::Freeze for dyn_encoding::FlatbuffersCodec
+impl core::marker::Send for dyn_encoding::FlatbuffersCodec
+impl core::marker::Sync for dyn_encoding::FlatbuffersCodec
+impl core::marker::Unpin for dyn_encoding::FlatbuffersCodec
+impl core::marker::UnsafeUnpin for dyn_encoding::FlatbuffersCodec
+impl !core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::FlatbuffersCodec
+impl !core::panic::unwind_safe::UnwindSafe for dyn_encoding::FlatbuffersCodec
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::FlatbuffersCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::FlatbuffersCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::FlatbuffersCodec where U: core::convert::From<T>
+pub fn dyn_encoding::FlatbuffersCodec::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::FlatbuffersCodec where U: core::convert::Into<T>
+pub type dyn_encoding::FlatbuffersCodec::Error = core::convert::Infallible
+pub fn dyn_encoding::FlatbuffersCodec::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::FlatbuffersCodec where U: core::convert::TryFrom<T>
+pub type dyn_encoding::FlatbuffersCodec::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::FlatbuffersCodec::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyn_encoding::FlatbuffersCodec where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::FlatbuffersCodec::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::FlatbuffersCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::FlatbuffersCodec::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::FlatbuffersCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::FlatbuffersCodec::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyn_encoding::FlatbuffersCodec
+pub fn dyn_encoding::FlatbuffersCodec::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::FlatbuffersCodec
+impl<T> tap::conv::TryConv for dyn_encoding::FlatbuffersCodec
+impl<T> tap::pipe::Pipe for dyn_encoding::FlatbuffersCodec where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::FlatbuffersCodec
+impl<T> wyz::fmt::FmtForward for dyn_encoding::FlatbuffersCodec
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::FlatbuffersCodec where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::FlatbuffersCodec where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::FlatbuffersCodec::vzip(self) -> V
+pub struct dyn_encoding::JsonCodec
+impl dyn_encoding::JsonCodec
+pub fn dyn_encoding::JsonCodec::new() -> Self
+pub fn dyn_encoding::JsonCodec::register<T>(&mut self) -> &mut Self where T: dyn_encoding::WireValue + serde_core::ser::Serialize + serde_core::de::DeserializeOwned
+pub fn dyn_encoding::JsonCodec::registered_type_count(&self) -> usize
+impl core::default::Default for dyn_encoding::JsonCodec
+pub fn dyn_encoding::JsonCodec::default() -> dyn_encoding::JsonCodec
+impl dyn_encoding::WireCodec for dyn_encoding::JsonCodec
+pub fn dyn_encoding::JsonCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::JsonCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::JsonCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl core::marker::Freeze for dyn_encoding::JsonCodec
+impl core::marker::Send for dyn_encoding::JsonCodec
+impl core::marker::Sync for dyn_encoding::JsonCodec
+impl core::marker::Unpin for dyn_encoding::JsonCodec
+impl core::marker::UnsafeUnpin for dyn_encoding::JsonCodec
+impl !core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::JsonCodec
+impl !core::panic::unwind_safe::UnwindSafe for dyn_encoding::JsonCodec
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::JsonCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::JsonCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::JsonCodec where U: core::convert::From<T>
+pub fn dyn_encoding::JsonCodec::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::JsonCodec where U: core::convert::Into<T>
+pub type dyn_encoding::JsonCodec::Error = core::convert::Infallible
+pub fn dyn_encoding::JsonCodec::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::JsonCodec where U: core::convert::TryFrom<T>
+pub type dyn_encoding::JsonCodec::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::JsonCodec::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyn_encoding::JsonCodec where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::JsonCodec::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::JsonCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::JsonCodec::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::JsonCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::JsonCodec::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyn_encoding::JsonCodec
+pub fn dyn_encoding::JsonCodec::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::JsonCodec
+impl<T> tap::conv::TryConv for dyn_encoding::JsonCodec
+impl<T> tap::pipe::Pipe for dyn_encoding::JsonCodec where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::JsonCodec
+impl<T> wyz::fmt::FmtForward for dyn_encoding::JsonCodec
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::JsonCodec where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::JsonCodec where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::JsonCodec::vzip(self) -> V
+pub struct dyn_encoding::ProtobufCodec
+impl dyn_encoding::ProtobufCodec
+pub fn dyn_encoding::ProtobufCodec::new() -> Self
+pub fn dyn_encoding::ProtobufCodec::register<T>(&mut self) -> &mut Self where T: dyn_encoding::WireValue + prost::message::Message + core::default::Default
+pub fn dyn_encoding::ProtobufCodec::registered_type_count(&self) -> usize
+impl core::default::Default for dyn_encoding::ProtobufCodec
+pub fn dyn_encoding::ProtobufCodec::default() -> dyn_encoding::ProtobufCodec
+impl dyn_encoding::WireCodec for dyn_encoding::ProtobufCodec
+pub fn dyn_encoding::ProtobufCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::ProtobufCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::ProtobufCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl core::marker::Freeze for dyn_encoding::ProtobufCodec
+impl core::marker::Send for dyn_encoding::ProtobufCodec
+impl core::marker::Sync for dyn_encoding::ProtobufCodec
+impl core::marker::Unpin for dyn_encoding::ProtobufCodec
+impl core::marker::UnsafeUnpin for dyn_encoding::ProtobufCodec
+impl !core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::ProtobufCodec
+impl !core::panic::unwind_safe::UnwindSafe for dyn_encoding::ProtobufCodec
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::ProtobufCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::ProtobufCodec where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::ProtobufCodec where U: core::convert::From<T>
+pub fn dyn_encoding::ProtobufCodec::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::ProtobufCodec where U: core::convert::Into<T>
+pub type dyn_encoding::ProtobufCodec::Error = core::convert::Infallible
+pub fn dyn_encoding::ProtobufCodec::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::ProtobufCodec where U: core::convert::TryFrom<T>
+pub type dyn_encoding::ProtobufCodec::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::ProtobufCodec::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for dyn_encoding::ProtobufCodec where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::ProtobufCodec::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::ProtobufCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::ProtobufCodec::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::ProtobufCodec where T: ?core::marker::Sized
+pub fn dyn_encoding::ProtobufCodec::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for dyn_encoding::ProtobufCodec
+pub fn dyn_encoding::ProtobufCodec::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::ProtobufCodec
+impl<T> tap::conv::TryConv for dyn_encoding::ProtobufCodec
+impl<T> tap::pipe::Pipe for dyn_encoding::ProtobufCodec where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::ProtobufCodec
+impl<T> wyz::fmt::FmtForward for dyn_encoding::ProtobufCodec
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::ProtobufCodec where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::ProtobufCodec where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::ProtobufCodec::vzip(self) -> V
+pub struct dyn_encoding::WireTypeId(_)
+impl dyn_encoding::WireTypeId
+pub const fn dyn_encoding::WireTypeId::as_str(self) -> &'static str
+pub const fn dyn_encoding::WireTypeId::new(&'static str) -> Self
+impl core::clone::Clone for dyn_encoding::WireTypeId
+pub fn dyn_encoding::WireTypeId::clone(&self) -> dyn_encoding::WireTypeId
+impl core::cmp::Eq for dyn_encoding::WireTypeId
+impl core::cmp::PartialEq for dyn_encoding::WireTypeId
+pub fn dyn_encoding::WireTypeId::eq(&self, &dyn_encoding::WireTypeId) -> bool
+impl core::fmt::Debug for dyn_encoding::WireTypeId
+pub fn dyn_encoding::WireTypeId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for dyn_encoding::WireTypeId
+pub fn dyn_encoding::WireTypeId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for dyn_encoding::WireTypeId
+pub fn dyn_encoding::WireTypeId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for dyn_encoding::WireTypeId
+impl core::marker::StructuralPartialEq for dyn_encoding::WireTypeId
+impl core::marker::Freeze for dyn_encoding::WireTypeId
+impl core::marker::Send for dyn_encoding::WireTypeId
+impl core::marker::Sync for dyn_encoding::WireTypeId
+impl core::marker::Unpin for dyn_encoding::WireTypeId
+impl core::marker::UnsafeUnpin for dyn_encoding::WireTypeId
+impl core::panic::unwind_safe::RefUnwindSafe for dyn_encoding::WireTypeId
+impl core::panic::unwind_safe::UnwindSafe for dyn_encoding::WireTypeId
+impl<Q, K> equivalent::Equivalent<K> for dyn_encoding::WireTypeId where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn dyn_encoding::WireTypeId::equivalent(&self, &K) -> bool
+impl<Q, K> hashbrown::Equivalent<K> for dyn_encoding::WireTypeId where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+pub fn dyn_encoding::WireTypeId::equivalent(&self, &K) -> bool
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Initialized, zerocopy::pointer::invariant::Initialized> for dyn_encoding::WireTypeId where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<ST, DT> zerocopy::pointer::invariant::CastableFrom<ST, zerocopy::pointer::invariant::Uninit, zerocopy::pointer::invariant::Uninit> for dyn_encoding::WireTypeId where ST: ?core::marker::Sized, DT: ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for dyn_encoding::WireTypeId where U: core::convert::From<T>
+pub fn dyn_encoding::WireTypeId::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for dyn_encoding::WireTypeId where U: core::convert::Into<T>
+pub type dyn_encoding::WireTypeId::Error = core::convert::Infallible
+pub fn dyn_encoding::WireTypeId::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for dyn_encoding::WireTypeId where U: core::convert::TryFrom<T>
+pub type dyn_encoding::WireTypeId::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn dyn_encoding::WireTypeId::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for dyn_encoding::WireTypeId where T: core::clone::Clone
+pub type dyn_encoding::WireTypeId::Owned = T
+pub fn dyn_encoding::WireTypeId::clone_into(&self, &mut T)
+pub fn dyn_encoding::WireTypeId::to_owned(&self) -> T
+impl<T> alloc::string::ToString for dyn_encoding::WireTypeId where T: core::fmt::Display + ?core::marker::Sized
+pub fn dyn_encoding::WireTypeId::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for dyn_encoding::WireTypeId where T: 'static + ?core::marker::Sized
+pub fn dyn_encoding::WireTypeId::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for dyn_encoding::WireTypeId where T: ?core::marker::Sized
+pub fn dyn_encoding::WireTypeId::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for dyn_encoding::WireTypeId where T: ?core::marker::Sized
+pub fn dyn_encoding::WireTypeId::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for dyn_encoding::WireTypeId where T: core::clone::Clone
+pub unsafe fn dyn_encoding::WireTypeId::clone_to_uninit(&self, *mut u8)
+impl<T> core::convert::From<T> for dyn_encoding::WireTypeId
+pub fn dyn_encoding::WireTypeId::from(T) -> T
+impl<T> tap::conv::Conv for dyn_encoding::WireTypeId
+impl<T> tap::conv::TryConv for dyn_encoding::WireTypeId
+impl<T> tap::pipe::Pipe for dyn_encoding::WireTypeId where T: ?core::marker::Sized
+impl<T> tap::tap::Tap for dyn_encoding::WireTypeId
+impl<T> wyz::fmt::FmtForward for dyn_encoding::WireTypeId
+impl<T> zerocopy::pointer::invariant::Read<zerocopy::pointer::invariant::Exclusive, zerocopy::pointer::invariant::BecauseExclusive> for dyn_encoding::WireTypeId where T: ?core::marker::Sized
+impl<V, T> ppv_lite86::types::VZip<V> for dyn_encoding::WireTypeId where V: ppv_lite86::types::MultiLane<T>
+pub fn dyn_encoding::WireTypeId::vzip(self) -> V
+pub trait dyn_encoding::BebopWire: dyn_encoding::WireValue + core::marker::Sized
+pub fn dyn_encoding::BebopWire::bebop_decode(&[u8]) -> core::result::Result<Self, dyn_encoding::CodecError>
+pub fn dyn_encoding::BebopWire::bebop_encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+pub trait dyn_encoding::CapnpWire: dyn_encoding::WireValue + core::marker::Sized
+pub fn dyn_encoding::CapnpWire::capnp_decode(&[u8]) -> core::result::Result<Self, dyn_encoding::CodecError>
+pub fn dyn_encoding::CapnpWire::capnp_encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+pub trait dyn_encoding::ErasedWireValue: core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static
+pub fn dyn_encoding::ErasedWireValue::as_any(&self) -> &dyn core::any::Any
+pub fn dyn_encoding::ErasedWireValue::type_id(&self) -> dyn_encoding::WireTypeId
+impl<T> dyn_encoding::ErasedWireValue for T where T: dyn_encoding::WireValue
+pub fn T::as_any(&self) -> &dyn core::any::Any
+pub fn T::type_id(&self) -> dyn_encoding::WireTypeId
+pub trait dyn_encoding::FlatbuffersWire: dyn_encoding::WireValue + core::marker::Sized
+pub fn dyn_encoding::FlatbuffersWire::flatbuffers_decode(&[u8]) -> core::result::Result<Self, dyn_encoding::CodecError>
+pub fn dyn_encoding::FlatbuffersWire::flatbuffers_encode(&self) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+pub trait dyn_encoding::WireCodec: core::marker::Send + core::marker::Sync + 'static
+pub fn dyn_encoding::WireCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::WireCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::WireCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl dyn_encoding::WireCodec for dyn_encoding::BebopCodec
+pub fn dyn_encoding::BebopCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::BebopCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::BebopCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl dyn_encoding::WireCodec for dyn_encoding::BsonCodec
+pub fn dyn_encoding::BsonCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::BsonCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::BsonCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl dyn_encoding::WireCodec for dyn_encoding::CapnpCodec
+pub fn dyn_encoding::CapnpCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::CapnpCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::CapnpCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl dyn_encoding::WireCodec for dyn_encoding::CborCodec
+pub fn dyn_encoding::CborCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::CborCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::CborCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl dyn_encoding::WireCodec for dyn_encoding::FlatbuffersCodec
+pub fn dyn_encoding::FlatbuffersCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::FlatbuffersCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::FlatbuffersCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl dyn_encoding::WireCodec for dyn_encoding::JsonCodec
+pub fn dyn_encoding::JsonCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::JsonCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::JsonCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+impl dyn_encoding::WireCodec for dyn_encoding::ProtobufCodec
+pub fn dyn_encoding::ProtobufCodec::content_type(&self) -> &'static str
+pub fn dyn_encoding::ProtobufCodec::decode(&self, dyn_encoding::WireTypeId, &[u8]) -> core::result::Result<alloc::boxed::Box<dyn dyn_encoding::ErasedWireValue>, dyn_encoding::CodecError>
+pub fn dyn_encoding::ProtobufCodec::encode(&self, &dyn dyn_encoding::ErasedWireValue) -> core::result::Result<alloc::vec::Vec<u8>, dyn_encoding::CodecError>
+pub trait dyn_encoding::WireValue: core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static
+pub fn dyn_encoding::WireValue::wire_type_id() -> dyn_encoding::WireTypeId where Self: core::marker::Sized
