@@ -14,6 +14,76 @@ upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [0.1.0] - 2026-06-03
+
+First general-availability release. Engineering Definition-of-Done
+(`AGENTS.md` Section 14) audited end-to-end; 11 of 14 items met outright,
+3 with documented Deviations under `docs/parity.md`.
+
+Published crates (all at 0.1.0):
+
+- `dynomite-engine` -- embeddable Dynamo-style replication engine
+  (token-ring partitioning, gossip cluster, hinted handoff, AAE,
+  CommandExtension hook for FT.* dispatch)
+- `dynomite-search` -- RediSearch FT.* surface (FT.CREATE/SEARCH/INFO/
+  LIST/DROPINDEX/AGGREGATE/EXPLAIN/ALTER + suggestion-dictionary
+  FT.SUGADD/SUGGET/SUGDEL/SUGLEN + filter expressions + cluster-
+  distributed FT.SEARCH broadcast)
+- `dynomite-vec` -- vector storage + HNSW + TurboHnswIndex over
+  packed turbovec codes (Fp32 / Fp16 / Int8 / 2,3,4-bit codecs)
+- `dynomite-text` -- trigram + bloom + TRE-backed approximate-regex
+  (K=0 via `regex`, K>=1 via TRE)
+- `dyniak` -- Riak-compatible HTTP + PBC surface; ITC causality
+  clocks (replaces DvvSet/Vclock; deliberate divergence from
+  upstream Riak documented under `docs/parity.md` Ambiguities)
+
+Validation:
+
+- 2017 nextest workspace tests pass under `--features riak`
+- Stage 16 chaos hour: 1,781,193 ops across 4 hosts (arnold, floki,
+  meh, nuc) with 92.22% aggregate success and zero invariant
+  violations under all-fault-classes mode
+  (`dist/chaos-reports/v0.1.0/multi-host-pass-stage16-20260602-175558Z.md`)
+- 1h fuzz soak per target: 6 of 7 clean (3.7 billion runs total);
+  `dnode_parse` finding (oversized length-field OOM) fixed; artifact
+  preserved as regression seed
+- QUIC differential conformance suite: 3 tests pass over QUIC
+  transport (mirrors the TCP scenarios)
+- Coverage gate: workspace measured via `cargo llvm-cov`; sub-95%
+  files documented as Deviations in `docs/parity.md`
+- Public API baselines committed under `dist/public-api/` for 11
+  crates
+- mdbook builds clean; embedding examples compile and run
+- Dual-CI green on Codeberg (Forgejo Actions) + GitHub Actions on
+  the same commit through `scripts/check.sh`
+
+Milestones since pre-1.0 series:
+
+- ITC migration replaces DvvSet/Vclock for every causality path
+  (Riak protobuf context-blob bytes now carry `Itc::encode()`
+  output; deliberate divergence from upstream Riak)
+- `dyniak-bench` 0.0.1 -- a Rust port of Basho's `basho_bench` with
+  HdrHistogram stats and plotters-rendered SVG graphs
+- Network-partition / clock-skew / disk-full chaos modes wired
+  into `chaos-injector.sh` (selected via `MODE_FAULTS` env knob)
+- Differential-rig phase 5: chaos faults applied to BOTH the Rust
+  and the C reference proxies in lockstep when
+  `INJECT_C_PROXY_TOO=1` is set
+- Stage 16 commit-author normalisation via `git filter-repo`: every
+  commit on `main` is now authored by `Greg Burd <greg@burd.me>`
+
+Known deferrals (each documented in `docs/parity.md` or a journal
+entry):
+
+- Network + clock fault classes are wired into the injector but
+  require operator-scope privileges (`tc` for netem, `faketime`
+  for clock skew) and were unrunnable on the test cluster; the
+  injector logs `injector_classes` with the runnable subset and
+  the chaos hour ran with process + disk faults active.
+- Coverage Deviations for 11 sub-95% files (mostly trait
+  default-impls, error paths only reachable under specific
+  platform conditions, and loom-only test entry points).
+
 ## [Unreleased]
 
 Stage 16 deliverables (final stage):
