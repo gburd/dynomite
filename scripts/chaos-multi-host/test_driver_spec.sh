@@ -81,7 +81,7 @@ assert_eq "-redis" "$redis_suffix" "unified first spec is redis"
 assert_eq "-riak" "$riak_suffix" "unified second spec is riak"
 assert_eq "100" "$redis_qps" "unified redis qps half"
 assert_eq "100" "$riak_qps" "unified riak qps half"
-assert_eq "--mode redis" "$redis_flags" "unified redis flags"
+assert_eq "--mode redis --noxu-compat" "$redis_flags" "unified redis flags"
 assert_eq "--mode riak --riak-pbc-port 21800" "$riak_flags" "unified riak flags"
 
 # QPS must sum to the configured total even when odd.

@@ -741,6 +741,41 @@ WORKLOADS = [
 ]
 
 
+def workload_kv(c: RespConn) -> str:
+    """Noxu-compatible Redis workload: only the commands the noxu
+    backend implements (GET / SET / DEL / PING).
+
+    The in-process Noxu datastore (``data_store: noxu``) is a
+    Riak-shaped KV + CRDT store. Its Redis dispatch surface
+    (``crates/dynomited/src/noxu_backend.rs``) handles exactly
+    GET, SET, DEL, and PING; every other RESP verb returns
+    ``-ERR command unsupported by noxu backend``. The unified
+    chaos mode drives this workload against the Redis client
+    port so the cross-protocol shared-store path (SET via RESP,
+    GET via Riak PBC, same key, same store) is exercised without
+    swamping the failure budget with deterministic
+    unsupported-command errors.
+    """
+    op = random.choice(["SET", "SET", "GET", "GET", "GET", "DEL", "PING"])
+    k = randkey()
+    if op == "SET":
+        c.call("SET", k, randval())
+    elif op == "GET":
+        c.call("GET", k)
+    elif op == "DEL":
+        c.call("DEL", k)
+    elif op == "PING":
+        c.call("PING")
+    return op
+
+
+# Noxu-compatible workload table for the unified chaos mode.
+# Only the KV verbs the noxu backend implements.
+KV_WORKLOADS = [
+    ("kv", workload_kv, 100),
+]
+
+
 # --- memcache ASCII protocol client ---
 
 
@@ -1600,6 +1635,11 @@ def main() -> int:
     p.add_argument("--mode", default="redis",
                    choices=("redis", "memcache", "riak", "differential"),
                    help="protocol to drive")
+    p.add_argument("--noxu-compat", action="store_true",
+                   help="restrict the redis workload to the noxu backend's "
+                        "supported command surface (GET/SET/DEL/PING). Used "
+                        "by the unified chaos mode where the redis proxy is "
+                        "backed by the in-process Noxu datastore.")
     p.add_argument("--riak-pbc-port", type=int, default=21800,
                    help="Riak PBC listener port (only used when "
                         "--mode riak); defaults to 21800")
@@ -1719,7 +1759,7 @@ def main() -> int:
         # divergent op.
         _load_allowlist()
     else:
-        workloads = WORKLOADS
+        workloads = KV_WORKLOADS if args.noxu_compat else WORKLOADS
         conn = RespConn(args.host, args.port)
         net_errors = (RespError, ConnectionError, socket.timeout, OSError)
 

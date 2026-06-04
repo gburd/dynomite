@@ -44,7 +44,7 @@ compute_driver_specs() {
             # driver so an odd QPS is never silently dropped.
             local redis_qps=$(( qps / 2 ))
             local riak_qps=$(( qps - redis_qps ))
-            printf '%s\t%s\t%s\n' "-redis" "$redis_qps" "--mode redis"
+            printf '%s\t%s\t%s\n' "-redis" "$redis_qps" "--mode redis --noxu-compat"
             printf '%s\t%s\t%s\n' "-riak" "$riak_qps" \
                 "--mode riak --riak-pbc-port $riak_pbc_port"
             ;;
