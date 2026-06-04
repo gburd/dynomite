@@ -179,6 +179,23 @@ fi
 # protocol-probes an external backend as before.
 if [ "$ENABLE_NOXU" = "1" ]; then
     mkdir -p "$NOXU_PATH"
+    # Clear a stale Noxu environment lock left by a hard-killed
+    # predecessor. Noxu's lock is a presence-based file
+    # (`noxu.lck`), not an flock, so the kernel does not release
+    # it when the chaos injector SIGKILLs dynomited; the next
+    # open then fails with "Environment is locked by another
+    # process" and the node never rejoins. The coordinator
+    # guarantees a single owner per host and pre-kills stale
+    # processes before every (re)start, so any lock file present
+    # at this point is always stale and safe to remove. This is
+    # the operational recovery a production operator would also
+    # perform after a `kill -9`; the underlying noxu lock-
+    # reclaim gap is recorded in
+    # docs/journal/2026-06-04-noxu-lock-after-sigkill.md.
+    if [ -e "$NOXU_PATH/noxu.lck" ]; then
+        rm -f "$NOXU_PATH/noxu.lck"
+        echo "==> MODE=unified: cleared stale noxu.lck before reopen"
+    fi
     echo "==> MODE=unified: in-process Noxu datastore at $NOXU_PATH (no external backend)"
 else
 # Resolve the backend binary based on EFFECTIVE_MODE. Redis and
