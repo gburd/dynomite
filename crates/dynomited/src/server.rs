@@ -2653,8 +2653,28 @@ mod tests {
         port
     }
 
+    /// Serialises the tests that build and `run()` a full
+    /// [`Server`]. `free_port` hands back a port but drops its
+    /// probe listener before [`Server::build`] rebinds it, so two
+    /// server-building tests running concurrently can race into
+    /// the same ephemeral port. The loser's stats / proxy / dnode
+    /// listener then fails to bind (or its first connection is
+    /// reset) and the listener task exits before the shutdown
+    /// signal arrives, surfacing as `TaskFailed { task: "stats",
+    /// reason: "listener returned before shutdown" }`. Holding
+    /// this async mutex for the lifetime of each server-building
+    /// test keeps them strictly serial without serialising the
+    /// whole unit-test binary. The flake only manifested under
+    /// `--all-features` in CI, where the extra feature-gated
+    /// tasks widen the bind-race window.
+    fn server_test_lock() -> &'static tokio::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn build_runs_and_shuts_down() {
+        let _serial = server_test_lock().lock().await;
         // Two free ephemeral ports. We bind the picker on a v4
         // loopback with SO_REUSEADDR so a second test running in
         // parallel does not race us into the same port.
@@ -2683,6 +2703,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn shutdown_method_triggers_stop() {
+        let _serial = server_test_lock().lock().await;
         let listen_port = free_port();
         let dyn_port = free_port_distinct(listen_port);
         let stats_port = free_port_distinct(listen_port);
