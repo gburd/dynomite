@@ -32,6 +32,24 @@
 #                             scripts/chaos-multi-host/build_cref_remote.sh);
 #                             aborts with a clear error if the
 #                             binary is missing.
+#   MODE=unified            - run a single dynomited with
+#                             data_store=noxu (the in-process
+#                             Noxu datastore) plus a riak block
+#                             exposing BOTH a PBC listener and an
+#                             HTTP gateway. One shared
+#                             Arc<NoxuDatastore> backs the Redis
+#                             (RESP / RediSearch FT.*) client
+#                             proxy AND the Riak PBC/HTTP
+#                             surface, so a key SET via RESP and
+#                             a GET via Riak PBC hit the same
+#                             store. No external redis/memcached
+#                             backend is started (noxu is
+#                             in-process). Requires a dynomited
+#                             built with --features riak (and
+#                             --features search for the FT.*
+#                             surface); aborts with a clear
+#                             error if the binary does not
+#                             expose --riak-pbc-listen.
 #   ROOT=/scratch/dynomite-chaos (default install root)
 
 set -euo pipefail
@@ -46,7 +64,16 @@ DYN_LISTEN_PORT="${5:-18101}"
 CLIENT_LISTEN_PORT="${6:-18102}"
 STATS_LISTEN_PORT="${7:-22222}"
 RIAK_PBC_PORT="${8:-21800}"
+# Riak HTTP gateway port. Defaults to one above the PBC port
+# (e.g. PBC 21800 -> HTTP 21801) so a single positional arg
+# pins both listeners; operators may override via the env.
+RIAK_HTTP_PORT="${RIAK_HTTP_PORT:-$((RIAK_PBC_PORT + 1))}"
 MODE="${MODE:-redis}"
+
+# Whether the in-process Noxu datastore backs the pool. Only
+# MODE=unified turns this on; every other mode leaves it 0 so
+# the external-backend bring-up runs unchanged.
+ENABLE_NOXU=0
 
 case "$MODE" in
     redis)
@@ -80,8 +107,20 @@ case "$MODE" in
         DATA_STORE_VAL=0
         ENABLE_RIAK_PBC=0
         ;;
+    unified)
+        # One dynomited, one shared in-process Noxu datastore
+        # (data_store=2). The Redis-front proxy and the Riak
+        # PBC/HTTP listeners both run against that single
+        # Arc<NoxuDatastore>, so a value written over RESP is
+        # readable over Riak PBC and vice versa. No external
+        # redis/memcached backend is started.
+        EFFECTIVE_MODE=unified
+        DATA_STORE_VAL=2
+        ENABLE_RIAK_PBC=1
+        ENABLE_NOXU=1
+        ;;
     *)
-        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential)" >&2
+        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential|unified)" >&2
         exit 1
         ;;
 esac
@@ -98,6 +137,12 @@ RUN="$ROOT/run"
 LOGS="$ROOT/logs"
 mkdir -p "$RUN" "$LOGS"
 
+# Per-host directory the in-process Noxu environment opens at
+# when MODE=unified. One dir per DC so a single host running
+# multiple DCs (smoke / HOSTS_OVERRIDE) never shares a Noxu
+# environment lock across pools.
+NOXU_PATH="$RUN/noxu-$DC_NAME"
+
 # Discover dynomited binary.
 if [ -x "$ROOT/build/release/dynomited" ]; then
     DYNOMITED="$ROOT/build/release/dynomited"
@@ -110,13 +155,14 @@ else
     exit 1
 fi
 
-# When MODE=riak, verify the binary was built with the `riak`
+# When the Riak PBC listener is enabled (MODE=riak or
+# MODE=unified), verify the binary was built with the `riak`
 # feature. The CLI only registers --riak-pbc-listen behind
 # `#[cfg(feature = "riak")]`, so a `--help` probe is the
 # cheapest reliable check.
 if [ "$ENABLE_RIAK_PBC" = "1" ]; then
     if ! "$DYNOMITED" --help 2>&1 | grep -q -- '--riak-pbc-listen'; then
-        echo "==> ERROR: MODE=riak requires a dynomited built with" \
+        echo "==> ERROR: MODE=$MODE requires a dynomited built with" \
              "--features riak" >&2
         echo "           binary at $DYNOMITED does not expose" \
              "--riak-pbc-listen; rebuild with" >&2
@@ -125,6 +171,16 @@ if [ "$ENABLE_RIAK_PBC" = "1" ]; then
     fi
 fi
 
+# Backend bring-up. MODE=unified backs the pool with the
+# in-process Noxu datastore, so there is no external
+# redis/memcached process to start or probe; we only create
+# the per-host Noxu directory and skip straight to the
+# dynomited launch. Every other mode resolves, starts, and
+# protocol-probes an external backend as before.
+if [ "$ENABLE_NOXU" = "1" ]; then
+    mkdir -p "$NOXU_PATH"
+    echo "==> MODE=unified: in-process Noxu datastore at $NOXU_PATH (no external backend)"
+else
 # Resolve the backend binary based on EFFECTIVE_MODE. Redis and
 # memcached can both fall back to a container runtime, so the
 # probe is identical.
@@ -281,6 +337,7 @@ if [ "$PROBE_OK" -ne 1 ]; then
     echo "==>        the port may be bound by a stale process from a prior mode; refusing to start dynomited" >&2
     exit 1
 fi
+fi
 
 # Write the dynomited config.
 CONF="$RUN/dynomite.yml"
@@ -312,6 +369,17 @@ dyn_o_mite:
   dyn_write_timeout: 1000
 EOF
 
+# Append the noxu_path directive when the in-process Noxu
+# datastore backs the pool (MODE=unified). data_store=2 above
+# selects Noxu; noxu_path tells dynomited where to open the
+# environment. The servers: line stays as a syntactic
+# placeholder; the Noxu backend supervisor ignores it.
+if [ "$ENABLE_NOXU" = "1" ]; then
+    cat >> "$CONF" <<EOF
+  noxu_path: $NOXU_PATH
+EOF
+fi
+
 # Append the seeds block only when SEEDS is non-empty. The C
 # `simple_provider` and the Rust seeds parser both treat an
 # empty seeds list as "no peers" (single-host smoke); writing
@@ -324,15 +392,23 @@ $SEEDS
 EOF
 fi
 
-# Append the riak block when MODE=riak. The block is a YAML
-# sibling of dyn_o_mite (under the same top-level pool key)
-# read by the binary's --features riak code path. The driver
-# will dial 127.0.0.1:$RIAK_PBC_PORT.
+# Append the riak block when the Riak PBC listener is enabled
+# (MODE=riak or MODE=unified). The block is a YAML sibling of
+# dyn_o_mite (under the same top-level pool key) read by the
+# binary's --features riak code path. The driver will dial
+# 127.0.0.1:$RIAK_PBC_PORT. In MODE=unified we additionally
+# emit http_listen so the Riak HTTP gateway comes up against
+# the same shared Noxu store the PBC listener serves.
 if [ "$ENABLE_RIAK_PBC" = "1" ]; then
     cat >> "$CONF" <<EOF
   riak:
     pbc_listen: 0.0.0.0:$RIAK_PBC_PORT
 EOF
+    if [ "$ENABLE_NOXU" = "1" ]; then
+        cat >> "$CONF" <<EOF
+    http_listen: 0.0.0.0:$RIAK_HTTP_PORT
+EOF
+    fi
 fi
 
 # Start dynomited. The chaos injector's clock-skew fault
@@ -439,6 +515,32 @@ if [ "$rust_ready" -ne 1 ]; then
     exit 1
 fi
 echo "==> dynomited up on $DC_NAME (stats:$STATS_LISTEN_PORT bound after $i tick(s) of ${STATS_TICK_SECS}s)"
+
+# MODE=unified readiness: in addition to the stats listener
+# (proven above), confirm the Riak PBC listener is accepting
+# connections. The PBC and the Redis-front proxy both run
+# against the same in-process Noxu store, so a bare TCP
+# connect to the PBC port is enough to prove the unified
+# surface is live before the workload drivers attach.
+if [ "$ENABLE_NOXU" = "1" ]; then
+    pbc_ready=0
+    for i in $(seq 1 "$STATS_MAX_ATTEMPTS"); do
+        if printf '' | timeout 1 bash -c "exec 9<>/dev/tcp/127.0.0.1/$RIAK_PBC_PORT" 2>/dev/null; then
+            pbc_ready=1
+            break
+        fi
+        sleep "$STATS_TICK_SECS"
+    done
+    if [ "$pbc_ready" -ne 1 ]; then
+        echo "==> ERROR: Riak PBC listener on $RIAK_PBC_PORT never accepted a TCP connection after ${STATS_TIMEOUT_SECS}s" >&2
+        echo "==> dynomited stderr tail (last 50 lines):" >&2
+        tail -50 "$LOGS/dynomited-$DC_NAME.stderr" 2>/dev/null >&2 || echo "    (no stderr log)" >&2
+        echo "==> dynomited log tail (last 50 lines):" >&2
+        tail -50 "$LOGS/dynomited-$DC_NAME.log" 2>/dev/null >&2 || echo "    (no log file)" >&2
+        exit 1
+    fi
+    echo "==> Riak PBC listener up on $DC_NAME (pbc:$RIAK_PBC_PORT, http:$RIAK_HTTP_PORT, noxu shared)"
+fi
 
 if [ "$MODE" != "differential" ]; then
     exit 0

@@ -98,6 +98,12 @@ export DC_NAME ROOT RUN LOGS EVENTS MODE CHAOS_NETEM_DEV CHAOS_CGROUP \
 # shellcheck source=./chaos-injector.sh
 . "$INJECTOR"
 
+# Source the driver fan-out helper too. The unified driver-
+# pidfile smoke below exercises compute_driver_specs +
+# driver_pidfile_for with a stubbed launch.
+# shellcheck source=./driver-spec.sh
+. "$HERE/driver-spec.sh"
+
 # Result accumulator.
 PASS=0
 FAIL=0
@@ -822,10 +828,82 @@ smoke_phase5_c_dyn_pid_gating() {
     record OK phase5_c_dyn_pid_gating
 }
 
+# ---------- MODE=unified driver fan-out smoke ----------
+#
+# MODE=unified launches TWO workload drivers per host (a redis
+# RESP + FT.* driver and a riak PBC driver) against one shared
+# in-process Noxu store. The coordinator's start_workload loops
+# over compute_driver_specs and writes a distinct pidfile per
+# driver so teardown kills both. We don't have a real coordinator
+# (or remote SSH) in the smoke, so we stub the launch: for each
+# emitted spec we just write a synthetic pid into the pidfile the
+# coordinator would use. The assertion is that the unified mode
+# produces BOTH driver-redis.pid and driver-riak.pid and NOT the
+# legacy workload.pid, and that the redis driver lands on the
+# client port while the riak driver carries --riak-pbc-port.
+smoke_unified_driver_pidfiles() {
+    local run_dir="$RUN/unified-pidfile-smoke"
+    rm -rf "$run_dir"
+    mkdir -p "$run_dir"
+
+    local specs
+    specs="$(compute_driver_specs unified 200 18102 18202 21800)"
+
+    local fake_pid=1000
+    local saw_redis_flag=0 saw_riak_flag=0
+    local api_suffix d_qps d_flags
+    while IFS=$'\t' read -r api_suffix d_qps d_flags; do
+        [ -z "$d_qps" ] && continue
+        local pidfile
+        pidfile="$(driver_pidfile_for "$api_suffix" "$run_dir")"
+        # Stubbed launch: record the synthetic pid.
+        echo "$fake_pid" > "$pidfile"
+        fake_pid=$((fake_pid + 1))
+        case "$api_suffix" in
+            -redis)
+                case "$d_flags" in
+                    *"--mode redis"*) saw_redis_flag=1 ;;
+                esac
+                ;;
+            -riak)
+                case "$d_flags" in
+                    *"--mode riak --riak-pbc-port 21800"*) saw_riak_flag=1 ;;
+                esac
+                ;;
+        esac
+    done <<<"$specs"
+
+    if [ ! -f "$run_dir/driver-redis.pid" ]; then
+        record FAIL unified_driver_pidfiles "driver-redis.pid was not created"
+        return 0
+    fi
+    if [ ! -f "$run_dir/driver-riak.pid" ]; then
+        record FAIL unified_driver_pidfiles "driver-riak.pid was not created"
+        return 0
+    fi
+    if [ -f "$run_dir/workload.pid" ]; then
+        record FAIL unified_driver_pidfiles "legacy workload.pid created in unified mode"
+        return 0
+    fi
+    if [ "$saw_redis_flag" != 1 ]; then
+        record FAIL unified_driver_pidfiles "redis driver spec missing '--mode redis'"
+        return 0
+    fi
+    if [ "$saw_riak_flag" != 1 ]; then
+        record FAIL unified_driver_pidfiles "riak driver spec missing '--mode riak --riak-pbc-port'"
+        return 0
+    fi
+    rm -rf "$run_dir"
+    record OK unified_driver_pidfiles
+}
+
 # ---------- run ----------
 
 note "==> running smokes"
 smoke_process_pause
+
+# MODE=unified driver fan-out (sourced helper, stubbed launch).
+smoke_unified_driver_pidfiles
 
 # P3-3.9 phase 5: dual-proxy fault smokes. These run on every
 # host because they only use trapping bash subshells and

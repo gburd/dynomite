@@ -66,6 +66,17 @@ SIMPLE_RUN_ID_PATTERN = re.compile(
     r"^pass(?P<pass_num>\d+)-(?P<stamp>\d{8}-\d{6}Z)$"
 )
 
+# Workload-driver API suffixes. MODE=unified launches one driver
+# per client wire protocol against a single shared in-process
+# Noxu store, writing ``workload-<label>-<api>.ndjson`` per API.
+# Single-driver modes keep the legacy unsuffixed
+# ``workload-<label>.ndjson``. The report sums across all of a
+# host's driver files for the per-host total and breaks the load
+# down per API. ``redis`` covers RESP + the RediSearch FT.* /
+# FT.SUG* surface (the ``ft`` / ``ftsug`` op classes); ``riak``
+# is the Riak PBC driver.
+WORKLOAD_API_SUFFIXES = ("redis", "riak", "memcache")
+
 
 # ---------- run-id parsing ----------
 
@@ -97,27 +108,67 @@ def default_out_path(run_id: str, out_dir: Path = DEFAULT_OUT_DIR) -> Path:
 # ---------- run-dir discovery ----------
 
 
+def _split_workload_label(stem: str):
+    """Split a ``workload-...`` filename stem into (label, api).
+
+    ``stem`` is the filename without the ``.ndjson`` suffix, e.g.
+    ``workload-dc-floki`` or ``workload-dc-floki-redis``. Returns
+    ``(label, api)`` where ``api`` is ``None`` for the legacy
+    single-driver shape or one of ``WORKLOAD_API_SUFFIXES`` for a
+    per-protocol unified driver file. Labels themselves contain
+    hyphens (``dc-floki``), so we strip only a trailing
+    ``-<known-api>`` rather than splitting on the last hyphen.
+    """
+    base = stem[len("workload-"):]
+    for api in WORKLOAD_API_SUFFIXES:
+        if base.endswith("-" + api):
+            return base[: -(len(api) + 1)], api
+    return base, None
+
+
 def discover_host_dirs(run_dir: Path) -> dict:
     """Map dc-label -> host-logs directory.
 
     A host's logs live in ``<host>-logs/`` next to ``coordinator.log``.
     The DC label is reconstructed from the workload ndjson filename
-    (``workload-dc-<label>.ndjson``) so renamed host dirs do not
-    desync the report.
+    (``workload-dc-<label>.ndjson`` or, for unified runs, a
+    per-API ``workload-dc-<label>-<api>.ndjson``) so renamed host
+    dirs do not desync the report.
     """
     hosts = {}
     for sub in sorted(run_dir.iterdir()):
         if not (sub.is_dir() and sub.name.endswith("-logs")):
             continue
         label = None
-        for entry in sub.iterdir():
+        for entry in sorted(sub.iterdir()):
             if entry.name.startswith("workload-dc-") and entry.suffix == ".ndjson":
-                label = entry.stem[len("workload-"):]
+                label, _api = _split_workload_label(entry.stem)
                 break
         if label is None:
             label = "dc-" + sub.name[: -len("-logs")]
         hosts[label] = sub
     return hosts
+
+
+def discover_workload_files(host_dir: Path, label: str):
+    """Return ``[(api, path), ...]`` for a host's workload files.
+
+    ``api`` is ``None`` for the legacy single-driver
+    ``workload-<label>.ndjson`` file, or an API name for each
+    per-protocol unified driver file present
+    (``workload-<label>-<api>.ndjson``). Only existing files are
+    returned. A non-unified run yields a single ``(None, path)``
+    entry, preserving backward compatibility.
+    """
+    out = []
+    plain = host_dir / f"workload-{label}.ndjson"
+    if plain.exists():
+        out.append((None, plain))
+    for api in WORKLOAD_API_SUFFIXES:
+        p = host_dir / f"workload-{label}-{api}.ndjson"
+        if p.exists():
+            out.append((api, p))
+    return out
 
 
 # ---------- ndjson aggregation ----------
@@ -445,14 +496,41 @@ def render_report(run_dir: Path) -> str:
     host_dirs = discover_host_dirs(run_dir)
     host_labels = sorted(host_dirs.keys())
 
-    # Aggregate per-host workload + chaos data once.
+    # Aggregate per-host workload + chaos data once. Each host may
+    # have one workload file (legacy single-driver modes) or
+    # several (MODE=unified: one per client wire protocol against
+    # the shared in-process Noxu store). We sum counts/failures
+    # across all of a host's driver files for the per-host total
+    # and keep a per-API breakdown for the unified section.
     per_host = {}
     grand_first_ts = None
     grand_last_ts = None
     for label in host_labels:
-        wpath = host_dirs[label] / f"workload-{label}.ndjson"
         cpath = host_dirs[label] / f"chaos-events-{label}.ndjson"
-        counts, failures, retries, snapshots, first_ts, last_ts = parse_workload_ndjson(wpath)
+        counts = collections.Counter()
+        failures = collections.Counter()
+        retries = collections.Counter()
+        snapshots = []
+        first_ts = last_ts = None
+        by_api = {}
+        for api, wpath in discover_workload_files(host_dirs[label], label):
+            (a_counts, a_failures, a_retries, a_snapshots,
+             a_first, a_last) = parse_workload_ndjson(wpath)
+            counts.update(a_counts)
+            failures.update(a_failures)
+            retries.update(a_retries)
+            snapshots.extend(a_snapshots)
+            if a_first is not None:
+                if first_ts is None or a_first < first_ts:
+                    first_ts = a_first
+            if a_last is not None:
+                if last_ts is None or a_last > last_ts:
+                    last_ts = a_last
+            by_api[api] = {
+                "counts": a_counts,
+                "failures": a_failures,
+                "retries": a_retries,
+            }
         kinds, events = parse_chaos_events(cpath)
         per_host[label] = {
             "counts": counts,
@@ -463,6 +541,7 @@ def render_report(run_dir: Path) -> str:
             "last_ts": last_ts,
             "kinds": kinds,
             "events": events,
+            "by_api": by_api,
         }
         if first_ts is not None:
             if grand_first_ts is None or first_ts < grand_first_ts:
@@ -528,6 +607,81 @@ def render_report(run_dir: Path) -> str:
         f"**{fmt_int(grand_total)}** | **{fmt_pct(grand_ok, grand_total)}** |"
     )
     lines.append("")
+
+    # ---- 2b. per-API breakdown (unified runs) ----
+    # MODE=unified drives one shared in-process Noxu store through
+    # several client wire protocols at once. When per-API driver
+    # files are present we break the per-host load down by API so
+    # the operator can see, e.g., that the Redis RESP surface and
+    # the Riak PBC surface both stayed healthy against the same
+    # store. The ft / ftsug columns surface the RediSearch FT.* /
+    # FT.SUG* sub-classes that already live inside the redis
+    # driver's counts. The section is omitted entirely for
+    # non-unified runs (only the legacy unsuffixed file present).
+    any_api = any(
+        any(api is not None for api in per_host[label]["by_api"])
+        for label in host_labels
+    )
+    if any_api:
+        def _ok(ctr):
+            return sum(ctr.values())
+
+        def _fail(ctr):
+            return sum(ctr.values())
+
+        def _class_ok(ctr, cls):
+            # counts keys are "<class>/<op>"; match the class head.
+            return sum(
+                v for k, v in ctr.items() if k.split("/", 1)[0] == cls
+            )
+
+        lines.append("## Per-API breakdown")
+        lines.append("")
+        lines.append(
+            "Per-host load split by client wire protocol against the "
+            "shared in-process Noxu datastore. `ft` / `ftsug` are the "
+            "RediSearch sub-classes inside the redis driver's counts."
+        )
+        lines.append("")
+        lines.append(
+            "| host | redis ok | redis fail | riak ok | riak fail | "
+            "ft ok | ftsug ok |"
+        )
+        lines.append("|---|---:|---:|---:|---:|---:|---:|")
+        agg = {
+            "redis_ok": 0, "redis_fail": 0, "riak_ok": 0,
+            "riak_fail": 0, "ft_ok": 0, "ftsug_ok": 0,
+        }
+        for label in host_labels:
+            by_api = per_host[label]["by_api"]
+            redis = by_api.get("redis", {"counts": collections.Counter(),
+                                         "failures": collections.Counter()})
+            riak = by_api.get("riak", {"counts": collections.Counter(),
+                                       "failures": collections.Counter()})
+            redis_ok = _ok(redis["counts"])
+            redis_fail = _fail(redis["failures"])
+            riak_ok = _ok(riak["counts"])
+            riak_fail = _fail(riak["failures"])
+            ft_ok = _class_ok(redis["counts"], "ft")
+            ftsug_ok = _class_ok(redis["counts"], "ftsug")
+            agg["redis_ok"] += redis_ok
+            agg["redis_fail"] += redis_fail
+            agg["riak_ok"] += riak_ok
+            agg["riak_fail"] += riak_fail
+            agg["ft_ok"] += ft_ok
+            agg["ftsug_ok"] += ftsug_ok
+            lines.append(
+                f"| `{label}` | {fmt_int(redis_ok)} | {fmt_int(redis_fail)} | "
+                f"{fmt_int(riak_ok)} | {fmt_int(riak_fail)} | "
+                f"{fmt_int(ft_ok)} | {fmt_int(ftsug_ok)} |"
+            )
+        lines.append(
+            f"| **aggregate** | **{fmt_int(agg['redis_ok'])}** | "
+            f"**{fmt_int(agg['redis_fail'])}** | **{fmt_int(agg['riak_ok'])}** | "
+            f"**{fmt_int(agg['riak_fail'])}** | **{fmt_int(agg['ft_ok'])}** | "
+            f"**{fmt_int(agg['ftsug_ok'])}** |"
+        )
+        lines.append("")
 
     # ---- 3. top failure reasons ----
     lines.append("## Top failure reasons")

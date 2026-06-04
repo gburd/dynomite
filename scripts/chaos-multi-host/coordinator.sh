@@ -58,11 +58,27 @@ REPO="/home/gburd/ws/dynomite"
 LOCAL_LOGS="$REPO/target/chaos-multi-host/$RUN_ID"
 mkdir -p "$LOCAL_LOGS"
 
+# Source the driver fan-out helper (compute_driver_specs,
+# driver_pidfile_for). Resolve it next to this script so the
+# coordinator works from any cwd.
+COORD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./driver-spec.sh
+. "$COORD_DIR/driver-spec.sh"
+
 DATASTORE_PORT=17100
 DYN_LISTEN_PORT=18101
 CLIENT_LISTEN_PORT=18102
 STATS_LISTEN_PORT=22222
 RIAK_PBC_PORT=21800
+# Riak HTTP gateway port (MODE=unified). start-host.sh derives
+# the same default (PBC + 1) internally; we pin the name here so
+# the teardown / status tooling can reference it.
+RIAK_HTTP_PORT=$((RIAK_PBC_PORT + 1))
+
+# Base offered QPS per host. For MODE=unified this is split
+# evenly across the redis and riak drivers so the total load is
+# unchanged from the single-driver modes.
+BASE_QPS="${CHAOS_QPS:-200}"
 
 # Differential-mode (P3-3.9) port shifts. The C `dynomite`
 # reference proxy listens on Rust + 100 so a single host can
@@ -75,14 +91,14 @@ MODE="${MODE:-redis}"
 export MODE
 
 # Mode validation. The coordinator dispatches to per-host
-# start-host.sh which knows redis|memcache|riak|differential.
-# Reject anything else early so the operator sees the typo on
-# the lead host instead of waiting for four parallel SSH
+# start-host.sh which knows redis|memcache|riak|differential|
+# unified. Reject anything else early so the operator sees the
+# typo on the lead host instead of waiting for four parallel SSH
 # failures.
 case "$MODE" in
-    redis|memcache|riak|differential) ;;
+    redis|memcache|riak|differential|unified) ;;
     *)
-        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential)" >&2
+        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential|unified)" >&2
         exit 2
         ;;
 esac
@@ -395,42 +411,59 @@ start_workload() {
     local label="$1"; shift
     local _bash_path="$1"; shift
     local runner=("$@")
-    log "starting workload-driver on $label (mode=$MODE)"
-    # Mode wiring varies per backend:
-    #  * riak: dial the PBC listener at $RIAK_PBC_PORT,
-    #    not the engine's client_listen.
-    #  * differential (P3-3.9 phases 3+4): the driver fans every
-    #    op out to both the Rust and C proxies and records
-    #    per-op agreed/divergent/one_side_failed verdicts. The
-    #    C-side defaults to ``--rust-host`` + 100 inside the
-    #    driver, but we pass the explicit flags so a future
-    #    re-shuffle of the port table only needs editing in
-    #    one place (here).
+    log "starting workload-driver(s) on $label (mode=$MODE)"
+    # Mode wiring varies per backend; compute_driver_specs (from
+    # driver-spec.sh) centralises the mapping:
+    #  * riak: dial the PBC listener at $RIAK_PBC_PORT, not the
+    #    engine's client_listen.
+    #  * differential (P3-3.9 phases 3+4): fan every op out to
+    #    both the Rust and C proxies and record per-op
+    #    agreed/divergent/one_side_failed verdicts.
+    #  * unified: TWO drivers per host against ONE shared
+    #    in-process Noxu store -- a redis (RESP + FT.*) driver on
+    #    client_listen and a riak PBC driver on $RIAK_PBC_PORT --
+    #    with the offered QPS split so total load is unchanged.
     #  * redis|memcache: the existing single-port path.
-    local mode_flags
-    if [ "$MODE" = "riak" ]; then
-        mode_flags="--mode riak --riak-pbc-port $RIAK_PBC_PORT"
-    elif [ "$MODE" = "differential" ]; then
-        mode_flags="--mode differential --rust-port $CLIENT_LISTEN_PORT --c-port $CLIENT_LISTEN_PORT_C"
-    else
-        mode_flags="--mode $MODE"
-    fi
+    #
+    # Each spec is <api_suffix>\t<qps>\t<mode_flags>. The empty
+    # suffix keeps the legacy workload-<label>.ndjson +
+    # workload.pid layout; suffixed drivers write
+    # workload-<label>-<api>.ndjson + driver-<api>.pid so
+    # teardown can find and kill every driver.
+    local specs
+    specs="$(compute_driver_specs "$MODE" "$BASE_QPS" \
+        "$CLIENT_LISTEN_PORT" "$CLIENT_LISTEN_PORT_C" "$RIAK_PBC_PORT")"
     local rc=0
-    "${runner[@]}" bash -s <<EOF || rc=$?
+    local launched=0
+    local api_suffix d_qps d_flags
+    while IFS=$'\t' read -r api_suffix d_qps d_flags; do
+        [ -z "$d_qps" ] && continue
+        local out_file="/scratch/dynomite-chaos/logs/workload-$label$api_suffix.ndjson"
+        local err_file="/scratch/dynomite-chaos/logs/workload-$label$api_suffix.stderr"
+        local pidfile
+        pidfile="$(driver_pidfile_for "$api_suffix" /scratch/dynomite-chaos/run)"
+        local one_rc=0
+        "${runner[@]}" bash -s <<EOF || one_rc=$?
 nohup python3 /scratch/dynomite-chaos/src/scripts/chaos-multi-host/workload-driver.py \\
     --host 127.0.0.1 --port $CLIENT_LISTEN_PORT \\
-    $mode_flags \\
+    $d_flags \\
     --label $label \\
-    --out /scratch/dynomite-chaos/logs/workload-$label.ndjson \\
+    --out $out_file \\
     --duration $DURATION \\
-    --qps 200 \\
+    --qps $d_qps \\
     --retry-on='$RETRY_POLICY' \\
-    > /scratch/dynomite-chaos/logs/workload-$label.stderr 2>&1 < /dev/null &
-echo \$! > /scratch/dynomite-chaos/run/workload.pid
+    > $err_file 2>&1 < /dev/null &
+echo \$! > $pidfile
 EOF
-    if [ "$rc" -ne 0 ]; then
-        log "  workload-driver start failed on $label (rc=$rc)"
-        return "$rc"
+        if [ "$one_rc" -ne 0 ]; then
+            log "  workload-driver$api_suffix start failed on $label (rc=$one_rc)"
+            rc="$one_rc"
+        else
+            launched=$((launched + 1))
+        fi
+    done <<<"$specs"
+    if [ "$rc" -ne 0 ] || [ "$launched" -eq 0 ]; then
+        return 1
     fi
     return 0
 }
@@ -503,11 +536,11 @@ teardown() {
     # remote escaping confusion.
     local remote_cmd
     remote_cmd=$(cat <<'REMOTE_EOF'
-for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid; do
+for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/driver-redis.pid /scratch/dynomite-chaos/run/driver-riak.pid /scratch/dynomite-chaos/run/injector.pid; do
     [ -f "$f" ] && pid=$(cat "$f") && kill -TERM "$pid" 2>/dev/null
 done
 sleep 2
-for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/injector.pid /scratch/dynomite-chaos/run/dynomited.pid /scratch/dynomite-chaos/run/dynomite-c.pid; do
+for f in /scratch/dynomite-chaos/run/workload.pid /scratch/dynomite-chaos/run/driver-redis.pid /scratch/dynomite-chaos/run/driver-riak.pid /scratch/dynomite-chaos/run/injector.pid /scratch/dynomite-chaos/run/dynomited.pid /scratch/dynomite-chaos/run/dynomite-c.pid; do
     [ -f "$f" ] && pid=$(cat "$f") && kill -KILL "$pid" 2>/dev/null
 done
 if [ -f /scratch/dynomite-chaos/run/redis.pid ]; then

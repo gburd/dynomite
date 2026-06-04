@@ -102,12 +102,19 @@ def _make_chaos_rows(label, kinds_with_counts, base_ts="2026-05-25T03:42:30Z"):
 
 
 def _make_run_dir(root, run_id, hosts, mode="redis", coord_lines=None,
-                   workload_per_host=None, chaos_per_host=None):
+                   workload_per_host=None, chaos_per_host=None,
+                   workload_api_per_host=None):
     """Build a synthetic run-dir under ``root/run_id``.
 
     ``workload_per_host`` and ``chaos_per_host`` map label ->
     list of pre-built ndjson rows. Hosts not present produce
     empty files (zero rows).
+
+    ``workload_api_per_host`` maps label -> {api_name: rows},
+    producing per-API ``workload-<label>-<api>.ndjson`` files
+    (the MODE=unified layout). When given for a host, the plain
+    ``workload-<label>.ndjson`` file is NOT written for that host
+    so the report exercises the suffixed-only path.
     """
     run_dir = root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -129,14 +136,20 @@ def _make_run_dir(root, run_id, hosts, mode="redis", coord_lines=None,
 
     workload_per_host = workload_per_host or {}
     chaos_per_host = chaos_per_host or {}
+    workload_api_per_host = workload_api_per_host or {}
 
     for label in hosts:
         host_root = run_dir / (label.replace("dc-", "") + "-logs")
         host_root.mkdir(parents=True, exist_ok=True)
-        wpath = host_root / f"workload-{label}.ndjson"
         cpath = host_root / f"chaos-events-{label}.ndjson"
-        _write_ndjson(wpath, workload_per_host.get(label, []))
         _write_ndjson(cpath, chaos_per_host.get(label, []))
+        if label in workload_api_per_host:
+            for api, rows in workload_api_per_host[label].items():
+                wpath = host_root / f"workload-{label}-{api}.ndjson"
+                _write_ndjson(wpath, rows)
+        else:
+            wpath = host_root / f"workload-{label}.ndjson"
+            _write_ndjson(wpath, workload_per_host.get(label, []))
     return run_dir
 
 
@@ -434,6 +447,148 @@ class FullRunSynthesisTests(unittest.TestCase):
         (run_dir / "git-sha").write_text("abcdef1234567\n")
         md = GR.render_report(run_dir)
         self.assertIn("`abcdef1234567`", md)
+
+
+class UnifiedPerApiTests(unittest.TestCase):
+    """MODE=unified: two driver files per host (redis + riak)
+    against one shared in-process Noxu store.
+
+    Asserts the report (1) discovers the suffixed driver files
+    and reconstructs the host label correctly, (2) sums ok/fail
+    across both files for the per-host workload total, and (3)
+    renders the per-API breakdown with redis/riak ok/fail plus
+    the ft / ftsug RediSearch sub-classes pulled from the redis
+    driver's counts.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="chaos-unified-test-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _row(self, label, mode, counts, failures, ts=1_700_000_000.0):
+        return {
+            "ts": ts,
+            "label": label,
+            "mode": mode,
+            "elapsed": 10.0,
+            "counts": counts,
+            "failures": failures,
+        }
+
+    def test_two_drivers_one_host_breakdown_and_total(self):
+        label = "dc-floki"
+        # redis driver: RESP strings + RediSearch ft / ftsug.
+        redis_rows = [self._row(
+            label, "redis",
+            {
+                "strings/SET": 100,
+                "strings/GET": 100,
+                "ft/FT.CREATE": 30,
+                "ft/FT.SEARCH_TEXT": 20,
+                "ftsug/FT.SUGADD": 10,
+            },
+            {"strings/Closed": 5},
+        )]
+        # riak driver: PBC ops.
+        riak_rows = [self._row(
+            label, "riak",
+            {"riak/Put": 80, "riak/Get": 70, "riak/Ping": 50},
+            {"riak/Timeout": 3},
+        )]
+        run_dir = _make_run_dir(
+            self.tmp, "pass9-unified-20261201-000000Z", [label],
+            mode="unified",
+            workload_api_per_host={label: {"redis": redis_rows,
+                                           "riak": riak_rows}},
+        )
+        md = GR.render_report(run_dir)
+
+        # Label reconstructed from a suffixed filename, not
+        # "dc-floki-redis".
+        self.assertIn("`dc-floki`", md)
+        self.assertNotIn("`dc-floki-redis`", md)
+
+        # Per-host workload total: redis ok = 260, riak ok = 200
+        # => 460 ok; fail = 5 + 3 = 8; total = 468.
+        self.assertIn("## Workload totals", md)
+        self.assertIn("460", md)
+        self.assertIn("468", md)
+
+        # Per-API breakdown section with the documented columns.
+        self.assertIn("## Per-API breakdown", md)
+        self.assertIn("redis ok", md)
+        self.assertIn("riak ok", md)
+        self.assertIn("ft ok", md)
+        self.assertIn("ftsug ok", md)
+
+        # The dc-floki breakdown row: redis ok=260, redis fail=5,
+        # riak ok=200, riak fail=3, ft ok=50, ftsug ok=10.
+        row = re.search(
+            r"\| `dc-floki` \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \|",
+            md,
+        )
+        self.assertIsNotNone(row)
+        if row:
+            self.assertEqual(
+                row.groups(),
+                ("260", "5", "200", "3", "50", "10"),
+            )
+
+        # Aggregate breakdown row mirrors the single host.
+        agg = re.search(
+            r"\| \*\*aggregate\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| "
+            r"\*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \|",
+            md,
+        )
+        self.assertIsNotNone(agg)
+        if agg:
+            self.assertEqual(
+                agg.groups(),
+                ("260", "5", "200", "3", "50", "10"),
+            )
+
+    def test_breakdown_section_omitted_for_non_unified(self):
+        """A legacy single-file run never grows the breakdown."""
+        hosts = ["dc-floki"]
+        wrows = {h: _make_workload_rows(h, "redis", 10, 0, 4) for h in hosts}
+        run_dir = _make_run_dir(
+            self.tmp, "pass9-redis-20261202-000000Z", hosts,
+            mode="redis", workload_per_host=wrows,
+        )
+        md = GR.render_report(run_dir)
+        self.assertNotIn("## Per-API breakdown", md)
+
+    def test_multi_host_unified_aggregate(self):
+        """Two hosts, each with redis + riak drivers; aggregate sums."""
+        hosts = ["dc-floki", "dc-arnold"]
+        api_rows = {}
+        for h in hosts:
+            api_rows[h] = {
+                "redis": [self._row(h, "redis",
+                                    {"strings/SET": 50, "ft/FT.CREATE": 10},
+                                    {})],
+                "riak": [self._row(h, "riak", {"riak/Put": 40}, {})],
+            }
+        run_dir = _make_run_dir(
+            self.tmp, "pass9-unified-20261203-000000Z", hosts,
+            mode="unified", workload_api_per_host=api_rows,
+        )
+        md = GR.render_report(run_dir)
+        # Aggregate redis ok = (50+10)*2 = 120; riak ok = 40*2 = 80;
+        # ft ok = 10*2 = 20.
+        agg = re.search(
+            r"\| \*\*aggregate\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| "
+            r"\*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \| \*\*(\d+)\*\* \|",
+            md,
+        )
+        self.assertIsNotNone(agg)
+        if agg:
+            self.assertEqual(
+                agg.groups(),
+                ("120", "0", "80", "0", "20", "0"),
+            )
 
 
 class RestartFailedClassifierTests(unittest.TestCase):
