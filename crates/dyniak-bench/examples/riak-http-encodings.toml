@@ -1,0 +1,42 @@
+# Riak HTTP workload that measures the object endpoints across the
+# three negotiated codecs. The `encoding` knob sets the request
+# `Content-Type` and `Accept` headers (json | cbor | protobuf), so a
+# run isolates one codec's encode / decode cost on the GET / PUT /
+# DELETE object paths. Override it from the CLI with
+# `--encoding cbor` (or `protobuf`) to sweep the codecs without
+# editing this file.
+#
+# Targets a single dyniak HTTP gateway bound on port 8098 backed by
+# a NoxuDatastore. The GET / PUT / DELETE ops exercise
+# `/buckets/<bucket>/keys/<key>` directly.
+
+[run]
+duration = "60s"
+concurrent = 8
+rate = "max"
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "riak_http"
+host = "127.0.0.1"
+port = 8098
+bucket = "bench"
+timeout_ms = 5000
+# One of: json | cbor | protobuf. Default is json.
+encoding = "json"
+
+[ops]
+put = 3
+get = 5
+del = 1
+
+[keygen]
+kind = "pareto"
+max = 100000
+shape = 1.5
+prefix = "rk_"
+
+[valgen]
+kind = "exponential"
+mean = 256

@@ -113,6 +113,7 @@ fn make_redis_config(port: u16, duration: &str, ops: OpsConfig, out_dir: &str) -
             port,
             timeout_ms: 1000,
             bucket: "bench".into(),
+            encoding: dyniak_bench::config::HttpEncoding::Json,
         },
         ops,
         keygen: KeyGenConfig {

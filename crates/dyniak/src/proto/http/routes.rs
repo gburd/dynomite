@@ -26,12 +26,24 @@
 //!
 //! # Datastore semantics
 //!
-//! The handler trampolines K/V requests through
-//! [`dynomite::embed::Datastore::dispatch`] in the same way
-//! [`crate::server::handle_conn`] does. The substrate's accounting
-//! ticks per request; the Riak-specific K/V semantics land in a
-//! follow-up slice along with the [`crate::datastore`] richer
-//! trait.
+//! Object K/V requests (`GET` / `PUT` / `DELETE` on
+//! `/buckets/{bucket}/keys/{key}`) are served against the real
+//! object store when the backend exposes one. The handler probes
+//! [`dynomite::embed::Datastore::as_any`] for a
+//! [`crate::datastore::NoxuDatastore`] (the `object_store` helper);
+//! on a hit it reads / writes / deletes the stored
+//! [`crate::proto::http::object::HttpObject`] envelope, re-encoding
+//! it under the negotiated codec. The envelope is persisted in a
+//! canonical, codec-independent form, so a value stored under one
+//! encoding is fetchable under any other.
+//!
+//! Backends without an object layer (the in-memory store used in
+//! tests) fall back to the documented trampoline: every K/V request
+//! is routed through [`dynomite::embed::Datastore::dispatch`] for the
+//! substrate's per-request accounting, a `GET` then replies
+//! `404 Not Found`, and `PUT` / `DELETE` reply `204 No Content`.
+//! Every path -- real or fallback -- ticks the dispatch counter the
+//! same way [`crate::server::handle_conn`] does on the PBC side.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -48,7 +60,12 @@ use dynomite::embed::hooks::DatastoreByteStream;
 use dynomite::embed::Datastore;
 use dynomite::msg::{Msg, MsgType};
 
+#[cfg(feature = "noxu")]
+use dyn_encoding::WireValue;
+
 use crate::proto::http::content_type::{select_codec, SUPPORTED_CONTENT_TYPES};
+#[cfg(feature = "noxu")]
+use crate::proto::http::object::{object_codecs, HttpIndex, HttpObject};
 use crate::txn::{HttpTxnRequest, HttpTxnResponse, TransactionalStore, TxnOutcome, TxnStoreError};
 
 /// Body type the gateway emits.
@@ -277,8 +294,8 @@ fn stats_response(headers: &HeaderMap) -> Response<ResponseBody> {
 }
 
 async fn handle_get(
-    _bucket: &str,
-    _key: &str,
+    bucket: &str,
+    key: &str,
     headers: &HeaderMap,
     head_only: bool,
     datastore: &dyn Datastore,
@@ -289,6 +306,8 @@ async fn handle_get(
         return not_acceptable_response();
     };
 
+    // Accounting trampoline: keep the substrate's per-request counter
+    // ticking exactly as the PBC path does before the real fetch.
     let routing = Msg::new(0, MsgType::Unknown, true);
     if let Err(e) = datastore.dispatch(routing).await {
         return text_response(
@@ -297,17 +316,26 @@ async fn handle_get(
         );
     }
 
-    // The trampoline returns no content. For the v0.0.1 slice the
-    // Riak HTTP gateway treats that as "key not found" -- 404 with
-    // no body, which is exactly what Riak emits when a fetch misses.
-    let _ = ct; // negotiated content-type would describe the body if there were one.
-    let _ = head_only; // 404 has no body either way.
+    // Object-capable backends (today: `NoxuDatastore`) fetch the
+    // stored envelope and re-encode it under the negotiated codec.
+    // Other backends (the in-memory store used in tests) have no
+    // object layer, so they fall back to Riak's miss response.
+    #[cfg(feature = "noxu")]
+    {
+        if let Some(store) = object_store(datastore) {
+            return get_object_from_store(store, bucket, key, ct, head_only);
+        }
+    }
+    #[cfg(not(feature = "noxu"))]
+    {
+        let _ = (bucket, key, ct, head_only);
+    }
     text_response(StatusCode::NOT_FOUND, "not found")
 }
 
 async fn handle_put(
-    _bucket: &str,
-    _key: &str,
+    bucket: &str,
+    key: &str,
     headers: &HeaderMap,
     body: Bytes,
     datastore: &dyn Datastore,
@@ -331,12 +359,27 @@ async fn handle_put(
         }
     }
 
+    // Accounting trampoline, matching the PBC path and the GET path.
     let routing = Msg::new(0, MsgType::Unknown, true);
     if let Err(e) = datastore.dispatch(routing).await {
         return text_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("datastore error: {e}"),
         );
+    }
+
+    // Object-capable backends decode the body under the request codec
+    // and persist the canonical envelope. Other backends acknowledge
+    // the write without storing (the in-memory test trampoline).
+    #[cfg(feature = "noxu")]
+    {
+        if let Some(store) = object_store(datastore) {
+            return put_object_into_store(store, bucket, key, headers, &body, req_ct);
+        }
+    }
+    #[cfg(not(feature = "noxu"))]
+    {
+        let _ = (bucket, key, &body);
     }
     Response::builder()
         .status(StatusCode::NO_CONTENT)
@@ -346,10 +389,11 @@ async fn handle_put(
 }
 
 async fn handle_delete(
-    _bucket: &str,
-    _key: &str,
+    bucket: &str,
+    key: &str,
     datastore: &dyn Datastore,
 ) -> Response<ResponseBody> {
+    // Accounting trampoline, matching the PBC and GET/PUT paths.
     let routing = Msg::new(0, MsgType::Unknown, true);
     if let Err(e) = datastore.dispatch(routing).await {
         return text_response(
@@ -357,11 +401,35 @@ async fn handle_delete(
             &format!("datastore error: {e}"),
         );
     }
+
+    // Object-capable backends remove the object and its 2i entries.
+    // As with Riak, a delete of an absent key is not an error: the
+    // PBC del path replies `RpbDelResp` regardless, so the HTTP path
+    // replies `204 No Content` whether or not the key existed.
+    #[cfg(feature = "noxu")]
+    {
+        if let Some(store) = object_store(datastore) {
+            return match store.delete_object(bucket.as_bytes(), key.as_bytes()) {
+                Ok(_) => no_content_response(),
+                Err(e) => storage_error_response(&e),
+            };
+        }
+    }
+    #[cfg(not(feature = "noxu"))]
+    {
+        let _ = (bucket, key);
+    }
+    no_content_response()
+}
+
+/// Build a body-less `204 No Content` response carrying the server
+/// name header. Shared by the put / delete success paths.
+fn no_content_response() -> Response<ResponseBody> {
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .header("Server", SERVER_NAME)
         .body(buffered_body(Bytes::new()))
-        .expect("invariant: delete response builder is well-formed")
+        .expect("invariant: no-content response builder is well-formed")
 }
 
 fn get_props_response(bucket: &str, headers: &HeaderMap) -> Response<ResponseBody> {
@@ -514,6 +582,185 @@ fn txn_store(datastore: &dyn Datastore) -> Option<&dyn TransactionalStore> {
         let _ = datastore;
         None
     }
+}
+
+// ------------------------------------------------------------------
+// Object K/V store wiring (GET / PUT / DELETE against a real store).
+// ------------------------------------------------------------------
+
+/// Probe `datastore` for the concrete object-capable backend.
+///
+/// Returns `Some` only when the crate is built with the `noxu`
+/// feature and the backend is a [`crate::datastore::NoxuDatastore`].
+/// The probe goes through [`dynomite::embed::Datastore::as_any`] in
+/// the same way [`txn_store`] reaches the transactional surface, so
+/// the HTTP layer never names the storage backend on its own trait.
+#[cfg(feature = "noxu")]
+fn object_store(datastore: &dyn Datastore) -> Option<&crate::datastore::NoxuDatastore> {
+    datastore
+        .as_any()
+        .and_then(|any| any.downcast_ref::<crate::datastore::NoxuDatastore>())
+}
+
+/// Fetch the object stored under `(bucket, key)` and re-encode it
+/// under the negotiated codec `ct`.
+///
+/// A miss is `404 Not Found`; a hit is `200 OK` with the envelope
+/// re-encoded in the negotiated codec. `HEAD` requests get the same
+/// status and headers with an empty body. A stored value that does
+/// not decode as an [`HttpObject`] is a `500`.
+#[cfg(feature = "noxu")]
+fn get_object_from_store(
+    store: &crate::datastore::NoxuDatastore,
+    bucket: &str,
+    key: &str,
+    ct: &'static str,
+    head_only: bool,
+) -> Response<ResponseBody> {
+    let stored = match store.get_object(bucket.as_bytes(), key.as_bytes()) {
+        Ok(Some(v)) => v,
+        Ok(None) => return text_response(StatusCode::NOT_FOUND, "not found"),
+        Err(e) => return storage_error_response(&e),
+    };
+    let obj = match HttpObject::from_storage_bytes(&stored) {
+        Ok(o) => o,
+        Err(e) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("stored object is corrupt: {e}"),
+            );
+        }
+    };
+    // `ct` came from `select_codec`, so it is always one of the
+    // registered baseline content-types; the `else` arm is defensive.
+    let Some(codec) = object_codecs().for_content_type(ct) else {
+        return not_acceptable_response();
+    };
+    let encoded = match codec.encode(&obj) {
+        Ok(b) => b,
+        Err(e) => {
+            return text_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("object encode: {e}"),
+            );
+        }
+    };
+    let body = if head_only {
+        Bytes::new()
+    } else {
+        Bytes::from(encoded)
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, ct)
+        .header("Server", SERVER_NAME)
+        .body(buffered_body(body))
+        .expect("invariant: object response builder is well-formed")
+}
+
+/// Decode the request `body` under the request codec, merge any
+/// `X-Riak-Index-*` headers into the envelope, persist the canonical
+/// form, and fan the index list out into the 2i layer.
+///
+/// A body that does not decode under its declared codec is a
+/// `400 Bad Request`. A successful store is `204 No Content`.
+#[cfg(feature = "noxu")]
+fn put_object_into_store(
+    store: &crate::datastore::NoxuDatastore,
+    bucket: &str,
+    key: &str,
+    headers: &HeaderMap,
+    body: &Bytes,
+    req_ct: Option<&str>,
+) -> Response<ResponseBody> {
+    // The request codec defaults to JSON when the client omits a
+    // Content-Type; the 415 guard in `handle_put` has already
+    // rejected any unsupported declared type.
+    let req_ct = req_ct.unwrap_or("application/json");
+    let canonical = super::content_type::canonicalize(req_ct).unwrap_or("application/json");
+    let Some(codec) = object_codecs().for_content_type(canonical) else {
+        return text_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request Content-Type is not supported",
+        );
+    };
+    let decoded = match codec.decode(HttpObject::wire_type_id(), body) {
+        Ok(v) => v,
+        Err(e) => {
+            return text_response(StatusCode::BAD_REQUEST, &format!("object decode: {e}"));
+        }
+    };
+    let Some(obj) = decoded.as_any().downcast_ref::<HttpObject>() else {
+        // The codec round-trips `HttpObject`, so a mismatch here is a
+        // codec-registry bug rather than a client error.
+        return text_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "decoded value was not an object",
+        );
+    };
+    let mut obj = obj.clone();
+    obj.indexes.extend(collect_index_headers(headers));
+
+    let indexes = obj.index_pairs();
+    let storage = obj.to_storage_bytes();
+    match store.put_object(bucket.as_bytes(), key.as_bytes(), &storage, &indexes) {
+        Ok(()) => no_content_response(),
+        Err(e) => storage_error_response(&e),
+    }
+}
+
+/// Collect `X-Riak-Index-<name>: <value>` headers into a list of
+/// [`HttpIndex`] entries.
+///
+/// Riak's HTTP API carries secondary indexes as headers named
+/// `X-Riak-Index-<index>_int` or `X-Riak-Index-<index>_bin`. A
+/// single header may carry several comma-separated values; each
+/// becomes one index entry. Header names are matched
+/// case-insensitively (hyper lower-cases them on receipt).
+#[cfg(feature = "noxu")]
+fn collect_index_headers(headers: &HeaderMap) -> Vec<HttpIndex> {
+    const PREFIX: &str = "x-riak-index-";
+    let mut out = Vec::new();
+    for (name, value) in headers {
+        let name = name.as_str();
+        let Some(index_name) = name.strip_prefix(PREFIX) else {
+            continue;
+        };
+        if index_name.is_empty() {
+            continue;
+        }
+        let Ok(value) = value.to_str() else {
+            continue;
+        };
+        for part in value.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            out.push(HttpIndex {
+                name: index_name.to_string(),
+                value: part.to_string(),
+            });
+        }
+    }
+    out
+}
+
+/// Map a [`crate::datastore::NoxuDatastoreError`] onto an HTTP status.
+///
+/// A malformed bucket name or an unparsable `_int` index value is the
+/// client's fault (`400`); everything else is a backend failure
+/// (`500`).
+#[cfg(feature = "noxu")]
+fn storage_error_response(err: &crate::datastore::NoxuDatastoreError) -> Response<ResponseBody> {
+    use crate::datastore::NoxuDatastoreError;
+    let status = match err {
+        NoxuDatastoreError::InvalidName { .. } | NoxuDatastoreError::BadIntValue { .. } => {
+            StatusCode::BAD_REQUEST
+        }
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    text_response(status, &format!("storage error: {err}"))
 }
 
 /// Render a [`TxnOutcome`] as a JSON [`HttpTxnResponse`]. Committed

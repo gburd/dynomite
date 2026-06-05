@@ -34,12 +34,21 @@
 //!
 //! # Datastore semantics
 //!
-//! For the v0.0.1 slice the gateway trampolines K/V operations
-//! through [`dynomite::embed::Datastore::dispatch`] in the same shape
-//! the PBC server uses. The substrate's accounting ticks per
-//! request; the Riak-aware K/V trait that turns a `dispatch` into a
-//! real fetch / store / delete lands in a follow-up slice. List-keys
-//! and list-buckets stream their response body chunk-by-chunk via
+//! Object K/V endpoints are served against the real store when the
+//! backend exposes one (today [`crate::datastore::NoxuDatastore`]):
+//! a `PUT` decodes the request body under its `Content-Type` codec
+//! into an [`crate::proto::http::object::HttpObject`], persists a
+//! canonical codec-independent form plus its secondary indexes, and
+//! a `GET` re-encodes the stored envelope under the negotiated
+//! `Accept` codec. Because storage holds the decoded object rather
+//! than the raw bytes, a value stored as `application/json` is
+//! fetchable as `application/cbor` or `application/x-protobuf`.
+//! Backends without an object layer (the in-memory store used in
+//! tests) fall back to a trampoline through
+//! [`dynomite::embed::Datastore::dispatch`]: `GET` replies
+//! `404 Not Found`, `PUT` / `DELETE` reply `204 No Content`.
+//! List-keys and list-buckets stream their response body
+//! chunk-by-chunk via
 //! [`dynomite::embed::Datastore::list_buckets_stream`] and
 //! [`dynomite::embed::Datastore::list_keys_stream`].
 
@@ -56,6 +65,7 @@ use dynomite::embed::Datastore;
 use crate::error::RiakError;
 
 pub mod content_type;
+pub mod object;
 pub mod routes;
 
 pub use crate::proto::http::content_type::{select_codec, SUPPORTED_CONTENT_TYPES};

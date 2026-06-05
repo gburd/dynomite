@@ -163,6 +163,35 @@ impl DriverKind {
     }
 }
 
+/// Body and response encoding for the `riak_http` driver.
+///
+/// Selects the HTTP `Content-Type` of `PUT` bodies and the `Accept`
+/// header of `GET` / `PUT` requests, so a run can measure each
+/// codec the gateway negotiates.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpEncoding {
+    /// `application/json` envelope (default).
+    #[default]
+    Json,
+    /// `application/cbor` envelope.
+    Cbor,
+    /// `application/x-protobuf` envelope.
+    Protobuf,
+}
+
+impl HttpEncoding {
+    /// The HTTP media type string for this encoding.
+    #[must_use]
+    pub fn content_type(self) -> &'static str {
+        match self {
+            Self::Json => "application/json",
+            Self::Cbor => "application/cbor",
+            Self::Protobuf => "application/x-protobuf",
+        }
+    }
+}
+
 /// Driver-level configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DriverConfig {
@@ -180,6 +209,10 @@ pub struct DriverConfig {
     /// Bucket name for Riak drivers.
     #[serde(default = "default_bucket")]
     pub bucket: String,
+    /// Object encoding for the `riak_http` driver. Ignored by the
+    /// other drivers.
+    #[serde(default)]
+    pub encoding: HttpEncoding,
 }
 
 fn default_host() -> String {

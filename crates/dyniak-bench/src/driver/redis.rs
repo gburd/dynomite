@@ -637,6 +637,7 @@ mod tests {
             port: 0,
             timeout_ms: 100,
             bucket: "b".into(),
+            encoding: crate::config::HttpEncoding::Json,
         };
         let d = RedisDriver::new(&cfg).unwrap();
         let ops = d.supported_ops();

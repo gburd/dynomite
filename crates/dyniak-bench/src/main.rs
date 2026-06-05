@@ -13,8 +13,8 @@ use clap::{Parser, ValueEnum};
 use tracing::{error, info};
 
 use dyniak_bench::config::{
-    Config, DriverConfig, DriverKind as CfgDriverKind, KeyGenConfig, OpsConfig, RateConfig,
-    RpsTable, RunConfig, ValGenConfig,
+    Config, DriverConfig, DriverKind as CfgDriverKind, HttpEncoding, KeyGenConfig, OpsConfig,
+    RateConfig, RpsTable, RunConfig, ValGenConfig,
 };
 use dyniak_bench::engine::Engine;
 
@@ -31,6 +31,23 @@ impl From<CliDriverKind> for CfgDriverKind {
             CliDriverKind::Redis => Self::Redis,
             CliDriverKind::RiakPbc => Self::RiakPbc,
             CliDriverKind::RiakHttp => Self::RiakHttp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliEncoding {
+    Json,
+    Cbor,
+    Protobuf,
+}
+
+impl From<CliEncoding> for HttpEncoding {
+    fn from(c: CliEncoding) -> Self {
+        match c {
+            CliEncoding::Json => Self::Json,
+            CliEncoding::Cbor => Self::Cbor,
+            CliEncoding::Protobuf => Self::Protobuf,
         }
     }
 }
@@ -68,6 +85,11 @@ struct Cli {
     /// Bucket name (Riak drivers).
     #[arg(long)]
     bucket: Option<String>,
+
+    /// Object encoding for the `riak_http` driver: `json`, `cbor`,
+    /// or `protobuf`. Sets the request `Content-Type` and `Accept`.
+    #[arg(long, value_enum)]
+    encoding: Option<CliEncoding>,
 
     /// Op weights as `op:weight,op:weight,...`. Example
     /// `get:4,set:1`.
@@ -194,6 +216,7 @@ fn build_config(cli: &Cli) -> Result<Config, String> {
                 }),
                 timeout_ms: cli.timeout_ms.unwrap_or(5000),
                 bucket: cli.bucket.clone().unwrap_or_else(|| "bench".into()),
+                encoding: cli.encoding.map(Into::into).unwrap_or_default(),
             },
             ops: parse_ops_arg(ops)?,
             keygen: keygen_from_cli(keygen)?,
@@ -225,6 +248,9 @@ fn build_config(cli: &Cli) -> Result<Config, String> {
     }
     if let Some(b) = &cli.bucket {
         cfg.driver.bucket.clone_from(b);
+    }
+    if let Some(e) = cli.encoding {
+        cfg.driver.encoding = e.into();
     }
     if let Some(d) = cli.driver {
         cfg.driver.kind = d.into();
