@@ -179,23 +179,18 @@ fi
 # protocol-probes an external backend as before.
 if [ "$ENABLE_NOXU" = "1" ]; then
     mkdir -p "$NOXU_PATH"
-    # Clear a stale Noxu environment lock left by a hard-killed
-    # predecessor. Noxu's lock is a presence-based file
-    # (`noxu.lck`), not an flock, so the kernel does not release
-    # it when the chaos injector SIGKILLs dynomited; the next
-    # open then fails with "Environment is locked by another
-    # process" and the node never rejoins. The coordinator
-    # guarantees a single owner per host and pre-kills stale
-    # processes before every (re)start, so any lock file present
-    # at this point is always stale and safe to remove. This is
-    # the operational recovery a production operator would also
-    # perform after a `kill -9`; the underlying noxu lock-
-    # reclaim gap is recorded in
-    # docs/journal/2026-06-04-noxu-lock-after-sigkill.md.
-    if [ -e "$NOXU_PATH/noxu.lck" ]; then
-        rm -f "$NOXU_PATH/noxu.lck"
-        echo "==> MODE=unified: cleared stale noxu.lck before reopen"
-    fi
+    # Noxu guards the environment with an advisory flock(2) on
+    # `noxu.lck` (`fs2::FileExt::try_lock_exclusive`), which the
+    # kernel releases automatically when the holding process
+    # dies -- including a `SIGKILL` from the chaos injector. We
+    # therefore do NOT touch the lock file: a fresh open after a
+    # hard kill reacquires it cleanly. Deleting it would be
+    # actively harmful -- unlinking the inode another live
+    # process still holds an flock on lets a second opener flock
+    # a brand-new inode and open the same environment
+    # concurrently (two writers). The coordinator's pre-kill of
+    # stale processes is what guarantees single ownership across
+    # restarts; noxu's flock enforces it.
     echo "==> MODE=unified: in-process Noxu datastore at $NOXU_PATH (no external backend)"
 else
 # Resolve the backend binary based on EFFECTIVE_MODE. Redis and
