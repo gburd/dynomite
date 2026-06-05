@@ -22,15 +22,28 @@
 //! `_bin` indexes. Index names ending in neither suffix are accepted
 //! verbatim and treated as `_bin` for the purposes of range scans.
 
+use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use dynomite::embed::hooks::{BoxFuture, Datastore, DatastoreError, Protocol};
 use dynomite::msg::{Msg, MsgType};
+use nix::fcntl::{Flock, FlockArg};
 use noxu::{
     Cursor, CursorConfig, Database, DatabaseConfig, DatabaseEntry, Environment, EnvironmentConfig,
     Get, NoxuError, OperationStatus,
 };
+
+/// Sidecar lock file dyniak owns (distinct from noxu's own
+/// presence-based `noxu.lck`). Held with an exclusive
+/// `flock(2)` for the lifetime of the datastore so the kernel
+/// releases it automatically when the process exits -- including
+/// a hard `SIGKILL`. See [`NoxuDatastore::open_with_db_name`].
+const OWNER_LOCK_FILE: &str = ".noxu-owner.lock";
+/// Noxu's own environment lock file. It is presence-based (a
+/// hard kill leaves it behind), which is why we reclaim it under
+/// the flock-guarded owner lock.
+const NOXU_ENV_LOCK_FILE: &str = "noxu.lck";
 
 /// Storage prefix for primary K/V records.
 const PRIMARY_TAG: &[u8] = b"K\0";
@@ -59,6 +72,24 @@ pub enum NoxuDatastoreError {
     /// operation on the database.
     #[error("noxu: {0}")]
     Noxu(#[from] NoxuError),
+    /// The Noxu environment directory is held by another live
+    /// process. The owner lock (`.noxu-owner.lock`) is currently
+    /// flocked, so a concurrent `dynomited` already owns this
+    /// path. Distinct from a stale `noxu.lck` left by a dead
+    /// predecessor, which is reclaimed automatically.
+    #[error("noxu: environment at {path} is owned by another live process")]
+    EnvironmentBusy {
+        /// The environment directory.
+        path: String,
+    },
+    /// I/O failure managing the owner lock file.
+    #[error("noxu: owner-lock io at {path}: {source}")]
+    OwnerLock {
+        /// The owner-lock file path.
+        path: String,
+        /// Underlying I/O error.
+        source: std::io::Error,
+    },
     /// Bucket or index_name contains the structural separator
     /// byte. The 2i path uses byte 0 to separate the bucket and
     /// index_name fields; bucket names and index names must not
@@ -106,6 +137,13 @@ struct Inner {
     /// forward 2i, reverse 2i). Distinct prefixes keep the three
     /// keyspaces disjoint.
     db: Mutex<Database>,
+    /// Exclusive `flock(2)` on the sidecar owner-lock file. Held
+    /// for the lifetime of the datastore; the kernel releases it
+    /// when the process exits (graceful or `SIGKILL`), so the
+    /// next opener can detect a dead predecessor and reclaim a
+    /// stale `noxu.lck`. Never read after construction; the
+    /// `Flock` guard's `Drop` releases the lock.
+    _owner_lock: Flock<File>,
 }
 
 /// Encoded form of an index value the caller asked us to store.
@@ -141,6 +179,63 @@ impl NoxuDatastore {
     /// database name. Used by tests that need disjoint environments
     /// in the same process.
     pub fn open_with_db_name(path: &Path, db_name: &str) -> Result<Self, NoxuDatastoreError> {
+        // Acquire dyniak's own flock-based owner lock before
+        // touching noxu. Noxu guards the environment with a
+        // presence-based `noxu.lck` that a hard kill leaves
+        // behind, so a SIGKILLed predecessor would wedge every
+        // subsequent open with "Environment is locked by another
+        // process". The owner lock is a real `flock(2)`: the
+        // kernel releases it on process death, so acquiring it
+        // proves no live owner remains, at which point any
+        // leftover `noxu.lck` is provably stale and safe to
+        // remove. A genuinely concurrent opener fails the flock
+        // and gets EnvironmentBusy instead of corrupting state.
+        std::fs::create_dir_all(path).map_err(|e| NoxuDatastoreError::OwnerLock {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+        let owner_lock_path = path.join(OWNER_LOCK_FILE);
+        let owner_file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&owner_lock_path)
+            .map_err(|e| NoxuDatastoreError::OwnerLock {
+                path: owner_lock_path.display().to_string(),
+                source: e,
+            })?;
+        let owner_lock = match Flock::lock(owner_file, FlockArg::LockExclusiveNonblock) {
+            Ok(guard) => guard,
+            Err((_file, _errno)) => {
+                return Err(NoxuDatastoreError::EnvironmentBusy {
+                    path: path.display().to_string(),
+                });
+            }
+        };
+
+        // We hold the exclusive owner lock: no other live process
+        // owns this environment. Reclaim a stale noxu.lck left by
+        // a hard-killed predecessor before opening.
+        let env_lock_path = path.join(NOXU_ENV_LOCK_FILE);
+        if env_lock_path.exists() {
+            if let Err(e) = std::fs::remove_file(&env_lock_path) {
+                // Not fatal on its own; Environment::open will
+                // surface the real error if the lock truly
+                // blocks. Record and continue.
+                tracing::warn!(
+                    path = %env_lock_path.display(),
+                    error = %e,
+                    "could not remove stale noxu.lck before open"
+                );
+            } else {
+                tracing::info!(
+                    path = %env_lock_path.display(),
+                    "reclaimed stale noxu.lck (no live owner held the flock)"
+                );
+            }
+        }
+
         let env_config = EnvironmentConfig::new(path.to_path_buf())
             .with_allow_create(true)
             .with_transactional(false);
@@ -155,6 +250,7 @@ impl NoxuDatastore {
             inner: Arc::new(Inner {
                 _env: Mutex::new(env),
                 db: Mutex::new(db),
+                _owner_lock: owner_lock,
             }),
         })
     }
@@ -751,6 +847,44 @@ pub fn encode_index_value_for_test(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn reopen_reclaims_stale_noxu_lck() {
+        // Simulate a hard-killed predecessor: open, drop WITHOUT
+        // the owner lock being released cleanly, then plant a
+        // stale noxu.lck and confirm a fresh open reclaims it.
+        let dir = TempDir::new().expect("tempdir");
+        {
+            let ds = NoxuDatastore::open_in(dir.path()).expect("first open");
+            ds.put(b"k", b"v").expect("put");
+        } // datastore dropped: owner flock released by the kernel
+
+        // Plant a stale presence-based noxu.lck as a hard kill
+        // would leave behind.
+        let stale = dir.path().join(NOXU_ENV_LOCK_FILE);
+        std::fs::write(&stale, b"").expect("plant stale lock");
+        assert!(stale.exists());
+
+        // A fresh open must reclaim the stale lock and succeed,
+        // preserving the data written before the "crash".
+        let ds = NoxuDatastore::open_in(dir.path()).expect("reopen reclaims stale lock");
+        assert_eq!(ds.get(b"k").unwrap().as_deref(), Some(&b"v"[..]));
+    }
+
+    #[test]
+    fn concurrent_open_is_rejected_while_owner_lives() {
+        // While a live datastore holds the owner flock, a second
+        // open of the same path must fail with EnvironmentBusy
+        // (not silently corrupt or block forever).
+        let dir = TempDir::new().expect("tempdir");
+        let _first = NoxuDatastore::open_in(dir.path()).expect("first open");
+        let second = NoxuDatastore::open_in(dir.path());
+        match second {
+            Err(NoxuDatastoreError::EnvironmentBusy { .. }) => {}
+            Err(other) => panic!("expected EnvironmentBusy, got {other:?}"),
+            Ok(_) => panic!("expected EnvironmentBusy, got Ok (second open succeeded)"),
+        }
+    }
 
     #[test]
     fn put_get_delete_round_trips() {
