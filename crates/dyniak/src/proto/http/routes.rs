@@ -49,6 +49,7 @@ use dynomite::embed::Datastore;
 use dynomite::msg::{Msg, MsgType};
 
 use crate::proto::http::content_type::{select_codec, SUPPORTED_CONTENT_TYPES};
+use crate::txn::{HttpTxnRequest, HttpTxnResponse, TransactionalStore, TxnOutcome, TxnStoreError};
 
 /// Body type the gateway emits.
 ///
@@ -135,6 +136,11 @@ enum Route<'a> {
     /// `POST /mapred` -- submit a MapReduce job. Added by the
     /// v0.0.3 MapReduce slice.
     MapRed,
+    /// `POST /transactions` (cluster-wide) or
+    /// `POST /buckets/{bucket}/transactions` (bucket-scoped) --
+    /// submit a multi-key atomic transaction batch. A dyniak
+    /// extension beyond Riak's per-key eventual consistency.
+    Transaction { bucket: Option<&'a str> },
 }
 
 impl<'a> Route<'a> {
@@ -158,6 +164,8 @@ impl<'a> Route<'a> {
             ("GET", ["buckets", b, "props"]) => Some(Self::GetProps { bucket: b }),
             ("PUT", ["buckets", b, "props"]) => Some(Self::SetProps { bucket: b }),
             ("POST", ["mapred"]) => Some(Self::MapRed),
+            ("POST", ["transactions"]) => Some(Self::Transaction { bucket: None }),
+            ("POST", ["buckets", b, "transactions"]) => Some(Self::Transaction { bucket: Some(b) }),
             _ => None,
         }
     }
@@ -218,6 +226,9 @@ async fn handle_route(
         Route::GetProps { bucket } => get_props_response(bucket, headers),
         Route::SetProps { bucket } => set_props_response(bucket, headers, &body),
         Route::MapRed => mapred_response(headers, &body),
+        Route::Transaction { bucket } => {
+            transaction_response(bucket, headers, &body, datastore.as_ref())
+        }
     }
 }
 
@@ -408,6 +419,135 @@ fn set_props_response(_bucket: &str, headers: &HeaderMap, body: &Bytes) -> Respo
         .header("Server", SERVER_NAME)
         .body(buffered_body(Bytes::new()))
         .expect("invariant: set-props response builder is well-formed")
+}
+
+// ------------------------------------------------------------------
+// Multi-key transaction route handler.
+// ------------------------------------------------------------------
+
+/// Run a multi-key atomic transaction submitted via
+/// `POST /transactions` or `POST /buckets/{bucket}/transactions`.
+///
+/// The body is a JSON [`HttpTxnRequest`]. The handler lowers it into
+/// a [`crate::txn::TxnBatch`], hands it to the backend's
+/// [`TransactionalStore`] (probed for via
+/// [`dynomite::embed::Datastore::as_any`]), and renders the
+/// [`TxnOutcome`] as a JSON [`HttpTxnResponse`]. A committed batch
+/// replies `200 OK`; a rolled-back batch replies `409 Conflict`.
+/// When the configured datastore is not transactional the handler
+/// replies `501 Not Implemented`.
+///
+/// For the bucket-scoped route every operation must target the URL
+/// bucket; a mismatch is a `400 Bad Request`.
+fn transaction_response(
+    bucket: Option<&str>,
+    headers: &HeaderMap,
+    body: &Bytes,
+    datastore: &dyn Datastore,
+) -> Response<ResponseBody> {
+    let req_ct = header_str_opt(headers, CONTENT_TYPE);
+    let ct = req_ct.unwrap_or("application/json");
+    if super::content_type::canonicalize(ct) != Some("application/json") {
+        return text_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "transactions require Content-Type: application/json",
+        );
+    }
+    if body.is_empty() {
+        return text_response(
+            StatusCode::BAD_REQUEST,
+            "transaction body must not be empty",
+        );
+    }
+    let request: HttpTxnRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return text_response(StatusCode::BAD_REQUEST, &format!("transaction decode: {e}"));
+        }
+    };
+    let batch = request.into_batch();
+    if let Some(b) = bucket {
+        if batch.ops.iter().any(|op| op.bucket() != b.as_bytes()) {
+            return text_response(
+                StatusCode::BAD_REQUEST,
+                "every operation must target the bucket named in the URL",
+            );
+        }
+    }
+    let Some(store) = txn_store(datastore) else {
+        return text_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "the configured datastore does not support transactions",
+        );
+    };
+    match store.execute_batch(&batch) {
+        Ok(outcome) => txn_outcome_response(&outcome),
+        Err(TxnStoreError::EmptyBatch) => {
+            text_response(StatusCode::BAD_REQUEST, "empty transaction batch")
+        }
+        Err(e @ TxnStoreError::Conflict(_)) => txn_error_response(StatusCode::CONFLICT, &e),
+        Err(e @ TxnStoreError::Backend(_)) => {
+            txn_error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)
+        }
+    }
+}
+
+/// Probe `datastore` for a multi-key [`TransactionalStore`].
+///
+/// Returns `Some` only when the crate is built with the `noxu`
+/// feature and the concrete backend is a
+/// [`crate::datastore::NoxuDatastore`]. The probe goes through
+/// [`dynomite::embed::Datastore::as_any`] so the HTTP layer never
+/// names the transactional backend on its own trait surface.
+fn txn_store(datastore: &dyn Datastore) -> Option<&dyn TransactionalStore> {
+    #[cfg(feature = "noxu")]
+    {
+        if let Some(any) = datastore.as_any() {
+            if let Some(noxu) = any.downcast_ref::<crate::datastore::NoxuDatastore>() {
+                return Some(noxu as &dyn TransactionalStore);
+            }
+        }
+        None
+    }
+    #[cfg(not(feature = "noxu"))]
+    {
+        let _ = datastore;
+        None
+    }
+}
+
+/// Render a [`TxnOutcome`] as a JSON [`HttpTxnResponse`]. Committed
+/// outcomes are `200 OK`; aborted (rolled-back) outcomes are
+/// `409 Conflict`.
+fn txn_outcome_response(outcome: &TxnOutcome) -> Response<ResponseBody> {
+    let status = match outcome {
+        TxnOutcome::Committed { .. } => StatusCode::OK,
+        TxnOutcome::Aborted { .. } => StatusCode::CONFLICT,
+    };
+    let payload = HttpTxnResponse::from_outcome(outcome);
+    let body = serde_json::to_vec(&payload).unwrap_or_else(|_| b"{}".to_vec());
+    json_response(status, body)
+}
+
+/// Render a [`TxnStoreError`] as a JSON [`HttpTxnResponse`] with the
+/// `aborted` shape, carrying the engine's own message as the abort
+/// reason.
+fn txn_error_response(status: StatusCode, err: &TxnStoreError) -> Response<ResponseBody> {
+    let payload = HttpTxnResponse::from_outcome(&TxnOutcome::Aborted {
+        reason: err.to_string(),
+    });
+    let body = serde_json::to_vec(&payload).unwrap_or_else(|_| b"{}".to_vec());
+    json_response(status, body)
+}
+
+/// Build a buffered `application/json` response with `status`.
+fn json_response(status: StatusCode, body: Vec<u8>) -> Response<ResponseBody> {
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "application/json")
+        .header("Server", SERVER_NAME)
+        .body(buffered_body(Bytes::from(body)))
+        .expect("invariant: json response builder is well-formed")
 }
 
 // ------------------------------------------------------------------
@@ -1475,6 +1615,145 @@ mod tests {
             &Method::POST,
             &headers,
             Bytes::from_static(b"not json"),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn route_parses_transactions() {
+        let r = Route::parse(&Method::POST, "/transactions", None).expect("txn");
+        assert_eq!(r, Route::Transaction { bucket: None });
+        let r = Route::parse(&Method::POST, "/buckets/u/transactions", None).expect("bucket txn");
+        assert_eq!(r, Route::Transaction { bucket: Some("u") });
+    }
+
+    #[test]
+    fn route_get_transactions_misses() {
+        // The transaction endpoint is POST-only.
+        assert!(Route::parse(&Method::GET, "/transactions", None).is_none());
+    }
+
+    #[tokio::test]
+    async fn transaction_on_non_transactional_backend_returns_501() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        let body = br#"{"operations":[{"op":"put","bucket":"b","key":"k","value":"v"}]}"#;
+        let resp = handle_route(
+            Route::Transaction { bucket: None },
+            &Method::POST,
+            &headers,
+            Bytes::copy_from_slice(body),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn transaction_empty_body_returns_400() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        let resp = handle_route(
+            Route::Transaction { bucket: None },
+            &Method::POST,
+            &headers,
+            Bytes::new(),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn transaction_unsupported_content_type_returns_415() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/xml".parse().unwrap());
+        let resp = handle_route(
+            Route::Transaction { bucket: None },
+            &Method::POST,
+            &headers,
+            Bytes::from_static(b"<doc/>"),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[cfg(feature = "noxu")]
+    #[tokio::test]
+    async fn transaction_commits_and_aborts_against_noxu() {
+        use crate::datastore::NoxuDatastore;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("tempdir");
+        let ds: Arc<dyn Datastore> =
+            Arc::new(NoxuDatastore::open_transactional(dir.path()).expect("open"));
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+
+        // Commit a three-put batch; the response is 200 + committed.
+        let body = br#"{"operations":[
+            {"op":"put","bucket":"users","key":"alice","value":"a"},
+            {"op":"put","bucket":"users","key":"bob","value":"b"},
+            {"op":"put","bucket":"users","key":"carol","value":"c"}
+        ]}"#;
+        let resp = handle_route(
+            Route::Transaction { bucket: None },
+            &Method::POST,
+            &headers,
+            Bytes::copy_from_slice(body),
+            Arc::clone(&ds),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(parsed["result"], "committed");
+        assert_eq!(parsed["operations"], 3);
+
+        // An aborting batch is 409 + aborted and leaves no writes.
+        let body = br#"{"abort":true,"operations":[
+            {"op":"put","bucket":"users","key":"dave","value":"d"}
+        ]}"#;
+        let resp = handle_route(
+            Route::Transaction { bucket: None },
+            &Method::POST,
+            &headers,
+            Bytes::copy_from_slice(body),
+            Arc::clone(&ds),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(parsed["result"], "aborted");
+
+        // Bucket-scoped route rejects a mismatched bucket with 400.
+        let body = br#"{"operations":[
+            {"op":"put","bucket":"other","key":"k","value":"v"}
+        ]}"#;
+        let resp = handle_route(
+            Route::Transaction {
+                bucket: Some("users"),
+            },
+            &Method::POST,
+            &headers,
+            Bytes::copy_from_slice(body),
             ds,
         )
         .await;

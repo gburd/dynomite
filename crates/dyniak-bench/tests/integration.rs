@@ -174,6 +174,22 @@ fn redis_smoke() {
 }
 
 #[test]
+fn riak_txn_example_config_parses() {
+    // The shipped transaction-workload example must stay loadable and
+    // valid: a `riak_http` driver with a `txn` op weight.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("riak-txn.toml");
+    let cfg = Config::from_path(&path).expect("riak-txn.toml must parse and validate");
+    assert_eq!(cfg.driver.kind, DriverKind::RiakHttp);
+    let weights = cfg.ops.weighted();
+    assert!(
+        weights.iter().any(|(op, w)| op == "txn" && *w > 0),
+        "riak-txn.toml must weight the txn op: {weights:?}"
+    );
+}
+
+#[test]
 fn keygen_uniform_distributes() {
     let mut g = KeyGen::UniformInt {
         max: 64,

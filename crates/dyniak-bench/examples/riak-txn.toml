@@ -1,0 +1,47 @@
+# Multi-key atomic transaction workload for the dyniak Riak HTTP
+# gateway.
+#
+# dyniak extends Riak's per-key, eventually-consistent model with
+# atomic multi-key transactions exposed over HTTP at
+#   POST /transactions
+#   POST /buckets/<bucket>/transactions
+#
+# The `txn` op (RiakHttp driver) packs several puts into one batch and
+# submits it atomically; a fraction of batches deliberately abort so
+# the workload exercises both the commit and the rollback paths. Point
+# `driver.host` / `driver.port` at a `dynomited` started with a
+# `data_store: dyniak` pool (transactional Noxu backend) and its Riak
+# HTTP listener enabled.
+#
+# Build the tool with the HTTP driver compiled in:
+#   cargo run -p dyniak-bench --features http -- --config crates/dyniak-bench/examples/riak-txn.toml
+
+[run]
+duration = "30s"
+concurrent = 8
+rate = "max"
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "riak_http"
+host = "127.0.0.1"
+port = 8098
+timeout_ms = 5000
+bucket = "txn_bench"
+
+# Mix atomic transaction batches with single-key reads so the run
+# shows both the per-op K/V latency and the multi-key transaction
+# latency side by side.
+[ops]
+txn = 3
+get = 1
+
+[keygen]
+kind = "uniform"
+max = 100000
+prefix = "k_"
+
+[valgen]
+kind = "fixed"
+size = 128

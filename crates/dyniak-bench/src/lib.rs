@@ -29,6 +29,7 @@ pub mod keygen;
 pub mod plot;
 pub mod report;
 pub mod stats;
+pub mod txn_workload;
 pub mod valgen;
 
 pub use config::{Config, DriverKind, OpsConfig, RateConfig, RunConfig};

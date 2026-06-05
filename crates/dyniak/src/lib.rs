@@ -61,6 +61,7 @@ pub mod datastore;
 pub mod error;
 pub mod proto;
 pub mod server;
+pub mod txn;
 
 pub use crate::error::RiakError;
 pub use crate::proto::http::{serve_http, serve_http_tls};
@@ -106,3 +107,11 @@ pub use crate::replication::{
     RingView,
 };
 pub use crate::router::{BucketRouter, PeerOp, PeerOutbound, RouteDecision, RoutingHooks};
+
+// Multi-key transaction surface -- dyniak extension beyond Riak's
+// per-key eventual consistency. The HTTP gateway exposes it through
+// the `POST /transactions` and `POST /buckets/{bucket}/transactions`
+// routes wired into [`serve_http`]; no separate server entry point is
+// needed. The PBC `DynRpbTxn*` extension is a tracked follow-up (see
+// `docs/journal/2026-06-05-dyniak-xa.md`).
+pub use crate::txn::{TransactionalStore, TxnBatch, TxnOp, TxnOutcome, TxnStoreError};

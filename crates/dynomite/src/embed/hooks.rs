@@ -125,6 +125,19 @@ pub trait Datastore: Send + Sync {
     /// across tokio tasks freely.
     fn dispatch(&self, req: Msg) -> BoxFuture<'_, Result<Msg, DatastoreError>>;
 
+    /// Optional downcast hook for transports that need a concrete
+    /// backend capability the trait surface does not express.
+    ///
+    /// The default returns `None`, so an existing impl that has no
+    /// extra capability does not have to override anything. A
+    /// backend that wants to expose itself for downcasting (for
+    /// example the Riak multi-key transaction store, which a
+    /// transport probes for via [`std::any::Any::downcast_ref`])
+    /// returns `Some(self)`.
+    fn as_any(&self) -> Option<&(dyn std::any::Any + 'static)> {
+        None
+    }
+
     /// Stream the names of every bucket the datastore is aware of,
     /// one [`bytes::Bytes`] per bucket.
     ///

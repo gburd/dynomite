@@ -11,5 +11,14 @@
 #[cfg(feature = "noxu")]
 pub mod noxu;
 
+// Cross-node X/Open XA two-phase commit. Local-only realisation
+// today: the coordinator and its participants all live in one
+// process (see the module docs for the multi-node boundary).
+#[cfg(feature = "noxu")]
+pub mod xa;
+
 #[cfg(feature = "noxu")]
 pub use crate::datastore::noxu::{NoxuDatastore, NoxuDatastoreError};
+
+#[cfg(feature = "noxu")]
+pub use crate::datastore::xa::{XaCoordinator, XaParticipant};
