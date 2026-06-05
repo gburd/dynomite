@@ -59,22 +59,22 @@ DEFAULT_RUNS_DIR = REPO_ROOT / "target" / "chaos-multi-host"
 DEFAULT_OUT_DIR = REPO_ROOT / "dist" / "chaos-reports" / "v0.1.0"
 
 RUN_ID_PATTERN = re.compile(
-    r"^pass(?P<pass_num>\d+)-(?P<mode>redis|memcache|riak)-"
+    r"^pass(?P<pass_num>\d+)-(?P<mode>redis|memcache|riak|combined)-"
     r"(?P<stamp>\d{8}-\d{6}Z)$"
 )
 SIMPLE_RUN_ID_PATTERN = re.compile(
     r"^pass(?P<pass_num>\d+)-(?P<stamp>\d{8}-\d{6}Z)$"
 )
 
-# Workload-driver API suffixes. MODE=unified launches one driver
-# per client wire protocol against a single shared in-process
-# Noxu store, writing ``workload-<label>-<api>.ndjson`` per API.
+# Workload-driver API suffixes. MODE=combined launches one driver
+# per co-located dynomited instance (redis, memcache, riak),
+# writing ``workload-<label>-<api>.ndjson`` per instance.
 # Single-driver modes keep the legacy unsuffixed
 # ``workload-<label>.ndjson``. The report sums across all of a
 # host's driver files for the per-host total and breaks the load
 # down per API. ``redis`` covers RESP + the RediSearch FT.* /
-# FT.SUG* surface (the ``ft`` / ``ftsug`` op classes); ``riak``
-# is the Riak PBC driver.
+# FT.SUG* surface (the ``ft`` / ``ftsug`` op classes); ``memcache``
+# is the memcache ASCII driver; ``riak`` is the Riak PBC driver.
 WORKLOAD_API_SUFFIXES = ("redis", "riak", "memcache")
 
 
@@ -115,7 +115,7 @@ def _split_workload_label(stem: str):
     ``workload-dc-floki`` or ``workload-dc-floki-redis``. Returns
     ``(label, api)`` where ``api`` is ``None`` for the legacy
     single-driver shape or one of ``WORKLOAD_API_SUFFIXES`` for a
-    per-protocol unified driver file. Labels themselves contain
+    per-instance combined driver file. Labels themselves contain
     hyphens (``dc-floki``), so we strip only a trailing
     ``-<known-api>`` rather than splitting on the last hyphen.
     """
@@ -131,9 +131,9 @@ def discover_host_dirs(run_dir: Path) -> dict:
 
     A host's logs live in ``<host>-logs/`` next to ``coordinator.log``.
     The DC label is reconstructed from the workload ndjson filename
-    (``workload-dc-<label>.ndjson`` or, for unified runs, a
-    per-API ``workload-dc-<label>-<api>.ndjson``) so renamed host
-    dirs do not desync the report.
+    (``workload-dc-<label>.ndjson`` or, for combined runs, a
+    per-instance ``workload-dc-<label>-<api>.ndjson``) so renamed
+    host dirs do not desync the report.
     """
     hosts = {}
     for sub in sorted(run_dir.iterdir()):
@@ -155,9 +155,9 @@ def discover_workload_files(host_dir: Path, label: str):
 
     ``api`` is ``None`` for the legacy single-driver
     ``workload-<label>.ndjson`` file, or an API name for each
-    per-protocol unified driver file present
+    per-instance combined driver file present
     (``workload-<label>-<api>.ndjson``). Only existing files are
-    returned. A non-unified run yields a single ``(None, path)``
+    returned. A non-combined run yields a single ``(None, path)``
     entry, preserving backward compatibility.
     """
     out = []
@@ -498,10 +498,10 @@ def render_report(run_dir: Path) -> str:
 
     # Aggregate per-host workload + chaos data once. Each host may
     # have one workload file (legacy single-driver modes) or
-    # several (MODE=unified: one per client wire protocol against
-    # the shared in-process Noxu store). We sum counts/failures
+    # several (MODE=combined: one per co-located dynomited
+    # instance -- redis, memcache, riak). We sum counts/failures
     # across all of a host's driver files for the per-host total
-    # and keep a per-API breakdown for the unified section.
+    # and keep a per-API breakdown for the combined section.
     per_host = {}
     grand_first_ts = None
     grand_last_ts = None
@@ -608,16 +608,17 @@ def render_report(run_dir: Path) -> str:
     )
     lines.append("")
 
-    # ---- 2b. per-API breakdown (unified runs) ----
-    # MODE=unified drives one shared in-process Noxu store through
-    # several client wire protocols at once. When per-API driver
-    # files are present we break the per-host load down by API so
-    # the operator can see, e.g., that the Redis RESP surface and
-    # the Riak PBC surface both stayed healthy against the same
-    # store. The ft / ftsug columns surface the RediSearch FT.* /
-    # FT.SUG* sub-classes that already live inside the redis
-    # driver's counts. The section is omitted entirely for
-    # non-unified runs (only the legacy unsuffixed file present).
+    # ---- 2b. per-API breakdown (combined runs) ----
+    # MODE=combined runs three independent dynomited instances per
+    # host (redis, memcache, riak), each on its own port band and
+    # driven by its own workload. When per-API driver files are
+    # present we break the per-host load down by instance so the
+    # operator can see, e.g., that the Redis, memcache, and Riak
+    # PBC surfaces all stayed healthy. The ft / ftsug columns
+    # surface the RediSearch FT.* / FT.SUG* sub-classes that
+    # already live inside the redis driver's counts. The section
+    # is omitted entirely for non-combined runs (only the legacy
+    # unsuffixed file present).
     any_api = any(
         any(api is not None for api in per_host[label]["by_api"])
         for label in host_labels
@@ -638,46 +639,55 @@ def render_report(run_dir: Path) -> str:
         lines.append("## Per-API breakdown")
         lines.append("")
         lines.append(
-            "Per-host load split by client wire protocol against the "
-            "shared in-process Noxu datastore. `ft` / `ftsug` are the "
-            "RediSearch sub-classes inside the redis driver's counts."
+            "Per-host load split by co-located dynomited instance "
+            "(redis / memcache / riak), each on its own port band. "
+            "`ft` / `ftsug` are the RediSearch sub-classes inside the "
+            "redis driver's counts."
         )
         lines.append("")
         lines.append(
-            "| host | redis ok | redis fail | riak ok | riak fail | "
-            "ft ok | ftsug ok |"
+            "| host | redis ok | redis fail | memcache ok | memcache fail | "
+            "riak ok | riak fail | ft ok | ftsug ok |"
         )
-        lines.append("|---|---:|---:|---:|---:|---:|---:|")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
         agg = {
-            "redis_ok": 0, "redis_fail": 0, "riak_ok": 0,
-            "riak_fail": 0, "ft_ok": 0, "ftsug_ok": 0,
+            "redis_ok": 0, "redis_fail": 0, "memcache_ok": 0,
+            "memcache_fail": 0, "riak_ok": 0, "riak_fail": 0,
+            "ft_ok": 0, "ftsug_ok": 0,
         }
+        empty_api = {"counts": collections.Counter(),
+                     "failures": collections.Counter()}
         for label in host_labels:
             by_api = per_host[label]["by_api"]
-            redis = by_api.get("redis", {"counts": collections.Counter(),
-                                         "failures": collections.Counter()})
-            riak = by_api.get("riak", {"counts": collections.Counter(),
-                                       "failures": collections.Counter()})
+            redis = by_api.get("redis", empty_api)
+            memcache = by_api.get("memcache", empty_api)
+            riak = by_api.get("riak", empty_api)
             redis_ok = _ok(redis["counts"])
             redis_fail = _fail(redis["failures"])
+            memcache_ok = _ok(memcache["counts"])
+            memcache_fail = _fail(memcache["failures"])
             riak_ok = _ok(riak["counts"])
             riak_fail = _fail(riak["failures"])
             ft_ok = _class_ok(redis["counts"], "ft")
             ftsug_ok = _class_ok(redis["counts"], "ftsug")
             agg["redis_ok"] += redis_ok
             agg["redis_fail"] += redis_fail
+            agg["memcache_ok"] += memcache_ok
+            agg["memcache_fail"] += memcache_fail
             agg["riak_ok"] += riak_ok
             agg["riak_fail"] += riak_fail
             agg["ft_ok"] += ft_ok
             agg["ftsug_ok"] += ftsug_ok
             lines.append(
                 f"| `{label}` | {fmt_int(redis_ok)} | {fmt_int(redis_fail)} | "
+                f"{fmt_int(memcache_ok)} | {fmt_int(memcache_fail)} | "
                 f"{fmt_int(riak_ok)} | {fmt_int(riak_fail)} | "
                 f"{fmt_int(ft_ok)} | {fmt_int(ftsug_ok)} |"
             )
         lines.append(
             f"| **aggregate** | **{fmt_int(agg['redis_ok'])}** | "
-            f"**{fmt_int(agg['redis_fail'])}** | **{fmt_int(agg['riak_ok'])}** | "
+            f"**{fmt_int(agg['redis_fail'])}** | **{fmt_int(agg['memcache_ok'])}** | "
+            f"**{fmt_int(agg['memcache_fail'])}** | **{fmt_int(agg['riak_ok'])}** | "
             f"**{fmt_int(agg['riak_fail'])}** | **{fmt_int(agg['ft_ok'])}** | "
             f"**{fmt_int(agg['ftsug_ok'])}** |"
         )

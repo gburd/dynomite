@@ -112,7 +112,7 @@ def _make_run_dir(root, run_id, hosts, mode="redis", coord_lines=None,
 
     ``workload_api_per_host`` maps label -> {api_name: rows},
     producing per-API ``workload-<label>-<api>.ndjson`` files
-    (the MODE=unified layout). When given for a host, the plain
+    (the MODE=combined layout). When given for a host, the plain
     ``workload-<label>.ndjson`` file is NOT written for that host
     so the report exercises the suffixed-only path.
     """
@@ -449,9 +449,12 @@ class FullRunSynthesisTests(unittest.TestCase):
         self.assertIn("`abcdef1234567`", md)
 
 
-class UnifiedPerApiTests(unittest.TestCase):
-    """MODE=unified: two driver files per host (redis + riak)
-    against one shared in-process Noxu store.
+class CombinedPerApiTests(unittest.TestCase):
+    """MODE=combined: per-API driver files per host (redis +
+    memcache + riak), each instance on its own port band.
+    These cases cover the redis + riak subset; the memcache
+    columns are exercised as zero here and non-zero in the
+    full combined run.
 
     Asserts the report (1) discovers the suffixed driver files
     and reconstructs the host label correctly, (2) sums ok/fail
@@ -462,7 +465,7 @@ class UnifiedPerApiTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="chaos-unified-test-"))
+        self.tmp = Path(tempfile.mkdtemp(prefix="chaos-combined-test-"))
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -498,8 +501,8 @@ class UnifiedPerApiTests(unittest.TestCase):
             {"riak/Timeout": 3},
         )]
         run_dir = _make_run_dir(
-            self.tmp, "pass9-unified-20261201-000000Z", [label],
-            mode="unified",
+            self.tmp, "pass9-combined-20261201-000000Z", [label],
+            mode="combined",
             workload_api_per_host={label: {"redis": redis_rows,
                                            "riak": riak_rows}},
         )
@@ -533,7 +536,7 @@ class UnifiedPerApiTests(unittest.TestCase):
         if row:
             self.assertEqual(
                 row.groups(),
-                ("260", "5", "200", "3", "50", "10"),
+                ("260", "5", "0", "0", "200", "3"),
             )
 
         # Aggregate breakdown row mirrors the single host.
@@ -546,10 +549,10 @@ class UnifiedPerApiTests(unittest.TestCase):
         if agg:
             self.assertEqual(
                 agg.groups(),
-                ("260", "5", "200", "3", "50", "10"),
+                ("260", "5", "0", "0", "200", "3"),
             )
 
-    def test_breakdown_section_omitted_for_non_unified(self):
+    def test_breakdown_section_omitted_for_non_combined(self):
         """A legacy single-file run never grows the breakdown."""
         hosts = ["dc-floki"]
         wrows = {h: _make_workload_rows(h, "redis", 10, 0, 4) for h in hosts}
@@ -572,8 +575,8 @@ class UnifiedPerApiTests(unittest.TestCase):
                 "riak": [self._row(h, "riak", {"riak/Put": 40}, {})],
             }
         run_dir = _make_run_dir(
-            self.tmp, "pass9-unified-20261203-000000Z", hosts,
-            mode="unified", workload_api_per_host=api_rows,
+            self.tmp, "pass9-combined-20261203-000000Z", hosts,
+            mode="combined", workload_api_per_host=api_rows,
         )
         md = GR.render_report(run_dir)
         # Aggregate redis ok = (50+10)*2 = 120; riak ok = 40*2 = 80;
@@ -587,7 +590,7 @@ class UnifiedPerApiTests(unittest.TestCase):
         if agg:
             self.assertEqual(
                 agg.groups(),
-                ("120", "0", "80", "0", "20", "0"),
+                ("120", "0", "0", "0", "80", "0"),
             )
 
 

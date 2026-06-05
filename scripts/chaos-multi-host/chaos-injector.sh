@@ -23,7 +23,7 @@
 #
 # When MODE_FAULTS is unset (the default), the injector runs the
 # legacy three-timer process-only schedule unchanged. When it is
-# set explicitly (even to MODE_FAULTS=process) the unified
+# set explicitly (even to MODE_FAULTS=process) the multi-class
 # scheduler is used: every 60-180 s the injector picks one fault
 # uniformly across the enabled classes, runs it, and goes back
 # to sleep.
@@ -186,9 +186,14 @@ base64_file() {
 # parse_chaos_events) keep working without a schema split.
 emit_restart_failed_detail() {
     local rc="$1"
+    local inst="${2:-}"
+    local log_tag="$DC_NAME"
+    if [ -n "$inst" ]; then
+        log_tag="$DC_NAME-$inst"
+    fi
     local stderr_b64 log_b64 ts
-    stderr_b64=$(base64_file "$LOGS/dynomited-$DC_NAME.stderr")
-    log_b64=$(base64_file "$LOGS/dynomited-$DC_NAME.log")
+    stderr_b64=$(base64_file "$LOGS/dynomited-$log_tag.stderr")
+    log_b64=$(base64_file "$LOGS/dynomited-$log_tag.log")
     ts=$(stamp)
     printf '{"event":"restart_failed_detail","kind":"restart_failed_detail","host":"%s","rc":%d,"stderr_tail":"%s","log_tail":"%s","timestamp":"%s","ts":"%s"}\n' \
         "$DC_NAME" "$rc" "$stderr_b64" "$log_b64" "$ts" "$ts" \
@@ -285,6 +290,86 @@ redis_pid() {
         esac
     fi
     return 1
+}
+
+# ---------- MODE=combined process-fault fan-out ----------
+#
+# In MODE=combined the host runs three independent dynomited
+# instances, one per backend (redis, memcache, riak), each under
+# its own run subdir ($RUN/<instance>/) on a distinct port band.
+# The process faults must hit all three; the helpers below
+# enumerate the per-instance pidfiles and live pids so the
+# pause / kill / recovery paths can fan a signal across them.
+COMBINED_INSTANCES="redis memcache riak"
+
+# combined_pidfiles: echo the dynomited pidfile path for every
+# combined instance, one per line.
+combined_pidfiles() {
+    local inst
+    for inst in $COMBINED_INSTANCES; do
+        printf '%s\n' "$RUN/$inst/dynomited.pid"
+    done
+}
+
+# combined_live_pids: echo the pid of every combined instance
+# whose pidfile names a process that is currently alive, one per
+# line. Missing pidfiles and dead pids are skipped silently.
+combined_live_pids() {
+    local pf pid
+    while IFS= read -r pf; do
+        [ -f "$pf" ] || continue
+        pid=$(cat "$pf" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            printf '%s\n' "$pid"
+        fi
+    done < <(combined_pidfiles)
+}
+
+# signal_all_dynomited <sig>: deliver <sig> to every dynomited on
+# this host. In MODE=combined that is every live combined
+# instance; in every other mode it delegates to
+# kill_both_proxies (the Rust dynomited plus, when
+# INJECT_C_PROXY_TOO=1, the C reference proxy). Returns 0 if at
+# least one signal landed, non-zero otherwise. <sig> is passed
+# without the leading dash (STOP, CONT, KILL, TERM, ...).
+signal_all_dynomited() {
+    local sig="$1"
+    if [ "${MODE:-}" = combined ]; then
+        local landed=0 pid
+        while IFS= read -r pid; do
+            [ -n "$pid" ] || continue
+            if kill "-$sig" "$pid" 2>/dev/null; then
+                landed=1
+            fi
+        done < <(combined_live_pids)
+        [ "$landed" = 1 ] && return 0
+        return 1
+    fi
+    kill_both_proxies "$sig"
+}
+
+# needs_recovery: return 0 (true) when a dynomited that should be
+# running is down. In MODE=combined that means any of the three
+# instance pidfiles is missing or names a dead process; in every
+# other mode it mirrors the single-instance dyn_pid check.
+needs_recovery() {
+    if [ "${MODE:-}" = combined ]; then
+        local pf pid
+        while IFS= read -r pf; do
+            if [ ! -f "$pf" ]; then
+                return 0
+            fi
+            pid=$(cat "$pf" 2>/dev/null)
+            if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+                return 0
+            fi
+        done < <(combined_pidfiles)
+        return 1
+    fi
+    if dyn_pid >/dev/null; then
+        return 1
+    fi
+    return 0
 }
 
 # Parse "process,network,..." into the `IS_CLASS_<n>` shell
@@ -393,7 +478,9 @@ check_prereqs() {
 # file path and SIGKILL'ing all matches before launching a new
 # one.
 kill_stale_dynomited() {
-    local conf="$RUN/dynomite.yml"
+    local conf="${1:-$RUN/dynomite.yml}"
+    local conf_dir
+    conf_dir="$(dirname "$conf")"
     local pids
     pids=$(pgrep -f "dynomited.*$conf" 2>/dev/null || true)
     if [ -n "$pids" ]; then
@@ -408,7 +495,7 @@ kill_stale_dynomited() {
             sleep 0.1
         done
     fi
-    rm -f "$RUN/dynomited.pid" 2>/dev/null || true
+    rm -f "$conf_dir/dynomited.pid" 2>/dev/null || true
 }
 
 # restart_dynomited [failure_event_name]
@@ -419,6 +506,31 @@ kill_stale_dynomited() {
 # launch the binary under faketime for clock-skew faults.
 restart_dynomited() {
     local fail_event="${1:-restart_failed}"
+    if [ "$MODE" = combined ]; then
+        # MODE=combined: re-launch each of the three pools via
+        # start-host.sh with its INSTANCE selector. start-host.sh
+        # re-derives the port band and per-instance run subdir.
+        local inst restart_log rc
+        for inst in $COMBINED_INSTANCES; do
+            restart_log="$LOGS/restart-$DC_NAME-$inst.log"
+            event restart "{\"reason\":\"sigkill\",\"instance\":\"$inst\",\"faketime\":\"${FAKETIME:-}\"}"
+            kill_stale_dynomited "$RUN/$inst/dynomite.yml"
+            INSTANCE="$inst" FAKETIME="${FAKETIME:-}" MODE="$MODE" \
+                bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
+                    "$DC_NAME" "$TOKENS" "$SEEDS" \
+                    "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" "$RIAK_PBC_PORT" \
+                    >> "$restart_log" 2>&1
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+                local tail_blob
+                tail_blob=$(json_string_escape "$(tail -n 50 "$restart_log" 2>/dev/null || true)")
+                event "$fail_event" \
+                    "{\"reason\":\"start-host.sh-nonzero\",\"instance\":\"$inst\",\"rc\":$rc,\"tail\":\"$tail_blob\"}"
+                emit_restart_failed_detail "$rc" "$inst"
+            fi
+        done
+        return
+    fi
     local restart_log="$LOGS/restart-$DC_NAME.log"
     event restart "{\"reason\":\"sigkill\",\"faketime\":\"${FAKETIME:-}\"}"
     kill_stale_dynomited
@@ -450,6 +562,22 @@ restart_dynomited() {
 # ---------- process faults ----------
 
 fault_process_pause() {
+    if [ "$MODE" = combined ]; then
+        local pids pidcsv
+        pids=$(combined_live_pids)
+        if [ -n "$pids" ]; then
+            pidcsv=$(echo "$pids" | tr '\n' ',' | sed 's/,$//')
+            local dur=$(( RANDOM % 11 + 5 ))
+            event fault_process_pause "{\"pids\":\"$pidcsv\",\"duration\":$dur}"
+            signal_all_dynomited STOP || true
+            sleep "$dur"
+            signal_all_dynomited CONT || true
+            event fault_process_pause_end "{\"pids\":\"$pidcsv\",\"duration\":$dur}"
+        else
+            event fault_process_pause_skipped "{\"reason\":\"no-dynomited\"}"
+        fi
+        return
+    fi
     if pid=$(dyn_pid); then
         local dur=$(( RANDOM % 11 + 5 ))
         event fault_process_pause "{\"pid\":$pid,\"duration\":$dur}"
@@ -475,6 +603,29 @@ fault_process_pause() {
 }
 
 fault_process_kill() {
+    if [ "$MODE" = combined ]; then
+        local pids pidcsv p
+        pids=$(combined_live_pids)
+        if [ -n "$pids" ]; then
+            pidcsv=$(echo "$pids" | tr '\n' ',' | sed 's/,$//')
+            event fault_process_kill "{\"pids\":\"$pidcsv\"}"
+            for p in $pids; do
+                kill -KILL "$p" 2>/dev/null || true
+            done
+            for p in $pids; do
+                for _ in $(seq 1 50); do
+                    kill -0 "$p" 2>/dev/null || break
+                    sleep 0.1
+                done
+            done
+        else
+            event fault_process_kill_skipped "{\"reason\":\"no-dynomited\"}"
+        fi
+        sleep 1
+        restart_dynomited
+        event fault_process_kill_end "{}"
+        return
+    fi
     if pid=$(dyn_pid); then
         event fault_process_kill "{\"pid\":$pid}"
         # P3-3.9 phase 5: emit `fault_kill_c` alongside the
@@ -504,6 +655,10 @@ fault_process_kill() {
 }
 
 fault_process_redis_bounce() {
+    if [ "$MODE" = combined ]; then
+        fault_process_redis_bounce_combined
+        return
+    fi
     # P3-3.9 phase 5 note: the redis-bounce path targets the
     # SHARED backend datastore (one redis-server per host that
     # both proxies front in MODE=differential). A single
@@ -576,6 +731,83 @@ fault_process_redis_bounce() {
     else
         event fault_process_redis_bounce_skipped "{\"reason\":\"no-redis\"}"
     fi
+}
+
+# MODE=combined backend bounce. Bounce the external backends of
+# the redis and memcache instances (the riak instance is backed
+# by the in-process Noxu store, which has no external process to
+# bounce; killing its dynomited is the kill fault's job). Each
+# instance keeps its backend under its own run subdir on its own
+# port band: redis at $DATASTORE_PORT, memcache at +1000.
+fault_process_redis_bounce_combined() {
+    local inst pidf id port
+    for inst in redis memcache; do
+        pidf="$RUN/$inst/redis.pid"
+        if [ ! -f "$pidf" ]; then
+            event fault_process_redis_bounce_skipped \
+                "{\"reason\":\"no-redis\",\"instance\":\"$inst\"}"
+            continue
+        fi
+        id=$(cat "$pidf" 2>/dev/null)
+        case "$inst" in
+            redis)    port=$DATASTORE_PORT ;;
+            memcache) port=$(( DATASTORE_PORT + 1000 )) ;;
+        esac
+        event fault_process_redis_bounce \
+            "{\"id\":\"$id\",\"instance\":\"$inst\",\"port\":$port}"
+        case "$id" in
+            container:*)
+                local name="${id#container:}"
+                if command -v podman >/dev/null 2>&1; then
+                    podman rm -f "$name" >/dev/null 2>&1 || true
+                elif command -v docker >/dev/null 2>&1; then
+                    docker rm -f "$name" >/dev/null 2>&1 || true
+                fi
+                sleep 1
+                local bounce_log="$LOGS/restart-backend-$DC_NAME-$inst.log"
+                INSTANCE="$inst" MODE=combined \
+                    bash "$ROOT/src/scripts/chaos-multi-host/start-host.sh" \
+                        "$DC_NAME" "$TOKENS" "$SEEDS" \
+                        "$DATASTORE_PORT" "$DYN_LISTEN_PORT" \
+                        "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" "$RIAK_PBC_PORT" \
+                        >> "$bounce_log" 2>&1 || true
+                ;;
+            *)
+                kill -KILL "$id" 2>/dev/null || true
+                sleep 1
+                if [ "$inst" = memcache ]; then
+                    local memcached
+                    memcached=$(command -v memcached || true)
+                    if [ -n "$memcached" ]; then
+                        nohup "$memcached" \
+                            -l 127.0.0.1 \
+                            -p "$port" \
+                            -U 0 \
+                            -m 64 \
+                            -v \
+                            > "$LOGS/memcached-$DC_NAME-$inst.log" 2>&1 &
+                        echo $! > "$pidf"
+                    fi
+                else
+                    local redis
+                    redis=$(command -v redis-server || true)
+                    if [ -n "$redis" ]; then
+                        nohup "$redis" \
+                            --port "$port" \
+                            --bind 127.0.0.1 \
+                            --daemonize no \
+                            --appendonly no \
+                            --save "" \
+                            --dir "$RUN/$inst" \
+                            --logfile "$LOGS/redis-$DC_NAME-$inst.log" \
+                            > /dev/null 2>&1 &
+                        echo $! > "$pidf"
+                    fi
+                fi
+                ;;
+        esac
+        event fault_process_redis_bounce_end "{\"instance\":\"$inst\"}"
+    done
 }
 
 # ---------- network faults ----------
@@ -1013,7 +1245,7 @@ pick_fault() {
     esac
 }
 
-scheduler_unified() {
+scheduler_multiclass() {
     local f
     while true; do
         local nap=$(( RANDOM % 121 + 60 ))   # 60-180s
@@ -1033,8 +1265,11 @@ scheduler_unified() {
         # come back via the same start-host.sh invocation
         # (start-host.sh in MODE=differential brings up both),
         # so a single restart_dynomited call is sufficient.
+        # In MODE=combined needs_recovery checks all three
+        # per-instance pidfiles and restart_dynomited respawns
+        # every down instance.
         local rust_down=0 c_down=0
-        if ! dyn_pid >/dev/null; then
+        if needs_recovery; then
             rust_down=1
         fi
         if [ "${INJECT_C_PROXY_TOO:-0}" = "1" ] \
@@ -1119,7 +1354,7 @@ scheduler_legacy() {
         # invocation, so a single restart_dynomited call
         # respawns both.
         local rust_down=0 c_down=0
-        if ! dyn_pid >/dev/null; then
+        if needs_recovery; then
             rust_down=1
         fi
         if [ "${INJECT_C_PROXY_TOO:-0}" = "1" ] \
@@ -1202,7 +1437,7 @@ main() {
     run_csv=$(IFS=,; echo "${run_list[*]:-}")
     event injector_classes \
         "{\"configured\":\"$conf_csv\",\"runnable\":\"$run_csv\"}"
-    scheduler_unified
+    scheduler_multiclass
 }
 
 # Sourceability for the fault-smoke test harness. When the

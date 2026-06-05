@@ -98,7 +98,7 @@ export DC_NAME ROOT RUN LOGS EVENTS MODE CHAOS_NETEM_DEV CHAOS_CGROUP \
 # shellcheck source=./chaos-injector.sh
 . "$INJECTOR"
 
-# Source the driver fan-out helper too. The unified driver-
+# Source the driver fan-out helper too. The combined driver-
 # pidfile smoke below exercises compute_driver_specs +
 # driver_pidfile_for with a stubbed launch.
 # shellcheck source=./driver-spec.sh
@@ -828,29 +828,32 @@ smoke_phase5_c_dyn_pid_gating() {
     record OK phase5_c_dyn_pid_gating
 }
 
-# ---------- MODE=unified driver fan-out smoke ----------
+# ---------- MODE=combined driver fan-out smoke ----------
 #
-# MODE=unified launches TWO workload drivers per host (a redis
-# RESP + FT.* driver and a riak PBC driver) against one shared
-# in-process Noxu store. The coordinator's start_workload loops
-# over compute_driver_specs and writes a distinct pidfile per
-# driver so teardown kills both. We don't have a real coordinator
+# MODE=combined launches THREE workload drivers per host (a redis
+# RESP + FT.* driver, a memcache ASCII driver, and a riak PBC
+# driver), one per co-located dynomited instance on its own port
+# band. The coordinator's start_workload loops over
+# compute_driver_specs and writes a distinct pidfile per driver
+# so teardown kills all three. We don't have a real coordinator
 # (or remote SSH) in the smoke, so we stub the launch: for each
 # emitted spec we just write a synthetic pid into the pidfile the
-# coordinator would use. The assertion is that the unified mode
-# produces BOTH driver-redis.pid and driver-riak.pid and NOT the
-# legacy workload.pid, and that the redis driver lands on the
-# client port while the riak driver carries --riak-pbc-port.
-smoke_unified_driver_pidfiles() {
-    local run_dir="$RUN/unified-pidfile-smoke"
+# coordinator would use. The assertion is that combined mode
+# produces driver-redis.pid, driver-memcache.pid, AND
+# driver-riak.pid, NOT the legacy workload.pid, that each driver
+# carries the right --mode + band-shifted port, and that no
+# driver carries --noxu-compat.
+smoke_combined_driver_pidfiles() {
+    local run_dir="$RUN/combined-pidfile-smoke"
     rm -rf "$run_dir"
     mkdir -p "$run_dir"
 
     local specs
-    specs="$(compute_driver_specs unified 200 18102 18202 21800)"
+    specs="$(compute_driver_specs combined 200 18102 18202 21800)"
 
     local fake_pid=1000
-    local saw_redis_flag=0 saw_riak_flag=0
+    local saw_redis_flag=0 saw_memcache_flag=0 saw_riak_flag=0
+    local saw_noxu_compat=0
     local api_suffix d_qps d_flags
     while IFS=$'\t' read -r api_suffix d_qps d_flags; do
         [ -z "$d_qps" ] && continue
@@ -859,42 +862,166 @@ smoke_unified_driver_pidfiles() {
         # Stubbed launch: record the synthetic pid.
         echo "$fake_pid" > "$pidfile"
         fake_pid=$((fake_pid + 1))
+        case "$d_flags" in
+            *"--noxu-compat"*) saw_noxu_compat=1 ;;
+        esac
         case "$api_suffix" in
             -redis)
                 case "$d_flags" in
-                    *"--mode redis"*) saw_redis_flag=1 ;;
+                    *"--mode redis --port 18102"*) saw_redis_flag=1 ;;
+                esac
+                ;;
+            -memcache)
+                case "$d_flags" in
+                    *"--mode memcache --port 19102"*) saw_memcache_flag=1 ;;
                 esac
                 ;;
             -riak)
                 case "$d_flags" in
-                    *"--mode riak --riak-pbc-port 21800"*) saw_riak_flag=1 ;;
+                    *"--mode riak --riak-pbc-port 23800"*) saw_riak_flag=1 ;;
                 esac
                 ;;
         esac
     done <<<"$specs"
 
     if [ ! -f "$run_dir/driver-redis.pid" ]; then
-        record FAIL unified_driver_pidfiles "driver-redis.pid was not created"
+        record FAIL combined_driver_pidfiles "driver-redis.pid was not created"
+        return 0
+    fi
+    if [ ! -f "$run_dir/driver-memcache.pid" ]; then
+        record FAIL combined_driver_pidfiles "driver-memcache.pid was not created"
         return 0
     fi
     if [ ! -f "$run_dir/driver-riak.pid" ]; then
-        record FAIL unified_driver_pidfiles "driver-riak.pid was not created"
+        record FAIL combined_driver_pidfiles "driver-riak.pid was not created"
         return 0
     fi
     if [ -f "$run_dir/workload.pid" ]; then
-        record FAIL unified_driver_pidfiles "legacy workload.pid created in unified mode"
+        record FAIL combined_driver_pidfiles "legacy workload.pid created in combined mode"
         return 0
     fi
     if [ "$saw_redis_flag" != 1 ]; then
-        record FAIL unified_driver_pidfiles "redis driver spec missing '--mode redis'"
+        record FAIL combined_driver_pidfiles "redis driver spec missing '--mode redis --port 18102'"
+        return 0
+    fi
+    if [ "$saw_memcache_flag" != 1 ]; then
+        record FAIL combined_driver_pidfiles "memcache driver spec missing '--mode memcache --port 19102'"
         return 0
     fi
     if [ "$saw_riak_flag" != 1 ]; then
-        record FAIL unified_driver_pidfiles "riak driver spec missing '--mode riak --riak-pbc-port'"
+        record FAIL combined_driver_pidfiles "riak driver spec missing '--mode riak --riak-pbc-port 23800'"
+        return 0
+    fi
+    if [ "$saw_noxu_compat" = 1 ]; then
+        record FAIL combined_driver_pidfiles "a combined driver carried --noxu-compat"
         return 0
     fi
     rm -rf "$run_dir"
-    record OK unified_driver_pidfiles
+    record OK combined_driver_pidfiles
+}
+
+# ---------- MODE=combined injector fault fan-out smoke ----------
+#
+# In MODE=combined the host runs three dynomited instances, one
+# per backend, each with a dynomited.pid under its own run subdir
+# ($RUN/<instance>/). The injector's process faults must hit all
+# three. This smoke stands up three trap-loop bash processes
+# (standing in for the three dynomited instances), writes their
+# pids into the per-instance pidfiles, and asserts:
+#
+#   * combined_live_pids enumerates all three;
+#   * signal_all_dynomited (in MODE=combined) delivers a signal
+#     to all three;
+#   * needs_recovery is false while all three are alive and true
+#     once they are gone.
+#
+# The trap helper writes a marker file on SIGTERM; the smoke
+# greps for the markers rather than racing the kernel reaper.
+smoke_combined_injector_faults_all() {
+    local saved_mode="$MODE"
+    local saved_run="$RUN"
+    MODE=combined
+    local cdir="$saved_run/combined-fault-smoke"
+    rm -rf "$cdir"
+    RUN="$cdir"
+    mkdir -p "$RUN/redis" "$RUN/memcache" "$RUN/riak"
+
+    local inst pid
+    local marker0 marker1 marker2
+    local -a pids=()
+    for inst in redis memcache riak; do
+        local marker="$RUN/$inst/caught"
+        local donef="$RUN/$inst/done"
+        bash -c '
+            marker="$1"; donef="$2"
+            trap "echo CAUGHT > \"$marker\"; touch \"$donef\"; exit 0" TERM
+            trap "touch \"$donef\"; exit 0" USR1
+            for _ in $(seq 1 300); do
+                sleep 0.1
+                [ -f "$donef" ] && break
+            done
+        ' _ "$marker" "$donef" &
+        pid=$!
+        echo "$pid" > "$RUN/$inst/dynomited.pid"
+        pids+=("$pid")
+    done
+    marker0="$RUN/redis/caught"
+    marker1="$RUN/memcache/caught"
+    marker2="$RUN/riak/caught"
+
+    # Let the trap handlers install before signalling.
+    command sleep 0.2
+
+    local fail_reason=""
+
+    # combined_live_pids must enumerate all three.
+    local live_count
+    live_count=$(combined_live_pids | grep -c .)
+    if [ "$live_count" != 3 ]; then
+        fail_reason="combined_live_pids saw $live_count of 3"
+    fi
+
+    # needs_recovery must be false while all three are alive.
+    if [ -z "$fail_reason" ] && needs_recovery; then
+        fail_reason="needs_recovery true while all instances up"
+    fi
+
+    # Fan SIGTERM across all three instances.
+    if [ -z "$fail_reason" ]; then
+        signal_all_dynomited TERM || true
+        local i landed=0
+        for i in $(seq 1 30); do
+            landed=0
+            [ -f "$marker0" ] && landed=$((landed + 1))
+            [ -f "$marker1" ] && landed=$((landed + 1))
+            [ -f "$marker2" ] && landed=$((landed + 1))
+            [ "$landed" = 3 ] && break
+            command sleep 0.1
+        done
+        if [ "$landed" != 3 ]; then
+            fail_reason="only $landed of 3 instances received SIGTERM"
+        fi
+    fi
+
+    # After all three are gone, needs_recovery must flip to true.
+    if [ -z "$fail_reason" ]; then
+        rm -f "$RUN/redis/dynomited.pid" "$RUN/memcache/dynomited.pid" \
+              "$RUN/riak/dynomited.pid"
+        if ! needs_recovery; then
+            fail_reason="needs_recovery false after all instances killed"
+        fi
+    fi
+
+    kill -USR1 "${pids[@]}" 2>/dev/null || true
+    wait 2>/dev/null || true
+    RUN="$saved_run"
+    MODE="$saved_mode"
+    rm -rf "$cdir"
+    if [ -n "$fail_reason" ]; then
+        record FAIL combined_injector_faults_all "$fail_reason"
+    else
+        record OK combined_injector_faults_all
+    fi
 }
 
 # ---------- run ----------
@@ -902,8 +1029,11 @@ smoke_unified_driver_pidfiles() {
 note "==> running smokes"
 smoke_process_pause
 
-# MODE=unified driver fan-out (sourced helper, stubbed launch).
-smoke_unified_driver_pidfiles
+# MODE=combined driver fan-out + injector fault fan-out (sourced
+# helpers, stubbed launch; trapping bash subshells stand in for
+# the three dynomited instances).
+smoke_combined_driver_pidfiles
+smoke_combined_injector_faults_all
 
 # P3-3.9 phase 5: dual-proxy fault smokes. These run on every
 # host because they only use trapping bash subshells and

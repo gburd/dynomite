@@ -32,24 +32,39 @@
 #                             scripts/chaos-multi-host/build_cref_remote.sh);
 #                             aborts with a clear error if the
 #                             binary is missing.
-#   MODE=unified            - run a single dynomited with
-#                             data_store=noxu (the in-process
-#                             Noxu datastore) plus a riak block
-#                             exposing BOTH a PBC listener and an
-#                             HTTP gateway. One shared
-#                             Arc<NoxuDatastore> backs the Redis
-#                             (RESP / RediSearch FT.*) client
-#                             proxy AND the Riak PBC/HTTP
-#                             surface, so a key SET via RESP and
-#                             a GET via Riak PBC hit the same
-#                             store. No external redis/memcached
-#                             backend is started (noxu is
-#                             in-process). Requires a dynomited
+#   MODE=combined           - run THREE independent dynomited
+#                             instances on this host, one per
+#                             backend, selected by the INSTANCE
+#                             env (redis|memcache|riak). Each
+#                             instance is a full Netflix-style
+#                             pool (one data_store + one client
+#                             port) on its own port band so the
+#                             three never collide:
+#                               INSTANCE=redis    data_store=0,
+#                                 real redis-server, base ports.
+#                               INSTANCE=memcache data_store=1,
+#                                 real memcached, ports +1000.
+#                               INSTANCE=riak     data_store=noxu,
+#                                 in-process Noxu + a riak block
+#                                 (PBC + HTTP), ports +2000.
+#                             Each instance writes its pidfile,
+#                             config, and backend under a
+#                             per-instance run subdir
+#                             ($ROOT/run/<instance>/) and tags
+#                             its logs with -<instance>. The
+#                             coordinator launches start-host.sh
+#                             once per INSTANCE; the chaos
+#                             injector faults all three. The
+#                             riak instance requires a dynomited
 #                             built with --features riak (and
 #                             --features search for the FT.*
-#                             surface); aborts with a clear
+#                             surface driven against the redis
+#                             instance); aborts with a clear
 #                             error if the binary does not
 #                             expose --riak-pbc-listen.
+#   INSTANCE=redis|memcache|riak  (only with MODE=combined)
+#                             selects which of the three pools
+#                             this invocation starts.
 #   ROOT=/scratch/dynomite-chaos (default install root)
 
 set -euo pipefail
@@ -70,9 +85,20 @@ RIAK_PBC_PORT="${8:-21800}"
 RIAK_HTTP_PORT="${RIAK_HTTP_PORT:-$((RIAK_PBC_PORT + 1))}"
 MODE="${MODE:-redis}"
 
-# Whether the in-process Noxu datastore backs the pool. Only
-# MODE=unified turns this on; every other mode leaves it 0 so
-# the external-backend bring-up runs unchanged.
+# In MODE=combined this selects which of the three co-located
+# pools this invocation starts (redis|memcache|riak). Ignored by
+# every other mode.
+INSTANCE="${INSTANCE:-}"
+
+# Port-band offset applied to every port (client/dyn/stats/
+# backend/PBC) so the three combined instances never collide. Set
+# per-INSTANCE in the MODE=combined arm below; 0 otherwise.
+BAND_OFFSET=0
+
+# Whether the in-process Noxu datastore backs the pool. Only the
+# MODE=combined riak instance turns this on; every other
+# mode/instance leaves it 0 so the external-backend bring-up runs
+# unchanged.
 ENABLE_NOXU=0
 
 case "$MODE" in
@@ -107,23 +133,69 @@ case "$MODE" in
         DATA_STORE_VAL=0
         ENABLE_RIAK_PBC=0
         ;;
-    unified)
-        # One dynomited, one shared in-process Noxu datastore
-        # (data_store=2). The Redis-front proxy and the Riak
-        # PBC/HTTP listeners both run against that single
-        # Arc<NoxuDatastore>, so a value written over RESP is
-        # readable over Riak PBC and vice versa. No external
-        # redis/memcached backend is started.
-        EFFECTIVE_MODE=unified
-        DATA_STORE_VAL=2
-        ENABLE_RIAK_PBC=1
-        ENABLE_NOXU=1
+    combined)
+        # MODE=combined runs three independent pools per host,
+        # one per backend, selected by INSTANCE. Each picks its
+        # own data_store, backend, and port band so all three
+        # co-exist. The redis instance keeps the base ports; the
+        # memcache instance is +1000; the riak (noxu) instance is
+        # +2000.
+        case "${INSTANCE:-}" in
+            redis)
+                EFFECTIVE_MODE=redis
+                DATA_STORE_VAL=0
+                ENABLE_RIAK_PBC=0
+                BAND_OFFSET=0
+                ;;
+            memcache)
+                EFFECTIVE_MODE=memcache
+                DATA_STORE_VAL=1
+                ENABLE_RIAK_PBC=0
+                BAND_OFFSET=1000
+                ;;
+            riak)
+                # data_store=noxu (in-process), a riak block
+                # exposing the PBC + HTTP listeners, and no
+                # external backend. The workload driver dials the
+                # band-shifted PBC port. EFFECTIVE_MODE is unused
+                # when ENABLE_NOXU=1 (no external backend probe).
+                EFFECTIVE_MODE=redis
+                DATA_STORE_VAL=2
+                ENABLE_RIAK_PBC=1
+                ENABLE_NOXU=1
+                BAND_OFFSET=2000
+                ;;
+            *)
+                echo "MODE=combined requires INSTANCE=redis|memcache|riak (got '${INSTANCE:-}')" >&2
+                exit 1
+                ;;
+        esac
         ;;
     *)
-        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential|unified)" >&2
+        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential|combined)" >&2
         exit 1
         ;;
 esac
+
+# MODE=combined port-band shift. Apply the per-instance offset to
+# every port and rewrite the seed dyn ports to the same band so
+# this instance gossips only with the matching-kind instances on
+# the other hosts (which all use the same band). Done before the
+# C-port and RUN computations below so they see the shifted
+# values.
+if [ "$BAND_OFFSET" -ne 0 ]; then
+    BASE_DYN_LISTEN_PORT="$DYN_LISTEN_PORT"
+    DATASTORE_PORT=$((DATASTORE_PORT + BAND_OFFSET))
+    DYN_LISTEN_PORT=$((DYN_LISTEN_PORT + BAND_OFFSET))
+    CLIENT_LISTEN_PORT=$((CLIENT_LISTEN_PORT + BAND_OFFSET))
+    STATS_LISTEN_PORT=$((STATS_LISTEN_PORT + BAND_OFFSET))
+    RIAK_PBC_PORT=$((RIAK_PBC_PORT + BAND_OFFSET))
+    RIAK_HTTP_PORT=$((RIAK_PBC_PORT + 1))
+    if [ -n "$(printf '%s' "$SEEDS" | tr -d ' \t\n\r')" ]; then
+        SEEDS="$(printf '%s\n' "$SEEDS" \
+            | sed -E "s/:${BASE_DYN_LISTEN_PORT}:/:${DYN_LISTEN_PORT}:/g")"
+    fi
+fi
 
 # Differential-mode port shifts. The C cluster mirrors the
 # Rust ports +100 so a single host can run both proxies
@@ -133,12 +205,23 @@ C_DYN_LISTEN_PORT=$((DYN_LISTEN_PORT + 100))
 C_STATS_LISTEN_PORT=$((STATS_LISTEN_PORT + 100))
 
 ROOT="${ROOT:-/scratch/dynomite-chaos}"
-RUN="$ROOT/run"
+# In MODE=combined each instance gets its own run subdir so its
+# config, pidfiles, and backend never collide with the other two
+# pools on this host. Logs stay in the shared $LOGS dir but carry
+# a per-instance tag.
+if [ -n "$INSTANCE" ]; then
+    RUN="$ROOT/run/$INSTANCE"
+    LOG_TAG="$DC_NAME-$INSTANCE"
+else
+    RUN="$ROOT/run"
+    LOG_TAG="$DC_NAME"
+fi
 LOGS="$ROOT/logs"
 mkdir -p "$RUN" "$LOGS"
 
 # Per-host directory the in-process Noxu environment opens at
-# when MODE=unified. One dir per DC so a single host running
+# when the MODE=combined riak instance is selected. One dir per
+# DC (under the per-instance run subdir) so a single host running
 # multiple DCs (smoke / HOSTS_OVERRIDE) never shares a Noxu
 # environment lock across pools.
 NOXU_PATH="$RUN/noxu-$DC_NAME"
@@ -155,10 +238,10 @@ else
     exit 1
 fi
 
-# When the Riak PBC listener is enabled (MODE=riak or
-# MODE=unified), verify the binary was built with the `riak`
-# feature. The CLI only registers --riak-pbc-listen behind
-# `#[cfg(feature = "riak")]`, so a `--help` probe is the
+# When the Riak PBC listener is enabled (MODE=riak or the
+# MODE=combined riak instance), verify the binary was built with
+# the `riak` feature. The CLI only registers --riak-pbc-listen
+# behind `#[cfg(feature = "riak")]`, so a `--help` probe is the
 # cheapest reliable check.
 if [ "$ENABLE_RIAK_PBC" = "1" ]; then
     if ! "$DYNOMITED" --help 2>&1 | grep -q -- '--riak-pbc-listen'; then
@@ -171,12 +254,12 @@ if [ "$ENABLE_RIAK_PBC" = "1" ]; then
     fi
 fi
 
-# Backend bring-up. MODE=unified backs the pool with the
-# in-process Noxu datastore, so there is no external
-# redis/memcached process to start or probe; we only create
-# the per-host Noxu directory and skip straight to the
-# dynomited launch. Every other mode resolves, starts, and
-# protocol-probes an external backend as before.
+# Backend bring-up. The MODE=combined riak instance backs the
+# pool with the in-process Noxu datastore, so there is no
+# external redis/memcached process to start or probe; we only
+# create the per-host Noxu directory and skip straight to the
+# dynomited launch. Every other mode/instance resolves, starts,
+# and protocol-probes an external backend as before.
 if [ "$ENABLE_NOXU" = "1" ]; then
     mkdir -p "$NOXU_PATH"
     # Noxu guards the environment with an advisory flock(2) on
@@ -191,7 +274,7 @@ if [ "$ENABLE_NOXU" = "1" ]; then
     # concurrently (two writers). The coordinator's pre-kill of
     # stale processes is what guarantees single ownership across
     # restarts; noxu's flock enforces it.
-    echo "==> MODE=unified: in-process Noxu datastore at $NOXU_PATH (no external backend)"
+    echo "==> ENABLE_NOXU: in-process Noxu datastore at $NOXU_PATH (no external backend)"
 else
 # Resolve the backend binary based on EFFECTIVE_MODE. Redis and
 # memcached can both fall back to a container runtime, so the
@@ -237,7 +320,7 @@ echo "==> starting $BACKEND_LABEL on $DATASTORE_PORT (mode=$EFFECTIVE_MODE)"
 #      bringing up memcached so kill any leftover redis).
 #   2. Native processes bound to the port via fuser or lsof.
 for stale_label in redis memcached; do
-    stale_name="dyn-chaos-$stale_label-$DC_NAME"
+    stale_name="dyn-chaos-$stale_label-$LOG_TAG"
     if command -v podman >/dev/null 2>&1; then
         podman rm -f "$stale_name" >/dev/null 2>&1 || true
     fi
@@ -267,7 +350,7 @@ if [ -n "$BACKEND_BIN" ]; then
             --appendonly no \
             --save "" \
             --dir "$RUN" \
-            --logfile "$LOGS/redis-$DC_NAME.log" \
+            --logfile "$LOGS/redis-$LOG_TAG.log" \
             > /dev/null 2>&1 &
     else
         # memcached: -l 127.0.0.1, -p $DATASTORE_PORT, no UDP,
@@ -279,12 +362,12 @@ if [ -n "$BACKEND_BIN" ]; then
             -U 0 \
             -m 64 \
             -v \
-            > "$LOGS/memcached-$DC_NAME.log" 2>&1 &
+            > "$LOGS/memcached-$LOG_TAG.log" 2>&1 &
     fi
     BACKEND_PID=$!
     echo "$BACKEND_PID" > "$RUN/redis.pid"
 else
-    CONTAINER_NAME="dyn-chaos-$BACKEND_LABEL-$DC_NAME"
+    CONTAINER_NAME="dyn-chaos-$BACKEND_LABEL-$LOG_TAG"
     # Container with our exact name was already killed by
     # the prefix sweep above; this rm -f is belt-and-braces
     # to handle the case where the sweep raced a fresh
@@ -301,7 +384,7 @@ else
                 --bind 127.0.0.1 \
                 --appendonly no \
                 --save "" \
-            > "$LOGS/$BACKEND_LABEL-$DC_NAME-container.id" 2>&1
+            > "$LOGS/$BACKEND_LABEL-$LOG_TAG-container.id" 2>&1
     else
         "$BACKEND_CONTAINER_TOOL" run -d \
             --name "$CONTAINER_NAME" \
@@ -314,7 +397,7 @@ else
                 -U 0 \
                 -m 64 \
                 -v \
-            > "$LOGS/$BACKEND_LABEL-$DC_NAME-container.id" 2>&1
+            > "$LOGS/$BACKEND_LABEL-$LOG_TAG-container.id" 2>&1
     fi
     # The container's PID isn't directly tracked; record the
     # container name in redis.pid (legacy filename, now
@@ -382,10 +465,10 @@ dyn_o_mite:
 EOF
 
 # Append the noxu_path directive when the in-process Noxu
-# datastore backs the pool (MODE=unified). data_store=2 above
-# selects Noxu; noxu_path tells dynomited where to open the
-# environment. The servers: line stays as a syntactic
-# placeholder; the Noxu backend supervisor ignores it.
+# datastore backs the pool (the MODE=combined riak instance).
+# data_store=2 above selects Noxu; noxu_path tells dynomited
+# where to open the environment. The servers: line stays as a
+# syntactic placeholder; the Noxu backend supervisor ignores it.
 if [ "$ENABLE_NOXU" = "1" ]; then
     cat >> "$CONF" <<EOF
   noxu_path: $NOXU_PATH
@@ -405,12 +488,13 @@ EOF
 fi
 
 # Append the riak block when the Riak PBC listener is enabled
-# (MODE=riak or MODE=unified). The block is a YAML sibling of
-# dyn_o_mite (under the same top-level pool key) read by the
-# binary's --features riak code path. The driver will dial
-# 127.0.0.1:$RIAK_PBC_PORT. In MODE=unified we additionally
-# emit http_listen so the Riak HTTP gateway comes up against
-# the same shared Noxu store the PBC listener serves.
+# (MODE=riak or the MODE=combined riak instance). The block is a
+# YAML sibling of dyn_o_mite (under the same top-level pool key)
+# read by the binary's --features riak code path. The driver
+# will dial 127.0.0.1:$RIAK_PBC_PORT. When the Noxu datastore
+# backs the pool we additionally emit http_listen so the Riak
+# HTTP gateway comes up against the same Noxu store the PBC
+# listener serves.
 if [ "$ENABLE_RIAK_PBC" = "1" ]; then
     cat >> "$CONF" <<EOF
   riak:
@@ -442,9 +526,9 @@ fi
 nohup "${FAKETIME_PREFIX[@]}" "$DYNOMITED" \
     -c "$CONF" \
     -p "$RUN/dynomited.pid" \
-    -o "$LOGS/dynomited-$DC_NAME.log" \
+    -o "$LOGS/dynomited-$LOG_TAG.log" \
     -v 6 \
-    > "$LOGS/dynomited-$DC_NAME.stderr" 2>&1 &
+    > "$LOGS/dynomited-$LOG_TAG.stderr" 2>&1 &
 DYN_PID=$!
 # `-p` writes its own pid; if the binary exits early, capture the
 # spawn pid as a fallback.
@@ -521,19 +605,17 @@ if [ "$rust_ready" -ne 1 ]; then
         echo "==> failure mode: dynomited never produced a pid; spawn likely failed before exec" >&2
     fi
     echo "==> dynomited stderr tail (last 50 lines):" >&2
-    tail -50 "$LOGS/dynomited-$DC_NAME.stderr" 2>/dev/null >&2 || echo "    (no stderr log)" >&2
+    tail -50 "$LOGS/dynomited-$LOG_TAG.stderr" 2>/dev/null >&2 || echo "    (no stderr log)" >&2
     echo "==> dynomited log tail (last 50 lines):" >&2
-    tail -50 "$LOGS/dynomited-$DC_NAME.log" 2>/dev/null >&2 || echo "    (no log file)" >&2
+    tail -50 "$LOGS/dynomited-$LOG_TAG.log" 2>/dev/null >&2 || echo "    (no log file)" >&2
     exit 1
 fi
-echo "==> dynomited up on $DC_NAME (stats:$STATS_LISTEN_PORT bound after $i tick(s) of ${STATS_TICK_SECS}s)"
+echo "==> dynomited up on $LOG_TAG (stats:$STATS_LISTEN_PORT bound after $i tick(s) of ${STATS_TICK_SECS}s)"
 
-# MODE=unified readiness: in addition to the stats listener
+# ENABLE_NOXU readiness: in addition to the stats listener
 # (proven above), confirm the Riak PBC listener is accepting
-# connections. The PBC and the Redis-front proxy both run
-# against the same in-process Noxu store, so a bare TCP
-# connect to the PBC port is enough to prove the unified
-# surface is live before the workload drivers attach.
+# connections. A bare TCP connect to the PBC port is enough to
+# prove the surface is live before the workload drivers attach.
 if [ "$ENABLE_NOXU" = "1" ]; then
     pbc_ready=0
     for i in $(seq 1 "$STATS_MAX_ATTEMPTS"); do
@@ -546,12 +628,12 @@ if [ "$ENABLE_NOXU" = "1" ]; then
     if [ "$pbc_ready" -ne 1 ]; then
         echo "==> ERROR: Riak PBC listener on $RIAK_PBC_PORT never accepted a TCP connection after ${STATS_TIMEOUT_SECS}s" >&2
         echo "==> dynomited stderr tail (last 50 lines):" >&2
-        tail -50 "$LOGS/dynomited-$DC_NAME.stderr" 2>/dev/null >&2 || echo "    (no stderr log)" >&2
+        tail -50 "$LOGS/dynomited-$LOG_TAG.stderr" 2>/dev/null >&2 || echo "    (no stderr log)" >&2
         echo "==> dynomited log tail (last 50 lines):" >&2
-        tail -50 "$LOGS/dynomited-$DC_NAME.log" 2>/dev/null >&2 || echo "    (no log file)" >&2
+        tail -50 "$LOGS/dynomited-$LOG_TAG.log" 2>/dev/null >&2 || echo "    (no log file)" >&2
         exit 1
     fi
-    echo "==> Riak PBC listener up on $DC_NAME (pbc:$RIAK_PBC_PORT, http:$RIAK_HTTP_PORT, noxu shared)"
+    echo "==> Riak PBC listener up on $LOG_TAG (pbc:$RIAK_PBC_PORT, http:$RIAK_HTTP_PORT, noxu)"
 fi
 
 if [ "$MODE" != "differential" ]; then
