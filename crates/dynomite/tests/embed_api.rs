@@ -37,7 +37,7 @@ fn minimal_builder(label: &str) -> ServerBuilder {
     ServerBuilder::new("dyn_o_mite")
         .listen("127.0.0.1:0".parse().unwrap())
         .dyn_listen("127.0.0.1:0".parse().unwrap())
-        .data_store(DataStore::Redis)
+        .data_store(DataStore::Valkey)
         .servers(vec![ConfServer::parse(&format!(
             "127.0.0.1:6379:1 {label}"
         ))

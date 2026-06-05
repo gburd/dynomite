@@ -136,7 +136,7 @@ impl Default for PoolConfig {
             name: "p".into(),
             dc: "localdc".into(),
             rack: "localrack".into(),
-            data_store: DataStore::Redis,
+            data_store: DataStore::Valkey,
             hash: HashType::Murmur,
             distribution: Distribution::Vnode,
             distribution_shadow: None,
@@ -216,8 +216,8 @@ impl PoolConfig {
         };
         let data_store = match pool.data_store {
             Some(1) => DataStore::Memcache,
-            Some(2) => DataStore::Noxu,
-            _ => DataStore::Redis,
+            Some(2) => DataStore::Dyniak,
+            _ => DataStore::Valkey,
         };
         Self {
             name: name.to_string(),

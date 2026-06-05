@@ -16,7 +16,7 @@
 //!   functional test scenarios from `_/dynomite/test/`.
 //!
 //! All scenarios are gated behind `feature = "integration"` and
-//! a runtime check for `redis-server` on `PATH`. When Redis is
+//! a runtime check for `valkey-server` on `PATH`. When Redis is
 //! missing the tests print a skip notice and exit successfully
 //! rather than failing.
 //!

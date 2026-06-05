@@ -4,7 +4,7 @@
 //! integration test crate entry) via a `#[path]` directive. It
 //! exposes three pieces of test infrastructure:
 //!
-//! * [`RedisBackend`] - spawns an ephemeral `redis-server` for
+//! * [`RedisBackend`] - spawns an ephemeral `valkey-server` for
 //!   one dynomite node and tears it down on drop.
 //! * [`DynomitedNode`] - spawns one `dynomited` binary against a
 //!   per-node YAML config and tears it down on drop.
@@ -20,7 +20,7 @@
 //! to `SIGKILL` after a short grace window, so the suite leaves
 //! no orphaned processes even when a test panics mid-flight.
 //!
-//! The harness skips entirely when `redis-server` is not on
+//! The harness skips entirely when `valkey-server` is not on
 //! `PATH` so CI environments without Redis still build the test
 //! binary cleanly.
 
@@ -45,12 +45,12 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// before escalating to `SIGKILL` on Drop.
 pub const GRACE_BEFORE_KILL: Duration = Duration::from_millis(750);
 
-/// True when `redis-server` is available on `PATH`. Tests use
+/// True when `valkey-server` is available on `PATH`. Tests use
 /// this to mark themselves "ignored" rather than fail when the
 /// CI environment lacks the binary.
 #[must_use]
 pub fn redis_server_available() -> bool {
-    which_in_path("redis-server").is_some()
+    which_in_path("valkey-server").is_some()
 }
 
 /// Locate an executable on `PATH`, returning the first match.
@@ -115,7 +115,7 @@ fn terminate_pg(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// One ephemeral `redis-server` process backing one dynomite
+/// One ephemeral `valkey-server` process backing one dynomite
 /// node.
 pub struct RedisBackend {
     pub port: u16,
@@ -124,15 +124,15 @@ pub struct RedisBackend {
 }
 
 impl RedisBackend {
-    /// Spawn a fresh `redis-server` on an ephemeral port.
+    /// Spawn a fresh `valkey-server` on an ephemeral port.
     ///
     /// # Errors
     ///
-    /// Returns an error if `redis-server` cannot be spawned or
+    /// Returns an error if `valkey-server` cannot be spawned or
     /// fails to bind within `DEFAULT_TIMEOUT`.
     pub fn spawn() -> io::Result<Self> {
-        let bin = which_in_path("redis-server")
-            .ok_or_else(|| io::Error::other("redis-server not on PATH"))?;
+        let bin = which_in_path("valkey-server")
+            .ok_or_else(|| io::Error::other("valkey-server not on PATH"))?;
         let dir = tempfile::tempdir()?;
         let port = pick_port();
         let mut cmd = Command::new(&bin);
@@ -157,7 +157,7 @@ impl RedisBackend {
         if !wait_for_listen(port, Instant::now() + DEFAULT_TIMEOUT) {
             terminate_pg(&mut child);
             return Err(io::Error::other(format!(
-                "redis-server failed to bind 127.0.0.1:{port}"
+                "valkey-server failed to bind 127.0.0.1:{port}"
             )));
         }
         Ok(Self {

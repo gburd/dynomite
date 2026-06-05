@@ -64,7 +64,7 @@ async fn proxy_accepts_client_and_responds() {
         Arc::new(EchoDispatcher),
     )
     .unwrap()
-    .with_data_store(DataStore::Redis);
+    .with_data_store(DataStore::Valkey);
     let addr = proxy.local_addr().unwrap();
 
     // Cancel via a oneshot channel.
@@ -198,7 +198,7 @@ async fn pool_ejects_target_after_consecutive_factory_failures() {
 #[tokio::test]
 async fn client_handler_alloc_id_is_monotonic() {
     let (tx, _rx) = mpsc::channel(1);
-    let handler = ClientHandler::new(Arc::new(EchoDispatcher), tx, DataStore::Redis);
+    let handler = ClientHandler::new(Arc::new(EchoDispatcher), tx, DataStore::Valkey);
     // Drive the client handler through one parse cycle by calling
     // alloc_msg_id via the public path: enqueue + lookup.
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -317,7 +317,7 @@ async fn client_server_redis_round_trip() {
         ConnRole::Server,
     );
     let server_driver = tokio::spawn(async move {
-        let _ = ServerConn::new(server_conn, req_rx, DataStore::Redis)
+        let _ = ServerConn::new(server_conn, req_rx, DataStore::Valkey)
             .run()
             .await;
     });
@@ -326,7 +326,7 @@ async fn client_server_redis_round_trip() {
     let dispatcher = Arc::new(ForwardingDispatcher { out: req_tx });
     let proxy = Proxy::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap(), dispatcher)
         .unwrap()
-        .with_data_store(DataStore::Redis);
+        .with_data_store(DataStore::Valkey);
     let proxy_addr = proxy.local_addr().unwrap();
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     let cancel_fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
@@ -410,7 +410,7 @@ async fn dnode_peer_round_trip() {
         ConnRole::DnodePeerClient,
     );
     let (rsp_tx, rsp_rx) = mpsc::channel::<OutboundEnvelope>(8);
-    let handler = ClientHandler::new(Arc::new(recorder), rsp_tx, DataStore::Redis);
+    let handler = ClientHandler::new(Arc::new(recorder), rsp_tx, DataStore::Valkey);
     let inbound_driver =
         tokio::spawn(async move { dnode_client_loop(inbound_conn, handler, rsp_rx).await });
 
@@ -568,7 +568,7 @@ async fn dnode_client_decrypt_round_trip() {
     inbound_conn.set_aes_key(key);
     inbound_conn.set_dnode_secured(true);
     let (rsp_tx, rsp_rx) = mpsc::channel::<OutboundEnvelope>(8);
-    let handler = ClientHandler::new(Arc::new(recorder), rsp_tx, DataStore::Redis);
+    let handler = ClientHandler::new(Arc::new(recorder), rsp_tx, DataStore::Valkey);
     let inbound_driver =
         tokio::spawn(async move { dnode_client_loop(inbound_conn, handler, rsp_rx).await });
 

@@ -30,7 +30,7 @@
 //!    and verify it now contains C's pid (not A's).
 //!
 //! Gated behind the `integration` feature so the default test
-//! run does not need a redis-server to be present.
+//! run does not need a valkey-server to be present.
 
 #![cfg(feature = "integration")]
 #![allow(
@@ -53,7 +53,7 @@ fn pick_port() -> u16 {
 fn redis_server_in_path() -> Option<PathBuf> {
     let path_env = std::env::var_os("PATH")?;
     for entry in std::env::split_paths(&path_env) {
-        let candidate = entry.join("redis-server");
+        let candidate = entry.join("valkey-server");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -153,7 +153,7 @@ fn wait_for_pid_in_file(path: &std::path::Path, timeout: Duration) -> Option<u32
 #[tokio::test]
 async fn pidfile_flock_two_dynomiteds_back_to_back() {
     let Some(redis_bin) = redis_server_in_path() else {
-        eprintln!("redis-server not in PATH; skipping integration test");
+        eprintln!("valkey-server not in PATH; skipping integration test");
         return;
     };
 
@@ -166,7 +166,7 @@ async fn pidfile_flock_two_dynomiteds_back_to_back() {
     let dyn_port_c = pick_port();
     let stats_port_c = pick_port();
 
-    // Start a single redis-server. Both proxies (A and C, but
+    // Start a single valkey-server. Both proxies (A and C, but
     // not the contender B) will use it.
     let mut redis = Command::new(&redis_bin)
         .args([
@@ -186,10 +186,10 @@ async fn pidfile_flock_two_dynomiteds_back_to_back() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn redis-server");
+        .expect("spawn valkey-server");
     if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
         kill_silently(&mut redis);
-        panic!("redis-server did not bind {backend_port} within 30s");
+        panic!("valkey-server did not bind {backend_port} within 30s");
     }
 
     let conf_a = dir.path().join("a.yml");

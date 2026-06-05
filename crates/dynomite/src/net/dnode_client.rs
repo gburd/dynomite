@@ -188,7 +188,7 @@ async fn drive_dnode_parser(
                 let dmsg_ty = dmsg.ty;
                 msg.set_dmsg(dmsg);
                 let parse_result = match handler.data_store() {
-                    crate::conf::DataStore::Redis | crate::conf::DataStore::Noxu => {
+                    crate::conf::DataStore::Valkey | crate::conf::DataStore::Dyniak => {
                         crate::proto::redis::redis_parse_req(&mut msg, &decoded)
                     }
                     crate::conf::DataStore::Memcache => {

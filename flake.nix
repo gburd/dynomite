@@ -63,8 +63,10 @@
             netcat-gnu
             tcpdump
 
-            # Datastores used in integration tests
-            redis
+            # Datastores used in integration tests. Valkey is the
+            # open-source Redis fork; it ships valkey-server /
+            # valkey-cli / valkey-benchmark and speaks RESP.
+            valkey
             memcached
 
             # Scripting / glue

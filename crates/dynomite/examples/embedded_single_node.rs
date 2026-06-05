@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server: Server = ServerBuilder::new("dyn_o_mite")
         .listen("127.0.0.1:18102".parse()?)
         .dyn_listen("127.0.0.1:18101".parse()?)
-        .data_store(DataStore::Redis)
+        .data_store(DataStore::Valkey)
         .servers(vec![ConfServer::parse("127.0.0.1:6379:1 backend")?])
         .datacenter("dc-local")
         .rack("rack-local")

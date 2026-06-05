@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     let server = Server::builder()
         .listen("127.0.0.1:8102".parse()?)
         .stats_listen("127.0.0.1:22222".parse()?)
-        .data_store(DataStore::Redis)
+        .data_store(DataStore::Valkey)
         .servers(Servers::single(ConfServer::parse(
             "127.0.0.1:6379:1 backend",
         )?))

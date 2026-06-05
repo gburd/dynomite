@@ -49,7 +49,7 @@ Observability via easily accessible statistics
 
 const FOOTER: &str = ".SH SEE ALSO
 .BR memcached (8),
-.BR redis-server (1)
+.BR valkey-server (1)
 .br
 .SH AUTHOR
 Greg Burd <greg@burd.me> and contributors.

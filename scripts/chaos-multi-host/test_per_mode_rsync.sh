@@ -15,7 +15,7 @@
 #
 # Skips when:
 #   * dynomited release binary is missing;
-#   * redis-server / memcached are not on PATH (the smoke
+#   * valkey-server / memcached are not on PATH (the smoke
 #     can't actually exercise either mode without them);
 #   * the operator already has chaos resources allocated
 #     (we refuse to clobber a real run by detecting an
@@ -45,8 +45,8 @@ if [ ! -x "$REPO/target/release/dynomited" ]; then
     echo "SKIP: $REPO/target/release/dynomited missing; build with 'cargo build --release -p dynomited' first"
     exit 77
 fi
-if ! command -v redis-server >/dev/null 2>&1; then
-    echo "SKIP: redis-server not on PATH"
+if ! command -v valkey-server >/dev/null 2>&1; then
+    echo "SKIP: valkey-server not on PATH"
     exit 77
 fi
 if ! command -v memcached >/dev/null 2>&1; then

@@ -54,7 +54,7 @@ async fn spawn_node(
     let server: Server = ServerBuilder::new("p")
         .listen(listen.parse().unwrap())
         .dyn_listen(dyn_listen.parse().unwrap())
-        .data_store(DataStore::Redis)
+        .data_store(DataStore::Valkey)
         .servers(vec![ConfServer::parse("127.0.0.1:6379:1").unwrap()])
         .datacenter("dc-local")
         .rack(rack)

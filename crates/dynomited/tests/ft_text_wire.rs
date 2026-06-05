@@ -2,7 +2,7 @@
 //! surface (Phase D of the dynvec / dyntext fold).
 //!
 //! These tests exercise the trigram + bloom-filter index path
-//! end to end: they spawn a real `redis-server` (used as the
+//! end to end: they spawn a real `valkey-server` (used as the
 //! storage backend for HSET writes) plus a `dynomited`
 //! instance pointed at it, then drive RESP traffic through
 //! the proxy port and assert the responses come back from
@@ -46,7 +46,7 @@ fn pick_port() -> u16 {
 fn redis_server_in_path() -> Option<PathBuf> {
     let path_env = std::env::var_os("PATH")?;
     for entry in std::env::split_paths(&path_env) {
-        let candidate = entry.join("redis-server");
+        let candidate = entry.join("valkey-server");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -286,11 +286,11 @@ impl Rig {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn redis-server");
+            .expect("spawn valkey-server");
 
         if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
             kill_silently(&mut redis);
-            panic!("redis-server did not bind {backend_port} within 30s");
+            panic!("valkey-server did not bind {backend_port} within 30s");
         }
 
         let conf = dir_path.join("d.yml");
@@ -353,7 +353,7 @@ macro_rules! rig_or_skip {
         match Rig::try_spawn() {
             Some(r) => r,
             None => {
-                eprintln!("redis-server not in PATH; skipping wire test");
+                eprintln!("valkey-server not in PATH; skipping wire test");
                 return;
             }
         }

@@ -223,7 +223,7 @@ pub struct Server {
     pool_name: String,
     pool: Arc<ServerPool>,
     dispatcher: Arc<ClusterDispatcher>,
-    proxy: ProxyKind,
+    proxy: Option<ProxyKind>,
     dnode_proxy: Option<DnodeProxy>,
     stats: Option<StatsServer>,
     backend_handle: Option<JoinHandle<Result<(), NetError>>>,
@@ -412,64 +412,65 @@ impl Server {
             .and_then(|s| s.entries().first())
             .ok_or(ServerError::MissingConfig("servers"))?;
         let backend_data_store = pool_config.data_store;
+        let is_dyniak = backend_data_store == dynomite::conf::DataStore::Dyniak;
         let preconnect = conf_pool.preconnect.unwrap_or(false);
         let backend_capacity =
             usize::from(conf_pool.datastore_connections.unwrap_or(8)).max(1) * 64;
         let (backend_tx, backend_rx) =
             tokio::sync::mpsc::channel::<OutboundRequest>(backend_capacity);
 
-        // When `data_store: noxu` is selected, open the Noxu
-        // environment exactly once and share it across the
-        // backend supervisor and the Riak PBC / HTTP listener.
-        // Noxu's environment lock is exclusive per directory,
-        // so re-opening it would fail with
-        // `Environment locked`.
+        // A `data_store: dyniak` pool opens an in-process Noxu
+        // environment in transactional mode and serves the dyniak
+        // Riak PBC / HTTP surface against it. It does NOT dial an
+        // external backend and does NOT run a RESP client proxy,
+        // so neither a backend supervisor nor a front-end proxy
+        // listener is spawned. The shared handle is also handed to
+        // the Riak listener wiring below. Noxu's environment lock
+        // is exclusive per directory, so it is opened exactly
+        // once.
         #[cfg(feature = "riak")]
-        let noxu_shared: Option<Arc<dyniak::datastore::NoxuDatastore>> =
-            if backend_data_store == dynomite::conf::DataStore::Noxu {
-                let path = conf_pool.noxu_path.clone().ok_or(ServerError::BadConfig {
-                    field: "noxu_path",
-                    reason: "data_store: noxu requires a non-empty 'noxu_path:' directive".into(),
-                })?;
-                match dyniak::datastore::NoxuDatastore::open_in(&path) {
-                    Ok(ds) => Some(Arc::new(ds)),
-                    Err(e) => {
-                        return Err(ServerError::BadConfig {
-                            field: "noxu_path",
-                            reason: format!(
-                                "could not open Noxu environment at '{}': {e}",
-                                path.display()
-                            ),
-                        });
-                    }
+        let noxu_shared: Option<Arc<dyniak::datastore::NoxuDatastore>> = if is_dyniak {
+            let path = conf_pool.noxu_path.clone().ok_or(ServerError::BadConfig {
+                field: "noxu_path",
+                reason: "data_store: dyniak requires a non-empty 'noxu_path:' directive".into(),
+            })?;
+            match dyniak::datastore::NoxuDatastore::open_transactional(&path) {
+                Ok(ds) => Some(Arc::new(ds)),
+                Err(e) => {
+                    return Err(ServerError::BadConfig {
+                        field: "noxu_path",
+                        reason: format!(
+                            "could not open transactional Noxu environment at '{}': {e}",
+                            path.display()
+                        ),
+                    });
                 }
-            } else {
-                None
-            };
-
-        // Backend supervisor selection. The historical TCP path
-        // dials a remote Redis / Memcache backend; the Noxu
-        // path delegates to an in-process supervisor that
-        // executes against the shared Noxu environment.
-        let backend_handle: JoinHandle<Result<(), NetError>> = if backend_data_store
-            == dynomite::conf::DataStore::Noxu
-        {
-            #[cfg(feature = "riak")]
-            {
-                let noxu = noxu_shared
-                    .as_ref()
-                    .expect("invariant: noxu_shared populated when data_store == Noxu")
-                    .clone();
-                tokio::spawn(async move {
-                    crate::noxu_backend::noxu_backend_supervisor(noxu, backend_rx).await
-                })
             }
+        } else {
+            None
+        };
+
+        // Backend supervisor selection. The `valkey` / `memcache`
+        // path dials a remote backend over TCP and keeps one
+        // `ServerConn` alive against it. The `dyniak` path has no
+        // RESP backend, so no supervisor is spawned: its local
+        // datastore lives in-process behind the Riak surface.
+        let backend_handle: Option<JoinHandle<Result<(), NetError>>> = if is_dyniak {
             #[cfg(not(feature = "riak"))]
             {
                 return Err(ServerError::BadConfig {
                     field: "data_store",
-                    reason: "noxu data_store requires dynomited built with --features riak".into(),
+                    reason: "dyniak data_store requires dynomited built with --features riak"
+                        .into(),
                 });
+            }
+            #[cfg(feature = "riak")]
+            {
+                // The transactional Noxu environment opened above
+                // backs the dyniak surface; drop the unused RESP
+                // backend receiver so the channel closes cleanly.
+                drop(backend_rx);
+                None
             }
         } else {
             if datastore.is_unix() {
@@ -499,8 +500,8 @@ impl Server {
             // backend; the `preconnect: true` config option still
             // gets respected by attempting one synchronous connect
             // before returning. The supervisor reconnects with
-            // exponential-ish backoff on failure so transient redis
-            // restarts do not break the proxy permanently.
+            // exponential-ish backoff on failure so a transient
+            // backend restart does not break the proxy permanently.
             if preconnect {
                 match tokio::time::timeout(
                     Duration::from_secs(5),
@@ -528,7 +529,7 @@ impl Server {
                 }
             }
             let backend_requirepass = conf_pool.redis_requirepass.clone();
-            tokio::spawn(async move {
+            Some(tokio::spawn(async move {
                 backend_supervisor(
                     backend_addr,
                     backend_rx,
@@ -536,7 +537,7 @@ impl Server {
                     backend_requirepass,
                 )
                 .await
-            })
+            }))
         };
 
         // Spawn one peer supervisor per non-local peer so the
@@ -666,13 +667,22 @@ impl Server {
 
         let dispatcher = Arc::new(dispatcher);
 
-        let proxy = build_proxy(
-            listen_addr,
-            dispatcher.clone(),
-            pool_config.data_store,
-            &conf_pool,
-        )
-        .await?;
+        // A dyniak pool serves only the Riak PBC / HTTP surface;
+        // it does not run a RESP client proxy, so the front-end
+        // listener is left unbound.
+        let proxy = if is_dyniak {
+            None
+        } else {
+            Some(
+                build_proxy(
+                    listen_addr,
+                    dispatcher.clone(),
+                    pool_config.data_store,
+                    &conf_pool,
+                )
+                .await?,
+            )
+        };
 
         // Resolve peer-plane TLS knobs once at startup. When
         // both `peer_tls_cert` and `peer_tls_key` are set we build
@@ -730,14 +740,14 @@ impl Server {
         #[cfg(feature = "riak")]
         let riak_handles = match conf_pool.riak.as_ref() {
             Some(r) => {
-                // Reuse the same backing store the request
-                // dispatcher routes to: when `data_store: noxu`
-                // is selected the Riak PBC listener serves
-                // requests against the same Noxu environment
-                // the Redis-front dispatcher writes to. Other
-                // values fall back to the in-process
-                // `MemoryDatastore` so the Riak surface remains
-                // a stand-alone protocol on Redis / Memcache
+                // Reuse the same backing store the dyniak
+                // surface routes to: when `data_store: dyniak`
+                // is selected the Riak PBC / HTTP listeners serve
+                // requests against the transactional Noxu
+                // environment opened above. Other data stores
+                // (`valkey` / `memcache`) fall back to the
+                // in-process `MemoryDatastore` so the Riak
+                // surface remains a stand-alone protocol on those
                 // deployments.
                 let ds: Arc<dyn dynomite::embed::Datastore> = match noxu_shared.as_ref() {
                     Some(noxu) => noxu.clone(),
@@ -766,7 +776,7 @@ impl Server {
             proxy,
             dnode_proxy,
             stats,
-            backend_handle: Some(backend_handle),
+            backend_handle,
             peer_handles,
             listen_addr,
             dyn_listen_addr,
@@ -1044,9 +1054,10 @@ impl Server {
             "dynomited run loop starting"
         );
 
-        let proxy_cancel = cancel_future(shutdown_rx.clone());
-        let proxy_handle: JoinHandle<Result<(), NetError>> =
-            tokio::spawn(async move { proxy.run(proxy_cancel).await });
+        let proxy_handle: Option<JoinHandle<Result<(), NetError>>> = proxy.map(|proxy| {
+            let proxy_cancel = cancel_future(shutdown_rx.clone());
+            tokio::spawn(async move { proxy.run(proxy_cancel).await })
+        });
 
         let dnode_handle = dnode_proxy.map(|dnode| {
             let dispatcher = dispatcher.clone();
@@ -1067,7 +1078,7 @@ impl Server {
                         dynomite::net::ClientHandler::new(
                             dispatcher.clone(),
                             tx,
-                            dynomite::conf::DataStore::Redis,
+                            dynomite::conf::DataStore::Valkey,
                         )
                         .with_read_timeout(Some(Duration::from_secs(60)))
                         .with_gossip(gossip_for_factory.clone())
@@ -1173,7 +1184,7 @@ impl Server {
             &shutdown_tx,
             &mut shutdown_rx,
             &mut signals,
-            &proxy_handle,
+            proxy_handle.as_ref(),
             dnode_handle.as_ref(),
             stats_handle.as_ref(),
             &reload_ctx,
@@ -1233,7 +1244,11 @@ impl Server {
         drop(gossip_peer_txs);
         drop(gossip_handler);
 
-        let proxy_outcome = await_listener("proxy", proxy_handle).await;
+        let proxy_outcome = if let Some(h) = proxy_handle {
+            await_listener("proxy", h).await
+        } else {
+            Ok(())
+        };
         let dnode_outcome = if let Some(h) = dnode_handle {
             await_listener("dnode_proxy", h).await
         } else {
@@ -1300,7 +1315,7 @@ async fn supervise(
     shutdown_tx: &watch::Sender<bool>,
     shutdown_rx: &mut watch::Receiver<bool>,
     signals: &mut SignalSet,
-    proxy: &JoinHandle<Result<(), NetError>>,
+    proxy: Option<&JoinHandle<Result<(), NetError>>>,
     dnode: Option<&JoinHandle<Result<(), NetError>>>,
     stats: Option<&JoinHandle<io::Result<()>>>,
     reload: &ReloadContext<'_>,
@@ -1338,7 +1353,7 @@ async fn supervise(
                     }
                 }
             }
-            () = wait_finished(proxy) => {
+            () = wait_finished_opt(proxy) => {
                 tracing::error!("proxy listener exited unexpectedly");
                 let _ = shutdown_tx.send(true);
                 return Err(ServerError::TaskFailed {
@@ -1571,7 +1586,7 @@ async fn backend_supervisor(
         // Optional Redis AUTH handshake before the supervisor
         // hands the stream to the run loop. Memcache backends
         // skip this entirely (binary SASL is not implemented).
-        if data_store == dynomite::conf::DataStore::Redis {
+        if data_store == dynomite::conf::DataStore::Valkey {
             if let Some(pw) = requirepass.as_deref() {
                 if let Err(e) = redis_auth_handshake(&mut stream, pw, Duration::from_secs(5)).await
                 {
@@ -1831,7 +1846,7 @@ async fn run_one_backend_conn(
                     let head_id = pending.front().map_or(0, |p| p.0);
                     let mut msg = Msg::new(head_id, MsgType::Unknown, false);
                     let result = match data_store {
-                        dynomite::conf::DataStore::Redis | dynomite::conf::DataStore::Noxu => {
+                        dynomite::conf::DataStore::Valkey | dynomite::conf::DataStore::Dyniak => {
                             dynomite::proto::redis::redis_parse_rsp(&mut msg, &accumulated)
                         }
                         dynomite::conf::DataStore::Memcache => {

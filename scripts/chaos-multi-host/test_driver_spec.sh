@@ -5,7 +5,7 @@
 # Sources the helper and asserts compute_driver_specs / the
 # pidfile mapping produce the expected per-mode fan-out. The
 # combined case is the load-bearing one: it must emit exactly
-# three specs (redis + memcache + riak) with the QPS split so
+# three specs (valkey + memcache + riak) with the QPS split so
 # the total is preserved, distinct band-shifted ports, and no
 # --noxu-compat anywhere.
 #
@@ -68,13 +68,13 @@ line_count="$(printf '%s\n' "$specs" | grep -c .)"
 assert_eq 3 "$line_count" "combined emits three specs"
 
 # Parse the three specs.
-redis_spec="$(printf '%s\n' "$specs" | sed -n '1p')"
+valkey_spec="$(printf '%s\n' "$specs" | sed -n '1p')"
 memcache_spec="$(printf '%s\n' "$specs" | sed -n '2p')"
 riak_spec="$(printf '%s\n' "$specs" | sed -n '3p')"
 
-redis_suffix="$(printf '%s' "$redis_spec" | cut -f1)"
-redis_qps="$(printf '%s' "$redis_spec" | cut -f2)"
-redis_flags="$(printf '%s' "$redis_spec" | cut -f3)"
+valkey_suffix="$(printf '%s' "$valkey_spec" | cut -f1)"
+valkey_qps="$(printf '%s' "$valkey_spec" | cut -f2)"
+valkey_flags="$(printf '%s' "$valkey_spec" | cut -f3)"
 memcache_suffix="$(printf '%s' "$memcache_spec" | cut -f1)"
 memcache_qps="$(printf '%s' "$memcache_spec" | cut -f2)"
 memcache_flags="$(printf '%s' "$memcache_spec" | cut -f3)"
@@ -82,18 +82,18 @@ riak_suffix="$(printf '%s' "$riak_spec" | cut -f1)"
 riak_qps="$(printf '%s' "$riak_spec" | cut -f2)"
 riak_flags="$(printf '%s' "$riak_spec" | cut -f3)"
 
-assert_eq "-redis" "$redis_suffix" "combined first spec is redis"
+assert_eq "-valkey" "$valkey_suffix" "combined first spec is valkey"
 assert_eq "-memcache" "$memcache_suffix" "combined second spec is memcache"
 assert_eq "-riak" "$riak_suffix" "combined third spec is riak"
 
 # QPS split three ways (200/3 = 66, 66, remainder 68).
-assert_eq "66" "$redis_qps" "combined redis qps third"
+assert_eq "66" "$valkey_qps" "combined valkey qps third"
 assert_eq "66" "$memcache_qps" "combined memcache qps third"
 assert_eq "68" "$riak_qps" "combined riak qps remainder"
 
-# Each driver dials its own band: redis +0, memcache +1000, riak
-# PBC +2000.
-assert_eq "--mode redis --port 18102" "$redis_flags" "combined redis flags"
+# Each driver dials its own band: valkey +0, memcache +1000,
+# dyniak PBC +2000.
+assert_eq "--mode valkey --port 18102" "$valkey_flags" "combined valkey flags"
 assert_eq "--mode memcache --port 19102" "$memcache_flags" \
     "combined memcache flags"
 assert_eq "--mode riak --riak-pbc-port 23800" "$riak_flags" \
@@ -134,8 +134,8 @@ ok "no mode emits --noxu-compat"
 # ---- pidfile mapping ----
 assert_eq "/run/workload.pid" "$(driver_pidfile_for "" /run)" \
     "empty suffix maps to workload.pid"
-assert_eq "/run/driver-redis.pid" "$(driver_pidfile_for "-redis" /run)" \
-    "redis suffix maps to driver-redis.pid"
+assert_eq "/run/driver-valkey.pid" "$(driver_pidfile_for "-valkey" /run)" \
+    "valkey suffix maps to driver-valkey.pid"
 assert_eq "/run/driver-riak.pid" "$(driver_pidfile_for "-riak" /run)" \
     "riak suffix maps to driver-riak.pid"
 assert_eq "/run/driver-memcache.pid" "$(driver_pidfile_for "-memcache" /run)" \

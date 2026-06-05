@@ -5,7 +5,7 @@
 //! ANN search. The MVP ships a [`MemoryStore`] backend that
 //! satisfies the [`Backend`] trait without external dependencies;
 //! a Noxu-backed implementation lives behind the optional `noxu`
-//! feature in [`crate::storage::noxu_backend`].
+//! feature in a follow-up storage backend.
 //!
 //! Layout:
 //!

@@ -83,18 +83,21 @@ pub enum ConfError {
     #[error("conf: directive 'secure_server_option' must be one of 'none', 'rack', 'datacenter', 'all', got '{0}'")]
     BadSecure(String),
 
-    /// `data_store` value is not 0 (Redis), 1 (Memcache), or 2
-    /// (Noxu). The string forms `redis`, `memcache`, and `noxu`
-    /// are also accepted on the YAML side and are translated to
-    /// these integers before validation.
-    #[error("conf: directive 'data_store' must be 0 (redis), 1 (memcache), or 2 (noxu), got {0}")]
+    /// `data_store` value is not 0 (Valkey), 1 (Memcache), or 2
+    /// (Dyniak). The string forms `valkey` (and the back-compat
+    /// alias `redis`), `memcache`, and `dyniak` are also accepted
+    /// on the YAML side and are translated to these integers
+    /// before validation.
+    #[error(
+        "conf: directive 'data_store' must be 0 (valkey), 1 (memcache), or 2 (dyniak), got {0}"
+    )]
     BadDataStore(i64),
 
-    /// `data_store: noxu` was selected but `noxu_path` was not
+    /// `data_store: dyniak` was selected but `noxu_path` was not
     /// supplied or `dynomited` was built without `--features
     /// riak`.
     #[error("conf: {0}")]
-    BadNoxuConfig(&'static str),
+    BadDyniakConfig(&'static str),
 
     /// `hash` value is not a recognized hash algorithm name.
     #[error("conf: directive 'hash' is not a valid hash function, got '{0}'")]

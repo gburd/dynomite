@@ -95,7 +95,7 @@ impl ServerConn {
     /// let s = tokio::net::TcpStream::connect("127.0.0.1:6379").await.unwrap();
     /// let conn = Conn::new(Box::new(TcpTransport::new(s, ConnRole::Server)), ConnRole::Server);
     /// let (_tx, rx) = mpsc::channel(8);
-    /// let _ = ServerConn::new(conn, rx, DataStore::Redis);
+    /// let _ = ServerConn::new(conn, rx, DataStore::Valkey);
     /// # });
     /// ```
     #[must_use]
@@ -207,7 +207,7 @@ impl ServerConn {
             let id = self.pending_responses.front().map_or(0, |(i, _, _)| *i);
             let mut msg = Msg::new(id, MsgType::Unknown, false);
             let result = match self.data_store {
-                DataStore::Redis | DataStore::Noxu => redis_parse_rsp(&mut msg, accumulated),
+                DataStore::Valkey | DataStore::Dyniak => redis_parse_rsp(&mut msg, accumulated),
                 DataStore::Memcache => memcache_parse_rsp(&mut msg, accumulated),
             };
             match result {
@@ -284,7 +284,7 @@ mod tests {
             ConnRole::Server,
         );
         let (_tx, rx) = mpsc::channel(1);
-        let server = ServerConn::new(conn, rx, DataStore::Redis);
+        let server = ServerConn::new(conn, rx, DataStore::Valkey);
         assert_eq!(server.conn().role(), ConnRole::Server);
     }
 }

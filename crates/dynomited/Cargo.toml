@@ -59,8 +59,8 @@ gen-man = ["dep:clap_mangen"]
 # alone.
 search = ["dep:dynomite-search"]
 # Enable the end-to-end integration test that spawns a real
-# `redis-server` and drives the `dynomited` binary against it.
-# The test discovers `redis-server` via `PATH`; when the binary
+# `valkey-server` and drives the `dynomited` binary against it.
+# The test discovers `valkey-server` via `PATH`; when the binary
 # is missing it marks itself ignored rather than failing. The
 # feature gates only the test, no production code.
 integration = ["search"]

@@ -450,17 +450,17 @@ class FullRunSynthesisTests(unittest.TestCase):
 
 
 class CombinedPerApiTests(unittest.TestCase):
-    """MODE=combined: per-API driver files per host (redis +
-    memcache + riak), each instance on its own port band.
-    These cases cover the redis + riak subset; the memcache
+    """MODE=combined: per-API driver files per host (valkey +
+    memcache + dyniak), each instance on its own port band.
+    These cases cover the valkey + riak subset; the memcache
     columns are exercised as zero here and non-zero in the
     full combined run.
 
     Asserts the report (1) discovers the suffixed driver files
     and reconstructs the host label correctly, (2) sums ok/fail
     across both files for the per-host workload total, and (3)
-    renders the per-API breakdown with redis/riak ok/fail plus
-    the ft / ftsug RediSearch sub-classes pulled from the redis
+    renders the per-API breakdown with valkey/riak ok/fail plus
+    the ft / ftsug RediSearch sub-classes pulled from the valkey
     driver's counts.
     """
 
@@ -482,9 +482,9 @@ class CombinedPerApiTests(unittest.TestCase):
 
     def test_two_drivers_one_host_breakdown_and_total(self):
         label = "dc-floki"
-        # redis driver: RESP strings + RediSearch ft / ftsug.
-        redis_rows = [self._row(
-            label, "redis",
+        # valkey driver: RESP strings + RediSearch ft / ftsug.
+        valkey_rows = [self._row(
+            label, "valkey",
             {
                 "strings/SET": 100,
                 "strings/GET": 100,
@@ -503,17 +503,17 @@ class CombinedPerApiTests(unittest.TestCase):
         run_dir = _make_run_dir(
             self.tmp, "pass9-combined-20261201-000000Z", [label],
             mode="combined",
-            workload_api_per_host={label: {"redis": redis_rows,
+            workload_api_per_host={label: {"valkey": valkey_rows,
                                            "riak": riak_rows}},
         )
         md = GR.render_report(run_dir)
 
         # Label reconstructed from a suffixed filename, not
-        # "dc-floki-redis".
+        # "dc-floki-valkey".
         self.assertIn("`dc-floki`", md)
-        self.assertNotIn("`dc-floki-redis`", md)
+        self.assertNotIn("`dc-floki-valkey`", md)
 
-        # Per-host workload total: redis ok = 260, riak ok = 200
+        # Per-host workload total: valkey ok = 260, riak ok = 200
         # => 460 ok; fail = 5 + 3 = 8; total = 468.
         self.assertIn("## Workload totals", md)
         self.assertIn("460", md)
@@ -521,12 +521,12 @@ class CombinedPerApiTests(unittest.TestCase):
 
         # Per-API breakdown section with the documented columns.
         self.assertIn("## Per-API breakdown", md)
-        self.assertIn("redis ok", md)
+        self.assertIn("valkey ok", md)
         self.assertIn("riak ok", md)
         self.assertIn("ft ok", md)
         self.assertIn("ftsug ok", md)
 
-        # The dc-floki breakdown row: redis ok=260, redis fail=5,
+        # The dc-floki breakdown row: valkey ok=260, valkey fail=5,
         # riak ok=200, riak fail=3, ft ok=50, ftsug ok=10.
         row = re.search(
             r"\| `dc-floki` \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \|",
@@ -564,14 +564,14 @@ class CombinedPerApiTests(unittest.TestCase):
         self.assertNotIn("## Per-API breakdown", md)
 
     def test_multi_host_unified_aggregate(self):
-        """Two hosts, each with redis + riak drivers; aggregate sums."""
+        """Two hosts, each with valkey + riak drivers; aggregate sums."""
         hosts = ["dc-floki", "dc-arnold"]
         api_rows = {}
         for h in hosts:
             api_rows[h] = {
-                "redis": [self._row(h, "redis",
-                                    {"strings/SET": 50, "ft/FT.CREATE": 10},
-                                    {})],
+                "valkey": [self._row(h, "valkey",
+                                     {"strings/SET": 50, "ft/FT.CREATE": 10},
+                                     {})],
                 "riak": [self._row(h, "riak", {"riak/Put": 40}, {})],
             }
         run_dir = _make_run_dir(

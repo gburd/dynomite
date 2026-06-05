@@ -1,4 +1,4 @@
-# Tutorial: Vector + Text + Regex Search via redis-cli
+# Tutorial: Vector + Text + Regex Search via valkey-cli
 
 This walkthrough takes a fresh checkout to a running search stack on
 your laptop in about ten minutes. Every command in this chapter is
@@ -11,7 +11,7 @@ By the end you will:
 - have a single `dynomited` node listening on `127.0.0.1:18402`, backed
   by a local Redis on `127.0.0.1:22122`;
 - have run k-NN vector search, trigram substring search, and TRE
-  approximate regex search via `redis-cli`;
+  approximate regex search via `valkey-cli`;
 - understand the wire-protocol shape of each FT.* response and how to
   encode the binary float blob a vector query needs.
 
@@ -20,7 +20,7 @@ By the end you will:
 You need:
 
 - Rust 1.90 or newer (`cargo --version` should report `>= 1.90`).
-- `redis-cli` and `redis-server` (any 6.x, 7.x, or 8.x release works).
+- `valkey-cli` and `valkey-server` (any 6.x, 7.x, or 8.x release works).
 - `python3` (used as a small encoder for binary float blobs).
 - On Linux, `libopenblas-dev` (Debian/Ubuntu) or the equivalent
   `openblas` package on your distro. The vector engine pulls in
@@ -33,7 +33,7 @@ above. Otherwise, install the system packages explicitly:
 
 ```sh
 # Debian / Ubuntu
-sudo apt-get install -y redis-server redis-tools libopenblas-dev python3
+sudo apt-get install -y valkey-server redis-tools libopenblas-dev python3
 
 # macOS (Homebrew)
 brew install redis openblas python3
@@ -62,11 +62,11 @@ your raw `HSET` / `HGET` / `DEL` traffic:
 ```sh
 mkdir -p /tmp/dynomite-tutorial
 cd /tmp/dynomite-tutorial
-redis-server --port 22122 --daemonize yes \
+valkey-server --port 22122 --daemonize yes \
     --dir /tmp/dynomite-tutorial \
     --pidfile /tmp/dynomite-tutorial/redis.pid \
     --logfile /tmp/dynomite-tutorial/redis.log
-redis-cli -p 22122 PING
+valkey-cli -p 22122 PING
 ```
 
 Expected output:
@@ -93,7 +93,7 @@ EOF
 
 The keys are:
 
-- `listen:` is the client-facing RESP port. Your `redis-cli` connects
+- `listen:` is the client-facing RESP port. Your `valkey-cli` connects
   here.
 - `dyn_listen:` is the inter-node DYN_O_MITE port. We are not running
   a cluster yet but the field is required.
@@ -113,7 +113,7 @@ nohup ./target/release/dynomited \
     -c /tmp/dynomite-tutorial/dynomite.yml \
     > /tmp/dynomite-tutorial/dynomited.log 2>&1 &
 sleep 2
-redis-cli -p 18402 PING
+valkey-cli -p 18402 PING
 ```
 
 Expected output:
@@ -133,7 +133,7 @@ Create a four-dimensional cosine HNSW index against the `docs:`
 prefix. `title` is a TEXT field and `vec` is the vector field:
 
 ```sh
-redis-cli -p 18402 FT.CREATE myidx \
+valkey-cli -p 18402 FT.CREATE myidx \
     ON HASH PREFIX 1 docs: \
     SCHEMA \
         title TEXT \
@@ -154,8 +154,8 @@ unchanged.
 Confirm the index registered, then peek at its metadata:
 
 ```sh
-redis-cli -p 18402 FT.LIST
-redis-cli -p 18402 FT.INFO myidx
+valkey-cli -p 18402 FT.LIST
+valkey-cli -p 18402 FT.INFO myidx
 ```
 
 Expected output:
@@ -220,19 +220,19 @@ floats, and the index will store and search the wrong values.
 
 ### Insert documents
 
-`redis-cli -x` reads its last argument from standard input. Pipe the
+`valkey-cli -x` reads its last argument from standard input. Pipe the
 binary blob through it so the shell never has to handle the embedded
 NUL bytes:
 
 ```sh
 python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<4f', 1.0, 0.0, 0.0, 0.0))" \
-    | redis-cli -p 18402 -x HSET docs:1 title "first hello world" vec
+    | valkey-cli -p 18402 -x HSET docs:1 title "first hello world" vec
 
 python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<4f', 0.9, 0.1, 0.0, 0.0))" \
-    | redis-cli -p 18402 -x HSET docs:2 title "second hello there" vec
+    | valkey-cli -p 18402 -x HSET docs:2 title "second hello there" vec
 
 python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<4f', 0.0, 1.0, 0.0, 0.0))" \
-    | redis-cli -p 18402 -x HSET docs:3 title "third orthogonal" vec
+    | valkey-cli -p 18402 -x HSET docs:3 title "third orthogonal" vec
 ```
 
 Expected output (one line per HSET):
@@ -256,7 +256,7 @@ the binary blob piped via `-x` lands in the right argument slot:
 
 ```sh
 python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<4f', 1.0, 0.0, 0.0, 0.0))" \
-    | redis-cli -p 18402 -x FT.SEARCH myidx '*=>[KNN 3 @vec $blob]' PARAMS 2 blob
+    | valkey-cli -p 18402 -x FT.SEARCH myidx '*=>[KNN 3 @vec $blob]' PARAMS 2 blob
 ```
 
 Expected output:
@@ -291,7 +291,7 @@ when you pipe the vector via `-x`:
 
 ```sh
 python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<4f', 1.0, 0.0, 0.0, 0.0))" \
-    | redis-cli -p 18402 -x FT.SEARCH myidx '*=>[KNN 3 @vec $blob]' \
+    | valkey-cli -p 18402 -x FT.SEARCH myidx '*=>[KNN 3 @vec $blob]' \
         RETURN 1 title LIMIT 0 5 PARAMS 2 blob
 ```
 
@@ -325,7 +325,7 @@ for i in 10 11 12 13; do
       13) t="hxllo world" ;;
     esac
     python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<4f', 0.${i}, 0.0, 0.0, 0.0))" \
-        | redis-cli -p 18402 -x HSET docs:$i title "$t" vec
+        | valkey-cli -p 18402 -x HSET docs:$i title "$t" vec
 done
 ```
 
@@ -334,7 +334,7 @@ Expected output (one `2` per row).
 Run the substring query:
 
 ```sh
-redis-cli -p 18402 FT.SEARCH myidx '@title:hello'
+valkey-cli -p 18402 FT.SEARCH myidx '@title:hello'
 ```
 
 Expected output:
@@ -365,7 +365,7 @@ query string. That is the same trigram set the funnel uses to walk
 the postings list:
 
 ```sh
-redis-cli -p 18402 FT.EXPLAIN myidx '@title:hello'
+valkey-cli -p 18402 FT.EXPLAIN myidx '@title:hello'
 ```
 
 Expected output:
@@ -385,7 +385,7 @@ exact-substring recheck filters the candidate set.
 Compare with a vector EXPLAIN:
 
 ```sh
-redis-cli -p 18402 FT.EXPLAIN myidx '*=>[KNN 5 @vec $blob]'
+valkey-cli -p 18402 FT.EXPLAIN myidx '*=>[KNN 5 @vec $blob]'
 ```
 
 Expected output:
@@ -412,7 +412,7 @@ underlying engine is TRE (the same library that powers `agrep(1)`).
 `hello` come back.
 
 ```sh
-redis-cli -p 18402 FT.REGEX myidx title 'hello' K=0
+valkey-cli -p 18402 FT.REGEX myidx title 'hello' K=0
 ```
 
 Expected output:
@@ -434,7 +434,7 @@ hello world
 `hxllo`:
 
 ```sh
-redis-cli -p 18402 FT.REGEX myidx title 'hello' K=1
+valkey-cli -p 18402 FT.REGEX myidx title 'hello' K=1
 ```
 
 Expected output:
@@ -465,7 +465,7 @@ hxllo world
 `K=1`; on a larger corpus you would see additional matches drift in:
 
 ```sh
-redis-cli -p 18402 FT.REGEX myidx title 'hello' K=2
+valkey-cli -p 18402 FT.REGEX myidx title 'hello' K=2
 ```
 
 Real regex syntax works too. The pattern is anchored by the underlying
@@ -473,7 +473,7 @@ TRE engine; group, alternation, and character class metacharacters all
 behave the way `regex(7)` documents:
 
 ```sh
-redis-cli -p 18402 FT.REGEX myidx title 'h(e|x)l*o' K=0
+valkey-cli -p 18402 FT.REGEX myidx title 'h(e|x)l*o' K=0
 ```
 
 Expected output:
@@ -504,7 +504,7 @@ hxllo world
 error:
 
 ```sh
-redis-cli -p 18402 FT.REGEX myidx title 'hello' K=-1
+valkey-cli -p 18402 FT.REGEX myidx title 'hello' K=-1
 ```
 
 Expected output:
@@ -522,9 +522,9 @@ separate at the wire layer; the application combines them.
 Add a body-bearing document:
 
 ```sh
-redis-cli -p 18402 FT.ALTER myidx ADD body TEXT
+valkey-cli -p 18402 FT.ALTER myidx ADD body TEXT
 python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<4f', 0.5, 0.5, 0.0, 0.0))" \
-    | redis-cli -p 18402 -x HSET docs:30 \
+    | valkey-cli -p 18402 -x HSET docs:30 \
         title "with body" \
         body "this body talks about machine learning" \
         vec
@@ -540,7 +540,7 @@ OK
 Filter by body keyword:
 
 ```sh
-redis-cli -p 18402 FT.SEARCH myidx '@body:machine'
+valkey-cli -p 18402 FT.SEARCH myidx '@body:machine'
 ```
 
 Expected output:
@@ -558,7 +558,7 @@ closest:
 
 ```sh
 python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<4f', 0.5, 0.5, 0.0, 0.0))" \
-    | redis-cli -p 18402 -x FT.SEARCH myidx '*=>[KNN 3 @vec $blob]' PARAMS 2 blob
+    | valkey-cli -p 18402 -x FT.SEARCH myidx '*=>[KNN 3 @vec $blob]' PARAMS 2 blob
 ```
 
 Expected output (truncated; closer matches first):
@@ -588,7 +588,7 @@ phase application pattern above is the correct shape.
 configured prefixes:
 
 ```sh
-redis-cli -p 18402 FT.INFO myidx
+valkey-cli -p 18402 FT.INFO myidx
 ```
 
 The output is a flat key/value array. The integer fields you will
@@ -604,7 +604,7 @@ care about most:
 name:
 
 ```sh
-redis-cli -p 18402 FT.LIST
+valkey-cli -p 18402 FT.LIST
 ```
 
 Expected output:
@@ -619,7 +619,7 @@ written before the ALTER do not retroactively pick it up. Supported
 types are `TEXT` and `TAG`:
 
 ```sh
-redis-cli -p 18402 FT.ALTER myidx ADD genre TAG
+valkey-cli -p 18402 FT.ALTER myidx ADD genre TAG
 ```
 
 `FT.DROPINDEX <idx> [DD]` removes the index. With `DD`, the
@@ -627,11 +627,11 @@ underlying documents are deleted from the backing store; without it,
 the rows survive and you can re-index them with another FT.CREATE:
 
 ```sh
-redis-cli -p 18402 FT.CREATE empty ON HASH PREFIX 1 emp: \
+valkey-cli -p 18402 FT.CREATE empty ON HASH PREFIX 1 emp: \
     SCHEMA body TEXT vec VECTOR HNSW 6 TYPE FLOAT32 DIM 4 \
     DISTANCE_METRIC COSINE
-redis-cli -p 18402 FT.DROPINDEX empty
-redis-cli -p 18402 FT.LIST
+valkey-cli -p 18402 FT.DROPINDEX empty
+valkey-cli -p 18402 FT.LIST
 ```
 
 Expected output:
@@ -678,7 +678,7 @@ RediSearch app to dynomite:
   the U+00E9 character; the latter would split across two trigrams
   the user did not type.
 
-- **`redis-cli -x` reads stdin into the LAST argument.** Always put
+- **`valkey-cli -x` reads stdin into the LAST argument.** Always put
   the binary blob's PARAMS clause at the end of your FT.SEARCH
   command line. Putting `RETURN`, `LIMIT`, or `SORTBY` after
   `PARAMS 2 blob` will not work because the blob lands one slot too
@@ -696,7 +696,7 @@ When you are done, stop the server and the backing Redis:
 
 ```sh
 pkill -f "dynomited.*tutorial"
-redis-cli -p 22122 SHUTDOWN NOSAVE 2>/dev/null || true
+valkey-cli -p 22122 SHUTDOWN NOSAVE 2>/dev/null || true
 rm -rf /tmp/dynomite-tutorial
 ```
 

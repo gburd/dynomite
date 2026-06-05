@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """Workload driver for the multi-host chaos test.
 
-Drives a Redis, memcache, or Riak PBC client against the local
-dynomited instance. The selected mode determines:
+Drives a Valkey (RESP), memcache, or Riak PBC client against the
+local dynomited instance. The selected mode determines:
 
-  * ``--mode redis``    -- RESP-2 over TCP, ``data_store: 0``
-  * ``--mode memcache`` -- memcache ASCII over TCP, ``data_store: 1``
+  * ``--mode valkey``   -- RESP-2 over TCP, ``data_store: valkey``
+                           (``--mode redis`` is accepted as a
+                           back-compat alias for the same RESP
+                           driver)
+  * ``--mode memcache`` -- memcache ASCII over TCP, ``data_store: memcache``
   * ``--mode riak``     -- Riak PBC over TCP at the engine's
-                           ``riak.pbc_listen`` address; the
-                           upstream ``data_store`` is irrelevant
-                           because the request flows through
-                           dyniak's MemoryDatastore (or whatever
-                           Datastore the binary was wired with)
-                           rather than the Redis/memcache
-                           dispatcher.
+                           ``riak.pbc_listen`` address against a
+                           ``data_store: dyniak`` pool (the dyniak
+                           surface runs no RESP proxy), or against
+                           the dyniak MemoryDatastore on other
+                           deployments.
 
 In every mode the driver runs continuously until SIGTERM,
 periodically recording per-class success/failure counters into a
@@ -1439,7 +1440,7 @@ def classify_error(exc: BaseException, mode: str) -> str:
     if exc.args:
         first = exc.args[0]
         msg = first if isinstance(first, str) else str(first)
-    if mode == "redis" and isinstance(exc, RespError):
+    if mode in ("valkey", "redis") and isinstance(exc, RespError):
         # The dispatcher prepends ``-DYNOMITE: `` (or a
         # capitalised ``-Dynomite: ``) to every operational
         # error. The leading minus is stripped by the RESP
@@ -1597,9 +1598,11 @@ def main() -> int:
     p.add_argument("--qps", type=int, default=200)
     p.add_argument("--duration", type=int, default=7200,
                    help="seconds; 0 means until SIGTERM")
-    p.add_argument("--mode", default="redis",
-                   choices=("redis", "memcache", "riak", "differential"),
-                   help="protocol to drive")
+    p.add_argument("--mode", default="valkey",
+                   choices=("valkey", "redis", "memcache", "riak",
+                            "differential"),
+                   help="protocol to drive (valkey == RESP; redis is a "
+                        "back-compat alias for valkey)")
     p.add_argument("--riak-pbc-port", type=int, default=21800,
                    help="Riak PBC listener port (only used when "
                         "--mode riak); defaults to 21800")

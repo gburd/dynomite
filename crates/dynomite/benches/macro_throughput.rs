@@ -5,7 +5,7 @@
 //! `CAP_NET_ADMIN`. Out-of-the-box this binary compiles to a
 //! diagnostic stub that prints how to enable the macro harness;
 //! the operator-run version under `bench-macro` spawns a 3-node
-//! local cluster, drives a redis-benchmark style workload for 30s
+//! local cluster, drives a valkey-benchmark style workload for 30s
 //! per condition, and writes the per-condition JSON snapshot to
 //! `target/bench/macro-<git-sha>.json`.
 //!
@@ -101,13 +101,13 @@ mod harness {
     }
 
     /// Run one condition. Placeholder: spawns three [`Server`](dynomite::Server)
-    /// instances, drives `redis-benchmark`, and reports tail latency.
+    /// instances, drives `valkey-benchmark`, and reports tail latency.
     /// The full implementation lives in the operator harness; this
     /// stub captures the wall time so the gate compiles end-to-end.
     pub fn run_condition(name: &str) -> serde_json::Value {
         let started = Instant::now();
         // The real harness spawns a 3-node cluster on localhost and
-        // drives `redis-benchmark` for 30 seconds; the stub returns
+        // drives `valkey-benchmark` for 30 seconds; the stub returns
         // an explicit `not-implemented-in-ci` marker so consumers do
         // not mistake the wall-clock for measured throughput.
         let elapsed = started.elapsed().min(Duration::from_secs(30));

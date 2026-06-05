@@ -18,7 +18,7 @@
 //! Tests in this file are gated on `feature = "quic"` (which
 //! also pulls the engine's `quic` feature in via the
 //! `dynomited` crate's feature graph). They additionally
-//! require `redis-server` on `PATH`; without it the harness
+//! require `valkey-server` on `PATH`; without it the harness
 //! prints a skip notice and exits successfully.
 //!
 //! See `docs/journal/2026-06-01-quic-conformance.md` for the
@@ -26,7 +26,7 @@
 //! `docs/journal/2026-06-01-quic-wire-up.md` for the unblock
 //! summary.
 //!
-//! Tags: feature = quic; redis-server required.
+//! Tags: feature = quic; valkey-server required.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -40,7 +40,7 @@ use crate::helpers::{
 
 fn skip(name: &str) -> bool {
     if !redis_server_available() {
-        eprintln!("[conformance::quic_three_node::{name}] redis-server not on PATH; skipping");
+        eprintln!("[conformance::quic_three_node::{name}] valkey-server not on PATH; skipping");
         return true;
     }
     false

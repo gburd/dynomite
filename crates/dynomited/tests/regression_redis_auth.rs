@@ -4,7 +4,7 @@
 //! Two scenarios:
 //!
 //! 1. `redis_auth_correct_password_round_trip` - spins up
-//!    `redis-server --requirepass shibboleth`, points dynomited
+//!    `valkey-server --requirepass shibboleth`, points dynomited
 //!    at it with `redis_requirepass: shibboleth`, drives a
 //!    `SET` / `GET` round-trip, and asserts the proxy answered
 //!    each command with the expected RESP reply. This is the
@@ -24,7 +24,7 @@
 //!    looping cooperatively rather than wedged on a panic.
 //!
 //! Gated behind the `integration` feature (which depends on
-//! `redis-server` being on `PATH`); when missing, the test
+//! `valkey-server` being on `PATH`); when missing, the test
 //! marks itself as skipped rather than failing.
 
 #![cfg(feature = "integration")]
@@ -49,7 +49,7 @@ fn pick_port() -> u16 {
 fn redis_server_in_path() -> Option<PathBuf> {
     let path_env = std::env::var_os("PATH")?;
     for entry in std::env::split_paths(&path_env) {
-        let candidate = entry.join("redis-server");
+        let candidate = entry.join("valkey-server");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -130,7 +130,7 @@ fn spawn_passworded_redis(redis_bin: &PathBuf, port: u16, dir: &std::path::Path)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn redis-server");
+        .expect("spawn valkey-server");
     child
 }
 
@@ -170,7 +170,7 @@ fn read_file_lossy(path: &std::path::Path) -> String {
 #[tokio::test]
 async fn redis_auth_correct_password_round_trip() {
     let Some(redis_bin) = redis_server_in_path() else {
-        eprintln!("redis-server not in PATH; skipping integration test");
+        eprintln!("valkey-server not in PATH; skipping integration test");
         return;
     };
 
@@ -184,7 +184,7 @@ async fn redis_auth_correct_password_round_trip() {
     let mut redis = spawn_passworded_redis(&redis_bin, backend_port, dir.path());
     if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
         kill_silently(&mut redis);
-        panic!("redis-server did not bind {backend_port} within 30s");
+        panic!("valkey-server did not bind {backend_port} within 30s");
     }
 
     let conf = dir.path().join("d.yml");
@@ -250,7 +250,7 @@ async fn redis_auth_correct_password_round_trip() {
 #[tokio::test]
 async fn redis_auth_wrong_password_supervisor_fails() {
     let Some(redis_bin) = redis_server_in_path() else {
-        eprintln!("redis-server not in PATH; skipping integration test");
+        eprintln!("valkey-server not in PATH; skipping integration test");
         return;
     };
 
@@ -264,7 +264,7 @@ async fn redis_auth_wrong_password_supervisor_fails() {
     let mut redis = spawn_passworded_redis(&redis_bin, backend_port, dir.path());
     if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
         kill_silently(&mut redis);
-        panic!("redis-server did not bind {backend_port} within 30s");
+        panic!("valkey-server did not bind {backend_port} within 30s");
     }
 
     // Configure with a deliberately wrong password.

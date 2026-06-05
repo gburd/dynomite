@@ -2,14 +2,14 @@
 #
 # Per-host startup script for the multi-host chaos test.
 # Runs on every cluster host. Receives $DC_NAME and $TOKENS and
-# the seed list as args, starts a local datastore (redis-server
+# the seed list as args, starts a local datastore (valkey-server
 # or memcached, controlled by $MODE) and a single dynomited
 # instance, both writing logs into /scratch/dynomite-chaos.
 #
 # Environment knobs:
-#   MODE=redis    (default) - run redis-server, data_store=0
+#   MODE=valkey   (default) - run valkey-server, data_store=0
 #   MODE=memcache           - run memcached, data_store=1
-#   MODE=riak               - run redis-server (used as the
+#   MODE=riak               - run valkey-server (used as the
 #                             dispatcher's backing store, even
 #                             though the workload driver dials
 #                             dyniak's PBC listener) AND
@@ -35,18 +35,19 @@
 #   MODE=combined           - run THREE independent dynomited
 #                             instances on this host, one per
 #                             backend, selected by the INSTANCE
-#                             env (redis|memcache|riak). Each
+#                             env (valkey|memcache|dyniak). Each
 #                             instance is a full Netflix-style
 #                             pool (one data_store + one client
 #                             port) on its own port band so the
 #                             three never collide:
-#                               INSTANCE=redis    data_store=0,
-#                                 real redis-server, base ports.
+#                               INSTANCE=valkey   data_store=0,
+#                                 real valkey-server, base ports.
 #                               INSTANCE=memcache data_store=1,
 #                                 real memcached, ports +1000.
-#                               INSTANCE=riak     data_store=noxu,
-#                                 in-process Noxu + a riak block
-#                                 (PBC + HTTP), ports +2000.
+#                               INSTANCE=dyniak   data_store=dyniak,
+#                                 in-process transactional Noxu +
+#                                 a riak block (PBC + HTTP),
+#                                 ports +2000.
 #                             Each instance writes its pidfile,
 #                             config, and backend under a
 #                             per-instance run subdir
@@ -55,14 +56,14 @@
 #                             coordinator launches start-host.sh
 #                             once per INSTANCE; the chaos
 #                             injector faults all three. The
-#                             riak instance requires a dynomited
+#                             dyniak instance requires a dynomited
 #                             built with --features riak (and
 #                             --features search for the FT.*
-#                             surface driven against the redis
+#                             surface driven against the valkey
 #                             instance); aborts with a clear
 #                             error if the binary does not
 #                             expose --riak-pbc-listen.
-#   INSTANCE=redis|memcache|riak  (only with MODE=combined)
+#   INSTANCE=valkey|memcache|dyniak  (only with MODE=combined)
 #                             selects which of the three pools
 #                             this invocation starts.
 #   ROOT=/scratch/dynomite-chaos (default install root)
@@ -83,11 +84,11 @@ RIAK_PBC_PORT="${8:-21800}"
 # (e.g. PBC 21800 -> HTTP 21801) so a single positional arg
 # pins both listeners; operators may override via the env.
 RIAK_HTTP_PORT="${RIAK_HTTP_PORT:-$((RIAK_PBC_PORT + 1))}"
-MODE="${MODE:-redis}"
+MODE="${MODE:-valkey}"
 
 # In MODE=combined this selects which of the three co-located
-# pools this invocation starts (redis|memcache|riak). Ignored by
-# every other mode.
+# pools this invocation starts (valkey|memcache|dyniak). Ignored
+# by every other mode.
 INSTANCE="${INSTANCE:-}"
 
 # Port-band offset applied to every port (client/dyn/stats/
@@ -96,13 +97,13 @@ INSTANCE="${INSTANCE:-}"
 BAND_OFFSET=0
 
 # Whether the in-process Noxu datastore backs the pool. Only the
-# MODE=combined riak instance turns this on; every other
+# MODE=combined dyniak instance turns this on; every other
 # mode/instance leaves it 0 so the external-backend bring-up runs
 # unchanged.
 ENABLE_NOXU=0
 
 case "$MODE" in
-    redis)
+    valkey|redis)
         EFFECTIVE_MODE=redis
         DATA_STORE_VAL=0
         ENABLE_RIAK_PBC=0
@@ -116,9 +117,9 @@ case "$MODE" in
         # The Riak PBC listener inside dynomited speaks to the
         # in-process MemoryDatastore by default (no noxu_path
         # required), so we do NOT need a separate Riak server.
-        # We still bring up redis as the dispatcher's data_store
-        # so the engine's Redis-front pipeline is healthy and
-        # the chaos injector's redis-bounce step has something
+        # We still bring up valkey as the dispatcher's data_store
+        # so the engine's RESP-front pipeline is healthy and
+        # the chaos injector's backend-bounce step has something
         # to bounce; the workload driver will only hit
         # 127.0.0.1:$RIAK_PBC_PORT.
         EFFECTIVE_MODE=redis
@@ -126,7 +127,7 @@ case "$MODE" in
         ENABLE_RIAK_PBC=1
         ;;
     differential)
-        # Both proxies (Rust + C) speak Redis to a shared
+        # Both proxies (Rust + C) speak RESP to a shared
         # backend on $DATASTORE_PORT. The C cluster shadows
         # the Rust one on shifted ports.
         EFFECTIVE_MODE=redis
@@ -137,11 +138,11 @@ case "$MODE" in
         # MODE=combined runs three independent pools per host,
         # one per backend, selected by INSTANCE. Each picks its
         # own data_store, backend, and port band so all three
-        # co-exist. The redis instance keeps the base ports; the
-        # memcache instance is +1000; the riak (noxu) instance is
+        # co-exist. The valkey instance keeps the base ports; the
+        # memcache instance is +1000; the dyniak instance is
         # +2000.
         case "${INSTANCE:-}" in
-            redis)
+            valkey)
                 EFFECTIVE_MODE=redis
                 DATA_STORE_VAL=0
                 ENABLE_RIAK_PBC=0
@@ -153,10 +154,11 @@ case "$MODE" in
                 ENABLE_RIAK_PBC=0
                 BAND_OFFSET=1000
                 ;;
-            riak)
-                # data_store=noxu (in-process), a riak block
-                # exposing the PBC + HTTP listeners, and no
-                # external backend. The workload driver dials the
+            dyniak)
+                # data_store=dyniak (in-process transactional
+                # Noxu), a riak block exposing the PBC + HTTP
+                # listeners, and no external backend and no RESP
+                # client proxy. The workload driver dials the
                 # band-shifted PBC port. EFFECTIVE_MODE is unused
                 # when ENABLE_NOXU=1 (no external backend probe).
                 EFFECTIVE_MODE=redis
@@ -166,13 +168,13 @@ case "$MODE" in
                 BAND_OFFSET=2000
                 ;;
             *)
-                echo "MODE=combined requires INSTANCE=redis|memcache|riak (got '${INSTANCE:-}')" >&2
+                echo "MODE=combined requires INSTANCE=valkey|memcache|dyniak (got '${INSTANCE:-}')" >&2
                 exit 1
                 ;;
         esac
         ;;
     *)
-        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential|combined)" >&2
+        echo "unknown MODE=$MODE (expected valkey|memcache|riak|differential|combined)" >&2
         exit 1
         ;;
 esac
@@ -220,7 +222,7 @@ LOGS="$ROOT/logs"
 mkdir -p "$RUN" "$LOGS"
 
 # Per-host directory the in-process Noxu environment opens at
-# when the MODE=combined riak instance is selected. One dir per
+# when the MODE=combined dyniak instance is selected. One dir per
 # DC (under the per-instance run subdir) so a single host running
 # multiple DCs (smoke / HOSTS_OVERRIDE) never shares a Noxu
 # environment lock across pools.
@@ -239,7 +241,7 @@ else
 fi
 
 # When the Riak PBC listener is enabled (MODE=riak or the
-# MODE=combined riak instance), verify the binary was built with
+# MODE=combined dyniak instance), verify the binary was built with
 # the `riak` feature. The CLI only registers --riak-pbc-listen
 # behind `#[cfg(feature = "riak")]`, so a `--help` probe is the
 # cheapest reliable check.
@@ -254,7 +256,7 @@ if [ "$ENABLE_RIAK_PBC" = "1" ]; then
     fi
 fi
 
-# Backend bring-up. The MODE=combined riak instance backs the
+# Backend bring-up. The MODE=combined dyniak instance backs the
 # pool with the in-process Noxu datastore, so there is no
 # external redis/memcached process to start or probe; we only
 # create the per-host Noxu directory and skip straight to the
@@ -280,9 +282,9 @@ else
 # memcached can both fall back to a container runtime, so the
 # probe is identical.
 if [ "$EFFECTIVE_MODE" = "redis" ]; then
-    BACKEND_BIN=$(command -v redis-server || true)
-    BACKEND_LABEL=redis
-    BACKEND_CONTAINER_IMAGE="docker.io/library/redis:7-alpine"
+    BACKEND_BIN=$(command -v valkey-server || true)
+    BACKEND_LABEL=valkey
+    BACKEND_CONTAINER_IMAGE="docker.io/valkey/valkey:8-alpine"
 else
     BACKEND_BIN=$(command -v memcached || true)
     BACKEND_LABEL=memcached
@@ -319,7 +321,7 @@ echo "==> starting $BACKEND_LABEL on $DATASTORE_PORT (mode=$EFFECTIVE_MODE)"
 #      doesn't) and the sibling-label name (e.g., we are
 #      bringing up memcached so kill any leftover redis).
 #   2. Native processes bound to the port via fuser or lsof.
-for stale_label in redis memcached; do
+for stale_label in valkey redis memcached; do
     stale_name="dyn-chaos-$stale_label-$LOG_TAG"
     if command -v podman >/dev/null 2>&1; then
         podman rm -f "$stale_name" >/dev/null 2>&1 || true
@@ -350,7 +352,7 @@ if [ -n "$BACKEND_BIN" ]; then
             --appendonly no \
             --save "" \
             --dir "$RUN" \
-            --logfile "$LOGS/redis-$LOG_TAG.log" \
+            --logfile "$LOGS/valkey-$LOG_TAG.log" \
             > /dev/null 2>&1 &
     else
         # memcached: -l 127.0.0.1, -p $DATASTORE_PORT, no UDP,
@@ -379,7 +381,7 @@ else
             --network=host \
             --rm \
             "$BACKEND_CONTAINER_IMAGE" \
-            redis-server \
+            valkey-server \
                 --port "$DATASTORE_PORT" \
                 --bind 127.0.0.1 \
                 --appendonly no \
@@ -465,8 +467,8 @@ dyn_o_mite:
 EOF
 
 # Append the noxu_path directive when the in-process Noxu
-# datastore backs the pool (the MODE=combined riak instance).
-# data_store=2 above selects Noxu; noxu_path tells dynomited
+# datastore backs the pool (the MODE=combined dyniak instance).
+# data_store=2 above selects Dyniak; noxu_path tells dynomited
 # where to open the environment. The servers: line stays as a
 # syntactic placeholder; the Noxu backend supervisor ignores it.
 if [ "$ENABLE_NOXU" = "1" ]; then
@@ -488,7 +490,7 @@ EOF
 fi
 
 # Append the riak block when the Riak PBC listener is enabled
-# (MODE=riak or the MODE=combined riak instance). The block is a
+# (MODE=riak or the MODE=combined dyniak instance). The block is a
 # YAML sibling of dyn_o_mite (under the same top-level pool key)
 # read by the binary's --features riak code path. The driver
 # will dial 127.0.0.1:$RIAK_PBC_PORT. When the Noxu datastore

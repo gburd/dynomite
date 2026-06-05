@@ -15,7 +15,7 @@
 //!
 //! * **Production (manual)**: 1-hour run, full 9-node fan-out,
 //!   every injector enabled. Requires `CAP_NET_ADMIN`,
-//!   `redis-server`, `tc`, and (for the clock-skew injector at
+//!   `valkey-server`, `tc`, and (for the clock-skew injector at
 //!   the 30-minute mark) `faketime`. The lead executes this as
 //!   the pre-tag gate.
 //! * **Smoke (CI-friendly)**: 60-second run via
@@ -68,7 +68,7 @@ use dynomite::seeds::SeedsError;
 struct EnvProbe {
     cap_net_admin: bool,
     has_tc: bool,
-    has_redis_server: bool,
+    has_valkey_server: bool,
     has_faketime: bool,
     netem_dir: PathBuf,
 }
@@ -84,7 +84,7 @@ fn probe_env() -> EnvProbe {
     EnvProbe {
         cap_net_admin: has_cap_net_admin(),
         has_tc: which("tc").is_some(),
-        has_redis_server: which("redis-server").is_some(),
+        has_valkey_server: which("valkey-server").is_some(),
         has_faketime: which("faketime").is_some(),
         netem_dir,
     }
@@ -460,7 +460,7 @@ async fn start_node(
     let server: Server = ServerBuilder::new("p")
         .listen(listen.parse().unwrap())
         .dyn_listen(dyn_listen.parse().unwrap())
-        .data_store(DataStore::Redis)
+        .data_store(DataStore::Valkey)
         .servers(vec![ConfServer::parse("127.0.0.1:6379:1").unwrap()])
         .datacenter(spec.dc.clone())
         .rack(spec.rack.clone())
@@ -1008,7 +1008,12 @@ fn write_report(s: &RunSummary) -> std::io::Result<()> {
     writeln!(buf, "|---|---|").ok();
     writeln!(buf, "| CAP_NET_ADMIN | {} |", s.env.cap_net_admin).ok();
     writeln!(buf, "| tc on PATH | {} |", s.env.has_tc).ok();
-    writeln!(buf, "| redis-server on PATH | {} |", s.env.has_redis_server).ok();
+    writeln!(
+        buf,
+        "| valkey-server on PATH | {} |",
+        s.env.has_valkey_server
+    )
+    .ok();
     writeln!(buf, "| faketime on PATH | {} |", s.env.has_faketime).ok();
 
     writeln!(buf, "\n## State coverage (dyn_state_t)\n").ok();
@@ -1086,7 +1091,7 @@ async fn stage_16_chaos() {
 
     eprintln!(
         "chaos: run_id={} duration={:?} cap_net_admin={} has_tc={} has_redis={} has_faketime={}",
-        ctx.run_id, total, env.cap_net_admin, env.has_tc, env.has_redis_server, env.has_faketime
+        ctx.run_id, total, env.cap_net_admin, env.has_tc, env.has_valkey_server, env.has_faketime
     );
 
     if total >= Duration::from_secs(3600) && !env.cap_net_admin {

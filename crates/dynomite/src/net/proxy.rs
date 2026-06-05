@@ -59,13 +59,13 @@ impl Proxy {
         Ok(Self {
             listener,
             dispatcher,
-            data_store: DataStore::Redis,
+            data_store: DataStore::Valkey,
             response_capacity: 64,
         })
     }
 
     /// Override the datastore the per-client FSMs will parse.
-    /// Defaults to [`DataStore::Redis`].
+    /// Defaults to [`DataStore::Valkey`].
     #[must_use]
     pub fn with_data_store(mut self, ds: DataStore) -> Self {
         self.data_store = ds;

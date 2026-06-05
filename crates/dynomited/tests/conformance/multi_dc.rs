@@ -20,7 +20,7 @@ use crate::helpers::{redis_server_available, Cluster, NodeSpec, RespClient};
 
 fn skip(name: &str) -> bool {
     if !redis_server_available() {
-        eprintln!("[conformance::multi_dc::{name}] redis-server not on PATH; skipping");
+        eprintln!("[conformance::multi_dc::{name}] valkey-server not on PATH; skipping");
         return true;
     }
     false

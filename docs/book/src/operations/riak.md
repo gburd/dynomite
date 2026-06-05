@@ -126,39 +126,41 @@ the scheduler tick has to change.
 The Riak protocol surface speaks to a `Datastore` implementation;
 operators select which one via the pool's `data_store:` knob.
 With `--features riak`, `dynomited` accepts a third value
-alongside the historical `redis` (`0`) and `memcache` (`1`):
+alongside the historical `valkey` (`0`, also accepted as the
+back-compat alias `redis`) and `memcache` (`1`):
 
 ```yaml
 dyn_o_mite:
   listen: 127.0.0.1:8102
   dyn_listen: 127.0.0.1:8101
   tokens: '0'
-  data_store: noxu          # or '2', mirroring the integer form
+  data_store: dyniak        # or '2', mirroring the integer form
   noxu_path: /var/lib/dynomite/noxu
   servers:
-  - 127.0.0.1:6379:1        # placeholder, ignored under noxu
+  - 127.0.0.1:6379:1        # placeholder, ignored under dyniak
   riak:
     pbc_listen: 127.0.0.1:8087
     http_listen: 127.0.0.1:8098
 ```
 
-When `data_store: noxu` is set:
+When `data_store: dyniak` is set:
 
-* The Redis-fronting proxy still parses RESP requests on
-  `listen:`. Each `GET` / `SET` / `DEL` / `PING` is delivered to
-  an in-process supervisor that reads / writes against the Noxu
-  environment at `noxu_path:`.
-* The Riak PBC and HTTP listeners (when configured) bind to the
-  same Noxu environment, so a key written via RESP is visible via
-  Riak's `RpbGetReq`, and a 2i index entry written via
-  `RpbPutReq` is visible to subsequent `RpbIndexReq` queries.
+* The pool opens an in-process Noxu environment in transactional
+  mode at `noxu_path:` and serves the dyniak Riak PBC / HTTP
+  surface directly against it.
+* The pool does NOT run a RESP client proxy and does NOT dial an
+  external backend: there is no RESP backend supervisor and the
+  `listen:` address is not bound. All traffic enters through the
+  Riak PBC / HTTP listeners.
+* A 2i index entry written via `RpbPutReq` is visible to
+  subsequent `RpbIndexReq` queries against the same environment.
 * The `servers:` list is preserved for schema compatibility but
   is not contacted; the placeholder `127.0.0.1:6379:1` is
   conventional.
 
 If `dynomited` is built without `--features riak`, selecting
-`data_store: noxu` is rejected at configuration validation time
-with `noxu data_store requires dynomited built with --features
+`data_store: dyniak` is rejected at configuration validation time
+with `dyniak data_store requires dynomited built with --features
 riak`.
 
 ## Secondary indexes (2i)

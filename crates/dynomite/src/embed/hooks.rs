@@ -83,9 +83,9 @@ pub enum Protocol {
 impl From<DataStore> for Protocol {
     fn from(d: DataStore) -> Self {
         match d {
-            DataStore::Redis => Protocol::Redis,
+            DataStore::Valkey => Protocol::Redis,
             DataStore::Memcache => Protocol::Memcache,
-            DataStore::Noxu => Protocol::Custom,
+            DataStore::Dyniak => Protocol::Custom,
         }
     }
 }

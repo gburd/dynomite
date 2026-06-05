@@ -1,9 +1,9 @@
 //! Single-node conformance: spawn one `dynomited` against one
-//! `redis-server` and exercise the basic Redis command surface
+//! `valkey-server` and exercise the basic Redis command surface
 //! end to end.
 //!
 //! Each `#[tokio::test]` skips with a notice when
-//! `redis-server` is not on `PATH`. Tests assert response shape
+//! `valkey-server` is not on `PATH`. Tests assert response shape
 //! against the known Redis semantics, mirroring the workload of
 //! `_/dynomite/test/func_test.py::run_key_value_tests` and
 //! `run_hash_tests`.
@@ -20,7 +20,7 @@ const SINGLE_NODE_TOKEN: &str = "437425602";
 
 fn skip_if_no_redis(name: &str) -> bool {
     if !redis_server_available() {
-        eprintln!("[conformance::{name}] redis-server not on PATH; skipping");
+        eprintln!("[conformance::{name}] valkey-server not on PATH; skipping");
         return true;
     }
     false

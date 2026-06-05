@@ -9,7 +9,7 @@ dependencies beyond a Rust toolchain.
 ## Quickstart
 
 ```
-# A 30s mixed RESP-2 workload against a local redis-server:
+# A 30s mixed RESP-2 workload against a local valkey-server:
 cargo run --release -p dyniak-bench -- \
     --config crates/dyniak-bench/examples/redis-mixed.toml
 

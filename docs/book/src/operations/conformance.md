@@ -28,14 +28,14 @@ crates/dynomited/tests/
   fixtures/conformance/commands.txt - 100+ RESP/Memcached lines
 ```
 
-Each scenario starts with a runtime check for `redis-server` on
+Each scenario starts with a runtime check for `valkey-server` on
 `PATH`. When Redis is missing the test prints a skip notice and
 returns successfully; the suite never fails just because Redis
 is not installed.
 
 ## Running locally
 
-The Nix flake provides `redis-server`, `cargo-nextest`, and
+The Nix flake provides `valkey-server`, `cargo-nextest`, and
 the rest of the toolchain. From the workspace root:
 
 ```bash
@@ -72,7 +72,7 @@ not yet wired into the workspace).
 
 ## Cleanup discipline
 
-Every spawned `redis-server` and `dynomited` child runs in its
+Every spawned `valkey-server` and `dynomited` child runs in its
 own process group (`std::os::unix::process::CommandExt::process_group(0)`).
 The `Cluster` Drop impl sends `SIGTERM` to each process group,
 waits a short grace window, then upgrades to `SIGKILL`. The

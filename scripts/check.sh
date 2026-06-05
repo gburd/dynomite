@@ -40,13 +40,13 @@ fi
 
 echo "==> conformance suite (Stage 14)"
 # The conformance suite is gated behind the `integration`
-# feature plus a runtime check for `redis-server` on PATH. When
+# feature plus a runtime check for `valkey-server` on PATH. When
 # Redis is missing, every scenario returns a skip notice and
 # passes; otherwise the full multi-cluster matrix runs and the
 # JUnit XML report lands at `target/junit/conformance.xml`.
 #
 # The `conformance`, `differential`, and `integration` binaries
-# spawn real `dynomited` and `redis-server` processes and are
+# spawn real `dynomited` and `valkey-server` processes and are
 # excluded from the default profile (see `.config/nextest.toml`)
 # so the parallel default run does not race them. They run here
 # under the `conformance` profile (test-threads=1).
@@ -108,10 +108,10 @@ echo "==> repo hygiene"
 echo "==> conformance suite (Stage 14, --features integration)"
 # AGENTS.md Section 14b lists the conformance suite as one of
 # the gates both runners exercise. The `dynomited` integration
-# feature spawns a real `redis-server` from PATH; when the
+# feature spawns a real `valkey-server` from PATH; when the
 # binary is missing the tests skip themselves rather than
 # fail. We invoke nextest only when both `cargo-nextest` and
-# `redis-server` are available; otherwise we surface a notice
+# `valkey-server` are available; otherwise we surface a notice
 # and continue.
 #
 # This pass uses the `conformance` profile so the
@@ -121,10 +121,10 @@ echo "==> conformance suite (Stage 14, --features integration)"
 # load-correlated flakes (F9 in
 # `docs/journal/2026-05-23-audit.md`).
 if command -v cargo-nextest >/dev/null 2>&1 \
-   && command -v redis-server >/dev/null 2>&1; then
+   && command -v valkey-server >/dev/null 2>&1; then
     cargo nextest run --profile conformance --workspace --features integration
 else
-    echo "   (skipped: cargo-nextest and/or redis-server not on PATH)"
+    echo "   (skipped: cargo-nextest and/or valkey-server not on PATH)"
 fi
 
 echo "==> cleanup-sweep (Stage 16)"

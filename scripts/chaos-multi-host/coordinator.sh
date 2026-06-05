@@ -88,18 +88,19 @@ BASE_QPS="${CHAOS_QPS:-200}"
 # by the workload-driver fan-out flags.
 CLIENT_LISTEN_PORT_C=$((CLIENT_LISTEN_PORT + 100))
 
-MODE="${MODE:-redis}"
+MODE="${MODE:-valkey}"
 export MODE
 
 # Mode validation. The coordinator dispatches to per-host
-# start-host.sh which knows redis|memcache|riak|differential|
+# start-host.sh which knows valkey|memcache|riak|differential|
 # combined. Reject anything else early so the operator sees the
 # typo on the lead host instead of waiting for four parallel SSH
-# failures.
+# failures. `redis` is accepted as a back-compat alias for the
+# RESP single-mode (`valkey`).
 case "$MODE" in
-    redis|memcache|riak|differential|combined) ;;
+    valkey|redis|memcache|riak|differential|combined) ;;
     *)
-        echo "unknown MODE=$MODE (expected redis|memcache|riak|differential|combined)" >&2
+        echo "unknown MODE=$MODE (expected valkey|memcache|riak|differential|combined)" >&2
         exit 2
         ;;
 esac
@@ -318,7 +319,7 @@ __CHAOS_SEEDS_END__
 # dynomited with the same arguments after a SIGKILL. We bake
 # MODE / TOKENS / port values into the file at write time so
 # the chaos-injector's source of start-args sees the
-# operator-selected mode rather than defaulting to 'redis'
+# operator-selected mode rather than defaulting to 'valkey'
 # when MODE is unset in its environment.
 #
 # The SEEDS line is the tricky one: this whole heredoc is
@@ -355,7 +356,7 @@ if [ '$MODE' = combined ]; then
     # data_store + backend + band from the INSTANCE env and
     # writes each instance under its own run subdir.
     cmb_rc=0
-    for cmb_inst in redis memcache riak; do
+    for cmb_inst in valkey memcache dyniak; do
         INSTANCE=\$cmb_inst MODE='$MODE' $bash_path /scratch/dynomite-chaos/src/scripts/chaos-multi-host/start-host.sh $label '$tokens' "\$(cat /scratch/dynomite-chaos/run/seeds.yml)" $DATASTORE_PORT $DYN_LISTEN_PORT $CLIENT_LISTEN_PORT $STATS_LISTEN_PORT $RIAK_PBC_PORT || cmb_rc=\$?
     done
     exit \$cmb_rc
@@ -411,7 +412,7 @@ EOF
         # backend) on distinct port bands. start-host.sh selects
         # the data_store + backend + band from INSTANCE.
         local cmb_inst
-        for cmb_inst in redis memcache riak; do
+        for cmb_inst in valkey memcache dyniak; do
             INSTANCE="$cmb_inst" bash "$REPO/scripts/chaos-multi-host/start-host.sh" \
                 dc-floki "$TOKENS_FLOKI" "$SEEDS_STR" \
                 "$DATASTORE_PORT" "$DYN_LISTEN_PORT" "$CLIENT_LISTEN_PORT" "$STATS_LISTEN_PORT" "$RIAK_PBC_PORT" \
@@ -446,13 +447,13 @@ start_workload() {
     #    both the Rust and C proxies and record per-op
     #    agreed/divergent/one_side_failed verdicts.
     #  * combined: THREE drivers per host, one per co-located
-    #    pool -- a redis (RESP + FT.*) driver on the redis band's
+    #    pool -- a valkey (RESP + FT.*) driver on the valkey band's
     #    client_listen, a memcache driver on the memcache band's
-    #    client_listen, and a riak PBC driver on the riak band's
+    #    client_listen, and a riak PBC driver on the dyniak band's
     #    pbc_listen -- with the offered QPS split three ways so
     #    total load is unchanged. Each spec carries its own
     #    band-shifted --port / --riak-pbc-port.
-    #  * redis|memcache: the existing single-port path.
+    #  * valkey|memcache: the existing single-port path.
     #
     # Each spec is <api_suffix>\t<qps>\t<mode_flags>. The empty
     # suffix keeps the legacy workload-<label>.ndjson +
@@ -567,21 +568,21 @@ teardown() {
     remote_cmd=$(cat <<'REMOTE_EOF'
 RUN=/scratch/dynomite-chaos/run
 # Driver + injector pids first (graceful TERM). MODE=combined
-# adds driver-memcache.pid alongside the redis/riak drivers.
-for f in "$RUN"/workload.pid "$RUN"/driver-redis.pid "$RUN"/driver-memcache.pid "$RUN"/driver-riak.pid "$RUN"/injector.pid; do
+# adds driver-memcache.pid alongside the valkey/riak drivers.
+for f in "$RUN"/workload.pid "$RUN"/driver-valkey.pid "$RUN"/driver-memcache.pid "$RUN"/driver-riak.pid "$RUN"/injector.pid; do
     [ -f "$f" ] && pid=$(cat "$f") && kill -TERM "$pid" 2>/dev/null
 done
 sleep 2
 # Hard KILL sweep. Covers the single-mode dynomited.pid /
 # dynomite-c.pid at the run root AND the MODE=combined
 # per-instance dynomited pids under $RUN/<instance>/.
-for f in "$RUN"/workload.pid "$RUN"/driver-redis.pid "$RUN"/driver-memcache.pid "$RUN"/driver-riak.pid "$RUN"/injector.pid "$RUN"/dynomited.pid "$RUN"/dynomite-c.pid "$RUN"/redis/dynomited.pid "$RUN"/memcache/dynomited.pid "$RUN"/riak/dynomited.pid; do
+for f in "$RUN"/workload.pid "$RUN"/driver-valkey.pid "$RUN"/driver-memcache.pid "$RUN"/driver-riak.pid "$RUN"/injector.pid "$RUN"/dynomited.pid "$RUN"/dynomite-c.pid "$RUN"/valkey/dynomited.pid "$RUN"/memcache/dynomited.pid "$RUN"/dyniak/dynomited.pid; do
     [ -f "$f" ] && pid=$(cat "$f") && kill -KILL "$pid" 2>/dev/null
 done
 # External backends: the single-mode layout records one
 # redis.pid at the run root; the combined layout records one
-# per instance subdir (the riak/noxu instance has none).
-for rp in "$RUN"/redis.pid "$RUN"/redis/redis.pid "$RUN"/memcache/redis.pid "$RUN"/riak/redis.pid; do
+# per instance subdir (the dyniak instance has none).
+for rp in "$RUN"/redis.pid "$RUN"/valkey/redis.pid "$RUN"/memcache/redis.pid "$RUN"/dyniak/redis.pid; do
     [ -f "$rp" ] || continue
     id=$(cat "$rp")
     case "$id" in

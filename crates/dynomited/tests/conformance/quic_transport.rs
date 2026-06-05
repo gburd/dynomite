@@ -12,7 +12,7 @@
 //!
 //! The test is gated on `feature = "quic"` so it only compiles
 //! when the QUIC stack is enabled. It does not require
-//! `redis-server`; QUIC transport conformance is independent of
+//! `valkey-server`; QUIC transport conformance is independent of
 //! the datastore.
 
 use std::time::Duration;

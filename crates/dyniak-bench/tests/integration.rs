@@ -27,7 +27,7 @@ fn pick_port() -> u16 {
 }
 
 fn redis_in_path() -> bool {
-    Command::new("redis-server")
+    Command::new("valkey-server")
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -47,7 +47,7 @@ impl RedisServer {
             return None;
         }
         let port = pick_port();
-        let child = Command::new("redis-server")
+        let child = Command::new("valkey-server")
             .args([
                 "--port",
                 &port.to_string(),
@@ -137,7 +137,7 @@ fn make_redis_config(port: u16, duration: &str, ops: OpsConfig, out_dir: &str) -
 #[test]
 fn redis_smoke() {
     let Some(server) = RedisServer::spawn() else {
-        eprintln!("skipping redis_smoke: no redis-server in PATH");
+        eprintln!("skipping redis_smoke: no valkey-server in PATH");
         return;
     };
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -214,7 +214,7 @@ fn valgen_size_distribution() {
 #[test]
 fn rate_limit_holds() {
     let Some(server) = RedisServer::spawn() else {
-        eprintln!("skipping rate_limit_holds: no redis-server in PATH");
+        eprintln!("skipping rate_limit_holds: no valkey-server in PATH");
         return;
     };
     let tmp = tempfile::tempdir().expect("tempdir");

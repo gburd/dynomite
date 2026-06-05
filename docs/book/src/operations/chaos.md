@@ -45,7 +45,7 @@ sudo -E env "PATH=$PATH" \
 The test self-checks each prerequisite and emits a `SKIP`
 notice (test passes, body is a no-op) when one is missing:
 
-* `redis-server` on `PATH`. The harness spawns one Redis
+* `valkey-server` on `PATH`. The harness spawns one Redis
   backend per dynomite node.
 * `tc` (iproute2) and `CAP_NET_ADMIN` (or root). Required by
   every `scripts/netem/*` injector.
@@ -98,7 +98,7 @@ The test installs an `on_drop` sweep that:
 
 1. Sends `SIGTERM` then `SIGKILL` to every spawned dynomited
    instance.
-2. Sends `SIGTERM` to every spawned redis-server.
+2. Sends `SIGTERM` to every spawned valkey-server.
 3. Removes every `tc qdisc` injected on the loopback device.
 4. Unsets `FAKETIME` for every spawned process.
 5. Captures a final `tc qdisc show dev lo` and asserts it

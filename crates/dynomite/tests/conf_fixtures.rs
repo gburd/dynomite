@@ -31,7 +31,7 @@ fn dynomite_yml() {
     assert_eq!(p.dyn_listen.as_ref().unwrap().pname(), "127.0.0.1:8101");
     assert_eq!(p.tokens.as_ref().unwrap().to_string(), "101134286");
     assert_eq!(p.servers.as_ref().unwrap().len(), 1);
-    assert_eq!(p.data_store, Some(DataStore::Redis.as_int()));
+    assert_eq!(p.data_store, Some(DataStore::Valkey.as_int()));
     assert_eq!(p.mbuf_size, Some(16384));
     assert_eq!(p.max_msgs, Some(300_000));
 }

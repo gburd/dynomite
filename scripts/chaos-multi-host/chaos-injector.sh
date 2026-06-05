@@ -72,9 +72,9 @@ if [ "$__CHAOS_SOURCED" = "0" ]; then
     # shellcheck disable=SC1090
     . "$START_ARGS_FILE"
 
-    # Honour the saved MODE; default to redis for back-compat
+    # Honour the saved MODE; default to valkey for back-compat
     # with pre-multi-mode start-args files.
-    MODE="${MODE:-redis}"
+    MODE="${MODE:-valkey}"
 
     # Distinguish "unset" from "explicitly set" for
     # MODE_FAULTS so the default unset case can route to the
@@ -295,12 +295,12 @@ redis_pid() {
 # ---------- MODE=combined process-fault fan-out ----------
 #
 # In MODE=combined the host runs three independent dynomited
-# instances, one per backend (redis, memcache, riak), each under
-# its own run subdir ($RUN/<instance>/) on a distinct port band.
-# The process faults must hit all three; the helpers below
+# instances, one per backend (valkey, memcache, dyniak), each
+# under its own run subdir ($RUN/<instance>/) on a distinct port
+# band. The process faults must hit all three; the helpers below
 # enumerate the per-instance pidfiles and live pids so the
 # pause / kill / recovery paths can fan a signal across them.
-COMBINED_INSTANCES="redis memcache riak"
+COMBINED_INSTANCES="valkey memcache dyniak"
 
 # combined_pidfiles: echo the dynomited pidfile path for every
 # combined instance, one per line.
@@ -659,8 +659,8 @@ fault_process_redis_bounce() {
         fault_process_redis_bounce_combined
         return
     fi
-    # P3-3.9 phase 5 note: the redis-bounce path targets the
-    # SHARED backend datastore (one redis-server per host that
+    # P3-3.9 phase 5 note: the backend-bounce path targets the
+    # SHARED backend datastore (one valkey-server per host that
     # both proxies front in MODE=differential). A single
     # bounce is therefore observable to both the Rust and C
     # proxies without any per-proxy duplication; we do NOT
@@ -708,18 +708,18 @@ fault_process_redis_bounce() {
                             echo $! > "$RUN/redis.pid"
                         fi
                         ;;
-                    riak|redis|*)
-                        local redis
-                        redis=$(command -v redis-server || true)
-                        if [ -n "$redis" ]; then
-                            nohup "$redis" \
+                    riak|valkey|redis|*)
+                        local valkey
+                        valkey=$(command -v valkey-server || true)
+                        if [ -n "$valkey" ]; then
+                            nohup "$valkey" \
                                 --port "$DATASTORE_PORT" \
                                 --bind 127.0.0.1 \
                                 --daemonize no \
                                 --appendonly no \
                                 --save "" \
                                 --dir "$RUN" \
-                                --logfile "$LOGS/redis-$DC_NAME.log" \
+                                --logfile "$LOGS/valkey-$DC_NAME.log" \
                                 > /dev/null 2>&1 &
                             echo $! > "$RUN/redis.pid"
                         fi
@@ -734,23 +734,24 @@ fault_process_redis_bounce() {
 }
 
 # MODE=combined backend bounce. Bounce the external backends of
-# the redis and memcache instances (the riak instance is backed
-# by the in-process Noxu store, which has no external process to
-# bounce; killing its dynomited is the kill fault's job). Each
-# instance keeps its backend under its own run subdir on its own
-# port band: redis at $DATASTORE_PORT, memcache at +1000.
+# the valkey and memcache instances (the dyniak instance is
+# backed by the in-process transactional Noxu store, which has no
+# external process to bounce; killing its dynomited is the kill
+# fault's job). Each instance keeps its backend under its own run
+# subdir on its own port band: valkey at $DATASTORE_PORT,
+# memcache at +1000.
 fault_process_redis_bounce_combined() {
     local inst pidf id port
-    for inst in redis memcache; do
+    for inst in valkey memcache; do
         pidf="$RUN/$inst/redis.pid"
         if [ ! -f "$pidf" ]; then
             event fault_process_redis_bounce_skipped \
-                "{\"reason\":\"no-redis\",\"instance\":\"$inst\"}"
+                "{\"reason\":\"no-backend\",\"instance\":\"$inst\"}"
             continue
         fi
         id=$(cat "$pidf" 2>/dev/null)
         case "$inst" in
-            redis)    port=$DATASTORE_PORT ;;
+            valkey)   port=$DATASTORE_PORT ;;
             memcache) port=$(( DATASTORE_PORT + 1000 )) ;;
         esac
         event fault_process_redis_bounce \
@@ -789,17 +790,17 @@ fault_process_redis_bounce_combined() {
                         echo $! > "$pidf"
                     fi
                 else
-                    local redis
-                    redis=$(command -v redis-server || true)
-                    if [ -n "$redis" ]; then
-                        nohup "$redis" \
+                    local valkey
+                    valkey=$(command -v valkey-server || true)
+                    if [ -n "$valkey" ]; then
+                        nohup "$valkey" \
                             --port "$port" \
                             --bind 127.0.0.1 \
                             --daemonize no \
                             --appendonly no \
                             --save "" \
                             --dir "$RUN/$inst" \
-                            --logfile "$LOGS/redis-$DC_NAME-$inst.log" \
+                            --logfile "$LOGS/valkey-$DC_NAME-$inst.log" \
                             > /dev/null 2>&1 &
                         echo $! > "$pidf"
                     fi

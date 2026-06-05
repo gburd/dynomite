@@ -2,7 +2,7 @@
 //!
 //! This test exercises the full request path:
 //!
-//! 1. Spawn `redis-server` on an ephemeral port.
+//! 1. Spawn `valkey-server` on an ephemeral port.
 //! 2. Write a temporary YAML config pointing the dynomite pool
 //!    at that port.
 //! 3. Spawn `dynomited` against the config.
@@ -13,8 +13,8 @@
 //!
 //! The test is gated behind the `integration` feature so the
 //! default test run does not require a Redis binary; the Nix
-//! flake provides `redis-server` so the dev shell exercises the
-//! gate. When the feature is on but `redis-server` is not on
+//! flake provides `valkey-server` so the dev shell exercises the
+//! gate. When the feature is on but `valkey-server` is not on
 //! `PATH`, the test marks itself ignored rather than failing.
 
 #![cfg(feature = "integration")]
@@ -37,7 +37,7 @@ fn pick_port() -> u16 {
 fn redis_server_in_path() -> Option<PathBuf> {
     let path_env = std::env::var_os("PATH")?;
     for entry in std::env::split_paths(&path_env) {
-        let candidate = entry.join("redis-server");
+        let candidate = entry.join("valkey-server");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -90,7 +90,7 @@ async fn read_exact_n(sock: &mut TcpStream, n: usize) -> Vec<u8> {
 #[tokio::test]
 async fn redis_set_get_quit_round_trip() {
     let Some(redis_bin) = redis_server_in_path() else {
-        eprintln!("redis-server not in PATH; skipping integration test");
+        eprintln!("valkey-server not in PATH; skipping integration test");
         // Match the brief: skipped, not failed. Returning early
         // from a test marks it as passed; we mirror that by
         // emitting a marker so CI logs surface the skip.
@@ -104,7 +104,7 @@ async fn redis_set_get_quit_round_trip() {
 
     let dir = tempfile::tempdir().unwrap();
 
-    // Start redis-server with no persistence so the test does
+    // Start valkey-server with no persistence so the test does
     // not leave files behind.
     let mut redis = Command::new(&redis_bin)
         .args([
@@ -124,11 +124,11 @@ async fn redis_set_get_quit_round_trip() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn redis-server");
+        .expect("spawn valkey-server");
 
     if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
         kill_silently(&mut redis);
-        panic!("redis-server did not bind {backend_port} within 30s");
+        panic!("valkey-server did not bind {backend_port} within 30s");
     }
 
     // Write the dynomite YAML pointing at the ephemeral redis.
@@ -202,7 +202,7 @@ async fn redis_set_get_quit_round_trip() {
         "dynomited exit status: {dyn_status:?}"
     );
 
-    // Tear down redis-server.
+    // Tear down valkey-server.
     let redis_pid = nix::unistd::Pid::from_raw(i32::try_from(redis.id()).unwrap());
     let _ = nix::sys::signal::kill(redis_pid, nix::sys::signal::Signal::SIGTERM);
     if wait_with_timeout(&mut redis, Duration::from_secs(5)).is_none() {
@@ -213,7 +213,7 @@ async fn redis_set_get_quit_round_trip() {
 #[tokio::test]
 async fn redis_set_get_with_requirepass() {
     let Some(redis_bin) = redis_server_in_path() else {
-        eprintln!("redis-server not in PATH; skipping integration test");
+        eprintln!("valkey-server not in PATH; skipping integration test");
         return;
     };
 
@@ -225,7 +225,7 @@ async fn redis_set_get_with_requirepass() {
     let dir = tempfile::tempdir().unwrap();
     let password = "hunter2-secret";
 
-    // Start redis-server with a password.
+    // Start valkey-server with a password.
     let mut redis = Command::new(&redis_bin)
         .args([
             "--bind",
@@ -246,11 +246,11 @@ async fn redis_set_get_with_requirepass() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn redis-server");
+        .expect("spawn valkey-server");
 
     if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
         kill_silently(&mut redis);
-        panic!("redis-server did not bind {backend_port} within 30s");
+        panic!("valkey-server did not bind {backend_port} within 30s");
     }
 
     // Write the dynomite YAML pointing at the passworded redis.

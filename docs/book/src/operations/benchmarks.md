@@ -66,7 +66,7 @@ median time regressed by more than the manifest's
 ## Macro benches
 
 The macro harness exercises a live three-node cluster on
-`localhost`, drives `redis-benchmark` for 30 seconds per
+`localhost`, drives `valkey-benchmark` for 30 seconds per
 condition, and writes the per-condition latency snapshot to
 `target/bench/macro-<git-sha>.json`. Conditions:
 
@@ -108,7 +108,7 @@ target/bench/macro-<git-sha>.json
 Each entry is one condition with `ops_per_sec`, `latency_p50_us`,
 `latency_p99_us`, `latency_p999_us`, `latency_p9999_us`, and
 `wall_seconds`. The Stage 15 commit ships the orchestration
-scaffold; the actual workload generator (a redis-benchmark
+scaffold; the actual workload generator (a valkey-benchmark
 spawn) is the operator's responsibility because CI does not
 have permission to install netem qdiscs.
 

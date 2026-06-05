@@ -96,7 +96,7 @@ async fn dnode_proxy_with_tls_round_trips_a_redis_request() {
         let dispatcher = Arc::clone(&recorder_arc);
         proxy
             .run(cancel_fut, move |tx| {
-                ClientHandler::new(Arc::clone(&dispatcher), tx, DataStore::Redis)
+                ClientHandler::new(Arc::clone(&dispatcher), tx, DataStore::Valkey)
             })
             .await
     });
@@ -190,7 +190,7 @@ async fn dnode_proxy_without_tls_still_round_trips_plaintext() {
         let dispatcher = Arc::clone(&recorder_arc);
         proxy
             .run(cancel_fut, move |tx| {
-                ClientHandler::new(Arc::clone(&dispatcher), tx, DataStore::Redis)
+                ClientHandler::new(Arc::clone(&dispatcher), tx, DataStore::Valkey)
             })
             .await
     });
@@ -326,7 +326,7 @@ async fn drive_per_dc_round_trip(
         let dispatcher = Arc::clone(&recorder_arc);
         proxy
             .run(cancel_fut, move |tx| {
-                ClientHandler::new(Arc::clone(&dispatcher), tx, DataStore::Redis)
+                ClientHandler::new(Arc::clone(&dispatcher), tx, DataStore::Valkey)
             })
             .await
     });
@@ -558,7 +558,7 @@ async fn legacy_default_profile_only_round_trip() {
         let dispatcher = Arc::clone(&recorder_arc);
         proxy
             .run(cancel_fut, move |tx| {
-                ClientHandler::new(Arc::clone(&dispatcher), tx, DataStore::Redis)
+                ClientHandler::new(Arc::clone(&dispatcher), tx, DataStore::Valkey)
             })
             .await
     });

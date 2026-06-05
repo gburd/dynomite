@@ -4,11 +4,11 @@
 //! the boolean combinators (AND / OR / NOT / grouping).
 //!
 //! The tests build on the same harness as `ft_wire.rs` and
-//! `ft_extensions_wire.rs`: spawn a real `redis-server` (the
+//! `ft_extensions_wire.rs`: spawn a real `valkey-server` (the
 //! HSET storage backend), spawn a `dynomited` proxy in front
 //! of it, then drive RESP traffic through the proxy port.
 //! The tests are gated on the `integration` Cargo feature
-//! and gracefully skip when `redis-server` is not on `PATH`,
+//! and gracefully skip when `valkey-server` is not on `PATH`,
 //! so a `cargo build` on a host without it stays green.
 
 #![cfg(feature = "integration")]
@@ -34,7 +34,7 @@ fn pick_port() -> u16 {
 fn redis_server_in_path() -> Option<PathBuf> {
     let path_env = std::env::var_os("PATH")?;
     for entry in std::env::split_paths(&path_env) {
-        let candidate = entry.join("redis-server");
+        let candidate = entry.join("valkey-server");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -257,11 +257,11 @@ impl Rig {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn redis-server");
+            .expect("spawn valkey-server");
 
         if !wait_for_listen(backend_port, Instant::now() + Duration::from_secs(30)) {
             kill_silently(&mut redis);
-            panic!("redis-server did not bind {backend_port} within 30s");
+            panic!("valkey-server did not bind {backend_port} within 30s");
         }
 
         let conf = dir_path.join("d.yml");
@@ -324,7 +324,7 @@ macro_rules! rig_or_skip {
         match Rig::try_spawn() {
             Some(r) => r,
             None => {
-                eprintln!("redis-server not in PATH; skipping wire test");
+                eprintln!("valkey-server not in PATH; skipping wire test");
                 return;
             }
         }

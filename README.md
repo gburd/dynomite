@@ -1,7 +1,7 @@
 # Dynomite (Rust)
 
 A Rust port of [Netflix Dynomite](https://github.com/Netflix/dynomite),
-the thin distributed replication layer for Redis and Memcached datastores
+the thin distributed replication layer for Valkey and Memcached datastores
 inspired by the [Amazon Dynamo paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf).
 
 This project is a from-scratch Rust implementation that aims to be
@@ -34,7 +34,7 @@ The Nix flake pins every tool needed to build, test, fuzz, bench, and
 package the project.
 
 For a ten-minute walk-through that takes a fresh checkout to a running
-search stack with vector, text, and regex queries over `redis-cli`,
+search stack with vector, text, and regex queries over `valkey-cli`,
 see [`docs/book/src/tutorial-search.md`](./docs/book/src/tutorial-search.md).
 
 ## Acknowledgements

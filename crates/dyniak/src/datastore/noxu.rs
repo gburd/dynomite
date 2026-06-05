@@ -137,18 +137,55 @@ impl NoxuDatastore {
         Self::open_with_db_name(path, "riak.objects")
     }
 
+    /// Open or create a transactional Noxu environment rooted at
+    /// `path` and the default database used by the Riak bridge.
+    ///
+    /// Identical to [`Self::open`] except the environment and the
+    /// database are opened with transactions enabled. The
+    /// `data_store: dyniak` production path uses this constructor
+    /// so the later cross-key XA work has a transactional
+    /// environment to build on.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::Path;
+    /// use dyniak::datastore::NoxuDatastore;
+    /// let ds = NoxuDatastore::open_transactional(Path::new("/var/lib/dynomite/riak"))
+    ///     .expect("open transactional noxu environment");
+    /// ds.put(b"hello", b"world").expect("put");
+    /// ```
+    pub fn open_transactional(path: &Path) -> Result<Self, NoxuDatastoreError> {
+        Self::open_with_options(path, "riak.objects", true)
+    }
+
     /// Variant of [`Self::open`] that lets the caller pick the
     /// database name. Used by tests that need disjoint environments
     /// in the same process.
     pub fn open_with_db_name(path: &Path, db_name: &str) -> Result<Self, NoxuDatastoreError> {
+        Self::open_with_options(path, db_name, false)
+    }
+
+    /// Open the environment and the default database, selecting
+    /// whether the environment and database are transactional.
+    ///
+    /// `transactional == false` reproduces the historical
+    /// auto-commit behaviour used by the tests and embedding
+    /// examples; `transactional == true` is the
+    /// `data_store: dyniak` production path.
+    fn open_with_options(
+        path: &Path,
+        db_name: &str,
+        transactional: bool,
+    ) -> Result<Self, NoxuDatastoreError> {
         let env_config = EnvironmentConfig::new(path.to_path_buf())
             .with_allow_create(true)
-            .with_transactional(false);
+            .with_transactional(transactional);
         let env = Environment::open(env_config)?;
 
         let db_config = DatabaseConfig::new()
             .with_allow_create(true)
-            .with_transactional(false);
+            .with_transactional(transactional);
         let db = env.open_database(None, db_name, &db_config)?;
 
         Ok(Self {
@@ -778,6 +815,27 @@ mod tests {
         ds.put(b"k", b"v1").expect("put v1");
         ds.put(b"k", b"v2").expect("put v2");
         assert_eq!(ds.get(b"k").unwrap().as_deref(), Some(&b"v2"[..]));
+    }
+
+    #[test]
+    fn open_transactional_round_trips() {
+        let dir = TempDir::new().expect("tempdir");
+        let ds = NoxuDatastore::open_transactional(dir.path()).expect("open transactional");
+        ds.put_object(
+            b"users",
+            b"alice",
+            b"hello",
+            &[(b"age_int".to_vec(), b"42".to_vec())],
+        )
+        .expect("put");
+        assert_eq!(
+            ds.get_object(b"users", b"alice").unwrap().as_deref(),
+            Some(&b"hello"[..])
+        );
+        assert_eq!(
+            ds.index_eq(b"users", b"age_int", b"42").unwrap(),
+            vec![b"alice".to_vec()]
+        );
     }
 
     #[tokio::test]

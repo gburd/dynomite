@@ -101,7 +101,7 @@ fn arb_pool_facts(tc: TestCase) -> PoolFacts {
         HashType::Jenkins,
         HashType::Murmur3,
     ]));
-    let data_store = tc.draw(gs::sampled_from(&[DataStore::Redis, DataStore::Memcache]));
+    let data_store = tc.draw(gs::sampled_from(&[DataStore::Valkey, DataStore::Memcache]));
     let timeout = tc.draw(gs::integers::<i64>().min_value(1).max_value(60_000));
     let mbuf_size = tc.draw(gs::optional(gs::sampled_from(&[
         512i64, 1024, 4096, 16384, 65536,

@@ -13,7 +13,7 @@
 //!    for the run loop to drain.
 //!
 //! The tests deliberately drive the server in-process (rather than
-//! spawning the binary) so they need no external `redis-server` or
+//! spawning the binary) so they need no external `valkey-server` or
 //! filesystem state. They run on every CI invocation that includes
 //! `--features riak`.
 
@@ -251,28 +251,28 @@ async fn pbc_recv(sock: &mut TcpStream) -> (u8, Vec<u8>) {
     (payload[0], payload[1..].to_vec())
 }
 
-/// `data_store: noxu` happy-path: open a Noxu environment in a
-/// tempdir, drive an `RpbPutReq` carrying two index entries via
-/// the Riak PBC listener, and assert that an `RpbIndexReq`
-/// equality query returns the stored key. The configured
-/// backend supervisor is the in-process Noxu supervisor; the
-/// PBC listener shares the same Noxu environment, so the put
-/// and the query travel through the same backing store.
+/// `data_store: dyniak` happy-path: open a transactional Noxu
+/// environment in a tempdir, drive an `RpbPutReq` carrying two
+/// index entries via the Riak PBC listener, and assert that an
+/// `RpbIndexReq` equality query returns the stored key. A dyniak
+/// pool runs no RESP backend supervisor and no RESP client
+/// proxy; the PBC listener serves requests directly against the
+/// in-process transactional Noxu environment.
 #[tokio::test(flavor = "multi_thread")]
 async fn riak_pbc_2i_against_noxu_round_trip() {
     use prost::Message as _;
 
     // Tests run inside the `dynomited` lib's test harness, which
-    // does not boot through `main()`; flip the noxu-supported
+    // does not boot through `main()`; flip the dyniak-supported
     // toggle by hand so the configuration validator accepts
-    // `data_store: noxu`. The flag is process-wide; setting it
+    // `data_store: dyniak`. The flag is process-wide; setting it
     // is idempotent.
-    dynomite::conf::set_noxu_supported(true);
+    dynomite::conf::set_dyniak_supported(true);
 
     let dir = tempfile::TempDir::new().expect("tempdir");
     let ports = pick_distinct_ports(4);
     let yaml_text = format!(
-        "p:\n  listen: 127.0.0.1:{listen}\n  dyn_listen: 127.0.0.1:{dyn_listen}\n  stats_listen: 127.0.0.1:{stats}\n  tokens: '101134286'\n  data_store: noxu\n  noxu_path: {noxu}\n  servers:\n  - 127.0.0.1:6379:1\n  riak:\n    pbc_listen: 127.0.0.1:{pbc}\n",
+        "p:\n  listen: 127.0.0.1:{listen}\n  dyn_listen: 127.0.0.1:{dyn_listen}\n  stats_listen: 127.0.0.1:{stats}\n  tokens: '101134286'\n  data_store: dyniak\n  noxu_path: {noxu}\n  servers:\n  - 127.0.0.1:6379:1\n  riak:\n    pbc_listen: 127.0.0.1:{pbc}\n",
         listen = ports[0],
         dyn_listen = ports[1],
         stats = ports[2],

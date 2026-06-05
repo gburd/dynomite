@@ -247,21 +247,28 @@ impl fmt::Display for Distribution {
 ///
 /// ```
 /// use dynomite::conf::DataStore;
-/// assert_eq!(DataStore::from_int(0).unwrap(), DataStore::Redis);
-/// assert_eq!(DataStore::Redis.as_int(), 0);
-/// assert_eq!(DataStore::from_name("noxu").unwrap(), DataStore::Noxu);
+/// assert_eq!(DataStore::from_int(0).unwrap(), DataStore::Valkey);
+/// assert_eq!(DataStore::Valkey.as_int(), 0);
+/// assert_eq!(DataStore::from_name("valkey").unwrap(), DataStore::Valkey);
+/// assert_eq!(DataStore::from_name("dyniak").unwrap(), DataStore::Dyniak);
 /// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum DataStore {
-    /// Redis (RESP) datastore. Encoded as `0` in YAML.
-    Redis,
+    /// Valkey backend, spoken over RESP (the protocol Valkey
+    /// speaks). Encoded as `0` in YAML. The historical name
+    /// `redis` is accepted as a back-compat alias on the YAML
+    /// side and maps to this variant.
+    Valkey,
     /// Memcached ASCII datastore. Encoded as `1` in YAML.
     Memcache,
-    /// In-process Noxu DB datastore (Riak-shaped). Encoded as
-    /// `2` in YAML, or as the string `noxu`. Selecting this
-    /// variant requires `dynomited` to be built with
-    /// `--features riak` and a sibling `noxu_path:` knob.
-    Noxu,
+    /// In-process dyniak datastore (Riak-shaped, backed by a
+    /// transactional Noxu environment). Encoded as `2` in YAML,
+    /// or as the string `dyniak`. Selecting this variant
+    /// requires `dynomited` to be built with `--features riak`
+    /// and a sibling `noxu_path:` knob. A dyniak pool serves the
+    /// Riak PBC / HTTP surface; it does not run a RESP client
+    /// proxy.
+    Dyniak,
 }
 
 impl DataStore {
@@ -272,14 +279,14 @@ impl DataStore {
     /// ```
     /// use dynomite::conf::DataStore;
     /// assert_eq!(DataStore::from_int(1).unwrap(), DataStore::Memcache);
-    /// assert_eq!(DataStore::from_int(2).unwrap(), DataStore::Noxu);
+    /// assert_eq!(DataStore::from_int(2).unwrap(), DataStore::Dyniak);
     /// assert!(DataStore::from_int(7).is_err());
     /// ```
     pub fn from_int(v: i64) -> Result<Self, ConfError> {
         match v {
-            0 => Ok(DataStore::Redis),
+            0 => Ok(DataStore::Valkey),
             1 => Ok(DataStore::Memcache),
-            2 => Ok(DataStore::Noxu),
+            2 => Ok(DataStore::Dyniak),
             n => Err(ConfError::BadDataStore(n)),
         }
     }
@@ -287,23 +294,28 @@ impl DataStore {
     /// Parse the textual form of a `data_store:` value, as
     /// accepted in YAML alongside the integer form.
     ///
-    /// Comparison is case-insensitive against `redis`,
-    /// `memcache`, `memcached`, and `noxu`.
+    /// Comparison is case-insensitive. `valkey` is the canonical
+    /// name for the RESP backend; `redis` is accepted as a
+    /// back-compat alias for the same variant so configs written
+    /// before the Valkey rename keep working. `memcache` and
+    /// `memcached` select [`DataStore::Memcache`]; `dyniak`
+    /// selects [`DataStore::Dyniak`].
     ///
     /// # Examples
     ///
     /// ```
     /// use dynomite::conf::DataStore;
-    /// assert_eq!(DataStore::from_name("REDIS").unwrap(), DataStore::Redis);
+    /// assert_eq!(DataStore::from_name("VALKEY").unwrap(), DataStore::Valkey);
+    /// assert_eq!(DataStore::from_name("redis").unwrap(), DataStore::Valkey);
     /// assert!(DataStore::from_name("sql").is_err());
     /// ```
     pub fn from_name(s: &str) -> Result<Self, ConfError> {
-        if s.eq_ignore_ascii_case("redis") {
-            Ok(DataStore::Redis)
+        if s.eq_ignore_ascii_case("valkey") || s.eq_ignore_ascii_case("redis") {
+            Ok(DataStore::Valkey)
         } else if s.eq_ignore_ascii_case("memcache") || s.eq_ignore_ascii_case("memcached") {
             Ok(DataStore::Memcache)
-        } else if s.eq_ignore_ascii_case("noxu") {
-            Ok(DataStore::Noxu)
+        } else if s.eq_ignore_ascii_case("dyniak") {
+            Ok(DataStore::Dyniak)
         } else {
             Err(ConfError::BadDataStore(-1))
         }
@@ -316,13 +328,13 @@ impl DataStore {
     /// ```
     /// use dynomite::conf::DataStore;
     /// assert_eq!(DataStore::Memcache.as_int(), 1);
-    /// assert_eq!(DataStore::Noxu.as_int(), 2);
+    /// assert_eq!(DataStore::Dyniak.as_int(), 2);
     /// ```
     pub fn as_int(self) -> i64 {
         match self {
-            DataStore::Redis => 0,
+            DataStore::Valkey => 0,
             DataStore::Memcache => 1,
-            DataStore::Noxu => 2,
+            DataStore::Dyniak => 2,
         }
     }
 
@@ -332,13 +344,14 @@ impl DataStore {
     ///
     /// ```
     /// use dynomite::conf::DataStore;
-    /// assert_eq!(DataStore::Noxu.as_name(), "noxu");
+    /// assert_eq!(DataStore::Valkey.as_name(), "valkey");
+    /// assert_eq!(DataStore::Dyniak.as_name(), "dyniak");
     /// ```
     pub fn as_name(self) -> &'static str {
         match self {
-            DataStore::Redis => "redis",
+            DataStore::Valkey => "valkey",
             DataStore::Memcache => "memcache",
-            DataStore::Noxu => "noxu",
+            DataStore::Dyniak => "dyniak",
         }
     }
 }
@@ -607,17 +620,21 @@ mod tests {
 
     #[test]
     fn data_store_round_trip() {
-        assert_eq!(DataStore::from_int(0).unwrap(), DataStore::Redis);
+        assert_eq!(DataStore::from_int(0).unwrap(), DataStore::Valkey);
         assert_eq!(DataStore::from_int(1).unwrap(), DataStore::Memcache);
-        assert_eq!(DataStore::from_int(2).unwrap(), DataStore::Noxu);
+        assert_eq!(DataStore::from_int(2).unwrap(), DataStore::Dyniak);
         assert!(matches!(
             DataStore::from_int(7),
             Err(ConfError::BadDataStore(7))
         ));
-        assert_eq!(DataStore::from_name("noxu").unwrap(), DataStore::Noxu);
-        assert_eq!(DataStore::from_name("REDIS").unwrap(), DataStore::Redis);
+        assert_eq!(DataStore::from_name("dyniak").unwrap(), DataStore::Dyniak);
+        assert_eq!(DataStore::from_name("VALKEY").unwrap(), DataStore::Valkey);
+        // `redis` stays accepted as a back-compat alias for the
+        // Valkey variant so pre-rename configs keep loading.
+        assert_eq!(DataStore::from_name("redis").unwrap(), DataStore::Valkey);
         assert!(DataStore::from_name("sql").is_err());
-        assert_eq!(DataStore::Noxu.as_name(), "noxu");
+        assert_eq!(DataStore::Valkey.as_name(), "valkey");
+        assert_eq!(DataStore::Dyniak.as_name(), "dyniak");
     }
 
     #[test]

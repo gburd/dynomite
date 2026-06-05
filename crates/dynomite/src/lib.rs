@@ -15,7 +15,7 @@
 //! let server = ServerBuilder::new("dyn_o_mite")
 //!     .listen("127.0.0.1:0".parse().unwrap())
 //!     .dyn_listen("127.0.0.1:0".parse().unwrap())
-//!     .data_store(DataStore::Redis)
+//!     .data_store(DataStore::Valkey)
 //!     .servers(vec![dynomite::conf::ConfServer::parse("127.0.0.1:6379:1").unwrap()])
 //!     .tokens_str("0")
 //!     .build()

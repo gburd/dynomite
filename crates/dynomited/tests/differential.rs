@@ -327,7 +327,7 @@ fn is_resp(bytes: &[u8]) -> bool {
 
 #[tokio::test]
 async fn corpus_loads_cleanly() {
-    // This test does not require redis-server; it just
+    // This test does not require valkey-server; it just
     // confirms the corpus on disk parses cleanly. It pins the
     // corpus format.
     let raw = std::fs::read_to_string(corpus_path()).expect("read corpus");
@@ -348,7 +348,7 @@ async fn corpus_loads_cleanly() {
 #[tokio::test]
 async fn rust_cluster_serves_corpus() {
     if !redis_server_available() {
-        eprintln!("[differential] redis-server not on PATH; skipping");
+        eprintln!("[differential] valkey-server not on PATH; skipping");
         return;
     }
     let cluster = spawn_rust_cluster();
@@ -380,7 +380,7 @@ async fn rust_cluster_serves_corpus() {
 #[tokio::test]
 async fn rust_vs_c_diff() {
     if !redis_server_available() {
-        eprintln!("[differential::rust_vs_c_diff] redis-server not on PATH; skipping");
+        eprintln!("[differential::rust_vs_c_diff] valkey-server not on PATH; skipping");
         return;
     }
     let Some(c_bin) = c_binary_path() else {

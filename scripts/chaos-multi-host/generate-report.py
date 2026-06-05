@@ -59,7 +59,7 @@ DEFAULT_RUNS_DIR = REPO_ROOT / "target" / "chaos-multi-host"
 DEFAULT_OUT_DIR = REPO_ROOT / "dist" / "chaos-reports" / "v0.1.0"
 
 RUN_ID_PATTERN = re.compile(
-    r"^pass(?P<pass_num>\d+)-(?P<mode>redis|memcache|riak|combined)-"
+    r"^pass(?P<pass_num>\d+)-(?P<mode>valkey|redis|memcache|riak|combined)-"
     r"(?P<stamp>\d{8}-\d{6}Z)$"
 )
 SIMPLE_RUN_ID_PATTERN = re.compile(
@@ -67,15 +67,16 @@ SIMPLE_RUN_ID_PATTERN = re.compile(
 )
 
 # Workload-driver API suffixes. MODE=combined launches one driver
-# per co-located dynomited instance (redis, memcache, riak),
+# per co-located dynomited instance (valkey, memcache, dyniak),
 # writing ``workload-<label>-<api>.ndjson`` per instance.
 # Single-driver modes keep the legacy unsuffixed
 # ``workload-<label>.ndjson``. The report sums across all of a
 # host's driver files for the per-host total and breaks the load
-# down per API. ``redis`` covers RESP + the RediSearch FT.* /
+# down per API. ``valkey`` covers RESP + the RediSearch FT.* /
 # FT.SUG* surface (the ``ft`` / ``ftsug`` op classes); ``memcache``
-# is the memcache ASCII driver; ``riak`` is the Riak PBC driver.
-WORKLOAD_API_SUFFIXES = ("redis", "riak", "memcache")
+# is the memcache ASCII driver; ``riak`` is the Riak PBC driver
+# that dials the dyniak instance's PBC port.
+WORKLOAD_API_SUFFIXES = ("valkey", "riak", "memcache")
 
 
 # ---------- run-id parsing ----------
@@ -374,7 +375,7 @@ RESTART_FAILED_CLASS_PATTERNS = [
         r"|ECONNREFUSED"
         r"|protocol probe within"
         r"|backend probe failed"
-        r"|redis-server.*not on PATH"
+        r"|valkey-server.*not on PATH"
         r"|memcached.*not on PATH)",
         re.IGNORECASE | re.MULTILINE,
     )),
@@ -610,13 +611,13 @@ def render_report(run_dir: Path) -> str:
 
     # ---- 2b. per-API breakdown (combined runs) ----
     # MODE=combined runs three independent dynomited instances per
-    # host (redis, memcache, riak), each on its own port band and
+    # host (valkey, memcache, dyniak), each on its own port band and
     # driven by its own workload. When per-API driver files are
     # present we break the per-host load down by instance so the
-    # operator can see, e.g., that the Redis, memcache, and Riak
-    # PBC surfaces all stayed healthy. The ft / ftsug columns
+    # operator can see, e.g., that the Valkey (RESP), memcache, and
+    # Riak PBC surfaces all stayed healthy. The ft / ftsug columns
     # surface the RediSearch FT.* / FT.SUG* sub-classes that
-    # already live inside the redis driver's counts. The section
+    # already live inside the valkey driver's counts. The section
     # is omitted entirely for non-combined runs (only the legacy
     # unsuffixed file present).
     any_api = any(
@@ -640,18 +641,18 @@ def render_report(run_dir: Path) -> str:
         lines.append("")
         lines.append(
             "Per-host load split by co-located dynomited instance "
-            "(redis / memcache / riak), each on its own port band. "
+            "(valkey / memcache / riak), each on its own port band. "
             "`ft` / `ftsug` are the RediSearch sub-classes inside the "
-            "redis driver's counts."
+            "valkey driver's counts."
         )
         lines.append("")
         lines.append(
-            "| host | redis ok | redis fail | memcache ok | memcache fail | "
+            "| host | valkey ok | valkey fail | memcache ok | memcache fail | "
             "riak ok | riak fail | ft ok | ftsug ok |"
         )
         lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
         agg = {
-            "redis_ok": 0, "redis_fail": 0, "memcache_ok": 0,
+            "valkey_ok": 0, "valkey_fail": 0, "memcache_ok": 0,
             "memcache_fail": 0, "riak_ok": 0, "riak_fail": 0,
             "ft_ok": 0, "ftsug_ok": 0,
         }
@@ -659,19 +660,19 @@ def render_report(run_dir: Path) -> str:
                      "failures": collections.Counter()}
         for label in host_labels:
             by_api = per_host[label]["by_api"]
-            redis = by_api.get("redis", empty_api)
+            valkey = by_api.get("valkey", empty_api)
             memcache = by_api.get("memcache", empty_api)
             riak = by_api.get("riak", empty_api)
-            redis_ok = _ok(redis["counts"])
-            redis_fail = _fail(redis["failures"])
+            valkey_ok = _ok(valkey["counts"])
+            valkey_fail = _fail(valkey["failures"])
             memcache_ok = _ok(memcache["counts"])
             memcache_fail = _fail(memcache["failures"])
             riak_ok = _ok(riak["counts"])
             riak_fail = _fail(riak["failures"])
-            ft_ok = _class_ok(redis["counts"], "ft")
-            ftsug_ok = _class_ok(redis["counts"], "ftsug")
-            agg["redis_ok"] += redis_ok
-            agg["redis_fail"] += redis_fail
+            ft_ok = _class_ok(valkey["counts"], "ft")
+            ftsug_ok = _class_ok(valkey["counts"], "ftsug")
+            agg["valkey_ok"] += valkey_ok
+            agg["valkey_fail"] += valkey_fail
             agg["memcache_ok"] += memcache_ok
             agg["memcache_fail"] += memcache_fail
             agg["riak_ok"] += riak_ok
@@ -679,14 +680,14 @@ def render_report(run_dir: Path) -> str:
             agg["ft_ok"] += ft_ok
             agg["ftsug_ok"] += ftsug_ok
             lines.append(
-                f"| `{label}` | {fmt_int(redis_ok)} | {fmt_int(redis_fail)} | "
+                f"| `{label}` | {fmt_int(valkey_ok)} | {fmt_int(valkey_fail)} | "
                 f"{fmt_int(memcache_ok)} | {fmt_int(memcache_fail)} | "
                 f"{fmt_int(riak_ok)} | {fmt_int(riak_fail)} | "
                 f"{fmt_int(ft_ok)} | {fmt_int(ftsug_ok)} |"
             )
         lines.append(
-            f"| **aggregate** | **{fmt_int(agg['redis_ok'])}** | "
-            f"**{fmt_int(agg['redis_fail'])}** | **{fmt_int(agg['memcache_ok'])}** | "
+            f"| **aggregate** | **{fmt_int(agg['valkey_ok'])}** | "
+            f"**{fmt_int(agg['valkey_fail'])}** | **{fmt_int(agg['memcache_ok'])}** | "
             f"**{fmt_int(agg['memcache_fail'])}** | **{fmt_int(agg['riak_ok'])}** | "
             f"**{fmt_int(agg['riak_fail'])}** | **{fmt_int(agg['ft_ok'])}** | "
             f"**{fmt_int(agg['ftsug_ok'])}** |"

@@ -8,8 +8,8 @@ An embeddable distributed-replication engine for Rust. `dynomite` gives
 you the substrate to build your own Dynamo-style distributed system: a
 gossip-driven cluster, ring-based key partitioning across racks and
 datacenters, tunable consistency, hinted handoff, active anti-entropy,
-optional QUIC peer transport, and a Redis-compatible client surface
-including the RediSearch FT.* command family.
+optional QUIC peer transport, and a RESP client surface (the
+protocol Valkey speaks) including the RediSearch FT.* command family.
 
 You wire in the things only you can decide: how to store a key on a
 single node and how a peer is discovered. The engine handles the rest.
@@ -38,7 +38,7 @@ use dynomite::embed::{Server, ServerBuilder};
 let handle = ServerBuilder::new("my_pool")
     .listen("127.0.0.1:8102".parse().unwrap())
     .dyn_listen("127.0.0.1:8101".parse().unwrap())
-    .data_store(DataStore::Redis)
+    .data_store(DataStore::Valkey)
     .servers(vec![ConfServer::parse("127.0.0.1:6379:1").unwrap()])
     .tokens_str("0")
     .build().unwrap()

@@ -77,7 +77,7 @@ impl ClientHandler {
     /// use std::sync::Arc;
     /// use tokio::sync::mpsc;
     /// let (tx, _rx) = mpsc::channel(1);
-    /// let _h = ClientHandler::new(Arc::new(NoopDispatcher), tx, DataStore::Redis);
+    /// let _h = ClientHandler::new(Arc::new(NoopDispatcher), tx, DataStore::Valkey);
     /// ```
     #[must_use]
     pub fn new(
@@ -136,7 +136,7 @@ impl ClientHandler {
     /// use std::sync::Arc;
     /// use tokio::sync::mpsc;
     /// let (tx, _rx) = mpsc::channel(1);
-    /// let h = ClientHandler::new(Arc::new(NoopDispatcher), tx, DataStore::Redis);
+    /// let h = ClientHandler::new(Arc::new(NoopDispatcher), tx, DataStore::Valkey);
     /// let _ = h.dispatcher();
     /// ```
     #[must_use]
@@ -156,7 +156,7 @@ impl ClientHandler {
     /// use std::sync::Arc;
     /// use tokio::sync::mpsc;
     /// let (tx, _rx) = mpsc::channel(1);
-    /// let h = ClientHandler::new(Arc::new(NoopDispatcher), tx, DataStore::Redis);
+    /// let h = ClientHandler::new(Arc::new(NoopDispatcher), tx, DataStore::Valkey);
     /// let _clone = h.response_tx().clone();
     /// ```
     #[must_use]
@@ -271,7 +271,7 @@ async fn drive_parser(
         let mut msg = Msg::new(id, MsgType::Unknown, true);
         let consumed_before = msg.parser_pos();
         let parse_result = match handler.data_store {
-            DataStore::Redis | DataStore::Noxu => redis_parse_req(&mut msg, accumulated),
+            DataStore::Valkey | DataStore::Dyniak => redis_parse_req(&mut msg, accumulated),
             DataStore::Memcache => memcache_parse_req(&mut msg, accumulated),
         };
         match parse_result {
@@ -408,7 +408,7 @@ mod tests {
     #[test]
     fn alloc_msg_id_is_monotonic() {
         let (tx, _rx) = mpsc::channel(1);
-        let mut h = ClientHandler::new(Arc::new(crate::net::NoopDispatcher), tx, DataStore::Redis);
+        let mut h = ClientHandler::new(Arc::new(crate::net::NoopDispatcher), tx, DataStore::Valkey);
         let a = h.alloc_msg_id();
         let b = h.alloc_msg_id();
         assert_eq!(a + 1, b);

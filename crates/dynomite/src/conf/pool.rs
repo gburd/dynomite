@@ -242,16 +242,16 @@ pub struct ConfPool {
     pub backlog: Option<i64>,
     /// `client_connections:` - max client connections.
     pub client_connections: Option<i64>,
-    /// `data_store:` - 0 = redis, 1 = memcache, 2 = noxu.
-    /// Operators may also write the textual form (`redis`,
-    /// `memcache`, `noxu`); the deserializer normalises both
-    /// shapes to the integer code that the rest of the engine
-    /// consumes.
+    /// `data_store:` - 0 = valkey, 1 = memcache, 2 = dyniak.
+    /// Operators may also write the textual form (`valkey`,
+    /// `memcache`, `dyniak`); the back-compat alias `redis` maps
+    /// to `valkey`. The deserializer normalises every shape to
+    /// the integer code that the rest of the engine consumes.
     #[serde(default, deserialize_with = "deserialize_data_store")]
     pub data_store: Option<i64>,
     /// `noxu_path:` - filesystem directory the in-process Noxu
-    /// DB datastore opens its environment at. Required when
-    /// `data_store: noxu` is selected; ignored otherwise. The
+    /// DB environment opens at. Required when
+    /// `data_store: dyniak` is selected; ignored otherwise. The
     /// directory must be writable; an existing environment is
     /// reused, otherwise one is created.
     #[serde(default)]
@@ -1221,8 +1221,8 @@ impl ConfPool {
 
         if let Some(n) = self.data_store {
             let ds = DataStore::from_int(n)?;
-            if ds == DataStore::Noxu {
-                self.validate_noxu()?;
+            if ds == DataStore::Dyniak {
+                self.validate_dyniak()?;
             }
         }
         if let Some(tag) = &self.hash_tag {
@@ -1386,32 +1386,32 @@ impl ConfPool {
         Ok(())
     }
 
-    /// Validate the cross-field invariants of the Noxu
+    /// Validate the cross-field invariants of the dyniak
     /// datastore selection.
     ///
-    /// Selecting `data_store: noxu` is permitted only when the
+    /// Selecting `data_store: dyniak` is permitted only when the
     /// binary was built with `--features riak`; without it,
     /// `dynomited` cannot construct a `NoxuDatastore` because
     /// the `dyniak` crate (which owns the type) is not
     /// linked. The check is gated on a `cfg!(feature = ...)`
     /// expression that the parent crate threads through via
-    /// the [`crate::conf::set_noxu_supported`] toggle: the
+    /// the [`crate::conf::set_dyniak_supported`] toggle: the
     /// engine ships with the toggle off, the `dynomited` binary
     /// turns it on under `--features riak`. The toggle is
-    /// global because `data_store: noxu` is a build-time
+    /// global because `data_store: dyniak` is a build-time
     /// configuration constraint, not a per-pool one.
     ///
     /// `noxu_path:` must be set and non-empty.
-    fn validate_noxu(&self) -> Result<(), ConfError> {
-        if !crate::conf::is_noxu_supported() {
-            return Err(ConfError::BadNoxuConfig(
-                "noxu data_store requires dynomited built with --features riak",
+    fn validate_dyniak(&self) -> Result<(), ConfError> {
+        if !crate::conf::is_dyniak_supported() {
+            return Err(ConfError::BadDyniakConfig(
+                "dyniak data_store requires dynomited built with --features riak",
             ));
         }
         match self.noxu_path.as_deref() {
             Some(p) if !p.as_os_str().is_empty() => Ok(()),
-            _ => Err(ConfError::BadNoxuConfig(
-                "data_store: noxu requires a non-empty 'noxu_path:' directive",
+            _ => Err(ConfError::BadDyniakConfig(
+                "data_store: dyniak requires a non-empty 'noxu_path:' directive",
             )),
         }
     }
@@ -1566,8 +1566,9 @@ fn check_non_negative(field: &'static str, v: Option<i64>) -> Result<(), ConfErr
 
 /// Custom deserializer for `data_store:` that accepts either the
 /// historical integer form (`0`, `1`, `2`) or the textual form
-/// (`redis`, `memcache`, `noxu`). Both shapes normalise to the
-/// integer code that the rest of the engine consumes.
+/// (`valkey`, `memcache`, `dyniak`, plus the back-compat alias
+/// `redis`). Both shapes normalise to the integer code that the
+/// rest of the engine consumes.
 fn deserialize_data_store<'de, D>(de: D) -> Result<Option<i64>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1580,7 +1581,9 @@ where
         type Value = Option<i64>;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a data_store value: integer (0, 1, 2) or string (redis, memcache, noxu)")
+            f.write_str(
+                "a data_store value: integer (0, 1, 2) or string (valkey, memcache, dyniak)",
+            )
         }
 
         fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
@@ -1614,7 +1617,7 @@ where
                 .map(|d| Some(d.as_int()))
                 .map_err(|_| {
                     E::custom(format!(
-                        "data_store: unknown name '{v}'; expected one of: redis, memcache, noxu"
+                        "data_store: unknown name '{v}'; expected one of: valkey, memcache, dyniak"
                     ))
                 })
         }
@@ -1741,78 +1744,93 @@ p:
     }
 
     /// Lock serialising tests that mutate the process-wide
-    /// `NOXU_SUPPORTED` flag. cargo test runs tests on multiple
+    /// `DYNIAK_SUPPORTED` flag. cargo test runs tests on multiple
     /// threads; without serialisation a parallel test can flip
     /// the flag back before the assertion runs.
-    static NOXU_FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static DYNIAK_FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
-    fn data_store_noxu_requires_riak_feature() {
-        let _g = NOXU_FLAG_LOCK
+    fn data_store_dyniak_requires_riak_feature() {
+        let _g = DYNIAK_FLAG_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Default state: noxu support flag is off; selecting
-        // noxu must be rejected with the documented message.
-        let prev = crate::conf::is_noxu_supported();
-        crate::conf::set_noxu_supported(false);
+        // Default state: dyniak support flag is off; selecting
+        // dyniak must be rejected with the documented message.
+        let prev = crate::conf::is_dyniak_supported();
+        crate::conf::set_dyniak_supported(false);
         let mut p = pool();
         p.data_store = Some(2);
-        p.noxu_path = Some("/tmp/test".into());
+        p.noxu_path = Some("/scratch/test".into());
         p.apply_defaults();
         let err = p.validate("p");
-        crate::conf::set_noxu_supported(prev);
+        crate::conf::set_dyniak_supported(prev);
         match err {
-            Err(ConfError::BadNoxuConfig(msg)) => {
+            Err(ConfError::BadDyniakConfig(msg)) => {
                 assert!(msg.contains("--features riak"), "unexpected message: {msg}");
             }
-            other => panic!("expected BadNoxuConfig, got {other:?}"),
+            other => panic!("expected BadDyniakConfig, got {other:?}"),
         }
     }
 
     #[test]
-    fn data_store_noxu_requires_path() {
-        let _g = NOXU_FLAG_LOCK
+    fn data_store_dyniak_requires_path() {
+        let _g = DYNIAK_FLAG_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let prev = crate::conf::is_noxu_supported();
-        crate::conf::set_noxu_supported(true);
+        let prev = crate::conf::is_dyniak_supported();
+        crate::conf::set_dyniak_supported(true);
         let mut p = pool();
         p.data_store = Some(2);
         p.noxu_path = None;
         p.apply_defaults();
         let err = p.validate("p");
-        crate::conf::set_noxu_supported(prev);
+        crate::conf::set_dyniak_supported(prev);
         match err {
-            Err(ConfError::BadNoxuConfig(msg)) => {
+            Err(ConfError::BadDyniakConfig(msg)) => {
                 assert!(msg.contains("noxu_path"), "unexpected message: {msg}");
             }
-            other => panic!("expected BadNoxuConfig, got {other:?}"),
+            other => panic!("expected BadDyniakConfig, got {other:?}"),
         }
     }
 
     #[test]
-    fn data_store_noxu_yaml_round_trip_string_form() {
-        // String form `data_store: noxu` and integer form
+    fn data_store_dyniak_yaml_round_trip_string_form() {
+        // String form `data_store: dyniak` and integer form
         // `data_store: 2` both normalise to integer 2 on parse.
         let yaml = r"
 listen: 127.0.0.1:8102
 servers:
 - 127.0.0.1:6379:1
 tokens: '0'
-data_store: noxu
-noxu_path: /tmp/test
+data_store: dyniak
+noxu_path: /scratch/test
 ";
         let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(p.data_store, Some(2));
         assert_eq!(
             p.noxu_path.as_deref(),
-            Some(std::path::Path::new("/tmp/test"))
+            Some(std::path::Path::new("/scratch/test"))
         );
         // Re-emit and re-parse: round-trip is stable.
         let dumped = serde_yaml::to_string(&p).unwrap();
         let p2: ConfPool = serde_yaml::from_str(&dumped).unwrap();
         assert_eq!(p2.data_store, p.data_store);
         assert_eq!(p2.noxu_path, p.noxu_path);
+    }
+
+    #[test]
+    fn data_store_redis_alias_maps_to_valkey() {
+        // The historical `redis` name must keep loading and map
+        // to the Valkey variant (integer 0).
+        let yaml = r"
+listen: 127.0.0.1:8102
+servers:
+- 127.0.0.1:6379:1
+tokens: '0'
+data_store: redis
+";
+        let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.data_store, Some(0));
     }
 
     #[test]
@@ -1823,7 +1841,7 @@ servers:
 - 127.0.0.1:6379:1
 tokens: '0'
 data_store: 2
-noxu_path: /tmp/test
+noxu_path: /scratch/test
 ";
         let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(p.data_store, Some(2));
