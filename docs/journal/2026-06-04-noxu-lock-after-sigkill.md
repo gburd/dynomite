@@ -47,15 +47,31 @@ stale processes before every (re)start, so any lock present at
 launch time is always stale. This is the same recovery step a
 production operator performs after a hard kill.
 
-## Recommended engine fix (follow-up, not in this commit)
+## Recommended engine fix (IMPLEMENTED 2026-06-04, commit follows this entry)
 
-`dyniak::datastore::NoxuDatastore::open_in` (or the underlying
-noxu environment open) should reclaim a stale lock itself:
+`dyniak::datastore::NoxuDatastore::open_with_db_name` now acquires
+a dyniak-owned sidecar lock -- an exclusive `flock(2)` on
+`.noxu-owner.lock` -- before touching noxu. The kernel releases an
+`flock` automatically when the holding process dies (graceful exit
+OR `SIGKILL`), so acquiring it proves no live owner remains; at
+that point any leftover `noxu.lck` is provably stale and is removed
+before `Environment::open`. A genuinely concurrent opener fails the
+non-blocking flock and gets the typed
+`NoxuDatastoreError::EnvironmentBusy` rather than corrupting state.
 
-- switch `noxu.lck` to an `flock(2)`/`fcntl` advisory lock so
-  the kernel releases it on process death (preferred); or
-- write the holder PID into the lock file and, on open, reclaim
-  the lock when that PID is no longer alive.
+With this in place the harness `rm noxu.lck` (start-host.sh, commit
+4551543) is belt-and-suspenders: crash-recovery is correct at the
+library level regardless of how dynomited is launched.
 
-Until then the presence-based lock requires external cleanup
-after any non-graceful exit.
+Regression tests in `crates/dyniak/src/datastore/noxu.rs`:
+
+- `reopen_reclaims_stale_noxu_lck` -- plant a stale lock, confirm a
+  fresh open reclaims it and preserves the pre-crash data.
+- `concurrent_open_is_rejected_while_owner_lives` -- a second live
+  open of the same path returns `EnvironmentBusy`.
+
+A further upstream improvement (in the `noxu` crate itself: make
+`noxu.lck` an flock rather than a presence file) would let us drop
+the sidecar entirely, but that is outside this repo's control
+(noxu is an external crate). The sidecar owner-lock is the correct
+fix at the dyniak boundary.
