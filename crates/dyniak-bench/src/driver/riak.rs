@@ -19,15 +19,15 @@ use crate::error::BenchError;
 use crate::keygen::KeyGen;
 use crate::valgen::ValGen;
 
-const RIAK_CODE_ERROR_RESP: u8 = 0;
-const RIAK_CODE_PING_REQ: u8 = 1;
-const RIAK_CODE_PING_RESP: u8 = 2;
-const RIAK_CODE_GET_REQ: u8 = 9;
-const RIAK_CODE_GET_RESP: u8 = 10;
-const RIAK_CODE_PUT_REQ: u8 = 11;
-const RIAK_CODE_PUT_RESP: u8 = 12;
-const RIAK_CODE_DEL_REQ: u8 = 13;
-const RIAK_CODE_DEL_RESP: u8 = 14;
+pub(crate) const RIAK_CODE_ERROR_RESP: u8 = 0;
+pub(crate) const RIAK_CODE_PING_REQ: u8 = 1;
+pub(crate) const RIAK_CODE_PING_RESP: u8 = 2;
+pub(crate) const RIAK_CODE_GET_REQ: u8 = 9;
+pub(crate) const RIAK_CODE_GET_RESP: u8 = 10;
+pub(crate) const RIAK_CODE_PUT_REQ: u8 = 11;
+pub(crate) const RIAK_CODE_PUT_RESP: u8 = 12;
+pub(crate) const RIAK_CODE_DEL_REQ: u8 = 13;
+pub(crate) const RIAK_CODE_DEL_RESP: u8 = 14;
 const RIAK_CODE_DT_UPDATE_REQ: u8 = 82;
 const RIAK_CODE_DT_UPDATE_RESP: u8 = 83;
 
@@ -50,7 +50,7 @@ const SUPPORTED: &[&str] = &[
 static RECENT_KEYS: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 const RECENT_CAP: usize = 1024;
 
-fn remember(k: &[u8]) {
+pub(crate) fn remember(k: &[u8]) {
     let mut g = RECENT_KEYS.lock().expect("recent keys mutex poisoned");
     if g.len() >= RECENT_CAP {
         g.drain(..(RECENT_CAP / 4));
@@ -58,7 +58,7 @@ fn remember(k: &[u8]) {
     g.push(k.to_vec());
 }
 
-fn recent_or(rng: &mut SmallRng, fallback: &[u8]) -> Vec<u8> {
+pub(crate) fn recent_or(rng: &mut SmallRng, fallback: &[u8]) -> Vec<u8> {
     let g = RECENT_KEYS.lock().expect("recent keys mutex poisoned");
     if !g.is_empty() && rng.random_bool(0.5) {
         let i = rng.random_range(0..g.len());
@@ -92,7 +92,7 @@ fn pb_encode_varint_field(field: u32, value: u64, out: &mut Vec<u8>) {
 }
 
 /// `RpbGetReq{ bucket, key }`.
-fn encode_get(bucket: &[u8], key: &[u8]) -> Vec<u8> {
+pub(crate) fn encode_get(bucket: &[u8], key: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bucket.len() + key.len() + 8);
     pb_encode_bytes_field(1, bucket, &mut out);
     pb_encode_bytes_field(2, key, &mut out);
@@ -102,7 +102,7 @@ fn encode_get(bucket: &[u8], key: &[u8]) -> Vec<u8> {
 /// `RpbPutReq{ bucket, key, content{value} }`. Field 4 is the
 /// `RpbContent value` shortcut Riak accepts when a single content
 /// blob is being written.
-fn encode_put(bucket: &[u8], key: &[u8], value: &[u8]) -> Vec<u8> {
+pub(crate) fn encode_put(bucket: &[u8], key: &[u8], value: &[u8]) -> Vec<u8> {
     let mut content = Vec::with_capacity(value.len() + 4);
     pb_encode_bytes_field(1, value, &mut content);
 
@@ -114,7 +114,7 @@ fn encode_put(bucket: &[u8], key: &[u8], value: &[u8]) -> Vec<u8> {
 }
 
 /// `RpbDelReq{ bucket, key }`.
-fn encode_del(bucket: &[u8], key: &[u8]) -> Vec<u8> {
+pub(crate) fn encode_del(bucket: &[u8], key: &[u8]) -> Vec<u8> {
     encode_get(bucket, key)
 }
 
@@ -218,7 +218,7 @@ fn pb_decode_varint(buf: &[u8], pos: &mut usize) -> Result<u64, String> {
     Err(format!("truncated varint at {start}"))
 }
 
-fn decode_error_resp(body: &[u8]) -> String {
+pub(crate) fn decode_error_resp(body: &[u8]) -> String {
     let mut errmsg = String::new();
     let mut errcode = 0u64;
     let mut pos = 0usize;

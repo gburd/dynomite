@@ -23,6 +23,14 @@ noxu = ["dep:noxu"]
 # user-defined Wasm phases do not pay for the wasmtime
 # compilation.
 wasm = ["dep:wasmtime", "dep:ciborium"]
+# Serve the PBC protocol surface over QUIC in addition to the
+# TCP and TLS-over-TCP listeners. Forwards to the engine's
+# `quic` feature so `dynomite::net::quic` (the shared quiche
+# integration) is compiled in. Off by default; the QUIC accept
+# loop ([`server::serve_pbc_quic`]) reuses the same
+# per-connection handler the TCP path drives, so only the byte
+# transport changes.
+quic = ["dynomite/quic"]
 
 [dependencies]
 dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.1.0" }

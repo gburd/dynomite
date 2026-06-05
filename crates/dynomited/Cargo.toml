@@ -66,8 +66,12 @@ search = ["dep:dynomite-search"]
 integration = ["search"]
 # Forward the engine's QUIC transport feature so the conformance
 # suite can exercise QUIC at the library level. Compiles in
-# `quiche` plus its build-time dependencies.
-quic = ["dynomite/quic"]
+# `quiche` plus its build-time dependencies. The weak
+# `dyniak?/quic` forward turns on the dyniak crate's QUIC PBC
+# accept loop only when the `riak` feature has already pulled
+# `dyniak` into the graph; `--features quic` alone does not drag
+# in the Riak surface.
+quic = ["dynomite/quic", "dyniak?/quic"]
 # Enable the Riak protocol surface: PBC server, HTTP gateway,
 # and (optional) active anti-entropy scheduler. Pulls in the
 # `dyniak` crate. Off by default; turning the feature on

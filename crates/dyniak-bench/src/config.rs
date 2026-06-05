@@ -147,6 +147,9 @@ pub enum DriverKind {
     Redis,
     /// Riak Protocol Buffer Client.
     RiakPbc,
+    /// Riak Protocol Buffer Client over QUIC (feature-gated;
+    /// build with `--features quic`).
+    RiakQuic,
     /// Riak HTTP API (feature-gated; build with `--features http`).
     RiakHttp,
 }
@@ -158,6 +161,7 @@ impl DriverKind {
         match self {
             Self::Redis => "redis",
             Self::RiakPbc => "riak-pbc",
+            Self::RiakQuic => "riak-quic",
             Self::RiakHttp => "riak-http",
         }
     }

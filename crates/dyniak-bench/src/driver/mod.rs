@@ -5,6 +5,8 @@ pub mod redis;
 pub mod riak;
 #[cfg(feature = "http")]
 pub mod riak_http;
+#[cfg(feature = "quic")]
+pub mod riak_quic;
 
 use std::fmt;
 
@@ -70,6 +72,16 @@ pub fn make_driver(cfg: &DriverConfig) -> Result<Box<dyn Driver>, BenchError> {
             #[cfg(not(feature = "riak"))]
             Err(BenchError::Config(
                 "riak_pbc driver requires the `riak` feature; rebuild with --features riak".into(),
+            ))
+        }
+        DriverKind::RiakQuic => {
+            #[cfg(feature = "quic")]
+            {
+                Ok(Box::new(riak_quic::RiakQuicDriver::new(cfg)?))
+            }
+            #[cfg(not(feature = "quic"))]
+            Err(BenchError::Config(
+                "riak_quic driver requires the `quic` feature; rebuild with --features quic".into(),
             ))
         }
         DriverKind::RiakHttp => {

@@ -1067,6 +1067,7 @@ version = "0.0.1"
 dependencies = [
  "assert_cmd",
  "clap",
+ "dynomite-engine",
  "hdrhistogram",
  "parking_lot",
  "plotters",

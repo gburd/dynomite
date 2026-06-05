@@ -36,6 +36,11 @@ use dyniak::aae::repair::{RepairSink, RepairTask};
 use dyniak::aae::scheduler::{Scheduler, SweepPlan, SystemClock};
 use dyniak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls};
 
+#[cfg(feature = "quic")]
+use dyniak::serve_pbc_quic;
+#[cfg(feature = "quic")]
+use dynomite::net::quic::{QuicConfig, QuicListener};
+
 #[cfg(feature = "wasm")]
 use dyniak::mapreduce::wasm::{load_modules_from_config, WasmLimits, WasmModuleStore};
 
@@ -55,6 +60,14 @@ pub enum RiakWireError {
     /// I/O failure binding a listener.
     #[error("riak: io binding listener: {0}")]
     Io(#[from] std::io::Error),
+    /// A `quic_listen` address was configured but `dynomited`
+    /// was built without the `quic` Cargo feature. Surfaced at
+    /// startup so the operator sees a clean error rather than a
+    /// silently ignored directive, mirroring how the engine's
+    /// QUIC client-plane rejects `transport: quic` without the
+    /// feature.
+    #[error("riak: quic_listen '{0}' requires dynomited built with the `quic` Cargo feature")]
+    QuicUnsupported(String),
     /// Loading a Wasm module from disk or compiling it failed.
     #[error("riak: wasm module load failed: {0}")]
     Wasm(String),
@@ -80,6 +93,16 @@ pub struct RiakHandles {
     /// Resolved address of the HTTP gateway. Stays populated
     /// across the [`spawn_listeners`] handoff.
     pub http_addr: Option<SocketAddr>,
+    /// Bound QUIC listener for the PBC accept loop. Taken by
+    /// [`spawn_listeners`]. Present only when the binary is
+    /// built with the `quic` Cargo feature and a `quic_listen`
+    /// address was configured.
+    #[cfg(feature = "quic")]
+    pub quic_listener: Option<QuicListener>,
+    /// Resolved address of the QUIC PBC listener. Stays
+    /// populated across the [`spawn_listeners`] handoff.
+    #[cfg(feature = "quic")]
+    pub quic_addr: Option<SocketAddr>,
     /// Datastore the listeners delegate to. Shared between the
     /// PBC and HTTP loops so request accounting accumulates in
     /// one place.
@@ -106,21 +129,35 @@ pub struct RiakHandles {
 
 /// Eagerly bind the Riak listeners described by `riak`.
 ///
-/// Returns `Ok(None)` when neither `pbc_listen` nor `http_listen`
-/// is set; otherwise returns a fully-populated [`RiakHandles`].
-/// Bind failures surface here rather than from the run loop, so
-/// `Server::build` can crash-on-construct in the same way the
-/// existing `Proxy::bind` calls do.
+/// Returns `Ok(None)` when none of `pbc_listen`, `http_listen`,
+/// or `quic_listen` is set; otherwise returns a fully-populated
+/// [`RiakHandles`]. Bind failures surface here rather than from
+/// the run loop, so `Server::build` can crash-on-construct in
+/// the same way the existing `Proxy::bind` calls do.
+///
+/// When `quic_listen` is set but the binary was built without
+/// the `quic` Cargo feature, this returns
+/// [`RiakWireError::QuicUnsupported`] so the operator sees a
+/// clean configuration error at startup.
 ///
 /// # Errors
 ///
-/// [`RiakWireError`] when an address fails to parse or a TCP
+/// [`RiakWireError`] when an address fails to parse or a
 /// `bind()` returns an I/O error.
 pub async fn build_handles(
     riak: &ConfRiak,
     datastore: Arc<dyn Datastore>,
 ) -> Result<Option<RiakHandles>, RiakWireError> {
-    if riak.pbc_listen.is_none() && riak.http_listen.is_none() {
+    // Reject `quic_listen` at build time when the feature is
+    // absent so the operator sees a clean error rather than a
+    // silently ignored directive. Mirrors how `build_proxy`
+    // rejects `transport: quic` without the engine feature.
+    #[cfg(not(feature = "quic"))]
+    if let Some(addr) = riak.quic_listen.as_deref() {
+        return Err(RiakWireError::QuicUnsupported(addr.to_string()));
+    }
+
+    if riak.pbc_listen.is_none() && riak.http_listen.is_none() && riak.quic_listen.is_none() {
         return Ok(None);
     }
 
@@ -138,6 +175,8 @@ pub async fn build_handles(
         }
         None => (None, None),
     };
+    #[cfg(feature = "quic")]
+    let (quic_listener, quic_addr) = bind_quic_listener(riak).await?;
 
     let aae = if riak.aae_enabled.unwrap_or(false) {
         let cfg = ConfAae {
@@ -168,6 +207,10 @@ pub async fn build_handles(
         http_listener,
         pbc_addr,
         http_addr,
+        #[cfg(feature = "quic")]
+        quic_listener,
+        #[cfg(feature = "quic")]
+        quic_addr,
         datastore,
         aae,
         tls: build_riak_tls_acceptor(riak)?,
@@ -209,6 +252,56 @@ fn build_riak_tls_acceptor(
     }
 }
 
+/// Bind the optional QUIC PBC listener described by
+/// [`ConfRiak::quic_listen`].
+///
+/// Returns `(None, None)` when `quic_listen` is unset. When set,
+/// the listener reuses the [`ConfRiak::tls_cert`] /
+/// [`ConfRiak::tls_key`] pair (QUIC mandates TLS); both must be
+/// present and UTF-8, otherwise a [`RiakWireError::BadAddr`] is
+/// returned. Bind failures (bad address, UDP socket error)
+/// surface here so `Server::build` crashes on construct in the
+/// same way the TCP `bind()` calls do.
+///
+/// Available only when the binary is built with the `quic` Cargo
+/// feature.
+#[cfg(feature = "quic")]
+async fn bind_quic_listener(
+    riak: &ConfRiak,
+) -> Result<(Option<QuicListener>, Option<SocketAddr>), RiakWireError> {
+    let Some(addr_str) = riak.quic_listen.as_deref() else {
+        return Ok((None, None));
+    };
+    let addr = addr_str
+        .parse::<SocketAddr>()
+        .map_err(|e| RiakWireError::BadAddr {
+            field: "quic_listen",
+            value: addr_str.to_string(),
+            reason: e.to_string(),
+        })?;
+    let (Some(cert), Some(key)) = (riak.tls_cert.as_deref(), riak.tls_key.as_deref()) else {
+        return Err(RiakWireError::BadAddr {
+            field: "quic_listen",
+            value: addr_str.to_string(),
+            reason: "quic_listen requires tls_cert and tls_key to also be set".into(),
+        });
+    };
+    let cert = cert.to_str().ok_or_else(|| RiakWireError::BadAddr {
+        field: "tls_cert",
+        value: cert.display().to_string(),
+        reason: "quic_listen requires a UTF-8 tls_cert path".into(),
+    })?;
+    let key = key.to_str().ok_or_else(|| RiakWireError::BadAddr {
+        field: "tls_key",
+        value: key.display().to_string(),
+        reason: "quic_listen requires a UTF-8 tls_key path".into(),
+    })?;
+    let cfg = QuicConfig::server_with_cert_paths(cert, key);
+    let listener = QuicListener::bind(addr, cfg).await?;
+    let local = listener.local_addr();
+    Ok((Some(listener), Some(local)))
+}
+
 /// Build the optional [`WasmModuleStore`] for the Riak
 /// MapReduce executor from [`ConfRiak::wasm_modules`].
 ///
@@ -239,21 +332,34 @@ pub fn build_wasm_store_from_config(
     Ok(Some(Arc::new(store)))
 }
 
+/// The join handles spawned for the Riak listener loops, in
+/// `(pbc, http, quic)` order. Any element is `None` when the
+/// corresponding listener was not configured; `quic` is always
+/// `None` unless the binary is built with the `quic` Cargo
+/// feature.
+type ListenerHandles = (
+    Option<JoinHandle<()>>,
+    Option<JoinHandle<()>>,
+    Option<JoinHandle<()>>,
+);
+
 /// Spawn the Riak listener tasks.
 ///
 /// Consumes the bound listeners and returns join handles whose
 /// lifetimes the caller (the run loop) is responsible for.
 /// `cancel_rx` resolves when graceful shutdown is requested;
-/// both listener loops exit shortly after.
+/// all listener loops exit shortly after.
 ///
 /// # Returns
 ///
-/// A tuple of `(pbc_handle, http_handle)`; either may be `None`
-/// when the corresponding address was not configured.
+/// A [`ListenerHandles`] tuple of `(pbc_handle, http_handle,
+/// quic_handle)`; any may be `None` when the corresponding
+/// address was not configured. `quic_handle` is always `None`
+/// unless the binary is built with the `quic` Cargo feature.
 pub fn spawn_listeners(
     handles: &mut RiakHandles,
     cancel_rx: &watch::Receiver<bool>,
-) -> (Option<JoinHandle<()>>, Option<JoinHandle<()>>) {
+) -> ListenerHandles {
     let pbc = handles.pbc_listener.take().map(|listener| {
         let ds = Arc::clone(&handles.datastore);
         let mut cancel = cancel_rx.clone();
@@ -298,7 +404,48 @@ pub fn spawn_listeners(
             }
         })
     });
-    (pbc, http)
+    let quic = spawn_quic_listener(handles, cancel_rx);
+    (pbc, http, quic)
+}
+
+/// Spawn the QUIC PBC listener task, if one is bound.
+///
+/// The accept loop drives [`serve_pbc_quic`], which reuses the
+/// same per-connection handler the TCP and TLS-over-TCP paths
+/// use. Returns `None` when no QUIC listener was bound.
+///
+/// Available only when the binary is built with the `quic` Cargo
+/// feature.
+#[cfg(feature = "quic")]
+fn spawn_quic_listener(
+    handles: &mut RiakHandles,
+    cancel_rx: &watch::Receiver<bool>,
+) -> Option<JoinHandle<()>> {
+    handles.quic_listener.take().map(|listener| {
+        let ds = Arc::clone(&handles.datastore);
+        let mut cancel = cancel_rx.clone();
+        tokio::spawn(async move {
+            let serve = serve_pbc_quic(listener, ds);
+            tokio::select! {
+                res = serve => {
+                    if let Err(e) = res {
+                        tracing::warn!(error = %e, "riak pbc quic listener exited with error");
+                    }
+                }
+                () = wait_flag(&mut cancel) => {}
+            }
+        })
+    })
+}
+
+/// QUIC support is compiled out without the `quic` feature; the
+/// listener is never bound, so the spawn is a no-op.
+#[cfg(not(feature = "quic"))]
+fn spawn_quic_listener(
+    _handles: &mut RiakHandles,
+    _cancel_rx: &watch::Receiver<bool>,
+) -> Option<JoinHandle<()>> {
+    None
 }
 
 /// Spawn the Riak active anti-entropy scheduler task.
@@ -583,5 +730,69 @@ mod tests {
         let req = rx.recv().await.expect("one outbound");
         assert!(req.bytes.starts_with(b"AAE:users/alice:"));
         assert_eq!(req.target_peer_idx, Some(3));
+    }
+
+    /// When the binary is built without the `quic` feature, a
+    /// configured `quic_listen` address must be rejected at
+    /// build time with [`RiakWireError::QuicUnsupported`] rather
+    /// than silently ignored.
+    #[cfg(not(feature = "quic"))]
+    #[tokio::test]
+    async fn build_handles_rejects_quic_without_feature() {
+        let cfg = ConfRiak {
+            quic_listen: Some("127.0.0.1:0".into()),
+            ..ConfRiak::default()
+        };
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let Err(err) = build_handles(&cfg, ds).await else {
+            panic!("quic_listen without the quic feature must fail");
+        };
+        assert!(matches!(err, RiakWireError::QuicUnsupported(_)));
+    }
+
+    /// With the `quic` feature on, a `quic_listen` address plus a
+    /// matching `tls_cert` / `tls_key` pair binds a QUIC
+    /// listener and reports its resolved address.
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn build_handles_binds_quic_with_tls_pair() {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, cert.cert.pem()).unwrap();
+        std::fs::write(&key_path, cert.signing_key.serialize_pem()).unwrap();
+        let cfg = ConfRiak {
+            quic_listen: Some("127.0.0.1:0".into()),
+            tls_cert: Some(cert_path),
+            tls_key: Some(key_path),
+            ..ConfRiak::default()
+        };
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let h = build_handles(&cfg, ds).await.unwrap().unwrap();
+        assert!(h.quic_addr.is_some(), "quic listener must bind");
+        assert!(h.quic_listener.is_some());
+    }
+
+    /// With the `quic` feature on, a `quic_listen` address with
+    /// no TLS material is rejected (QUIC mandates TLS).
+    #[cfg(feature = "quic")]
+    #[tokio::test]
+    async fn build_handles_rejects_quic_without_tls() {
+        let cfg = ConfRiak {
+            quic_listen: Some("127.0.0.1:0".into()),
+            ..ConfRiak::default()
+        };
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let Err(err) = build_handles(&cfg, ds).await else {
+            panic!("quic_listen without tls_cert/tls_key must fail");
+        };
+        assert!(matches!(
+            err,
+            RiakWireError::BadAddr {
+                field: "quic_listen",
+                ..
+            }
+        ));
     }
 }

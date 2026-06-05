@@ -208,6 +208,75 @@ pub async fn serve_pbc_tls_with_admin(
     serve_pbc_inner(listener, datastore, admin, Some(acceptor)).await
 }
 
+/// Run the PBC accept loop on a QUIC `listener`.
+///
+/// This is the QUIC sibling of [`serve_pbc`]: it loops on
+/// [`dynomite::net::quic::QuicListener::accept`], which yields a
+/// [`dynomite::net::quic::QuicTransport`] per connected client,
+/// and feeds that transport into the exact same per-connection
+/// handler the TCP and TLS-over-TCP paths use. The PBC framing
+/// is byte-for-byte identical over QUIC; only the underlying
+/// transport changes (each accepted connection is carried over a
+/// single QUIC bidirectional stream).
+///
+/// Per-connection failures are logged at `tracing::warn!` and
+/// otherwise swallowed so a misbehaving client cannot bring the
+/// listener down, matching the plaintext / TLS accept loops.
+///
+/// Available only when the crate is built with the `quic` Cargo
+/// feature.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+#[cfg(feature = "quic")]
+pub async fn serve_pbc_quic(
+    listener: dynomite::net::quic::QuicListener,
+    datastore: Arc<dyn Datastore>,
+) -> Result<(), RiakError> {
+    let admin: Arc<dyn ClusterAdmin> = Arc::new(NoopClusterAdmin);
+    serve_pbc_quic_inner(listener, datastore, admin).await
+}
+
+/// As [`serve_pbc_quic`], with a custom [`ClusterAdmin`] handle
+/// wired into the dispatch path.
+///
+/// Available only when the crate is built with the `quic` Cargo
+/// feature.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+#[cfg(feature = "quic")]
+pub async fn serve_pbc_quic_with_admin(
+    listener: dynomite::net::quic::QuicListener,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+) -> Result<(), RiakError> {
+    serve_pbc_quic_inner(listener, datastore, admin).await
+}
+
+#[cfg(feature = "quic")]
+async fn serve_pbc_quic_inner(
+    listener: dynomite::net::quic::QuicListener,
+    datastore: Arc<dyn Datastore>,
+    admin: Arc<dyn ClusterAdmin>,
+) -> Result<(), RiakError> {
+    let aae_status: Arc<dyn AaeStatusProvider> = Arc::new(NoopAaeStatusProvider);
+    loop {
+        let transport = listener.accept().await?;
+        let peer = transport.peer_addr_socket();
+        let datastore = Arc::clone(&datastore);
+        let admin = Arc::clone(&admin);
+        let aae = Arc::clone(&aae_status);
+        tokio::spawn(async move {
+            if let Err(e) = handle_conn_full(transport, datastore, admin, None, aae).await {
+                tracing::warn!(%peer, error = %e, "riak pbc quic connection ended with error");
+            }
+        });
+    }
+}
+
 /// As [`serve_pbc_with_admin`], with [`RoutingHooks`] wired into
 /// the request path.
 ///

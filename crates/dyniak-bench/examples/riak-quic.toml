@@ -1,0 +1,39 @@
+# Riak Protocol Buffer Client (PBC) workload over QUIC: balanced
+# ping/get/put/del. Targets a single server whose QUIC PBC
+# listener (`riak.quic_listen`) is bound on UDP port 8089.
+#
+# Requires dyniak-bench to be built with `--features quic`; the
+# QUIC driver speaks the same PBC framing as the `riak_pbc`
+# driver but carries it over a QUIC bidirectional stream and
+# dials the listener with the insecure client config (no
+# certificate verification).
+
+[run]
+duration = "60s"
+concurrent = 8
+rate = "max"
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "riak_quic"
+host = "127.0.0.1"
+port = 8089
+bucket = "bench"
+timeout_ms = 5000
+
+[ops]
+ping = 3
+put  = 3
+get  = 3
+del  = 1
+
+[keygen]
+kind = "pareto"
+max = 100000
+shape = 1.5
+prefix = "rk_"
+
+[valgen]
+kind = "exponential"
+mean = 256

@@ -81,6 +81,14 @@ pub use crate::server::{handle_conn_with_hooks, serve_pbc_with_routing};
 // the prior block so parallel branches do not conflict.
 pub use crate::server::{handle_conn_with_aae_status, serve_pbc_with_aae_status};
 
+// QUIC PBC accept loops. Gated on the `quic` feature, which
+// forwards to the engine's shared quiche integration. The
+// handler that drives each accepted connection is the same one
+// the TCP and TLS-over-TCP paths use; only the byte transport
+// differs.
+#[cfg(feature = "quic")]
+pub use crate::server::{serve_pbc_quic, serve_pbc_quic_with_admin};
+
 pub mod aae;
 pub mod datatypes;
 pub mod handoff;

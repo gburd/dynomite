@@ -514,6 +514,7 @@ pub struct ConfPool {
 /// let r = ConfRiak {
 ///     pbc_listen: Some("127.0.0.1:8087".into()),
 ///     http_listen: Some("127.0.0.1:8098".into()),
+///     quic_listen: None,
 ///     aae_enabled: Some(false),
 ///     aae_full_sweep_interval_seconds: None,
 ///     aae_segment_interval_seconds: None,
@@ -535,6 +536,22 @@ pub struct ConfRiak {
     /// (`host:port`). When unset, the HTTP gateway is not
     /// started.
     pub http_listen: Option<String>,
+    /// Address the Riak Protocol Buffers Client listener binds
+    /// to over QUIC (`host:port`, a UDP socket). When unset,
+    /// the QUIC PBC listener is not started. The PBC framing is
+    /// identical to the TCP listener; only the byte transport
+    /// differs (a single QUIC bidirectional stream per accepted
+    /// connection).
+    ///
+    /// QUIC mandates TLS, so a QUIC listener reuses the
+    /// [`Self::tls_cert`] / [`Self::tls_key`] pair: setting
+    /// `quic_listen` without both is rejected at validation
+    /// time. Serving QUIC also requires `dynomited` to be built
+    /// with the `quic` Cargo feature; when the knob is set but
+    /// the feature is absent the binary fails fast at startup
+    /// with a clean configuration error rather than silently
+    /// ignoring the directive.
+    pub quic_listen: Option<String>,
     /// When `true`, the Riak active anti-entropy scheduler is
     /// spawned alongside the listeners. Default: `false`.
     pub aae_enabled: Option<bool>,
@@ -738,6 +755,19 @@ impl ConfRiak {
         }
         if let Some(addr) = self.http_listen.as_deref() {
             validate_riak_addr("http_listen", addr)?;
+        }
+        if let Some(addr) = self.quic_listen.as_deref() {
+            validate_riak_addr("quic_listen", addr)?;
+            // QUIC mandates TLS; the listener reuses the
+            // `tls_cert` / `tls_key` pair, so both must be set
+            // when a QUIC address is configured.
+            if self.tls_cert.is_none() || self.tls_key.is_none() {
+                return Err(ConfError::BadServer {
+                    field: "quic_listen",
+                    value: addr.to_string(),
+                    reason: "quic_listen requires tls_cert and tls_key to also be set".into(),
+                });
+            }
         }
         if let Some(n) = self.aae_full_sweep_interval_seconds {
             if n == 0 {
@@ -2294,6 +2324,46 @@ p:
         });
         p.apply_defaults();
         assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn riak_quic_listen_requires_tls_pair() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            quic_listen: Some("127.0.0.1:8089".into()),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        let Err(ConfError::BadServer { field, .. }) = p.validate("p") else {
+            panic!("quic_listen without tls_cert/tls_key must be rejected");
+        };
+        assert_eq!(field, "quic_listen");
+    }
+
+    #[test]
+    fn riak_quic_listen_with_tls_pair_is_ok() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            quic_listen: Some("127.0.0.1:8089".into()),
+            tls_cert: Some(std::path::PathBuf::from("/x.crt")),
+            tls_key: Some(std::path::PathBuf::from("/x.key")),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn riak_quic_listen_rejects_bad_addr() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            quic_listen: Some("not-an-addr".into()),
+            tls_cert: Some(std::path::PathBuf::from("/x.crt")),
+            tls_key: Some(std::path::PathBuf::from("/x.key")),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        assert!(p.validate("p").is_err());
     }
 
     #[test]

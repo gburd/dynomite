@@ -22,6 +22,7 @@ use dyniak_bench::engine::Engine;
 enum CliDriverKind {
     Redis,
     RiakPbc,
+    RiakQuic,
     RiakHttp,
 }
 
@@ -30,6 +31,7 @@ impl From<CliDriverKind> for CfgDriverKind {
         match c {
             CliDriverKind::Redis => Self::Redis,
             CliDriverKind::RiakPbc => Self::RiakPbc,
+            CliDriverKind::RiakQuic => Self::RiakQuic,
             CliDriverKind::RiakHttp => Self::RiakHttp,
         }
     }
@@ -212,6 +214,7 @@ fn build_config(cli: &Cli) -> Result<Config, String> {
                 port: cli.port.unwrap_or(match driver {
                     CliDriverKind::Redis => 6379,
                     CliDriverKind::RiakPbc => 8087,
+                    CliDriverKind::RiakQuic => 8089,
                     CliDriverKind::RiakHttp => 8098,
                 }),
                 timeout_ms: cli.timeout_ms.unwrap_or(5000),

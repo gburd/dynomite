@@ -917,6 +917,14 @@ impl Server {
         self.riak_handles.as_ref().and_then(|h| h.http_addr)
     }
 
+    /// Address the optional Riak QUIC PBC listener bound to.
+    /// Available only with the `riak` and `quic` Cargo features.
+    #[cfg(all(feature = "riak", feature = "quic"))]
+    #[must_use]
+    pub fn riak_quic_addr(&self) -> Option<SocketAddr> {
+        self.riak_handles.as_ref().and_then(|h| h.quic_addr)
+    }
+
     /// Cheap clonable shutdown handle. Surviving copies can request
     /// a stop after [`Server::run`] has been called.
     #[must_use]
@@ -1147,31 +1155,36 @@ impl Server {
         // listener tasks and the AAE scheduler. They share the
         // same shutdown signal as the rest of the run loop.
         #[cfg(feature = "riak")]
-        let (riak_pbc_handle, riak_http_handle, riak_aae_handle) = match riak_handles.as_mut() {
-            Some(h) => {
-                let aae_cfg = h.aae.clone();
-                let (p, http) = crate::riak::spawn_listeners(h, &shutdown_rx);
-                let aae = aae_cfg.map(|cfg| {
-                    let txs = gossip_peer_txs.clone();
-                    let cancel = shutdown_rx.clone();
-                    tracing::info!(
-                        pool = %pool_name,
-                        full_sweep_seconds = cfg.full_sweep_interval_seconds,
-                        segment_seconds = cfg.segment_interval_seconds,
-                        "riak aae scheduler spawned"
-                    );
-                    crate::riak::spawn_aae(cfg, txs, cancel)
-                });
-                if let Some(a) = h.pbc_addr {
-                    tracing::info!(pool = %pool_name, addr = %a, "riak pbc listener spawned");
+        let (riak_pbc_handle, riak_http_handle, riak_quic_handle, riak_aae_handle) =
+            match riak_handles.as_mut() {
+                Some(h) => {
+                    let aae_cfg = h.aae.clone();
+                    let (p, http, quic) = crate::riak::spawn_listeners(h, &shutdown_rx);
+                    let aae = aae_cfg.map(|cfg| {
+                        let txs = gossip_peer_txs.clone();
+                        let cancel = shutdown_rx.clone();
+                        tracing::info!(
+                            pool = %pool_name,
+                            full_sweep_seconds = cfg.full_sweep_interval_seconds,
+                            segment_seconds = cfg.segment_interval_seconds,
+                            "riak aae scheduler spawned"
+                        );
+                        crate::riak::spawn_aae(cfg, txs, cancel)
+                    });
+                    if let Some(a) = h.pbc_addr {
+                        tracing::info!(pool = %pool_name, addr = %a, "riak pbc listener spawned");
+                    }
+                    if let Some(a) = h.http_addr {
+                        tracing::info!(pool = %pool_name, addr = %a, "riak http gateway spawned");
+                    }
+                    #[cfg(feature = "quic")]
+                    if let Some(a) = h.quic_addr {
+                        tracing::info!(pool = %pool_name, addr = %a, "riak pbc quic listener spawned");
+                    }
+                    (p, http, quic, aae)
                 }
-                if let Some(a) = h.http_addr {
-                    tracing::info!(pool = %pool_name, addr = %a, "riak http gateway spawned");
-                }
-                (p, http, aae)
-            }
-            None => (None, None, None),
-        };
+                None => (None, None, None, None),
+            };
 
         let mut signals = SignalSet::install().map_err(ServerError::Signals)?;
         let reload_ctx = ReloadContext {
@@ -1231,9 +1244,14 @@ impl Server {
         let _ = stats_refresher.await;
         #[cfg(feature = "riak")]
         {
-            for h in [riak_pbc_handle, riak_http_handle, riak_aae_handle]
-                .into_iter()
-                .flatten()
+            for h in [
+                riak_pbc_handle,
+                riak_http_handle,
+                riak_quic_handle,
+                riak_aae_handle,
+            ]
+            .into_iter()
+            .flatten()
             {
                 h.abort();
                 let _ = h.await;
