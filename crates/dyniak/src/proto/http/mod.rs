@@ -67,8 +67,12 @@ use crate::error::RiakError;
 pub mod content_type;
 pub mod object;
 pub mod routes;
+#[cfg(feature = "search")]
+pub mod search;
 
 pub use crate::proto::http::content_type::{select_codec, SUPPORTED_CONTENT_TYPES};
+#[cfg(feature = "search")]
+pub use crate::proto::http::search::SearchState;
 
 /// Run the HTTP accept loop on `listener`.
 ///
@@ -99,15 +103,42 @@ pub async fn serve_http(
     listener: TcpListener,
     datastore: Arc<dyn Datastore>,
 ) -> Result<(), RiakError> {
+    serve_http_ctx(listener, routes::RouteCtx::new(datastore)).await
+}
+
+/// Run the HTTP accept loop on `listener`, wiring the search
+/// registry into the gateway alongside the datastore so the index
+/// and search routes are served. Behaves exactly like
+/// [`serve_http`] for the object / list / transaction routes.
+///
+/// Available only when the crate is built with the `search` Cargo
+/// feature.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+#[cfg(feature = "search")]
+pub async fn serve_http_with_search(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    registry: Arc<dynomite_search::VectorRegistry>,
+) -> Result<(), RiakError> {
+    let ctx = routes::RouteCtx::with_search(datastore, Arc::new(SearchState::new(registry)));
+    serve_http_ctx(listener, ctx).await
+}
+
+/// Shared accept loop driving one `hyper` connection per accepted
+/// client against a prebuilt [`routes::RouteCtx`].
+async fn serve_http_ctx(listener: TcpListener, ctx: routes::RouteCtx) -> Result<(), RiakError> {
     loop {
         let (sock, peer) = listener.accept().await?;
-        let datastore = Arc::clone(&datastore);
+        let ctx = ctx.clone();
         let io = TokioIo::new(sock);
         tokio::spawn(async move {
             let svc = service_fn(move |req| {
-                let ds = Arc::clone(&datastore);
+                let ctx = ctx.clone();
                 async move {
-                    let resp = routes::dispatch(req, ds).await;
+                    let resp = routes::dispatch(req, ctx).await;
                     Ok::<_, std::convert::Infallible>(resp)
                 }
             });
@@ -131,9 +162,36 @@ pub async fn serve_http_tls(
     datastore: Arc<dyn Datastore>,
     acceptor: TlsAcceptor,
 ) -> Result<(), RiakError> {
+    serve_http_tls_ctx(listener, routes::RouteCtx::new(datastore), acceptor).await
+}
+
+/// TLS-terminating variant of [`serve_http_with_search`]. Available
+/// only when the crate is built with the `search` Cargo feature.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+#[cfg(feature = "search")]
+pub async fn serve_http_tls_with_search(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    registry: Arc<dynomite_search::VectorRegistry>,
+    acceptor: TlsAcceptor,
+) -> Result<(), RiakError> {
+    let ctx = routes::RouteCtx::with_search(datastore, Arc::new(SearchState::new(registry)));
+    serve_http_tls_ctx(listener, ctx, acceptor).await
+}
+
+/// Shared TLS-terminating accept loop against a prebuilt
+/// [`routes::RouteCtx`].
+async fn serve_http_tls_ctx(
+    listener: TcpListener,
+    ctx: routes::RouteCtx,
+    acceptor: TlsAcceptor,
+) -> Result<(), RiakError> {
     loop {
         let (sock, peer) = listener.accept().await?;
-        let datastore = Arc::clone(&datastore);
+        let ctx = ctx.clone();
         let acc = acceptor.clone();
         tokio::spawn(async move {
             let tls = match acc.accept(sock).await {
@@ -145,9 +203,9 @@ pub async fn serve_http_tls(
             };
             let io = TokioIo::new(tls);
             let svc = service_fn(move |req| {
-                let ds = Arc::clone(&datastore);
+                let ctx = ctx.clone();
                 async move {
-                    let resp = routes::dispatch(req, ds).await;
+                    let resp = routes::dispatch(req, ctx).await;
                     Ok::<_, std::convert::Infallible>(resp)
                 }
             });

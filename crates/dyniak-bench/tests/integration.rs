@@ -191,6 +191,24 @@ fn riak_txn_example_config_parses() {
 }
 
 #[test]
+fn riak_search_example_config_parses() {
+    // The shipped search-workload example must stay loadable and
+    // valid: a `riak_http` driver weighting the search op classes.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("riak-search.toml");
+    let cfg = Config::from_path(&path).expect("riak-search.toml must parse and validate");
+    assert_eq!(cfg.driver.kind, DriverKind::RiakHttp);
+    let weights = cfg.ops.weighted();
+    for op in ["index_put", "search_text", "search_regex", "search_vector"] {
+        assert!(
+            weights.iter().any(|(name, w)| name == op && *w > 0),
+            "riak-search.toml must weight the {op} op: {weights:?}"
+        );
+    }
+}
+
+#[test]
 fn keygen_uniform_distributes() {
     let mut g = KeyGen::UniformInt {
         max: 64,

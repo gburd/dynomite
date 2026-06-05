@@ -740,25 +740,31 @@ impl Server {
         #[cfg(feature = "riak")]
         let riak_handles = match conf_pool.riak.as_ref() {
             Some(r) => {
-                // Reuse the same backing store the dyniak
-                // surface routes to: when `data_store: dyniak`
-                // is selected the Riak PBC / HTTP listeners serve
-                // requests against the transactional Noxu
-                // environment opened above. Other data stores
-                // (`valkey` / `memcache`) fall back to the
-                // in-process `MemoryDatastore` so the Riak
-                // surface remains a stand-alone protocol on those
-                // deployments.
                 let ds: Arc<dyn dynomite::embed::Datastore> = match noxu_shared.as_ref() {
                     Some(noxu) => noxu.clone(),
                     None => Arc::new(dynomite::embed::MemoryDatastore::new()),
                 };
-                crate::riak::build_handles(r, ds)
-                    .await
-                    .map_err(|e| ServerError::BadConfig {
+                let handles = crate::riak::build_handles(r, ds).await.map_err(|e| {
+                    ServerError::BadConfig {
                         field: "riak",
                         reason: e.to_string(),
-                    })?
+                    }
+                })?;
+                // Wire the shared vector-index registry into the Riak
+                // HTTP gateway for `data_store: dyniak` pools so the
+                // bucket index-management and search routes resolve
+                // against the same registry the RediSearch FT.*
+                // surface uses. Only meaningful when the binary is
+                // built with the `search` feature; the dyniak object
+                // store (noxu) feeds the indexes on write.
+                #[cfg(feature = "search")]
+                let handles = handles.map(|mut h| {
+                    if is_dyniak {
+                        h.search_registry = Some(std::sync::Arc::clone(&vector_registry));
+                    }
+                    h
+                });
+                handles
             }
             None => None,
         };

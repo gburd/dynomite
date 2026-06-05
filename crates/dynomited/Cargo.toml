@@ -57,7 +57,7 @@ gen-man = ["dep:clap_mangen"]
 # strips the search dependency tree out of the binary and
 # leaves the dispatcher running with the cluster substrate
 # alone.
-search = ["dep:dynomite-search"]
+search = ["dep:dynomite-search", "dyniak?/search"]
 # Enable the end-to-end integration test that spawns a real
 # `valkey-server` and drives the `dynomited` binary against it.
 # The test discovers `valkey-server` via `PATH`; when the binary

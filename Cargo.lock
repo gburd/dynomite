@@ -1037,6 +1037,7 @@ dependencies = [
  "dyn-encoding",
  "dyn-hashtree",
  "dynomite-engine",
+ "dynomite-search",
  "futures-core",
  "futures-util",
  "gen-fsm",

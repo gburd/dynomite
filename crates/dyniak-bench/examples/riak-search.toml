@@ -1,0 +1,50 @@
+# Riak HTTP search workload. Exercises the dyniak search bridge:
+# the driver declares a `title` text index and an 8-dimension
+# `_vector` index once (idempotently -- repeated declarations reply
+# 200 / 409, both treated as success), seeds documents that carry a
+# `title` string and a `_vector` float array, and then drives a mix
+# of substring, approximate-regex, and vector-KNN queries.
+#
+# Each op name is its own latency class, so the run reports
+# per-query-class tail latencies for `index_put`, `search_text`,
+# `search_regex`, and `search_vector` independently.
+#
+# Targets a single dyniak HTTP gateway bound on port 8098 backed by
+# a NoxuDatastore and wired with a search registry (a
+# `data_store: dyniak` pool built with `--features riak,search`).
+
+[run]
+duration = "60s"
+concurrent = 8
+rate = "max"
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "riak_http"
+host = "127.0.0.1"
+port = 8098
+bucket = "search-bench"
+timeout_ms = 5000
+# Object writes use the JSON envelope so the indexed document is a
+# plain JSON object the gateway can parse for the `title` / `_vector`
+# fields.
+encoding = "json"
+
+[ops]
+# Seed the indexes, then weight the three query classes.
+index_put = 2
+search_text = 5
+search_regex = 3
+search_vector = 4
+
+[keygen]
+kind = "uniform"
+max = 100000
+prefix = "doc_"
+
+[valgen]
+# Unused by the search ops (documents are generated internally), but
+# the schema requires a valgen block.
+kind = "fixed"
+size = 64

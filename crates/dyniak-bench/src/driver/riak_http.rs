@@ -22,8 +22,29 @@ use crate::txn_workload::{
 };
 use crate::valgen::ValGen;
 
-const SUPPORTED: &[&str] = &["get", "put", "del", "txn"];
+const SUPPORTED: &[&str] = &[
+    "get",
+    "put",
+    "del",
+    "txn",
+    "index_put",
+    "search_text",
+    "search_regex",
+    "search_vector",
+];
 const VCLOCK_CAP: usize = 1024;
+
+/// Dimension of the small vectors the `search` workload indexes and
+/// queries. Kept tiny so per-request encode / decode cost does not
+/// dominate the measured latency.
+const SEARCH_VECTOR_DIM: usize = 8;
+
+/// Fixed vocabulary the `search` workload draws document titles and
+/// query terms from, so substring / regex queries reliably hit
+/// indexed documents.
+const SEARCH_VOCAB: &[&str] = &[
+    "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet",
+];
 
 static VCLOCKS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
@@ -61,6 +82,10 @@ pub struct RiakHttpDriver {
     bucket: String,
     client: reqwest::blocking::Client,
     encoding: HttpEncoding,
+    /// Whether the `search` workload has declared its text + vector
+    /// indexes yet. Declaration is idempotent, so each worker runs it
+    /// lazily on its first search-related op.
+    indexes_ready: bool,
 }
 
 impl RiakHttpDriver {
@@ -79,6 +104,7 @@ impl RiakHttpDriver {
             bucket: cfg.bucket.clone(),
             client,
             encoding: cfg.encoding,
+            indexes_ready: false,
         })
     }
 
@@ -193,6 +219,185 @@ impl RiakHttpDriver {
         } else {
             Err(format!("http error: {st}"))
         }
+    }
+
+    /// Declare the `search` workload's text and vector indexes.
+    ///
+    /// Idempotent: a repeated text-index declaration replies `200`
+    /// and a repeated vector-index creation replies `409`; both are
+    /// treated as success so every worker can call this lazily on its
+    /// first search op.
+    fn ensure_indexes(&mut self) -> Result<(), String> {
+        if self.indexes_ready {
+            return Ok(());
+        }
+        let text_url = format!("{}/buckets/{}/index/text/title", self.base, self.bucket);
+        let resp = self
+            .client
+            .put(&text_url)
+            .send()
+            .map_err(|e| classify(&e.to_string(), &e))?;
+        let st = resp.status();
+        if !st.is_success() {
+            return Err(format!("declare text index: http error: {st}"));
+        }
+        let vec_url = format!("{}/buckets/{}/index/vector", self.base, self.bucket);
+        let body = format!("{{\"dim\":{SEARCH_VECTOR_DIM},\"metric\":\"cosine\"}}");
+        let resp = self
+            .client
+            .post(&vec_url)
+            .header("content-type", "application/json")
+            .body(body)
+            .send()
+            .map_err(|e| classify(&e.to_string(), &e))?;
+        let st = resp.status();
+        // 409 means the index already exists (another worker won the
+        // race); that is fine.
+        if !st.is_success() && st.as_u16() != 409 {
+            return Err(format!("create vector index: http error: {st}"));
+        }
+        self.indexes_ready = true;
+        Ok(())
+    }
+
+    /// PUT a document carrying a text `title` field and a small
+    /// `_vector` so it lands in both the text and vector indexes.
+    fn op_index_put(&mut self, key: &str, rng: &mut SmallRng) -> Result<DriverOutcome, String> {
+        self.ensure_indexes()?;
+        let title = random_title(rng);
+        let vector = random_vector(rng);
+        let document = build_search_document(&title, &vector);
+        let body = encode_envelope(self.encoding, document.as_bytes());
+        let url = self.url_for(key);
+        let resp = self
+            .client
+            .put(&url)
+            .header("content-type", self.encoding.content_type())
+            .body(body)
+            .send()
+            .map_err(|e| classify(&e.to_string(), &e))?;
+        let st = resp.status();
+        if !st.is_success() {
+            return Err(format!("http error: {st}"));
+        }
+        Ok(DriverOutcome::Ok)
+    }
+
+    /// Substring search over the `title` field for a random vocabulary
+    /// term.
+    fn op_search_text(&mut self, rng: &mut SmallRng) -> Result<DriverOutcome, String> {
+        self.ensure_indexes()?;
+        let term = random_word(rng);
+        let url = format!(
+            "{}/buckets/{}/search/text/title?q={term}",
+            self.base, self.bucket
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .header("accept", "application/json")
+            .send()
+            .map_err(|e| classify(&e.to_string(), &e))?;
+        let st = resp.status();
+        if !st.is_success() {
+            return Err(format!("http error: {st}"));
+        }
+        Ok(DriverOutcome::Ok)
+    }
+
+    /// Approximate regex search (one edit) over the `title` field.
+    fn op_search_regex(&mut self, rng: &mut SmallRng) -> Result<DriverOutcome, String> {
+        self.ensure_indexes()?;
+        let term = random_word(rng);
+        let url = format!(
+            "{}/buckets/{}/search/regex/title?pattern={term}&k=1",
+            self.base, self.bucket
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .header("accept", "application/json")
+            .send()
+            .map_err(|e| classify(&e.to_string(), &e))?;
+        let st = resp.status();
+        if !st.is_success() {
+            return Err(format!("http error: {st}"));
+        }
+        Ok(DriverOutcome::Ok)
+    }
+
+    /// KNN search with a random query vector.
+    fn op_search_vector(&mut self, rng: &mut SmallRng) -> Result<DriverOutcome, String> {
+        self.ensure_indexes()?;
+        let vector = random_vector(rng);
+        let body = build_vector_query(&vector, 10);
+        let url = format!("{}/buckets/{}/search/vector", self.base, self.bucket);
+        let resp = self
+            .client
+            .post(&url)
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .body(body)
+            .send()
+            .map_err(|e| classify(&e.to_string(), &e))?;
+        let st = resp.status();
+        if !st.is_success() {
+            return Err(format!("http error: {st}"));
+        }
+        Ok(DriverOutcome::Ok)
+    }
+}
+
+/// Pick a random vocabulary word.
+fn random_word(rng: &mut SmallRng) -> &'static str {
+    let idx = rng.random_range(0..SEARCH_VOCAB.len());
+    SEARCH_VOCAB[idx]
+}
+
+/// Build a document title from two random vocabulary words.
+fn random_title(rng: &mut SmallRng) -> String {
+    format!("{} {}", random_word(rng), random_word(rng))
+}
+
+/// Build a small random unit-ish vector of [`SEARCH_VECTOR_DIM`]
+/// dimensions.
+fn random_vector(rng: &mut SmallRng) -> Vec<f32> {
+    (0..SEARCH_VECTOR_DIM)
+        .map(|_| rng.random_range(-1.0_f32..1.0_f32))
+        .collect()
+}
+
+/// Render a search document as JSON: a `title` string and a
+/// `_vector` float array.
+fn build_search_document(title: &str, vector: &[f32]) -> String {
+    let mut out = String::with_capacity(64 + vector.len() * 8);
+    out.push_str("{\"title\":\"");
+    out.push_str(title);
+    out.push_str("\",\"_vector\":[");
+    append_float_array(&mut out, vector);
+    out.push_str("]}");
+    out
+}
+
+/// Render a vector-KNN query body: `{"query":[..],"k":N}`.
+fn build_vector_query(vector: &[f32], k: usize) -> String {
+    let mut out = String::with_capacity(32 + vector.len() * 8);
+    out.push_str("{\"query\":[");
+    append_float_array(&mut out, vector);
+    out.push_str("],\"k\":");
+    out.push_str(&k.to_string());
+    out.push('}');
+    out
+}
+
+/// Append a comma-separated list of floats to `out`.
+fn append_float_array(out: &mut String, vector: &[f32]) {
+    use std::fmt::Write as _;
+    for (i, v) in vector.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(out, "{v}");
     }
 }
 
@@ -327,6 +532,13 @@ impl Driver for RiakHttpDriver {
                 self.op_del(&key)
             }
             "txn" => self.op_txn(keygen, valgen, rng),
+            "index_put" => {
+                let key = keygen.next(rng);
+                self.op_index_put(&key, rng)
+            }
+            "search_text" => self.op_search_text(rng),
+            "search_regex" => self.op_search_regex(rng),
+            "search_vector" => self.op_search_vector(rng),
             other => return DriverOutcome::Err(format!("unsupported op `{other}`")),
         };
         match result {
@@ -404,5 +616,43 @@ mod tests {
             encode_envelope(HttpEncoding::Cbor, b"A"),
             vec![0xa1, 0x65, b'v', b'a', b'l', b'u', b'e', 0x81, 0x18, 0x41]
         );
+    }
+
+    #[test]
+    fn search_document_carries_title_and_vector() {
+        let doc = build_search_document("alpha bravo", &[1.0, -0.5]);
+        assert!(doc.starts_with(r#"{"title":"alpha bravo","_vector":["#));
+        assert!(doc.ends_with("]}"));
+        assert!(doc.contains('1') && doc.contains("-0.5"));
+    }
+
+    #[test]
+    fn vector_query_body_has_query_and_k() {
+        let body = build_vector_query(&[0.1, 0.2, 0.3], 7);
+        assert!(body.starts_with(r#"{"query":["#));
+        assert!(body.ends_with(r#"],"k":7}"#));
+        // Three comma-separated entries.
+        let inner = body
+            .trim_start_matches(r#"{"query":["#)
+            .split(']')
+            .next()
+            .unwrap();
+        assert_eq!(inner.split(',').count(), 3);
+    }
+
+    #[test]
+    fn random_vector_has_fixed_dimension() {
+        use rand::SeedableRng;
+        let mut rng = SmallRng::seed_from_u64(42);
+        let v = random_vector(&mut rng);
+        assert_eq!(v.len(), SEARCH_VECTOR_DIM);
+        assert!(v.iter().all(|x| (-1.0..1.0).contains(x)));
+    }
+
+    #[test]
+    fn search_ops_are_supported() {
+        for op in ["index_put", "search_text", "search_regex", "search_vector"] {
+            assert!(SUPPORTED.contains(&op), "missing op {op}");
+        }
     }
 }

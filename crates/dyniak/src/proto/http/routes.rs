@@ -102,16 +102,58 @@ const SERVER_NAME: &str = "dyniak";
 /// the crate version.
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Per-request gateway context: the datastore the handlers delegate
+/// to, plus the optional search registry that lights up the index /
+/// search routes.
+///
+/// The context is built once per server (cheap to clone: every field
+/// is an [`Arc`]) and cloned per request. A plain
+/// `Arc<dyn Datastore>` converts into a search-less context through
+/// [`From`], so the call sites that predate the search surface keep
+/// compiling unchanged.
+#[derive(Clone)]
+pub(crate) struct RouteCtx {
+    pub(crate) datastore: Arc<dyn Datastore>,
+    #[cfg(feature = "search")]
+    pub(crate) search: Option<Arc<crate::proto::http::search::SearchState>>,
+}
+
+impl RouteCtx {
+    /// Build a context with no search registry wired in.
+    pub(crate) fn new(datastore: Arc<dyn Datastore>) -> Self {
+        Self {
+            datastore,
+            #[cfg(feature = "search")]
+            search: None,
+        }
+    }
+
+    /// Build a context with a search registry wired in.
+    #[cfg(feature = "search")]
+    pub(crate) fn with_search(
+        datastore: Arc<dyn Datastore>,
+        search: Arc<crate::proto::http::search::SearchState>,
+    ) -> Self {
+        Self {
+            datastore,
+            search: Some(search),
+        }
+    }
+}
+
+impl From<Arc<dyn Datastore>> for RouteCtx {
+    fn from(datastore: Arc<dyn Datastore>) -> Self {
+        Self::new(datastore)
+    }
+}
+
 /// Dispatch entry point. Reads the request, walks the route table,
 /// and produces a single buffered response.
 ///
 /// This function never returns an error: every failure path is
 /// turned into an HTTP response so the hyper service contract is
 /// satisfied with `Result<_, Infallible>`.
-pub(crate) async fn dispatch(
-    req: Request<Incoming>,
-    datastore: Arc<dyn Datastore>,
-) -> Response<ResponseBody> {
+pub(crate) async fn dispatch(req: Request<Incoming>, ctx: RouteCtx) -> Response<ResponseBody> {
     let (parts, body) = req.into_parts();
     let Some(route) = Route::parse(&parts.method, parts.uri.path(), parts.uri.query()) else {
         return text_response(StatusCode::NOT_FOUND, "not found");
@@ -122,7 +164,7 @@ pub(crate) async fn dispatch(
         Err(resp) => return resp,
     };
 
-    handle_route(route, &parts.method, &parts.headers, body_bytes, datastore).await
+    handle_route(route, &parts.method, &parts.headers, body_bytes, ctx).await
 }
 
 /// Riak-recognised route classification.
@@ -158,6 +200,34 @@ enum Route<'a> {
     /// submit a multi-key atomic transaction batch. A dyniak
     /// extension beyond Riak's per-key eventual consistency.
     Transaction { bucket: Option<&'a str> },
+    /// `PUT /buckets/{bucket}/index/text/{field}` -- declare a text
+    /// index on a logical document field. Search extension.
+    #[cfg(feature = "search")]
+    DeclareTextIndex { bucket: &'a str, field: &'a str },
+    /// `POST /buckets/{bucket}/index/vector` -- create the bucket's
+    /// vector index. Search extension.
+    #[cfg(feature = "search")]
+    CreateVectorIndex { bucket: &'a str },
+    /// `GET /buckets/{bucket}/index` -- list declared indexes.
+    #[cfg(feature = "search")]
+    ListIndexes { bucket: &'a str },
+    /// `GET /buckets/{bucket}/search/text/{field}?q=<substr>`.
+    #[cfg(feature = "search")]
+    SearchText {
+        bucket: &'a str,
+        field: &'a str,
+        query: Option<&'a str>,
+    },
+    /// `GET /buckets/{bucket}/search/regex/{field}?pattern=<re>&k=<n>`.
+    #[cfg(feature = "search")]
+    SearchRegex {
+        bucket: &'a str,
+        field: &'a str,
+        query: Option<&'a str>,
+    },
+    /// `POST /buckets/{bucket}/search/vector` -- KNN query.
+    #[cfg(feature = "search")]
+    SearchVector { bucket: &'a str },
 }
 
 impl<'a> Route<'a> {
@@ -183,6 +253,31 @@ impl<'a> Route<'a> {
             ("POST", ["mapred"]) => Some(Self::MapRed),
             ("POST", ["transactions"]) => Some(Self::Transaction { bucket: None }),
             ("POST", ["buckets", b, "transactions"]) => Some(Self::Transaction { bucket: Some(b) }),
+            #[cfg(feature = "search")]
+            ("PUT", ["buckets", b, "index", "text", f]) => Some(Self::DeclareTextIndex {
+                bucket: b,
+                field: f,
+            }),
+            #[cfg(feature = "search")]
+            ("POST", ["buckets", b, "index", "vector"]) => {
+                Some(Self::CreateVectorIndex { bucket: b })
+            }
+            #[cfg(feature = "search")]
+            ("GET", ["buckets", b, "index"]) => Some(Self::ListIndexes { bucket: b }),
+            #[cfg(feature = "search")]
+            ("GET", ["buckets", b, "search", "text", f]) => Some(Self::SearchText {
+                bucket: b,
+                field: f,
+                query,
+            }),
+            #[cfg(feature = "search")]
+            ("GET", ["buckets", b, "search", "regex", f]) => Some(Self::SearchRegex {
+                bucket: b,
+                field: f,
+                query,
+            }),
+            #[cfg(feature = "search")]
+            ("POST", ["buckets", b, "search", "vector"]) => Some(Self::SearchVector { bucket: b }),
             _ => None,
         }
     }
@@ -225,26 +320,57 @@ async fn handle_route(
     method: &Method,
     headers: &HeaderMap,
     body: Bytes,
-    datastore: Arc<dyn Datastore>,
+    ctx: impl Into<RouteCtx>,
 ) -> Response<ResponseBody> {
+    let ctx = ctx.into();
     let head_only = method == Method::HEAD;
     match route {
         Route::Ping => ping_response(head_only),
         Route::Stats => stats_response(headers),
         Route::GetObject { bucket, key } => {
-            handle_get(bucket, key, headers, head_only, datastore.as_ref()).await
+            handle_get(bucket, key, headers, head_only, ctx.datastore.as_ref()).await
         }
         Route::PutObject { bucket, key } | Route::PostObject { bucket, key } => {
-            handle_put(bucket, key, headers, body, datastore.as_ref()).await
+            handle_put(bucket, key, headers, body, &ctx).await
         }
-        Route::DeleteObject { bucket, key } => handle_delete(bucket, key, datastore.as_ref()).await,
-        Route::ListBuckets => list_buckets_response(headers, &datastore),
-        Route::ListKeys { bucket } => list_keys_response(bucket, headers, &datastore),
+        Route::DeleteObject { bucket, key } => {
+            handle_delete(bucket, key, ctx.datastore.as_ref()).await
+        }
+        Route::ListBuckets => list_buckets_response(headers, &ctx.datastore),
+        Route::ListKeys { bucket } => list_keys_response(bucket, headers, &ctx.datastore),
         Route::GetProps { bucket } => get_props_response(bucket, headers),
         Route::SetProps { bucket } => set_props_response(bucket, headers, &body),
         Route::MapRed => mapred_response(headers, &body),
         Route::Transaction { bucket } => {
-            transaction_response(bucket, headers, &body, datastore.as_ref())
+            transaction_response(bucket, headers, &body, ctx.datastore.as_ref())
+        }
+        #[cfg(feature = "search")]
+        Route::DeclareTextIndex { bucket, field } => {
+            super::search::declare_text_index(ctx.search.as_deref(), bucket, field, headers)
+        }
+        #[cfg(feature = "search")]
+        Route::CreateVectorIndex { bucket } => {
+            super::search::create_vector_index(ctx.search.as_deref(), bucket, headers, &body)
+        }
+        #[cfg(feature = "search")]
+        Route::ListIndexes { bucket } => {
+            super::search::list_indexes(ctx.search.as_deref(), bucket, headers)
+        }
+        #[cfg(feature = "search")]
+        Route::SearchText {
+            bucket,
+            field,
+            query,
+        } => super::search::search_text(ctx.search.as_deref(), bucket, field, query, headers),
+        #[cfg(feature = "search")]
+        Route::SearchRegex {
+            bucket,
+            field,
+            query,
+        } => super::search::search_regex(ctx.search.as_deref(), bucket, field, query, headers),
+        #[cfg(feature = "search")]
+        Route::SearchVector { bucket } => {
+            super::search::search_vector(ctx.search.as_deref(), bucket, headers, &body)
         }
     }
 }
@@ -338,8 +464,9 @@ async fn handle_put(
     key: &str,
     headers: &HeaderMap,
     body: Bytes,
-    datastore: &dyn Datastore,
+    ctx: &RouteCtx,
 ) -> Response<ResponseBody> {
+    let datastore = ctx.datastore.as_ref();
     let accept = header_str(headers, ACCEPT);
     let req_ct = header_str_opt(headers, CONTENT_TYPE);
     if select_codec(accept, req_ct).is_none() {
@@ -374,12 +501,12 @@ async fn handle_put(
     #[cfg(feature = "noxu")]
     {
         if let Some(store) = object_store(datastore) {
-            return put_object_into_store(store, bucket, key, headers, &body, req_ct);
+            return put_object_into_store(store, bucket, key, headers, &body, req_ct, ctx);
         }
     }
     #[cfg(not(feature = "noxu"))]
     {
-        let _ = (bucket, key, &body);
+        let _ = (bucket, key, &body, ctx);
     }
     Response::builder()
         .status(StatusCode::NO_CONTENT)
@@ -672,6 +799,7 @@ fn put_object_into_store(
     headers: &HeaderMap,
     body: &Bytes,
     req_ct: Option<&str>,
+    ctx: &RouteCtx,
 ) -> Response<ResponseBody> {
     // The request codec defaults to JSON when the client omits a
     // Content-Type; the 415 guard in `handle_put` has already
@@ -704,7 +832,19 @@ fn put_object_into_store(
     let indexes = obj.index_pairs();
     let storage = obj.to_storage_bytes();
     match store.put_object(bucket.as_bytes(), key.as_bytes(), &storage, &indexes) {
-        Ok(()) => no_content_response(),
+        Ok(()) => {
+            // Feed any declared text / vector indexes for this bucket
+            // from the object payload. Indexing is best-effort: the
+            // object is already durable, so an indexing miss never
+            // turns the write into an error.
+            #[cfg(feature = "search")]
+            if let Some(state) = ctx.search.as_deref() {
+                state.index_object(bucket, key.as_bytes(), &obj.value);
+            }
+            #[cfg(not(feature = "search"))]
+            let _ = ctx;
+            no_content_response()
+        }
         Err(e) => storage_error_response(&e),
     }
 }
@@ -801,7 +941,7 @@ fn json_response(status: StatusCode, body: Vec<u8>) -> Response<ResponseBody> {
 // Generic response helpers.
 // ------------------------------------------------------------------
 
-fn text_response(status: StatusCode, msg: &str) -> Response<ResponseBody> {
+pub(crate) fn text_response(status: StatusCode, msg: &str) -> Response<ResponseBody> {
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, "text/plain; charset=utf-8")
@@ -810,7 +950,20 @@ fn text_response(status: StatusCode, msg: &str) -> Response<ResponseBody> {
         .expect("invariant: text response builder is well-formed")
 }
 
-fn not_acceptable_response() -> Response<ResponseBody> {
+/// Build a buffered `200 OK` response carrying an already-encoded
+/// body under content-type `ct`. Shared by the search routes, which
+/// negotiate the codec themselves and hand the encoded bytes here.
+#[cfg(feature = "search")]
+pub(crate) fn encoded_response(ct: &'static str, body: Vec<u8>) -> Response<ResponseBody> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, ct)
+        .header("Server", SERVER_NAME)
+        .body(buffered_body(Bytes::from(body)))
+        .expect("invariant: encoded response builder is well-formed")
+}
+
+pub(crate) fn not_acceptable_response() -> Response<ResponseBody> {
     text_response(
         StatusCode::NOT_ACCEPTABLE,
         "no supported codec in Accept header",
@@ -819,7 +972,7 @@ fn not_acceptable_response() -> Response<ResponseBody> {
 
 /// Header value extractor that returns "" for missing or non-ASCII
 /// headers. The negotiation logic copes with empty input cleanly.
-fn header_str(headers: &HeaderMap, name: hyper::header::HeaderName) -> &str {
+pub(crate) fn header_str(headers: &HeaderMap, name: hyper::header::HeaderName) -> &str {
     headers
         .get(name)
         .and_then(|v| v.to_str().ok())
@@ -829,7 +982,7 @@ fn header_str(headers: &HeaderMap, name: hyper::header::HeaderName) -> &str {
 /// Header value extractor that distinguishes "absent" from
 /// "present but unreadable". Used where the caller wants to fall
 /// back to a default only when the header was truly missing.
-fn header_str_opt(headers: &HeaderMap, name: hyper::header::HeaderName) -> Option<&str> {
+pub(crate) fn header_str_opt(headers: &HeaderMap, name: hyper::header::HeaderName) -> Option<&str> {
     headers.get(name).and_then(|v| v.to_str().ok())
 }
 

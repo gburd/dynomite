@@ -23,6 +23,14 @@ noxu = ["dep:noxu"]
 # user-defined Wasm phases do not pay for the wasmtime
 # compilation.
 wasm = ["dep:wasmtime", "dep:ciborium"]
+# Bridge the text-search and vector-KNN engines to the Riak
+# buckets through the HTTP gateway. Pulls in `dynomite-search`
+# (which transitively carries `dynomite-vec` and
+# `dynomite-text`) and lights up the index-management and
+# search routes on the HTTP server. Off by default so a
+# `--no-default-features` build of dyniak stays lean and does
+# not compile the search dependency tree.
+search = ["dep:dynomite-search"]
 # Serve the PBC protocol surface over QUIC in addition to the
 # TCP and TLS-over-TCP listeners. Forwards to the engine's
 # `quic` feature so `dynomite::net::quic` (the shared quiche
@@ -34,6 +42,7 @@ quic = ["dynomite/quic"]
 
 [dependencies]
 dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.1.0" }
+dynomite-search = { path = "../dynomite-search", version = "0.1.0", optional = true }
 dyn-encoding = { path = "../dyn-encoding", version = "0.0.1" }
 dyn-hashtree = { path = "../dyn-hashtree", version = "0.0.1" }
 gen-fsm = { path = "../gen-fsm", version = "0.0.1" }

@@ -27,6 +27,13 @@
 //! * [`datastore::NoxuDatastore`] -- gated behind the `noxu` Cargo
 //!   feature; bridges this crate to the in-process Noxu DB storage
 //!   engine.
+//! * `serve_http_with_search` -- gated behind the `search` Cargo
+//!   feature; serves the HTTP gateway with a
+//!   `dynomite_search::VectorRegistry` wired in, lighting up the
+//!   per-bucket text (substring + approximate-regex) and vector-KNN
+//!   index-management and search routes. Without the feature, or
+//!   without a registry, those routes reply `501 Not Implemented`
+//!   and the object / list / transaction surface is unchanged.
 //!
 //! # Architecture
 //!
@@ -65,6 +72,8 @@ pub mod txn;
 
 pub use crate::error::RiakError;
 pub use crate::proto::http::{serve_http, serve_http_tls};
+#[cfg(feature = "search")]
+pub use crate::proto::http::{serve_http_tls_with_search, serve_http_with_search, SearchState};
 pub use crate::server::{handle_conn, serve_pbc, serve_pbc_tls};
 
 // Cluster admin RPC entry points -- v0.0.4 admin slice. Wired

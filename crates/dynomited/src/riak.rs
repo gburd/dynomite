@@ -35,6 +35,8 @@ use dyniak::aae::config::{ConfAae, DEFAULT_FULL_SWEEP_SECONDS, DEFAULT_SEGMENT_S
 use dyniak::aae::repair::{RepairSink, RepairTask};
 use dyniak::aae::scheduler::{Scheduler, SweepPlan, SystemClock};
 use dyniak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls};
+#[cfg(feature = "search")]
+use dyniak::{serve_http_tls_with_search, serve_http_with_search};
 
 #[cfg(feature = "quic")]
 use dyniak::serve_pbc_quic;
@@ -107,6 +109,16 @@ pub struct RiakHandles {
     /// PBC and HTTP loops so request accounting accumulates in
     /// one place.
     pub datastore: Arc<dyn Datastore>,
+    /// Optional vector-index registry shared with the dispatcher's
+    /// RediSearch FT.* surface. When present, the HTTP gateway
+    /// serves the bucket index-management and search routes against
+    /// it via [`dyniak::serve_http_with_search`]; when absent those
+    /// routes reply `501 Not Implemented`. Populated by
+    /// [`crate::server`] only when the binary is built with the
+    /// `search` Cargo feature and a `data_store: dyniak` pool is
+    /// configured.
+    #[cfg(feature = "search")]
+    pub search_registry: Option<Arc<dynomite_search::VectorRegistry>>,
     /// Materialised AAE configuration. `None` when the YAML did
     /// not enable AAE.
     pub aae: Option<ConfAae>,
@@ -212,6 +224,8 @@ pub async fn build_handles(
         #[cfg(feature = "quic")]
         quic_addr,
         datastore,
+        #[cfg(feature = "search")]
+        search_registry: None,
         aae,
         tls: build_riak_tls_acceptor(riak)?,
         #[cfg(feature = "wasm")]
@@ -386,8 +400,18 @@ pub fn spawn_listeners(
         let ds = Arc::clone(&handles.datastore);
         let mut cancel = cancel_rx.clone();
         let tls = handles.tls.clone();
+        #[cfg(feature = "search")]
+        let registry = handles.search_registry.clone();
         tokio::spawn(async move {
             let serve = async {
+                #[cfg(feature = "search")]
+                if let Some(registry) = registry {
+                    return if let Some(acc) = tls {
+                        serve_http_tls_with_search(listener, ds, registry, acc).await
+                    } else {
+                        serve_http_with_search(listener, ds, registry).await
+                    };
+                }
                 if let Some(acc) = tls {
                     serve_http_tls(listener, ds, acc).await
                 } else {
