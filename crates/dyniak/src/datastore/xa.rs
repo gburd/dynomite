@@ -157,11 +157,14 @@ impl XaParticipant {
     /// identified by `xid`.
     fn apply(&self, xid: &Xid, op: &TxnOp) -> Result<(), NoxuDatastoreError> {
         // Re-fetch the branch transaction per op so we never hold a
-        // borrow across another engine call.
+        // borrow across another engine call. noxu 4.0.0 returns an
+        // `Arc<Transaction>` (R-F04 soundness fix); deref-borrow it
+        // for the `Option<&Transaction>` the object writers take.
         let txn = self
             .xa
             .get_transaction(xid)
             .map_err(|e| NoxuDatastoreError::Xa(e.to_string()))?;
+        let txn: &noxu::Transaction = &txn;
         match op {
             TxnOp::Put {
                 bucket,
