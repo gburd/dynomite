@@ -521,6 +521,7 @@ def workload_ft_search(c: RespConn) -> str:
         except RespError as e:
             _low = str(e).lower()
             if ("unknown index" not in _low
+                    and "index not found" not in _low
                     and "unknown command" not in _low
                     and "unsupported" not in _low):
                 raise
@@ -548,6 +549,7 @@ def workload_ft_search(c: RespConn) -> str:
         except RespError as e:
             _low = str(e).lower()
             if ("unknown index" not in _low
+                    and "index not found" not in _low
                     and "unknown command" not in _low
                     and "unsupported" not in _low):
                 raise
@@ -560,6 +562,7 @@ def workload_ft_search(c: RespConn) -> str:
         except RespError as e:
             _low = str(e).lower()
             if ("unknown index" not in _low
+                    and "index not found" not in _low
                     and "unknown command" not in _low
                     and "unsupported" not in _low):
                 raise
@@ -574,6 +577,7 @@ def workload_ft_search(c: RespConn) -> str:
         except RespError as e:
             _low = str(e).lower()
             if ("unknown index" not in _low
+                    and "index not found" not in _low
                     and "unknown command" not in _low
                     and "unsupported" not in _low):
                 raise
@@ -600,6 +604,7 @@ def workload_ft_search(c: RespConn) -> str:
         except RespError as e:
             _low = str(e).lower()
             if ("unknown index" not in _low
+                    and "index not found" not in _low
                     and "unknown command" not in _low
                     and "unsupported" not in _low):
                 raise
