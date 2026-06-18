@@ -1479,6 +1479,18 @@ def classify_error(exc: BaseException, mode: str) -> str:
             return "NoTargets"
         if head == "NOAUTH":
             return "WrongConnection"
+        # FT.* index-lifecycle errors are an expected consequence of
+        # chaos process-kills: the in-memory search-index registry
+        # is not persisted across a dynomited restart, so a kill
+        # leaves the index transiently absent (or a concurrent
+        # recreate races into "already exists"). The workload
+        # recreates on miss; classify these as a tolerated,
+        # chaos-induced condition rather than an unexplained
+        # Unknown so the failure budget reflects only true faults.
+        low = msg.lower()
+        if "index not found" in low or "index already exists" in low \
+                or "unknown index" in low:
+            return "IndexResetByChaos"
         return "Unknown"
     if mode == "memcache" and isinstance(exc, MemcacheError):
         low = msg.lower()
