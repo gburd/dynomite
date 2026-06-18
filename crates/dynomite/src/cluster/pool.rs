@@ -128,6 +128,11 @@ pub struct PoolConfig {
     /// zero is rejected by the configuration validator when
     /// `enable_hinted_handoff` is true.
     pub hint_drain_interval_ms: u64,
+    /// Optional directory for the durable hinted-handoff backend.
+    /// When `Some` (and `enable_hinted_handoff` is true), the
+    /// hint store persists one segment file per peer here and
+    /// replays them at startup. `None` keeps the store RAM-only.
+    pub hint_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for PoolConfig {
@@ -153,6 +158,7 @@ impl Default for PoolConfig {
             hint_ttl_seconds: 86_400,
             hint_store_max_bytes: 64 * 1024 * 1024,
             hint_drain_interval_ms: 30_000,
+            hint_dir: None,
         }
     }
 }
@@ -258,6 +264,7 @@ impl PoolConfig {
             hint_ttl_seconds: pool.hint_ttl_seconds.unwrap_or(86_400),
             hint_store_max_bytes: pool.hint_store_max_bytes.unwrap_or(64 * 1024 * 1024),
             hint_drain_interval_ms: pool.hint_drain_interval_ms.unwrap_or(30_000),
+            hint_dir: pool.hint_dir.clone(),
         }
     }
 }

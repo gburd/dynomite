@@ -564,7 +564,17 @@ impl Server {
         // `Arc<HintStore>` so the drainer task and the dispatch
         // path operate against the same in-memory queue.
         let hint_store = if pool_config.enable_hinted_handoff {
-            Some(Arc::new(HintStore::new(pool_config.hint_store_max_bytes)))
+            let store =
+                match pool_config.hint_dir.as_ref() {
+                    Some(dir) => HintStore::open(dir, pool_config.hint_store_max_bytes).map_err(
+                        |source| ServerError::BadConfig {
+                            field: "hint_dir",
+                            reason: source.to_string(),
+                        },
+                    )?,
+                    None => HintStore::new(pool_config.hint_store_max_bytes),
+                };
+            Some(Arc::new(store))
         } else {
             None
         };

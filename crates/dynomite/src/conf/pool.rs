@@ -425,6 +425,17 @@ pub struct ConfPool {
     /// when `enable_hinted_handoff` is false.
     #[serde(default)]
     pub hint_drain_interval_ms: Option<u64>,
+    /// `hint_dir:` - filesystem directory for the durable
+    /// hinted-handoff backend. When set (and
+    /// `enable_hinted_handoff` is true), the hint store keeps one
+    /// append-only segment file per peer under this directory and
+    /// replays them at startup, so hints queued for a temporarily
+    /// down peer survive a coordinator restart. When unset (the
+    /// default) the hint store is RAM-only and queued hints are
+    /// lost on restart. Ignored when `enable_hinted_handoff` is
+    /// false.
+    #[serde(default)]
+    pub hint_dir: Option<PathBuf>,
     /// `log_format:` - selectable shape for tracing output.
     ///
     /// Accepted values are `default`, `rfc5424`, `rfc3164`, `json`,
@@ -2101,18 +2112,24 @@ enable_hinted_handoff: true
 hint_ttl_seconds: 7200
 hint_store_max_bytes: 8388608
 hint_drain_interval_ms: 5000
+hint_dir: /scratch/dynomite-hints
 ";
         let p: ConfPool = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(p.enable_hinted_handoff, Some(true));
         assert_eq!(p.hint_ttl_seconds, Some(7200));
         assert_eq!(p.hint_store_max_bytes, Some(8_388_608));
         assert_eq!(p.hint_drain_interval_ms, Some(5_000));
+        assert_eq!(
+            p.hint_dir.as_deref(),
+            Some(std::path::Path::new("/scratch/dynomite-hints"))
+        );
         let dumped = serde_yaml::to_string(&p).unwrap();
         let p2: ConfPool = serde_yaml::from_str(&dumped).unwrap();
         assert_eq!(p2.enable_hinted_handoff, p.enable_hinted_handoff);
         assert_eq!(p2.hint_ttl_seconds, p.hint_ttl_seconds);
         assert_eq!(p2.hint_store_max_bytes, p.hint_store_max_bytes);
         assert_eq!(p2.hint_drain_interval_ms, p.hint_drain_interval_ms);
+        assert_eq!(p2.hint_dir, p.hint_dir);
     }
 
     #[test]

@@ -65,7 +65,7 @@ pub use self::dispatch::{ClusterDispatcher, DispatchPlan, ReplicaTarget};
 pub use self::gossip::{
     parse_seed_node, GossipConfig, GossipHandler, GossipNode, GossipState, GossipStep, SeedRecord,
 };
-pub use self::hints::{Hint, HintStore, HintStoreError, HintStoreStats};
+pub use self::hints::{Hint, HintStore, HintStoreError, HintStoreOpenError, HintStoreStats};
 pub use self::peer::{Peer, PeerEndpoint, PeerState};
 pub use self::pool::{PoolConfig, ServerPool};
 pub use self::snitch::{rack_distance, RackDistance};
