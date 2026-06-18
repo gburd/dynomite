@@ -74,6 +74,12 @@ pub use crate::error::RiakError;
 pub use crate::proto::http::{serve_http, serve_http_tls};
 #[cfg(feature = "search")]
 pub use crate::proto::http::{serve_http_tls_with_search, serve_http_with_search, SearchState};
+#[cfg(all(feature = "search", feature = "wasm"))]
+pub use crate::proto::http::{
+    serve_http_tls_with_search_and_wasm, serve_http_with_search_and_wasm,
+};
+#[cfg(feature = "wasm")]
+pub use crate::proto::http::{serve_http_tls_with_wasm, serve_http_with_wasm};
 pub use crate::server::{handle_conn, serve_pbc, serve_pbc_tls};
 
 // Cluster admin RPC entry points -- v0.0.4 admin slice. Wired

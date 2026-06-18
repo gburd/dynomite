@@ -116,15 +116,25 @@ pub(crate) struct RouteCtx {
     pub(crate) datastore: Arc<dyn Datastore>,
     #[cfg(feature = "search")]
     pub(crate) search: Option<Arc<crate::proto::http::search::SearchState>>,
+    /// Optional Wasm phase store. When `Some`, a
+    /// [`crate::mapreduce::Phase::WasmModule`] job submitted to
+    /// `POST /mapred` is dispatched through the store; when `None`
+    /// such a job surfaces the typed
+    /// [`crate::mapreduce::MrError::WasmNotImplemented`] error.
+    #[cfg(feature = "wasm")]
+    pub(crate) wasm: Option<Arc<crate::mapreduce::wasm::WasmModuleStore>>,
 }
 
 impl RouteCtx {
-    /// Build a context with no search registry wired in.
+    /// Build a context with neither search registry nor Wasm store
+    /// wired in.
     pub(crate) fn new(datastore: Arc<dyn Datastore>) -> Self {
         Self {
             datastore,
             #[cfg(feature = "search")]
             search: None,
+            #[cfg(feature = "wasm")]
+            wasm: None,
         }
     }
 
@@ -137,7 +147,32 @@ impl RouteCtx {
         Self {
             datastore,
             search: Some(search),
+            #[cfg(feature = "wasm")]
+            wasm: None,
         }
+    }
+
+    /// Build a context with a Wasm phase store wired in.
+    #[cfg(feature = "wasm")]
+    pub(crate) fn with_wasm(
+        datastore: Arc<dyn Datastore>,
+        wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>,
+    ) -> Self {
+        Self {
+            datastore,
+            #[cfg(feature = "search")]
+            search: None,
+            wasm: Some(wasm),
+        }
+    }
+
+    /// Attach a Wasm phase store to an existing context, preserving
+    /// any search registry already wired in.
+    #[cfg(feature = "wasm")]
+    #[must_use]
+    pub(crate) fn set_wasm(mut self, wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>) -> Self {
+        self.wasm = Some(wasm);
+        self
     }
 }
 
@@ -340,7 +375,7 @@ async fn handle_route(
         Route::ListKeys { bucket } => list_keys_response(bucket, headers, &ctx.datastore),
         Route::GetProps { bucket } => get_props_response(bucket, headers),
         Route::SetProps { bucket } => set_props_response(bucket, headers, &body),
-        Route::MapRed => mapred_response(headers, &body),
+        Route::MapRed => mapred_response(headers, &body, &ctx),
         Route::Transaction { bucket } => {
             transaction_response(bucket, headers, &body, ctx.datastore.as_ref())
         }
@@ -990,6 +1025,8 @@ pub(crate) fn header_str_opt(headers: &HeaderMap, name: hyper::header::HeaderNam
 // MapReduce route handler. Added by the v0.0.3 MapReduce slice.
 // ------------------------------------------------------------------
 
+#[cfg(feature = "wasm")]
+use crate::mapreduce::run_job_streaming_with_wasm;
 use crate::mapreduce::{
     builtins::default_registry, run_job_streaming, MapReduceJob, MrError, PhaseBatch,
 };
@@ -1010,7 +1047,7 @@ use tokio::sync::mpsc;
 /// tokio task and the HTTP body stream pulls per-phase batches
 /// off the executor's mpsc receiver. Returning the response is
 /// a constant-time operation.
-fn mapred_response(headers: &HeaderMap, body: &Bytes) -> Response<ResponseBody> {
+fn mapred_response(headers: &HeaderMap, body: &Bytes, ctx: &RouteCtx) -> Response<ResponseBody> {
     let req_ct = header_str_opt(headers, CONTENT_TYPE);
     let ct = req_ct.unwrap_or("application/json");
     if super::content_type::canonicalize(ct) != Some("application/json") {
@@ -1029,7 +1066,23 @@ fn mapred_response(headers: &HeaderMap, body: &Bytes) -> Response<ResponseBody> 
         }
     };
     let registry = std::sync::Arc::new(default_registry());
-    let rx = run_job_streaming(job, registry);
+    // When a Wasm phase store is wired into the context, dispatch
+    // through the Wasm-aware executor so a `Phase::WasmModule` job
+    // reaches the configured modules; otherwise the plain executor
+    // surfaces the typed `MrError::WasmNotImplemented` error.
+    #[cfg(feature = "wasm")]
+    let rx = match ctx.wasm.clone() {
+        Some(store) => {
+            let hook: std::sync::Arc<dyn crate::mapreduce::WasmHook> = store;
+            run_job_streaming_with_wasm(job, registry, Some(hook))
+        }
+        None => run_job_streaming(job, registry),
+    };
+    #[cfg(not(feature = "wasm"))]
+    let rx = {
+        let _ = ctx;
+        run_job_streaming(job, registry)
+    };
     let boundary = mapred_boundary();
     let body_stream = mapred_multipart_body(rx, boundary.clone());
     let body_stream: Pin<Box<dyn Stream<Item = Result<HttpFrame<Bytes>, Infallible>> + Send>> =

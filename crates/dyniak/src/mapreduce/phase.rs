@@ -5,9 +5,10 @@
 //! next phase's inbound. Phases are dispatched by name through the
 //! [`crate::mapreduce::registry::PhaseRegistry`] except for
 //! [`Phase::Link`] (whose semantics are baked into the executor) and
-//! [`Phase::WasmModule`] (reserved for a future task; the executor
-//! returns [`crate::mapreduce::MrError::WasmNotImplemented`] when it
-//! encounters one).
+//! [`Phase::WasmModule`] (dispatched through a
+//! [`crate::mapreduce::wasm::WasmModuleStore`] when one is wired into
+//! the executor; without a store the executor returns
+//! [`crate::mapreduce::MrError::WasmNotImplemented`]).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,7 +17,7 @@ use serde_json::Value;
 ///
 /// The variants mirror Riak's `{map, ...} | {reduce, ...} | {link,
 /// ...}` shapes from the HTTP `/mapred` schema, plus a fourth
-/// `WasmModule` reservation slot for the future Wasm-fitting task.
+/// `WasmModule` slot for dispatching a registered Wasm module.
 ///
 /// `keep` matches Riak's `keep` flag: when set, the phase's outputs
 /// are also captured into the final response. The last phase is
@@ -66,11 +67,13 @@ pub enum Phase {
         #[serde(default)]
         keep: bool,
     },
-    /// Reserved phase variant for a future Wasm fitting. Present
-    /// in the enum so the JSON schema is forwards-compatible. The
-    /// executor rejects this variant with
-    /// [`crate::mapreduce::MrError::WasmNotImplemented`] until the
-    /// Wasm fitting task lands.
+    /// Wasm phase: invoke `fn_name` in the registered Wasm module
+    /// `module_id` for each phase invocation. Present in the enum
+    /// so the JSON schema is forwards-compatible. The executor
+    /// dispatches this variant through a
+    /// [`crate::mapreduce::wasm::WasmModuleStore`] when one is wired
+    /// in; without a store it returns
+    /// [`crate::mapreduce::MrError::WasmNotImplemented`].
     WasmModule {
         /// Wasm module identifier (registry-style name).
         module_id: String,
@@ -157,10 +160,10 @@ mod tests {
 
     #[test]
     fn wasm_phase_is_present_in_enum() {
-        // The Wasm variant must round-trip even though execution is
-        // not implemented yet. This guarantees the JSON schema is
-        // forwards-compatible: clients can submit Wasm-bearing jobs
-        // today and receive a typed error.
+        // The Wasm variant must round-trip through the JSON schema
+        // so clients can submit Wasm-bearing jobs; the executor
+        // dispatches them through a registered module store or
+        // returns a typed error when no store is wired in.
         let p = Phase::WasmModule {
             module_id: "m".into(),
             fn_name: "f".into(),

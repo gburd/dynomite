@@ -447,9 +447,13 @@ impl Drop for WatchdogGuard {
 /// path = "/etc/dynomited/wasm/my_module.wasm"
 /// ```
 ///
-/// Wiring ConfRiak to call this function is deferred until the
-/// admin / config slice lands; today the executor takes a
-/// pre-built [`WasmModuleStore`] programmatically.
+/// `ConfRiak::wasm_modules` is wired to this function by
+/// `dynomited`'s Riak server builder: each configured
+/// `[[mapreduce.wasm_modules]]` entry is loaded into the returned
+/// store, which is then carried into the HTTP `/mapred` handler so
+/// a [`crate::mapreduce::Phase::WasmModule`] job reaches the
+/// configured modules. The executor can also take a pre-built
+/// [`WasmModuleStore`] programmatically.
 pub fn load_modules_from_config<P: AsRef<Path>>(
     modules: &[(String, P)],
     limits: WasmLimits,

@@ -37,6 +37,10 @@ use dyniak::aae::scheduler::{Scheduler, SweepPlan, SystemClock};
 use dyniak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls};
 #[cfg(feature = "search")]
 use dyniak::{serve_http_tls_with_search, serve_http_with_search};
+#[cfg(all(feature = "search", feature = "wasm"))]
+use dyniak::{serve_http_tls_with_search_and_wasm, serve_http_with_search_and_wasm};
+#[cfg(feature = "wasm")]
+use dyniak::{serve_http_tls_with_wasm, serve_http_with_wasm};
 
 #[cfg(feature = "quic")]
 use dyniak::serve_pbc_quic;
@@ -402,8 +406,26 @@ pub fn spawn_listeners(
         let tls = handles.tls.clone();
         #[cfg(feature = "search")]
         let registry = handles.search_registry.clone();
+        #[cfg(feature = "wasm")]
+        let wasm = handles.wasm.clone();
         tokio::spawn(async move {
             let serve = async {
+                #[cfg(all(feature = "search", feature = "wasm"))]
+                if let (Some(registry), Some(wasm)) = (registry.clone(), wasm.clone()) {
+                    return if let Some(acc) = tls {
+                        serve_http_tls_with_search_and_wasm(listener, ds, registry, wasm, acc).await
+                    } else {
+                        serve_http_with_search_and_wasm(listener, ds, registry, wasm).await
+                    };
+                }
+                #[cfg(feature = "wasm")]
+                if let Some(wasm) = wasm {
+                    return if let Some(acc) = tls {
+                        serve_http_tls_with_wasm(listener, ds, wasm, acc).await
+                    } else {
+                        serve_http_with_wasm(listener, ds, wasm).await
+                    };
+                }
                 #[cfg(feature = "search")]
                 if let Some(registry) = registry {
                     return if let Some(acc) = tls {

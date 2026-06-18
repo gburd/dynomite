@@ -127,8 +127,51 @@ pub async fn serve_http_with_search(
     serve_http_ctx(listener, ctx).await
 }
 
-/// Shared accept loop driving one `hyper` connection per accepted
-/// client against a prebuilt [`routes::RouteCtx`].
+/// Run the HTTP accept loop on `listener`, wiring a Wasm phase
+/// store into the gateway alongside the datastore so a
+/// `POST /mapred` job referencing a
+/// [`crate::mapreduce::Phase::WasmModule`] reaches the configured
+/// modules. Behaves exactly like [`serve_http`] for every other
+/// route.
+///
+/// Available only when the crate is built with the `wasm` Cargo
+/// feature.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+#[cfg(feature = "wasm")]
+pub async fn serve_http_with_wasm(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>,
+) -> Result<(), RiakError> {
+    let ctx = routes::RouteCtx::with_wasm(datastore, wasm);
+    serve_http_ctx(listener, ctx).await
+}
+
+/// Run the HTTP accept loop on `listener`, wiring both a search
+/// registry and a Wasm phase store into the gateway. A single
+/// `data_store: dyniak` pool can configure both surfaces at once,
+/// so this entry point carries both into one [`routes::RouteCtx`].
+///
+/// Available only when the crate is built with both the `search`
+/// and `wasm` Cargo features.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+#[cfg(all(feature = "search", feature = "wasm"))]
+pub async fn serve_http_with_search_and_wasm(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    registry: Arc<dynomite_search::VectorRegistry>,
+    wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>,
+) -> Result<(), RiakError> {
+    let ctx = routes::RouteCtx::with_search(datastore, Arc::new(SearchState::new(registry)))
+        .set_wasm(wasm);
+    serve_http_ctx(listener, ctx).await
+}
 async fn serve_http_ctx(listener: TcpListener, ctx: routes::RouteCtx) -> Result<(), RiakError> {
     loop {
         let (sock, peer) = listener.accept().await?;
@@ -179,6 +222,43 @@ pub async fn serve_http_tls_with_search(
     acceptor: TlsAcceptor,
 ) -> Result<(), RiakError> {
     let ctx = routes::RouteCtx::with_search(datastore, Arc::new(SearchState::new(registry)));
+    serve_http_tls_ctx(listener, ctx, acceptor).await
+}
+
+/// TLS-terminating variant of [`serve_http_with_wasm`]. Available
+/// only when the crate is built with the `wasm` Cargo feature.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+#[cfg(feature = "wasm")]
+pub async fn serve_http_tls_with_wasm(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>,
+    acceptor: TlsAcceptor,
+) -> Result<(), RiakError> {
+    let ctx = routes::RouteCtx::with_wasm(datastore, wasm);
+    serve_http_tls_ctx(listener, ctx, acceptor).await
+}
+
+/// TLS-terminating variant of [`serve_http_with_search_and_wasm`].
+/// Available only when the crate is built with both the `search`
+/// and `wasm` Cargo features.
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+#[cfg(all(feature = "search", feature = "wasm"))]
+pub async fn serve_http_tls_with_search_and_wasm(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    registry: Arc<dynomite_search::VectorRegistry>,
+    wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>,
+    acceptor: TlsAcceptor,
+) -> Result<(), RiakError> {
+    let ctx = routes::RouteCtx::with_search(datastore, Arc::new(SearchState::new(registry)))
+        .set_wasm(wasm);
     serve_http_tls_ctx(listener, ctx, acceptor).await
 }
 
