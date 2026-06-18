@@ -6,6 +6,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use dynomite::admin::cluster_info::gather_ring_from_pool;
+use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
+use dynomite::cluster::pool::{PoolConfig, ServerPool};
+use dynomite::hashkit::DynToken;
 use dynomite::stats::{
     describe_stats, Histogram, Latency, PoolField, PoolStats, ServerField, ServerStats,
     ServiceInfo, Snapshot, Stats, StatsServer, BUCKET_COUNT, POOL_CODEC, SERVER_CODEC,
@@ -235,6 +239,132 @@ async fn metrics_endpoint_returns_prometheus_text() {
         body.contains("# TYPE "),
         "prometheus body missing # TYPE lines:\n{body}"
     );
+
+    handle
+        .await
+        .expect("server task joined")
+        .expect("server completed without error");
+}
+
+#[tokio::test]
+async fn ring_endpoint_serves_multi_peer_json() {
+    // Build a real three-peer pool with distinct tokens, dcs, and
+    // racks; mark the third peer Down. The /ring route must serialise
+    // every peer's real tokens and lifecycle state -- not a synthetic
+    // single-row view.
+    let cfg = PoolConfig {
+        dc: "dc1".into(),
+        rack: "r1".into(),
+        ..PoolConfig::default()
+    };
+    let mut local = Peer::new(
+        0,
+        PeerEndpoint::tcp("10.0.0.1".into(), 8101),
+        "r1".into(),
+        "dc1".into(),
+        vec![DynToken::from_u32(0)],
+        true,
+        true,
+        false,
+    );
+    local.set_state(PeerState::Normal, 0);
+    let mut remote_up = Peer::new(
+        1,
+        PeerEndpoint::tcp("10.0.0.2".into(), 8101),
+        "r2".into(),
+        "dc1".into(),
+        vec![DynToken::from_u32(1_431_655_765)],
+        false,
+        true,
+        false,
+    );
+    remote_up.set_state(PeerState::Normal, 0);
+    let mut remote_down = Peer::new(
+        2,
+        PeerEndpoint::tcp("10.0.0.3".into(), 8101),
+        "r1".into(),
+        "dc2".into(),
+        vec![DynToken::from_u32(2_863_311_530)],
+        false,
+        false,
+        false,
+    );
+    remote_down.set_state(PeerState::Down, 0);
+    let pool = Arc::new(ServerPool::new(cfg, vec![local, remote_up, remote_down]));
+
+    let ring_pool = Arc::clone(&pool);
+    let provider: dynomite::stats::RingProvider =
+        Arc::new(move || gather_ring_from_pool(&ring_pool));
+
+    let sink = Arc::new(Mutex::new(Snapshot::default()));
+    let addr: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid loopback addr");
+    let server = StatsServer::bind(addr, Arc::clone(&sink))
+        .await
+        .expect("bind ephemeral port")
+        .with_ring_provider(provider);
+    let local_addr = server.local_addr().expect("local address");
+    let handle = tokio::spawn(async move { server.accept_one().await });
+
+    let mut conn = TcpStream::connect(local_addr)
+        .await
+        .expect("connect to stats server");
+    conn.write_all(b"GET /ring HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .expect("write request");
+    let mut buf = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), conn.read_to_end(&mut buf))
+        .await
+        .expect("response within timeout")
+        .expect("read response");
+    let response = String::from_utf8(buf).expect("response is ascii");
+    let header_end = response
+        .find("\r\n\r\n")
+        .expect("header terminator present");
+    assert!(response.lines().next().unwrap().starts_with("HTTP/1.1 200"));
+    assert!(response[..header_end].contains("Content-Type: application/json"));
+    let body = &response[header_end + 4..];
+    let parsed: serde_json::Value = serde_json::from_str(body).expect("json body");
+    let peers = parsed["peers"].as_array().expect("peers array");
+    assert_eq!(peers.len(), 3);
+    assert_eq!(peers[0]["node"], "10.0.0.1:8101");
+    assert_eq!(peers[0]["tokens"][0], 0);
+    assert_eq!(peers[0]["is_local"], true);
+    assert_eq!(peers[0]["state"], "NORMAL");
+    assert_eq!(peers[1]["tokens"][0], 1_431_655_765);
+    assert_eq!(peers[1]["rack"], "r2");
+    assert_eq!(peers[2]["dc"], "dc2");
+    assert_eq!(peers[2]["tokens"][0], 2_863_311_530u64);
+    assert_eq!(peers[2]["state"], "DOWN");
+
+    handle
+        .await
+        .expect("server task joined")
+        .expect("server completed without error");
+}
+
+#[tokio::test]
+async fn ring_endpoint_returns_503_when_provider_unwired() {
+    let sink = Arc::new(Mutex::new(Snapshot::default()));
+    let addr: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid loopback addr");
+    let server = StatsServer::bind(addr, Arc::clone(&sink))
+        .await
+        .expect("bind ephemeral port");
+    let local_addr = server.local_addr().expect("local address");
+    let handle = tokio::spawn(async move { server.accept_one().await });
+
+    let mut conn = TcpStream::connect(local_addr)
+        .await
+        .expect("connect to stats server");
+    conn.write_all(b"GET /ring HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .expect("write request");
+    let mut buf = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), conn.read_to_end(&mut buf))
+        .await
+        .expect("response within timeout")
+        .expect("read response");
+    let response = String::from_utf8(buf).expect("response is ascii");
+    assert!(response.lines().next().unwrap().starts_with("HTTP/1.1 503"));
 
     handle
         .await

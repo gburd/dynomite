@@ -436,8 +436,10 @@ impl ClusterAdmin for PoolClusterAdmin {
 /// Stable per-(host, port) token used by [`PoolClusterAdmin::cluster_join`]
 /// when the caller does not provide an explicit token list. The
 /// hash is FNV-1a over the host bytes and port; collisions with
-/// existing tokens are not avoided here because the v0 admin
-/// surface does not yet drive a rebalance pass.
+/// existing tokens are not avoided here because moving tokens
+/// across the ring (a rebalance pass) is a separate, larger
+/// feature. The read-only ring-visibility surface (`dyn-admin
+/// ring-status`) does not depend on rebalancing.
 fn derive_token(host: &str, port: u16) -> u32 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in host.as_bytes() {

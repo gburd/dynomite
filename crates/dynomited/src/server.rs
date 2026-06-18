@@ -755,11 +755,18 @@ impl Server {
 
         let stats_sink = Arc::new(Mutex::new(Snapshot::default()));
         let stats = match stats_listen_addr {
-            Some(addr) => Some(
-                StatsServer::bind(addr, stats_sink.clone())
-                    .await
-                    .map_err(ServerError::Io)?,
-            ),
+            Some(addr) => {
+                let ring_pool = server_pool.clone();
+                let ring_provider: dynomite::stats::RingProvider = Arc::new(move || {
+                    dynomite::admin::cluster_info::gather_ring_from_pool(&ring_pool)
+                });
+                Some(
+                    StatsServer::bind(addr, stats_sink.clone())
+                        .await
+                        .map_err(ServerError::Io)?
+                        .with_ring_provider(ring_provider),
+                )
+            }
             None => None,
         };
 

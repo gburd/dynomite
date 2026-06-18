@@ -1,25 +1,25 @@
-//! `dyn-admin ring-status` -- best-effort topology view.
+//! `dyn-admin ring-status` -- multi-peer topology view.
 //!
-//! The dynomite v0 substrate does not yet expose a multi-peer ring
-//! map over PBC. Until it does, this subcommand combines what is
-//! available:
+//! The view combines two sources:
 //!
 //! * `RpbGetServerInfoResp` from the configured node's PBC port:
-//!   carries the node identity and version string.
-//! * (optional) `/stats` JSON from the node's HTTP port: carries
-//!   the datacenter and rack identifiers.
+//!   carries the queried node's identity and version string.
+//! * The node's HTTP `/ring` endpoint: a JSON document listing
+//!   every peer the engine knows about, with each peer's tokens,
+//!   datacenter, rack, and lifecycle state.
 //!
-//! The resulting view is a single-row "ring" listing the local node
-//! plus its DC/rack and a `state: up` marker, mirroring the column
-//! layout that `riak-admin ring-status` prints. Tokens and per-vnode
-//! state are reported as `<unset>` because they are not yet exposed
-//! by the substrate; the journal entry tracks the deferred
-//! follow-up.
+//! When the `/ring` endpoint is reachable, `ring-status` emits one
+//! row per peer with real tokens and state, mirroring the column
+//! layout that `riak-admin ring-status` prints. When the HTTP
+//! endpoint is unavailable (no stats listener, or an older node
+//! that does not serve `/ring`), it falls back to a single
+//! best-effort row built from the PBC server-info response, with
+//! the missing fields reported as `<unset>`.
 
 use std::io::Write;
 
 use dyniak::proto::pb::{MessageCode, RpbGetServerInfoResp, RpbServerInfoReq};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::client::{http_get, PbcClient};
 use crate::error::AdminError;
@@ -28,21 +28,20 @@ use crate::output::{write_json, OutputFormat};
 /// One ring entry as rendered by `ring-status`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct RingEntry {
-    /// Node name (`RpbGetServerInfoResp.node`, falling back to the
-    /// stats `source`).
+    /// Node name (`host:port` from the ring payload, or the
+    /// `RpbGetServerInfoResp.node` for the fallback row).
     pub node: String,
-    /// Datacenter; `<unset>` when the stats endpoint did not supply
-    /// one.
+    /// Datacenter; `<unset>` when no source supplied one.
     pub dc: String,
-    /// Rack; `<unset>` when the stats endpoint did not supply one.
+    /// Rack; `<unset>` when no source supplied one.
     pub rack: String,
-    /// Server-reported version string.
+    /// Server-reported version string (only populated for the
+    /// queried node; `<unset>` for remote peers).
     pub version: String,
-    /// Token range start (hex); `<unset>` until the substrate
-    /// surfaces ring tokens through PBC.
+    /// Comma-separated token list, or `<unset>` when the peer has
+    /// no tokens.
     pub token: String,
-    /// Per-node liveness flag; always `up` for a node that answered
-    /// PBC ping.
+    /// Per-node liveness state (`up`, `NORMAL`, `DOWN`, ...).
     pub state: String,
 }
 
@@ -57,8 +56,28 @@ pub struct RingView {
     pub note: Option<String>,
 }
 
+/// Shape of one peer in the engine's `/ring` JSON document.
+#[derive(Clone, Debug, Deserialize)]
+struct RingPeerJson {
+    node: String,
+    dc: String,
+    rack: String,
+    #[serde(default)]
+    tokens: Vec<u32>,
+    state: String,
+    #[serde(default)]
+    is_local: bool,
+}
+
+/// Shape of the engine's `/ring` JSON document.
+#[derive(Clone, Debug, Deserialize)]
+struct RingJson {
+    #[serde(default)]
+    peers: Vec<RingPeerJson>,
+}
+
 /// Run the ring-status subcommand. `stats_addr` is optional and
-/// supplies DC/rack labels when reachable.
+/// supplies the structured per-peer ring view when reachable.
 pub async fn run<W: Write>(
     node: &str,
     stats_addr: Option<&str>,
@@ -66,45 +85,92 @@ pub async fn run<W: Write>(
     out: &mut W,
 ) -> Result<(), AdminError> {
     let info = fetch_info(node).await?;
-    let mut entry = RingEntry {
-        node: info.node.as_ref().map_or_else(
-            || node.to_string(),
-            |b| String::from_utf8_lossy(b).into_owned(),
-        ),
-        dc: "<unset>".into(),
-        rack: "<unset>".into(),
-        version: info.server_version.as_ref().map_or_else(
-            || "<unset>".into(),
-            |b| String::from_utf8_lossy(b).into_owned(),
-        ),
-        token: "<unset>".into(),
-        state: "up".into(),
-    };
+    let local_version = info.server_version.as_ref().map_or_else(
+        || "<unset>".to_string(),
+        |b| String::from_utf8_lossy(b).into_owned(),
+    );
+    let local_node = info.node.as_ref().map_or_else(
+        || node.to_string(),
+        |b| String::from_utf8_lossy(b).into_owned(),
+    );
+
     let mut warning: Option<String> = None;
-    if let Some(addr) = stats_addr {
-        match http_get(addr, "/stats").await {
-            Ok(body) => {
-                let v: serde_json::Value = serde_json::from_str(&body)?;
-                if let Some(s) = v.get("source").and_then(|s| s.as_str()) {
-                    entry.node = s.to_string();
-                }
-                if let Some(s) = v.get("dc").and_then(|s| s.as_str()) {
-                    entry.dc = s.to_string();
-                }
-                if let Some(s) = v.get("rack").and_then(|s| s.as_str()) {
-                    entry.rack = s.to_string();
-                }
+    let entries = match stats_addr {
+        Some(addr) => match fetch_ring(addr).await {
+            Ok(peers) if !peers.is_empty() => entries_from_ring(&peers, &local_version),
+            Ok(_) => {
+                warning = Some("ring endpoint returned no peers".into());
+                vec![fallback_entry(&local_node, &local_version)]
             }
-            Err(e) => warning = Some(format!("stats fetch failed: {e}")),
-        }
-    }
+            Err(e) => {
+                warning = Some(format!("ring fetch failed: {e}"));
+                vec![fallback_entry(&local_node, &local_version)]
+            }
+        },
+        None => vec![fallback_entry(&local_node, &local_version)],
+    };
+
     let view = RingView {
         queried: node.to_string(),
-        entries: vec![entry],
+        entries,
         note: warning,
     };
     render(&view, fmt, out)?;
     Ok(())
+}
+
+/// Build one [`RingEntry`] per peer from the structured ring
+/// payload. The queried (local) peer carries the PBC-reported
+/// version; remote peers report `<unset>` because the version is
+/// only known for the node we issued the PBC call to.
+fn entries_from_ring(peers: &[RingPeerJson], local_version: &str) -> Vec<RingEntry> {
+    peers
+        .iter()
+        .map(|p| RingEntry {
+            node: p.node.clone(),
+            dc: blank_to_unset(&p.dc),
+            rack: blank_to_unset(&p.rack),
+            version: if p.is_local {
+                local_version.to_string()
+            } else {
+                "<unset>".to_string()
+            },
+            token: render_tokens(&p.tokens),
+            state: p.state.clone(),
+        })
+        .collect()
+}
+
+/// Single best-effort row used when the structured ring view is
+/// unavailable.
+fn fallback_entry(node: &str, version: &str) -> RingEntry {
+    RingEntry {
+        node: node.to_string(),
+        dc: "<unset>".into(),
+        rack: "<unset>".into(),
+        version: version.to_string(),
+        token: "<unset>".into(),
+        state: "up".into(),
+    }
+}
+
+fn render_tokens(tokens: &[u32]) -> String {
+    if tokens.is_empty() {
+        return "<unset>".into();
+    }
+    tokens
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn blank_to_unset(s: &str) -> String {
+    if s.is_empty() {
+        "<unset>".into()
+    } else {
+        s.to_string()
+    }
 }
 
 async fn fetch_info(node: &str) -> Result<RpbGetServerInfoResp, AdminError> {
@@ -119,6 +185,12 @@ async fn fetch_info(node: &str) -> Result<RpbGetServerInfoResp, AdminError> {
     Ok(resp)
 }
 
+async fn fetch_ring(addr: &str) -> Result<Vec<RingPeerJson>, AdminError> {
+    let body = http_get(addr, "/ring").await?;
+    let parsed: RingJson = serde_json::from_str(&body)?;
+    Ok(parsed.peers)
+}
+
 fn render<W: Write>(view: &RingView, fmt: OutputFormat, out: &mut W) -> Result<(), AdminError> {
     match fmt {
         OutputFormat::Json => {
@@ -129,23 +201,23 @@ fn render<W: Write>(view: &RingView, fmt: OutputFormat, out: &mut W) -> Result<(
             writeln!(out)?;
             writeln!(
                 out,
-                "{:<28}  {:<10}  {:<10}  {:<6}  {:<20}  token",
+                "{:<28}  {:<10}  {:<10}  {:<8}  {:<20}  token",
                 "node", "dc", "rack", "state", "version",
             )?;
             writeln!(
                 out,
-                "{:<28}  {:<10}  {:<10}  {:<6}  {:<20}  {}",
+                "{:<28}  {:<10}  {:<10}  {:<8}  {:<20}  {}",
                 "-".repeat(28),
                 "-".repeat(10),
                 "-".repeat(10),
-                "-".repeat(6),
+                "-".repeat(8),
                 "-".repeat(20),
                 "-".repeat(8),
             )?;
             for e in &view.entries {
                 writeln!(
                     out,
-                    "{:<28}  {:<10}  {:<10}  {:<6}  {:<20}  {}",
+                    "{:<28}  {:<10}  {:<10}  {:<8}  {:<20}  {}",
                     e.node, e.dc, e.rack, e.state, e.version, e.token
                 )?;
             }
@@ -162,51 +234,115 @@ fn render<W: Write>(view: &RingView, fmt: OutputFormat, out: &mut W) -> Result<(
 mod tests {
     use super::*;
 
-    fn fixture() -> RingView {
-        RingView {
-            queried: "127.0.0.1:8087".into(),
-            entries: vec![RingEntry {
-                node: "node-a".into(),
+    fn three_peer_ring() -> Vec<RingPeerJson> {
+        vec![
+            RingPeerJson {
+                node: "10.0.0.1:8101".into(),
                 dc: "dc1".into(),
                 rack: "r1".into(),
-                version: "dyniak 0.0.1".into(),
-                token: "<unset>".into(),
-                state: "up".into(),
-            }],
-            note: None,
-        }
+                tokens: vec![0],
+                state: "NORMAL".into(),
+                is_local: true,
+            },
+            RingPeerJson {
+                node: "10.0.0.2:8101".into(),
+                dc: "dc1".into(),
+                rack: "r2".into(),
+                tokens: vec![1_431_655_765],
+                state: "NORMAL".into(),
+                is_local: false,
+            },
+            RingPeerJson {
+                node: "10.0.0.3:8101".into(),
+                dc: "dc2".into(),
+                rack: "r1".into(),
+                tokens: vec![2_863_311_530, 4_000_000_000],
+                state: "DOWN".into(),
+                is_local: false,
+            },
+        ]
     }
 
     #[test]
-    fn human_render_emits_header_and_row() {
-        let v = fixture();
+    fn ring_payload_yields_one_row_per_peer() {
+        let entries = entries_from_ring(&three_peer_ring(), "dyniak 0.0.1");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].node, "10.0.0.1:8101");
+        assert_eq!(entries[0].token, "0");
+        assert_eq!(entries[0].version, "dyniak 0.0.1");
+        // Remote peers do not carry a version.
+        assert_eq!(entries[1].version, "<unset>");
+        assert_eq!(entries[1].token, "1431655765");
+        assert_eq!(entries[2].state, "DOWN");
+        assert_eq!(entries[2].dc, "dc2");
+        assert_eq!(entries[2].token, "2863311530,4000000000");
+    }
+
+    #[test]
+    fn ring_json_deserialises_and_round_trips_through_view() {
+        let body = r#"{"peers":[
+            {"node":"10.0.0.1:8101","dc":"dc1","rack":"r1","tokens":[0],"state":"NORMAL","is_local":true},
+            {"node":"10.0.0.2:8101","dc":"dc1","rack":"r2","tokens":[100],"state":"DOWN","is_local":false}
+        ]}"#;
+        let parsed: RingJson = serde_json::from_str(body).expect("parse");
+        let entries = entries_from_ring(&parsed.peers, "v1");
+        let view = RingView {
+            queried: "127.0.0.1:8087".into(),
+            entries,
+            note: None,
+        };
         let mut buf = Vec::new();
-        render(&v, OutputFormat::Human, &mut buf).unwrap();
+        render(&view, OutputFormat::Json, &mut buf).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(json["entries"][0]["node"], "10.0.0.1:8101");
+        assert_eq!(json["entries"][0]["state"], "NORMAL");
+        assert_eq!(json["entries"][1]["state"], "DOWN");
+        assert_eq!(json["entries"][1]["token"], "100");
+    }
+
+    #[test]
+    fn human_render_emits_three_rows_with_tokens_and_state() {
+        let entries = entries_from_ring(&three_peer_ring(), "v1");
+        let view = RingView {
+            queried: "127.0.0.1:8087".into(),
+            entries,
+            note: None,
+        };
+        let mut buf = Vec::new();
+        render(&view, OutputFormat::Human, &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(s.starts_with("Ring status"));
-        assert!(s.contains("node-a"));
-        assert!(s.contains("dc1"));
-        assert!(s.contains("r1"));
-        assert!(s.contains("up"));
+        assert!(s.contains("10.0.0.1:8101"));
+        assert!(s.contains("10.0.0.2:8101"));
+        assert!(s.contains("10.0.0.3:8101"));
+        assert!(s.contains("DOWN"));
+        assert!(s.contains("1431655765"));
+        assert!(s.contains("2863311530,4000000000"));
     }
 
     #[test]
-    fn human_render_includes_note_when_present() {
-        let mut v = fixture();
-        v.note = Some("stats fetch failed".into());
+    fn fallback_entry_is_single_best_effort_row() {
+        let e = fallback_entry("node-a", "dyniak 0.0.1");
+        assert_eq!(e.node, "node-a");
+        assert_eq!(e.dc, "<unset>");
+        assert_eq!(e.token, "<unset>");
+        assert_eq!(e.state, "up");
+        let view = RingView {
+            queried: "127.0.0.1:8087".into(),
+            entries: vec![e],
+            note: Some("ring fetch failed".into()),
+        };
         let mut buf = Vec::new();
-        render(&v, OutputFormat::Human, &mut buf).unwrap();
+        render(&view, OutputFormat::Human, &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
-        assert!(s.contains("note: stats fetch failed"));
+        assert!(s.contains("node-a"));
+        assert!(s.contains("note: ring fetch failed"));
     }
 
     #[test]
-    fn json_render_serialises_entries() {
-        let v = fixture();
-        let mut buf = Vec::new();
-        render(&v, OutputFormat::Json, &mut buf).unwrap();
-        let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-        assert_eq!(parsed["entries"][0]["node"], "node-a");
-        assert_eq!(parsed["entries"][0]["state"], "up");
+    fn empty_tokens_render_as_unset() {
+        assert_eq!(render_tokens(&[]), "<unset>");
+        assert_eq!(render_tokens(&[7]), "7");
+        assert_eq!(render_tokens(&[1, 2, 3]), "1,2,3");
     }
 }

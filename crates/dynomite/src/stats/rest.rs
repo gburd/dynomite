@@ -17,7 +17,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::Instrument as _;
 
-use crate::admin::cluster_info::{format_text, ClusterInfoSnapshot};
+use crate::admin::cluster_info::{format_text, ClusterInfoSnapshot, RingSnapshot};
 use crate::stats::prometheus::render_prometheus;
 use crate::stats::snapshot::Snapshot;
 
@@ -30,6 +30,15 @@ use crate::stats::snapshot::Snapshot;
 /// embedders set it via
 /// [`StatsServer::with_cluster_info_provider`].
 pub type ClusterInfoProvider = Arc<dyn Fn() -> ClusterInfoSnapshot + Send + Sync>;
+
+/// Type alias for a closure that produces a fresh
+/// [`RingSnapshot`] every time the `/ring` route is hit.
+///
+/// The closure must be `Send + Sync` so a clone can be moved
+/// into each accept-handler task. Embedders set it via
+/// [`StatsServer::with_ring_provider`]; when unset the `/ring`
+/// route returns `503 Service Unavailable`.
+pub type RingProvider = Arc<dyn Fn() -> RingSnapshot + Send + Sync>;
 
 /// Maximum number of bytes the server will read for an HTTP request
 /// line plus headers. Requests larger than this are rejected.
@@ -80,6 +89,7 @@ pub struct StatsServer {
     listener: TcpListener,
     source: Arc<Mutex<Snapshot>>,
     cluster_info: Option<ClusterInfoProvider>,
+    ring: Option<RingProvider>,
 }
 
 impl StatsServer {
@@ -105,6 +115,7 @@ impl StatsServer {
             listener,
             source,
             cluster_info: None,
+            ring: None,
         })
     }
 
@@ -133,6 +144,35 @@ impl StatsServer {
     #[must_use]
     pub fn with_cluster_info_provider(mut self, provider: ClusterInfoProvider) -> Self {
         self.cluster_info = Some(provider);
+        self
+    }
+
+    /// Attach a [`RingProvider`] so the server answers
+    /// `GET /ring` with a freshly assembled, JSON-serialized
+    /// view of every peer's tokens, dc, rack, and state. When no
+    /// provider is registered the route returns `503 Service
+    /// Unavailable`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use dynomite::admin::cluster_info::RingSnapshot;
+    /// use dynomite::stats::{Snapshot, StatsServer};
+    /// use parking_lot::Mutex;
+    ///
+    /// # async fn _example() -> std::io::Result<()> {
+    /// let sink = Arc::new(Mutex::new(Snapshot::default()));
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)
+    ///     .await?
+    ///     .with_ring_provider(Arc::new(RingSnapshot::default));
+    /// drop(server);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_ring_provider(mut self, provider: RingProvider) -> Self {
+        self.ring = Some(provider);
         self
     }
 
@@ -178,7 +218,8 @@ impl StatsServer {
         let (sock, _peer) = self.listener.accept().await?;
         let snapshot = self.source.lock().clone();
         let cluster_info = self.cluster_info.clone();
-        serve_connection(sock, snapshot, cluster_info).await
+        let ring = self.ring.clone();
+        serve_connection(sock, snapshot, cluster_info, ring).await
     }
 
     /// Run the accept loop until cancelled. Each connection is handled
@@ -206,13 +247,15 @@ impl StatsServer {
         let listener = self.listener;
         let source = self.source;
         let cluster_info = self.cluster_info;
+        let ring = self.ring;
         async move {
             loop {
                 let (sock, _peer) = listener.accept().await?;
                 let snapshot = source.lock().clone();
                 let ci = cluster_info.clone();
+                let rg = ring.clone();
                 tokio::spawn(async move {
-                    let _ = serve_connection(sock, snapshot, ci).await;
+                    let _ = serve_connection(sock, snapshot, ci, rg).await;
                 });
             }
         }
@@ -225,6 +268,7 @@ async fn serve_connection(
     mut sock: TcpStream,
     snapshot: Snapshot,
     cluster_info: Option<ClusterInfoProvider>,
+    ring: Option<RingProvider>,
 ) -> io::Result<()> {
     let mut buf = vec![0u8; MAX_REQUEST_BYTES];
     let mut filled = 0usize;
@@ -248,7 +292,7 @@ async fn serve_connection(
         let mut req = httparse::Request::new(&mut headers);
         match req.parse(&buf[..filled]) {
             Ok(httparse::Status::Complete(_)) => {
-                return handle_parsed(&mut sock, &req, snapshot, cluster_info).await;
+                return handle_parsed(&mut sock, &req, snapshot, cluster_info, ring).await;
             }
             Ok(httparse::Status::Partial) => continue,
             Err(_) => {
@@ -264,6 +308,7 @@ async fn handle_parsed(
     req: &httparse::Request<'_, '_>,
     snapshot: Snapshot,
     cluster_info: Option<ClusterInfoProvider>,
+    ring: Option<RingProvider>,
 ) -> io::Result<()> {
     let path = req.path.unwrap_or("/");
     if !matches!(req.method, Some("GET")) {
@@ -287,6 +332,13 @@ async fn handle_parsed(
                 }
                 write_text_response(sock, &body).await
             }
+            None => write_response(sock, 503, "Service Unavailable", b"").await,
+        },
+        "/ring" | "/ring.json" => match ring {
+            Some(provider) => match serde_json::to_vec(&provider()) {
+                Ok(body) => write_json_response(sock, &body).await,
+                Err(_) => write_response(sock, 500, "Internal Server Error", b"").await,
+            },
             None => write_response(sock, 503, "Service Unavailable", b"").await,
         },
         _ => write_response(sock, 200, "OK", b"OK\r\n").await,

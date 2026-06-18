@@ -34,9 +34,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 
+use serde::Serialize;
+
 use crate::cluster::peer::PeerState;
+use crate::cluster::pool::ServerPool;
 use crate::conf::ConfPool;
 use crate::embed::ServerHandle;
+use crate::hashkit::DynToken;
 use crate::stats::PoolField;
 
 /// Maximum number of recent events retained in the ring buffer.
@@ -646,6 +650,103 @@ pub fn peer_row(
          last_seen_ms={last_seen_ms} tokens={tokens}",
         status = state.name(),
     )
+}
+
+/// One peer rendered as a typed, machine-parseable ring row.
+///
+/// This is the JSON-friendly counterpart to the free-form
+/// [`RowSection`] used by the plaintext dump: every field is a
+/// named value so a consumer (such as `dyn-admin ring-status`)
+/// can deserialize the whole ring without scraping text.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::admin::cluster_info::RingPeer;
+/// let p = RingPeer {
+///     node: "10.0.0.1:8101".into(),
+///     dc: "dc1".into(),
+///     rack: "r1".into(),
+///     tokens: vec![0, 2_147_483_648],
+///     state: "NORMAL".into(),
+///     is_local: true,
+/// };
+/// assert_eq!(p.tokens.len(), 2);
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RingPeer {
+    /// Node label: `host:port` for a remote peer, or the local
+    /// node's endpoint.
+    pub node: String,
+    /// Datacenter name.
+    pub dc: String,
+    /// Rack name.
+    pub rack: String,
+    /// Token list as the `u32` integers the engine uses for ring
+    /// lookups.
+    pub tokens: Vec<u32>,
+    /// Lifecycle state name (`JOINING`, `NORMAL`, `DOWN`, ...).
+    pub state: String,
+    /// True for the local peer.
+    pub is_local: bool,
+}
+
+/// Typed, JSON-serializable view of the whole ring.
+///
+/// Produced by [`gather_ring_from_pool`] and served verbatim on
+/// the stats server's `/ring` route.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::admin::cluster_info::RingSnapshot;
+/// let snap = RingSnapshot { peers: Vec::new() };
+/// assert!(snap.peers.is_empty());
+/// ```
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RingSnapshot {
+    /// One entry per peer the pool knows about.
+    pub peers: Vec<RingPeer>,
+}
+
+/// Build a [`RingSnapshot`] from a live [`ServerPool`]: every
+/// peer's endpoint, dc, rack, tokens, and lifecycle state, read
+/// under the pool's existing peer `RwLock`.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use dynomite::admin::cluster_info::gather_ring_from_pool;
+/// use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
+/// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+/// use dynomite::hashkit::DynToken;
+///
+/// let local = Peer::new(
+///     0, PeerEndpoint::tcp("127.0.0.1".into(), 8101), "r1".into(),
+///     "dc1".into(), vec![DynToken::from_u32(0)], true, true, false,
+/// );
+/// let pool = ServerPool::new(PoolConfig::default(), vec![local]);
+/// let ring = gather_ring_from_pool(&pool);
+/// assert_eq!(ring.peers.len(), 1);
+/// assert!(ring.peers[0].is_local);
+/// ```
+#[must_use]
+pub fn gather_ring_from_pool(pool: &ServerPool) -> RingSnapshot {
+    let peers = pool.peers().read();
+    let rows = peers
+        .iter()
+        .map(|p| RingPeer {
+            node: format!("{}:{}", p.endpoint().host(), p.endpoint().port()),
+            dc: p.dc().to_string(),
+            rack: p.rack().to_string(),
+            tokens: p.tokens().iter().map(DynToken::get_int).collect(),
+            state: p.state().name().to_string(),
+            is_local: p.is_local(),
+        })
+        .collect();
+    RingSnapshot { peers: rows }
 }
 
 /// Build the `queues` section from a stats snapshot.
