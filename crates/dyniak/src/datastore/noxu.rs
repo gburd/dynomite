@@ -25,7 +25,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use dynomite::embed::hooks::{BoxFuture, Datastore, DatastoreError, Protocol};
+use dynomite::embed::hooks::{BoxFuture, Datastore, DatastoreByteStream, DatastoreError, Protocol};
 use dynomite::msg::{Msg, MsgType};
 use noxu::{
     Cursor, CursorConfig, Database, DatabaseConfig, DatabaseEntry, Environment, EnvironmentConfig,
@@ -696,6 +696,29 @@ impl Datastore for NoxuDatastore {
             self.index_range(bucket, index_name, min, max)
                 .map_err(|e| DatastoreError::Backend(e.to_string()))
         })
+    }
+
+    fn list_keys_stream(&self, bucket: &[u8]) -> DatastoreByteStream {
+        // Walk the primary K/V layer once, collecting the keys that
+        // live under `bucket`. The fold buffers into a Vec rather
+        // than yielding lazily because the Noxu cursor borrows the
+        // database guard, which cannot escape into the returned
+        // 'static stream. A bucket scan over the primary tag is the
+        // same cost the AAE rebuild already pays.
+        let want = bucket.to_vec();
+        let mut keys: Vec<bytes::Bytes> = Vec::new();
+        let result = self.fold_primary(|b, k, _v| {
+            if b == want.as_slice() {
+                keys.push(bytes::Bytes::copy_from_slice(k));
+            }
+            Ok(())
+        });
+        match result {
+            Ok(()) => Box::pin(futures_util::stream::iter(keys.into_iter().map(Ok))),
+            Err(e) => Box::pin(futures_util::stream::once(async move {
+                Err(DatastoreError::Backend(e.to_string()))
+            })),
+        }
     }
 }
 

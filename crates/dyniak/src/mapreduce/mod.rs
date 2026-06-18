@@ -14,8 +14,8 @@
 //! * [`Inputs`] -- the seed values for the pipeline. Either an
 //!   explicit list of `(bucket, key)` pairs, an inline list of
 //!   `KeyDatum` objects (with values inline), or a bucket name (all
-//!   keys in the bucket; not implemented in this slice and rejected
-//!   with [`MrError::UnsupportedInputs`]).
+//!   keys in the bucket, enumerated by the executor through a
+//!   datastore's `list_keys_stream`).
 //! * [`Phase`] list -- an ordered pipeline of [`Phase::Map`],
 //!   [`Phase::Reduce`], [`Phase::Link`] and the reserved
 //!   [`Phase::WasmModule`] variants.
@@ -75,7 +75,9 @@ pub mod registry;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
-pub use crate::mapreduce::executor::{run_job, run_job_with_wasm, MrError, PhaseOutput, WasmHook};
+pub use crate::mapreduce::executor::{
+    run_job, run_job_full, run_job_with_wasm, MrError, PhaseOutput, WasmHook,
+};
 pub use crate::mapreduce::job::{Inputs, KeyDatum, MapReduceJob};
 pub use crate::mapreduce::phase::Phase;
 pub use crate::mapreduce::registry::{MapFn, PhaseRegistry, ReduceFn};
@@ -84,7 +86,9 @@ pub use crate::mapreduce::registry::{MapFn, PhaseRegistry, ReduceFn};
 // added by the streaming HTTP `/mapred` slice. The buffered
 // `run_job` entry stays unchanged for callers (PBC `RpbMapRedResp`)
 // that still emit a single response.
-pub use crate::mapreduce::executor::{run_job_streaming, run_job_streaming_with_wasm, PhaseBatch};
+pub use crate::mapreduce::executor::{
+    run_job_streaming, run_job_streaming_full, run_job_streaming_with_wasm, PhaseBatch,
+};
 
 #[cfg(feature = "wasm")]
 pub use crate::mapreduce::wasm::{

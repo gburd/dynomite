@@ -1025,10 +1025,8 @@ pub(crate) fn header_str_opt(headers: &HeaderMap, name: hyper::header::HeaderNam
 // MapReduce route handler. Added by the v0.0.3 MapReduce slice.
 // ------------------------------------------------------------------
 
-#[cfg(feature = "wasm")]
-use crate::mapreduce::run_job_streaming_with_wasm;
 use crate::mapreduce::{
-    builtins::default_registry, run_job_streaming, MapReduceJob, MrError, PhaseBatch,
+    builtins::default_registry, run_job_streaming_full, MapReduceJob, MrError, PhaseBatch,
 };
 use tokio::sync::mpsc;
 
@@ -1066,6 +1064,10 @@ fn mapred_response(headers: &HeaderMap, body: &Bytes, ctx: &RouteCtx) -> Respons
         }
     };
     let registry = std::sync::Arc::new(default_registry());
+    // The datastore enumerates an `Inputs::Bucket` job's keys; pass
+    // it through so a whole-bucket MapReduce input can run. Inline
+    // input shapes ignore it.
+    let datastore = ctx.datastore.clone();
     // When a Wasm phase store is wired into the context, dispatch
     // through the Wasm-aware executor so a `Phase::WasmModule` job
     // reaches the configured modules; otherwise the plain executor
@@ -1074,15 +1076,12 @@ fn mapred_response(headers: &HeaderMap, body: &Bytes, ctx: &RouteCtx) -> Respons
     let rx = match ctx.wasm.clone() {
         Some(store) => {
             let hook: std::sync::Arc<dyn crate::mapreduce::WasmHook> = store;
-            run_job_streaming_with_wasm(job, registry, Some(hook))
+            run_job_streaming_full(job, registry, Some(hook), Some(datastore))
         }
-        None => run_job_streaming(job, registry),
+        None => run_job_streaming_full(job, registry, None, Some(datastore)),
     };
     #[cfg(not(feature = "wasm"))]
-    let rx = {
-        let _ = ctx;
-        run_job_streaming(job, registry)
-    };
+    let rx = run_job_streaming_full(job, registry, None, Some(datastore));
     let boundary = mapred_boundary();
     let body_stream = mapred_multipart_body(rx, boundary.clone());
     let body_stream: Pin<Box<dyn Stream<Item = Result<HttpFrame<Bytes>, Infallible>> + Send>> =

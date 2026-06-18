@@ -26,11 +26,13 @@
 
 use std::sync::Arc;
 
+use dynomite::embed::Datastore;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::mapreduce::job::MapReduceJob;
+use crate::mapreduce::job::{Inputs, KeyDatum, MapReduceJob};
 use crate::mapreduce::phase::Phase;
 use crate::mapreduce::registry::PhaseRegistry;
 
@@ -58,7 +60,11 @@ pub enum MrError {
         message: String,
     },
 
-    /// Inputs variant is not implemented in this slice.
+    /// Inputs variant cannot be materialised in this execution
+    /// context. A well-formed [`Inputs::Bucket`] needs a datastore
+    /// to enumerate its keys; this surfaces when no datastore was
+    /// wired into the executor (the no-store entry points) or when
+    /// the supplied input spec is otherwise unrunnable.
     #[error("unsupported MapReduce inputs: {0}")]
     UnsupportedInputs(&'static str),
 
@@ -95,10 +101,12 @@ pub enum MrError {
     #[error("wasm phase encoding error: {0}")]
     WasmEncoding(String),
 
-    /// Link phase needs a datastore that can resolve `(bucket, key)`
-    /// references and walk their links. The current substrate does
-    /// not expose a content fetch; the executor surfaces this rather
-    /// than silently emitting an empty result.
+    /// Link phase needs each object to persist its Riak links as
+    /// fetchable metadata. The current object model stores only an
+    /// opaque value plus 2i index pairs, so there are no links to
+    /// walk; the executor surfaces this rather than emitting an
+    /// empty result. Removing this variant waits on object-metadata
+    /// persistence (see the `Phase::Link` arm in the executor).
     #[error("link phases are not implemented in this slice")]
     LinkNotImplemented,
 
@@ -180,7 +188,7 @@ pub async fn run_job(
     job: MapReduceJob,
     registry: Arc<PhaseRegistry>,
 ) -> Result<Vec<PhaseOutput>, MrError> {
-    run_job_with_wasm(job, registry, None).await
+    run_job_full(job, registry, None, None).await
 }
 
 /// Run a MapReduce job, streaming captured per-phase outputs back
@@ -202,7 +210,7 @@ pub fn run_job_streaming(
     job: MapReduceJob,
     registry: Arc<PhaseRegistry>,
 ) -> mpsc::Receiver<Result<PhaseBatch, MrError>> {
-    run_job_streaming_with_wasm(job, registry, None)
+    run_job_streaming_full(job, registry, None, None)
 }
 
 /// Streaming variant of [`run_job_with_wasm`]. See
@@ -213,6 +221,27 @@ pub fn run_job_streaming_with_wasm(
     registry: Arc<PhaseRegistry>,
     wasm: Option<Arc<dyn WasmHook>>,
 ) -> mpsc::Receiver<Result<PhaseBatch, MrError>> {
+    run_job_streaming_full(job, registry, wasm, None)
+}
+
+/// Streaming entry point that also accepts a datastore for
+/// resolving [`Inputs::Bucket`] jobs.
+///
+/// When `datastore` is `Some`, an [`Inputs::Bucket`] job enumerates
+/// every key in the named bucket through
+/// [`Datastore::list_keys_stream`] and seeds the pipeline with one
+/// `(bucket, key)` datum per key (no inline value). When
+/// `datastore` is `None`, an [`Inputs::Bucket`] job surfaces as
+/// [`MrError::UnsupportedInputs`], preserving the no-store path.
+///
+/// See [`run_job_streaming`] for the wire shape.
+#[must_use]
+pub fn run_job_streaming_full(
+    job: MapReduceJob,
+    registry: Arc<PhaseRegistry>,
+    wasm: Option<Arc<dyn WasmHook>>,
+    datastore: Option<Arc<dyn Datastore>>,
+) -> mpsc::Receiver<Result<PhaseBatch, MrError>> {
     // Channel size 4 matches the inbound / outbound channels in
     // `run_phase`: the consumer (HTTP body writer / PBC frame
     // writer) is expected to drain at line speed, but a small
@@ -220,7 +249,7 @@ pub fn run_job_streaming_with_wasm(
     // executor block on the consumer.
     let (tx, rx) = mpsc::channel::<Result<PhaseBatch, MrError>>(4);
     tokio::spawn(async move {
-        let result = stream_job_inner(job, registry, wasm, tx.clone()).await;
+        let result = stream_job_inner(job, registry, wasm, datastore, tx.clone()).await;
         if let Err(e) = result {
             // The error path is always reported through the
             // receiver; ignoring the send result is fine because
@@ -240,13 +269,10 @@ async fn stream_job_inner(
     job: MapReduceJob,
     registry: Arc<PhaseRegistry>,
     wasm: Option<Arc<dyn WasmHook>>,
+    datastore: Option<Arc<dyn Datastore>>,
     tx: mpsc::Sender<Result<PhaseBatch, MrError>>,
 ) -> Result<(), MrError> {
-    let items = job
-        .inputs
-        .items()
-        .ok_or(MrError::UnsupportedInputs("bucket scan"))?;
-    let initial: Vec<Value> = items.into_iter().map(|kd| kd.to_value()).collect();
+    let initial = resolve_inputs(&job.inputs, datastore.as_ref()).await?;
     materialised_initial_inputs_must_be_iterable(&initial);
 
     if job.phases.is_empty() {
@@ -307,14 +333,33 @@ pub async fn run_job_with_wasm(
     registry: Arc<PhaseRegistry>,
     wasm: Option<Arc<dyn WasmHook>>,
 ) -> Result<Vec<PhaseOutput>, MrError> {
+    run_job_full(job, registry, wasm, None).await
+}
+
+/// Buffered entry point that also accepts a datastore for resolving
+/// [`Inputs::Bucket`] jobs.
+///
+/// Identical to [`run_job_with_wasm`] except a well-formed
+/// [`Inputs::Bucket`] job enumerates its keys through
+/// [`Datastore::list_keys_stream`] when `datastore` is `Some`. When
+/// `datastore` is `None`, an [`Inputs::Bucket`] job surfaces as
+/// [`MrError::UnsupportedInputs`].
+///
+/// # Errors
+///
+/// Returns [`MrError`] on the first phase failure, an unresolvable
+/// input shape, or a datastore enumeration failure. The pipeline is
+/// cancelled at the first error.
+pub async fn run_job_full(
+    job: MapReduceJob,
+    registry: Arc<PhaseRegistry>,
+    wasm: Option<Arc<dyn WasmHook>>,
+    datastore: Option<Arc<dyn Datastore>>,
+) -> Result<Vec<PhaseOutput>, MrError> {
     // Resolve inputs into a Vec<Value>. The executor materialises
-    // every input upfront; large bucket-scan inputs would land in
-    // the streaming follow-up, alongside an InputSource trait.
-    let items = job
-        .inputs
-        .items()
-        .ok_or(MrError::UnsupportedInputs("bucket scan"))?;
-    let initial: Vec<Value> = items.into_iter().map(|kd| kd.to_value()).collect();
+    // every input upfront; a bucket-scan input streams its keys
+    // through the datastore here before the pipeline runs.
+    let initial = resolve_inputs(&job.inputs, datastore.as_ref()).await?;
     materialised_initial_inputs_must_be_iterable(&initial);
 
     if job.phases.is_empty() {
@@ -475,15 +520,22 @@ async fn run_phase_task(
             Ok(())
         }
         Phase::Link { .. } => {
-            // The substrate's Datastore::dispatch does not yet expose
-            // object content; following links requires a content
-            // fetch. Returning a typed error makes the limitation
-            // visible to clients without lying about the result.
+            // Link-walking needs each object to carry its Riak links
+            // as fetchable metadata. The persisted object model
+            // (crate::proto::http::object::HttpObject -> the bytes
+            // returned by Datastore::riak_get) stores only an opaque
+            // value, an optional content-type, and 2i index pairs:
+            // there is no link list to walk, and the put paths (HTTP
+            // and PBC) never accept or persist one. Walking links
+            // would therefore require an object-metadata-persistence
+            // change that is out of scope for this slice; returning
+            // a typed error keeps the limitation visible rather than
+            // emitting an empty (and silently wrong) result.
             //
-            // The Phase::Link variant is preserved in the public
-            // enum and the JSON schema so a follow-up slice can
-            // implement execution mechanically once the K/V trait
-            // lands.
+            // The Phase::Link variant stays in the public enum and
+            // the JSON schema so a follow-up slice can implement
+            // execution mechanically once objects persist their
+            // links.
             Err(MrError::LinkNotImplemented)
         }
         Phase::WasmModule {
@@ -531,6 +583,42 @@ async fn run_phase_task(
 /// a single-call seam so the executor's documentation can point at
 /// "the materialise step".
 fn materialised_initial_inputs_must_be_iterable<T>(_: &[T]) {}
+
+/// Materialise a job's inputs into the seed `Vec<Value>` the
+/// pipeline drains from phase 0.
+///
+/// [`Inputs::Pairs`] and [`Inputs::KeyData`] resolve inline via
+/// [`Inputs::items`]. [`Inputs::Bucket`] enumerates every key in the
+/// named bucket through [`Datastore::list_keys_stream`]; each key
+/// becomes a routing-only [`KeyDatum`] (bucket + key, no inline
+/// value), exactly as Riak seeds a whole-bucket MapReduce input.
+/// An empty or nonexistent bucket yields an empty seed list, not an
+/// error. Without a datastore, [`Inputs::Bucket`] is reported as
+/// [`MrError::UnsupportedInputs`].
+async fn resolve_inputs(
+    inputs: &Inputs,
+    datastore: Option<&Arc<dyn Datastore>>,
+) -> Result<Vec<Value>, MrError> {
+    if let Some(items) = inputs.items() {
+        return Ok(items.into_iter().map(|kd| kd.to_value()).collect());
+    }
+    // The only shape `items()` cannot materialise inline is
+    // `Inputs::Bucket`; enumerate its keys through the datastore.
+    let Inputs::Bucket(bucket) = inputs else {
+        return Err(MrError::UnsupportedInputs("unrunnable input spec"));
+    };
+    let store = datastore.ok_or(MrError::UnsupportedInputs("bucket scan"))?;
+    let mut stream = store.list_keys_stream(bucket.as_bytes());
+    let mut out = Vec::new();
+    while let Some(item) = stream.next().await {
+        let key = item.map_err(|e| MrError::Pipeline(format!("bucket scan: {e}")))?;
+        // Keys are object names; lossy UTF-8 keeps the JSON datum
+        // ASCII-clean while preserving any printable key verbatim.
+        let key = String::from_utf8_lossy(&key).into_owned();
+        out.push(KeyDatum::pair(bucket.clone(), key).to_value());
+    }
+    Ok(out)
+}
 
 #[cfg(test)]
 mod tests {
@@ -648,7 +736,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bucket_inputs_unsupported() {
+    async fn bucket_inputs_without_datastore_are_unsupported() {
+        // The no-store entry points cannot enumerate a bucket's
+        // keys, so a bucket-scan input still surfaces as a typed
+        // UnsupportedInputs error there.
         let job = MapReduceJob {
             inputs: Inputs::Bucket("b".into()),
             phases: vec![],
@@ -656,6 +747,120 @@ mod tests {
         };
         let err = run_job(job, registry()).await.expect_err("error");
         assert!(matches!(err, MrError::UnsupportedInputs(_)));
+    }
+
+    #[tokio::test]
+    async fn bucket_inputs_enumerate_keys_through_datastore() {
+        use dynomite::embed::hooks::MemoryDatastore;
+        let ds = MemoryDatastore::new();
+        ds.insert(b"users", b"alice");
+        ds.insert(b"users", b"bob");
+        ds.insert(b"users", b"carol");
+        // A key in another bucket must not leak into the scan.
+        ds.insert(b"orders", b"o1");
+        let ds: Arc<dyn Datastore> = Arc::new(ds);
+
+        let job = MapReduceJob {
+            inputs: Inputs::Bucket("users".into()),
+            phases: vec![],
+            timeout_ms: None,
+        };
+        let out = run_job_full(job, registry(), None, Some(ds))
+            .await
+            .expect("ok");
+        // Identity (no phases): one phase-0 datum per enumerated key.
+        assert_eq!(out.len(), 3);
+        let mut keys: Vec<String> = out
+            .iter()
+            .map(|o| o.value["key"].as_str().unwrap().to_string())
+            .collect();
+        keys.sort();
+        assert_eq!(keys, vec!["alice", "bob", "carol"]);
+        for o in &out {
+            assert_eq!(o.value["bucket"], "users");
+            assert!(o.value["value"].is_null());
+        }
+    }
+
+    #[tokio::test]
+    async fn bucket_inputs_feed_map_reduce_pipeline() {
+        use dynomite::embed::hooks::MemoryDatastore;
+        let ds = MemoryDatastore::new();
+        for i in 0..5u32 {
+            ds.insert(b"nums", format!("k{i}").as_bytes());
+        }
+        let ds: Arc<dyn Datastore> = Arc::new(ds);
+
+        // map_identity passes each key datum through; reduce_count
+        // aggregates to the key count.
+        let job = MapReduceJob {
+            inputs: Inputs::Bucket("nums".into()),
+            phases: vec![
+                Phase::Map {
+                    fn_name: "map_identity".into(),
+                    arg: None,
+                    keep: false,
+                },
+                Phase::Reduce {
+                    fn_name: "reduce_count".into(),
+                    arg: None,
+                    keep: true,
+                },
+            ],
+            timeout_ms: None,
+        };
+        let out = run_job_full(job, registry(), None, Some(ds))
+            .await
+            .expect("ok");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, serde_json::json!(5));
+    }
+
+    #[tokio::test]
+    async fn bucket_inputs_over_empty_bucket_yield_empty_result() {
+        use dynomite::embed::hooks::MemoryDatastore;
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let job = MapReduceJob {
+            inputs: Inputs::Bucket("nonexistent".into()),
+            phases: vec![Phase::Reduce {
+                fn_name: "reduce_sum".into(),
+                arg: None,
+                keep: true,
+            }],
+            timeout_ms: None,
+        };
+        // An empty / nonexistent bucket is not an error: the reduce
+        // runs over an empty set and the pipeline completes.
+        let out = run_job_full(job, registry(), None, Some(ds))
+            .await
+            .expect("ok, not error");
+        assert_eq!(
+            out,
+            vec![PhaseOutput {
+                phase: 0,
+                value: serde_json::json!(0)
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn bucket_inputs_stream_through_streaming_entry_point() {
+        use dynomite::embed::hooks::MemoryDatastore;
+        let ds = MemoryDatastore::new();
+        ds.insert(b"b", b"k1");
+        ds.insert(b"b", b"k2");
+        let ds: Arc<dyn Datastore> = Arc::new(ds);
+        let job = MapReduceJob {
+            inputs: Inputs::Bucket("b".into()),
+            phases: vec![],
+            timeout_ms: None,
+        };
+        let rx = run_job_streaming_full(job, registry(), None, Some(ds));
+        let items = drain_stream(rx).await;
+        assert_eq!(items.len(), 1);
+        let b = items[0].as_ref().expect("ok");
+        assert_eq!(b.phase, 0);
+        assert_eq!(b.data.len(), 2);
     }
 
     #[tokio::test]

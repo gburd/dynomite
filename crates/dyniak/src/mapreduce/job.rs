@@ -71,8 +71,8 @@ impl KeyDatum {
 ///
 /// * a literal list of `(bucket, key)` pairs
 /// * an inline list of [`KeyDatum`] values (with values inline)
-/// * a bucket name (all keys in the bucket; not implemented in this
-///   slice and rejected at execution time)
+/// * a bucket name (all keys in the bucket, enumerated by the
+///   executor through `Datastore::list_keys_stream`)
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Inputs {
@@ -80,18 +80,20 @@ pub enum Inputs {
     Pairs(Vec<(String, String)>),
     /// `[{bucket, key, value?, data?}, ...]` -- inline values.
     KeyData(Vec<KeyDatum>),
-    /// `"bucketname"` -- enumerate every key in the bucket.
-    /// Not implemented in this slice.
+    /// `"bucketname"` -- enumerate every key in the bucket. The
+    /// executor resolves this shape through a datastore rather than
+    /// inline; see [`Inputs::items`].
     Bucket(String),
 }
 
 impl Inputs {
-    /// Enumerate the input items in order.
+    /// Enumerate the inline input items in order.
     ///
-    /// Returns `Err` for [`Inputs::Bucket`] because that variant
-    /// requires a list-keys path that is not wired through in this
-    /// slice; the caller surfaces the failure as
-    /// [`crate::mapreduce::MrError::UnsupportedInputs`].
+    /// Returns `None` for [`Inputs::Bucket`] because that variant
+    /// has no inline item list: its keys are enumerated
+    /// asynchronously by the executor through
+    /// `Datastore::list_keys_stream`. Inline shapes ([`Inputs::Pairs`]
+    /// and [`Inputs::KeyData`]) return `Some`.
     pub fn items(&self) -> Option<Vec<KeyDatum>> {
         match self {
             Self::Pairs(pairs) => Some(
