@@ -165,6 +165,19 @@ impl RouteCtx {
             wasm: Some(wasm),
         }
     }
+
+    /// Attach a Wasm module store to an existing context, returning
+    /// the updated context. Used by the combined search-and-wasm
+    /// serve path, which first builds a search-carrying context and
+    /// then layers the Wasm store on top.
+    #[cfg(all(feature = "wasm", feature = "search"))]
+    pub(crate) fn set_wasm(
+        mut self,
+        wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>,
+    ) -> Self {
+        self.wasm = Some(wasm);
+        self
+    }
 }
 
 impl From<Arc<dyn Datastore>> for RouteCtx {
