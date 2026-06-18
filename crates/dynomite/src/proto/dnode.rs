@@ -189,6 +189,27 @@ pub enum DmsgType {
     /// top-K hit list plus a `timed_out` flag the coordinator
     /// uses to mark partial results.
     FtSearchRep = 16,
+    /// Cross-node XA prepare request.
+    ///
+    /// Carries one transaction branch's writes to the peer that
+    /// owns it. The receiver runs start + apply + end + prepare
+    /// against its local resource manager and replies with a
+    /// [`Self::XaVote`]. The payload layout is owned by the
+    /// `dyniak` transaction layer (`dyniak::datastore::xa`).
+    XaPrepare = 17,
+    /// Cross-node XA prepare reply carrying a branch's vote
+    /// (commit / read-only / abort) for a [`Self::XaPrepare`].
+    XaVote = 18,
+    /// Cross-node XA commit request for a durably prepared branch.
+    /// The receiver commits idempotently and replies
+    /// [`Self::XaAck`].
+    XaCommit = 19,
+    /// Cross-node XA rollback request for a branch. The receiver
+    /// rolls back idempotently and replies [`Self::XaAck`].
+    XaRollback = 20,
+    /// Cross-node XA acknowledgement for a [`Self::XaCommit`] or
+    /// [`Self::XaRollback`].
+    XaAck = 21,
 }
 
 impl DmsgType {
@@ -221,6 +242,11 @@ impl DmsgType {
             14 => DmsgType::HandoffChunk,
             15 => DmsgType::FtSearchReq,
             16 => DmsgType::FtSearchRep,
+            17 => DmsgType::XaPrepare,
+            18 => DmsgType::XaVote,
+            19 => DmsgType::XaCommit,
+            20 => DmsgType::XaRollback,
+            21 => DmsgType::XaAck,
             _ => return None,
         })
     }
@@ -992,7 +1018,12 @@ pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
         | DmsgType::GossipSynReply
         | DmsgType::HandoffChunk
         | DmsgType::FtSearchReq
-        | DmsgType::FtSearchRep => DmsgDispatch::Bypass,
+        | DmsgType::FtSearchRep
+        | DmsgType::XaPrepare
+        | DmsgType::XaVote
+        | DmsgType::XaCommit
+        | DmsgType::XaRollback
+        | DmsgType::XaAck => DmsgDispatch::Bypass,
         _ => DmsgDispatch::Forward,
     }
 }
@@ -1336,6 +1367,18 @@ mod tests {
         // dedicated query-fsm coordinator via the same
         // bypass path used by the handoff coordinator.
         for ty in [DmsgType::FtSearchReq, DmsgType::FtSearchRep] {
+            d.ty = ty;
+            assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
+        }
+        // Cross-node XA frames are routed to the dyniak XA
+        // handler and bypass the data plane the same way.
+        for ty in [
+            DmsgType::XaPrepare,
+            DmsgType::XaVote,
+            DmsgType::XaCommit,
+            DmsgType::XaRollback,
+            DmsgType::XaAck,
+        ] {
             d.ty = ty;
             assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
         }

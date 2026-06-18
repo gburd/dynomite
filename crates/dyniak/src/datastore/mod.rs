@@ -11,14 +11,28 @@
 #[cfg(feature = "noxu")]
 pub mod noxu;
 
-// Cross-node X/Open XA two-phase commit. Local-only realisation
-// today: the coordinator and its participants all live in one
-// process (see the module docs for the multi-node boundary).
+// Cross-node X/Open XA two-phase commit. The local single-process
+// coordinator lives in `xa`; the network leg (transport seam, remote
+// branches, receiver-side peer handler, durable in-doubt log, and the
+// cross-node async coordinator) lives in `xa_net`, with its wire codec
+// in `xa_wire`.
 #[cfg(feature = "noxu")]
 pub mod xa;
+
+#[cfg(feature = "noxu")]
+pub mod xa_net;
+
+#[cfg(feature = "noxu")]
+pub mod xa_wire;
 
 #[cfg(feature = "noxu")]
 pub use crate::datastore::noxu::{NoxuDatastore, NoxuDatastoreError};
 
 #[cfg(feature = "noxu")]
 pub use crate::datastore::xa::{XaCoordinator, XaParticipant};
+
+#[cfg(feature = "noxu")]
+pub use crate::datastore::xa_net::{
+    serve_xa_peer, CrossNodeCoordinator, DnodeXaTransport, InDoubtLog, RemoteXaBranch, XaBranch,
+    XaPeer, XaTransport, XaTransportError,
+};

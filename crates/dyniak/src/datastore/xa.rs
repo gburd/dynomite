@@ -1,25 +1,34 @@
-//! Single-process X/Open XA two-phase commit across local Noxu
-//! environments.
+//! X/Open XA two-phase commit across Noxu environments.
 //!
-//! This module is the local-only realisation of Layer 2 of the
-//! dyniak transaction stack (see [`crate::txn`]). Layer 1
+//! This module realises Layer 2 of the dyniak transaction stack (see
+//! [`crate::txn`]). Layer 1
 //! ([`crate::datastore::NoxuDatastore::transaction`]) commits a batch
 //! whose keys all live on one node inside a single engine
 //! transaction. Layer 2 coordinates a batch whose keys span several
 //! nodes: every node prepares its branch, and the coordinator commits
 //! all branches only once every prepare has voted to commit.
 //!
-//! [`XaCoordinator`] is the transaction manager; each
+//! [`XaCoordinator`] is the single-process transaction manager; each
 //! [`XaParticipant`] is one resource manager backed by an independent
-//! [`noxu::xa::XaEnvironment`]. Both layers of the protocol run inside
-//! one process here: the participants are distinct local Noxu
-//! environments rather than remote peers reached over the dnode wire.
-//! That is deliberate -- it exercises the real
-//! prepare -> commit / rollback handshake against the engine's XA
-//! resource-manager API without yet taking on the cross-node
-//! transport. The boundary, and the multi-node design that builds on
-//! it, are written up in
-//! `docs/journal/2026-06-05-dyniak-xa.md`.
+//! [`noxu::xa::XaEnvironment`]. When every participant lives in the
+//! same process, [`XaCoordinator::execute`] runs the whole protocol
+//! synchronously against the in-process resource managers.
+//!
+//! The cross-node leg -- a branch reached over the dnode peer plane
+//! rather than in-process -- lives in [`crate::datastore::xa_net`].
+//! Its [`crate::datastore::xa_net::CrossNodeCoordinator`] drives the
+//! identical prepare -> commit / rollback phases over a transport,
+//! so a transaction can span the coordinator's own node and any
+//! number of peers. The two coordinators share this module's
+//! [`XaParticipant`] verbatim for the local branches; the cross-node
+//! coordinator adds the presumed-abort prepare path, the
+//! forward-commit (commit-in-doubt) retry, and a durable in-doubt
+//! log. The one remaining boundary is the automatic cold-restart
+//! recovery scan that re-reads that log on coordinator startup; the
+//! durable record is already written so the scan can be built on top
+//! (see [`crate::datastore::xa_net`] for the precise scoping). The
+//! design notes are in `docs/journal/2026-06-05-dyniak-xa.md` and
+//! `docs/journal/2026-06-18-xa-cross-node.md`.
 //!
 //! # Protocol
 //!
@@ -80,7 +89,7 @@ use crate::txn::{TxnBatch, TxnOp, TxnOutcome, TxnStoreError};
 /// XA format identifier stamped on every [`Xid`] this coordinator
 /// mints. The value is arbitrary but stable so a recovery scan can
 /// recognise the transactions as dyniak's.
-const DYNIAK_XA_FORMAT_ID: i32 = 0x6479_6e6b; // "dynk"
+pub(crate) const DYNIAK_XA_FORMAT_ID: i32 = 0x6479_6e6b; // "dynk"
 
 /// Database name every participant opens for the Riak object
 /// keyspace. Matches the single-node bridge's default so the two
@@ -134,6 +143,33 @@ impl XaParticipant {
     #[must_use]
     pub fn name(&self) -> &[u8] {
         &self.name
+    }
+
+    /// Borrow the underlying XA resource manager.
+    ///
+    /// Exposed for the cross-node coordinator and the peer-side
+    /// handler in [`crate::datastore::xa_net`], which drive the same
+    /// `xa_start` / `xa_prepare` / `xa_commit` / `xa_rollback` calls
+    /// this module's local coordinator uses.
+    #[must_use]
+    pub fn xa(&self) -> &XaEnvironment {
+        &self.xa
+    }
+
+    /// Apply one operation to this branch inside the transaction
+    /// identified by `xid`.
+    ///
+    /// Public counterpart to the local coordinator's per-op apply,
+    /// used by [`crate::datastore::xa_net::XaPeer`] when a remote
+    /// prepare delivers a branch's writes.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces the same errors as
+    /// [`crate::datastore::NoxuDatastore::put_object`] /
+    /// `delete_object`.
+    pub fn apply_op(&self, xid: &Xid, op: &TxnOp) -> Result<(), NoxuDatastoreError> {
+        self.apply(xid, op)
     }
 
     /// Read `(bucket, key)` against this branch's committed state.
