@@ -33,6 +33,7 @@
 //!         keyfun: Some(KeyFun::BucketOnly),
 //!         strategy: Some(ReplicationStrategy::Successors),
 //!         n_val: Some(3),
+//!         ..Default::default()
 //!     },
 //! );
 //! let props = reg.resolve(b"default", b"users");
@@ -59,14 +60,43 @@ pub struct BucketProps {
     pub strategy: Option<ReplicationStrategy>,
     /// `n_val` replication factor. `None` means "use default" (3).
     pub n_val: Option<u8>,
+    /// Module id of the operator-supplied keyfun WASM module,
+    /// when [`Self::keyfun`] selects [`KeyFun::Custom`]. Riak's
+    /// wire `chash_keyfun = CUSTOM` selector carries no module
+    /// name, so dyniak takes it from this field. The bucket-
+    /// property write path rejects a `CUSTOM` selection that
+    /// names no module (or names an unregistered one), so a
+    /// `Some` here is always a module the keyfun store knows.
+    pub custom_keyfun_module: Option<String>,
 }
 
 impl BucketProps {
     /// Resolve the effective [`KeyFun`], applying the supplied
     /// default when the field is unset.
+    ///
+    /// When the stored keyfun is [`KeyFun::Custom`] the returned
+    /// variant carries the module id from
+    /// [`Self::custom_keyfun_module`] (the wire selector alone
+    /// does not name the module). If the field is empty the
+    /// returned `Custom` id is empty too; the router treats an
+    /// empty / unregistered id as a clean
+    /// [`crate::datatypes::keyfun::KeyFunError::ModuleNotFound`].
     #[must_use]
     pub fn effective_keyfun_with(&self, default: KeyFun) -> KeyFun {
-        self.keyfun.unwrap_or(default)
+        match self.keyfun.clone() {
+            Some(KeyFun::Custom(id)) => {
+                let module = self.custom_keyfun_module.clone().unwrap_or_else(|| {
+                    if id.is_empty() {
+                        String::new()
+                    } else {
+                        id
+                    }
+                });
+                KeyFun::Custom(module)
+            }
+            Some(other) => other,
+            None => default,
+        }
     }
 
     /// Resolve the effective [`ReplicationStrategy`], applying the
@@ -185,7 +215,7 @@ impl BucketPropsRegistry {
         let inner = self.inner.read().expect("registry rwlock poisoned");
         let mut p = inner.by_bucket.get(&key).cloned().unwrap_or_default();
         if p.keyfun.is_none() {
-            p.keyfun = Some(inner.default_keyfun);
+            p.keyfun = Some(inner.default_keyfun.clone());
         }
         if p.strategy.is_none() {
             p.strategy = Some(inner.default_strategy);
@@ -202,9 +232,10 @@ impl BucketPropsRegistry {
     pub fn defaults(&self) -> BucketProps {
         let inner = self.inner.read().expect("registry rwlock poisoned");
         BucketProps {
-            keyfun: Some(inner.default_keyfun),
+            keyfun: Some(inner.default_keyfun.clone()),
             strategy: Some(inner.default_strategy),
             n_val: Some(inner.default_n_val),
+            custom_keyfun_module: None,
         }
     }
 
@@ -261,6 +292,7 @@ mod tests {
                 keyfun: Some(KeyFun::BucketOnly),
                 strategy: Some(ReplicationStrategy::Topology),
                 n_val: Some(5),
+                ..BucketProps::default()
             },
         );
         let p = reg.resolve(b"default", b"users");
@@ -296,6 +328,36 @@ mod tests {
         let reg = BucketPropsRegistry::new_riak_defaults();
         let p = reg.resolve(b"default", b"never-set");
         assert_eq!(p.effective_strategy(), ReplicationStrategy::Successors);
+    }
+
+    #[test]
+    fn custom_keyfun_takes_module_id_from_field() {
+        // The explicit module field wins over the id embedded in
+        // the variant.
+        let p = BucketProps {
+            keyfun: Some(KeyFun::Custom(String::new())),
+            custom_keyfun_module: Some("reverse".to_string()),
+            ..BucketProps::default()
+        };
+        assert_eq!(p.effective_keyfun(), KeyFun::Custom("reverse".to_string()));
+
+        // With no module field the embedded id is used.
+        let p2 = BucketProps {
+            keyfun: Some(KeyFun::Custom("embedded".to_string())),
+            ..BucketProps::default()
+        };
+        assert_eq!(
+            p2.effective_keyfun(),
+            KeyFun::Custom("embedded".to_string())
+        );
+
+        // Neither set: an empty Custom id, which the router treats
+        // as ModuleNotFound.
+        let p3 = BucketProps {
+            keyfun: Some(KeyFun::Custom(String::new())),
+            ..BucketProps::default()
+        };
+        assert_eq!(p3.effective_keyfun(), KeyFun::Custom(String::new()));
     }
 
     #[test]

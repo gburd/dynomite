@@ -124,6 +124,7 @@ fn bucket_props_get_returns_registered_overrides() {
             n_val: Some(5),
             keyfun: Some(KeyFun::BucketOnly),
             strategy: Some(ReplicationStrategy::Successors),
+            ..BucketProps::default()
         },
     );
     let (node, server) = spawn_server(&runtime, registry);

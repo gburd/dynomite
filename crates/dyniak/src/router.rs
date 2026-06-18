@@ -42,6 +42,7 @@
 //!         keyfun: Some(KeyFun::BucketOnly),
 //!         strategy: Some(ReplicationStrategy::Successors),
 //!         n_val: Some(3),
+//!         ..Default::default()
 //!     },
 //! );
 //! let span = u64::from(u32::MAX);
@@ -132,6 +133,13 @@ pub struct BucketRouter {
     registry: Arc<BucketPropsRegistry>,
     ring: Arc<RingView>,
     hash: HashType,
+    /// Store of operator-supplied custom-keyfun WASM modules.
+    /// `None` when no keyfun store is wired; a
+    /// [`crate::datatypes::keyfun::KeyFun::Custom`] route then
+    /// surfaces a clean [`crate::datatypes::keyfun::KeyFunError`]
+    /// instead of routing. Present only with the `wasm` feature.
+    #[cfg(feature = "wasm")]
+    keyfun_store: Option<crate::datatypes::keyfun_wasm::WasmKeyfunStore>,
 }
 
 impl BucketRouter {
@@ -142,7 +150,32 @@ impl BucketRouter {
             registry,
             ring,
             hash,
+            #[cfg(feature = "wasm")]
+            keyfun_store: None,
         }
+    }
+
+    /// Attach a custom-keyfun WASM store to the router.
+    ///
+    /// After this call, a bucket whose `chash_keyfun` selects
+    /// [`crate::datatypes::keyfun::KeyFun::Custom`] routes its keys
+    /// through the named module in `store`. Consumes and returns
+    /// `self` for builder-style construction.
+    #[cfg(feature = "wasm")]
+    #[must_use]
+    pub fn with_keyfun_store(
+        mut self,
+        store: crate::datatypes::keyfun_wasm::WasmKeyfunStore,
+    ) -> Self {
+        self.keyfun_store = Some(store);
+        self
+    }
+
+    /// Borrow the attached custom-keyfun WASM store, if any.
+    #[cfg(feature = "wasm")]
+    #[must_use]
+    pub fn keyfun_store(&self) -> Option<&crate::datatypes::keyfun_wasm::WasmKeyfunStore> {
+        self.keyfun_store.as_ref()
     }
 
     /// Borrow the bucket-properties registry. Useful for the
@@ -176,11 +209,39 @@ impl BucketRouter {
     /// See the module-level example.
     #[must_use]
     pub fn route(&self, bucket_type: &[u8], bucket: &[u8], key: &[u8]) -> RouteDecision {
+        self.try_route(bucket_type, bucket, key).expect(
+            "invariant: route called on a Custom keyfun without a keyfun store; use try_route",
+        )
+    }
+
+    /// Fallible [`Self::route`].
+    ///
+    /// Behaves identically to [`Self::route`] for the built-in
+    /// `Std` / `BucketOnly` keyfuns (it never errors for them), and
+    /// resolves a [`crate::datatypes::keyfun::KeyFun::Custom`]
+    /// keyfun by running its WASM module through the attached
+    /// keyfun store. The route bytes the module returns are fed to
+    /// the cluster hash exactly as the built-in keyfuns' bytes are.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`crate::datatypes::keyfun::KeyFunError`] when the
+    /// bucket selects a custom keyfun and the module is missing,
+    /// the store is not wired, or the module traps / times out /
+    /// exceeds its memory cap. Routing never panics or hangs on a
+    /// bad module; the caller surfaces the error cleanly (the PBC
+    /// server emits an `RpbErrorResp`).
+    pub fn try_route(
+        &self,
+        bucket_type: &[u8],
+        bucket: &[u8],
+        key: &[u8],
+    ) -> Result<RouteDecision, crate::datatypes::keyfun::KeyFunError> {
         let props = self.registry.resolve(bucket_type, bucket);
         let kf = props.effective_keyfun();
         let strategy = props.effective_strategy();
         let n_val = props.effective_n_val();
-        let route_bytes = kf.route_bytes(bucket, key);
+        let route_bytes = self.resolve_route_bytes(&kf, bucket, key)?;
         let key_hash = hash64(self.hash, &route_bytes);
         let plan = plan_replicas(
             self.ring.as_ref(),
@@ -189,7 +250,7 @@ impl BucketRouter {
             strategy,
             ConsistencyLevel::DcOne,
         );
-        RouteDecision {
+        Ok(RouteDecision {
             bucket_type: if bucket_type.is_empty() {
                 b"default".to_vec()
             } else {
@@ -199,7 +260,51 @@ impl BucketRouter {
             route_bytes,
             key_hash,
             plan,
+        })
+    }
+
+    /// Compute the pre-hash route bytes for a resolved keyfun.
+    ///
+    /// `Std` / `BucketOnly` use the pure path; `Custom` runs the
+    /// named WASM module through the attached keyfun store.
+    fn resolve_route_bytes(
+        &self,
+        kf: &KeyFun,
+        bucket: &[u8],
+        key: &[u8],
+    ) -> Result<Vec<u8>, crate::datatypes::keyfun::KeyFunError> {
+        match kf {
+            KeyFun::Std | KeyFun::BucketOnly => kf.try_route_bytes(bucket, key),
+            KeyFun::Custom(module_id) => self.resolve_custom_route_bytes(module_id, bucket, key),
         }
+    }
+
+    #[cfg(feature = "wasm")]
+    fn resolve_custom_route_bytes(
+        &self,
+        module_id: &str,
+        bucket: &[u8],
+        key: &[u8],
+    ) -> Result<Vec<u8>, crate::datatypes::keyfun::KeyFunError> {
+        match &self.keyfun_store {
+            Some(store) => store.route_bytes(module_id, bucket, key),
+            None => Err(crate::datatypes::keyfun::KeyFunError::ModuleNotFound(
+                module_id.to_string(),
+            )),
+        }
+    }
+
+    #[cfg(not(feature = "wasm"))]
+    fn resolve_custom_route_bytes(
+        &self,
+        module_id: &str,
+        _bucket: &[u8],
+        _key: &[u8],
+    ) -> Result<Vec<u8>, crate::datatypes::keyfun::KeyFunError> {
+        let _ = self;
+        Err(crate::datatypes::keyfun::KeyFunError::ModuleNotFound(
+            module_id.to_string(),
+        ))
     }
 }
 
@@ -306,6 +411,7 @@ mod tests {
             keyfun: Some(KeyFun::BucketOnly),
             strategy: Some(ReplicationStrategy::Successors),
             n_val: Some(3),
+            ..BucketProps::default()
         });
         let mut buckets: HashMap<u32, usize> = HashMap::new();
         for i in 0..100u32 {
@@ -327,6 +433,7 @@ mod tests {
             keyfun: Some(KeyFun::Std),
             strategy: Some(ReplicationStrategy::Successors),
             n_val: Some(1),
+            ..BucketProps::default()
         });
         let mut buckets: HashMap<u32, usize> = HashMap::new();
         // 10_000 keys gives a low-variance check; std deviation

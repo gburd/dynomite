@@ -619,7 +619,10 @@ async fn handle_get(
     let req = RpbGetReq::decode(body)?;
     if let Some(hooks) = hooks {
         let bucket_type = req.r#type.as_deref().unwrap_or(b"");
-        let decision = hooks.router.route(bucket_type, &req.bucket, &req.key);
+        let decision = match hooks.router.try_route(bucket_type, &req.bucket, &req.key) {
+            Ok(d) => d,
+            Err(e) => return Ok(error_frame(format!("riak get: {e}"))),
+        };
         for replica in decision.replica_list() {
             hooks
                 .outbound
@@ -679,7 +682,10 @@ async fn handle_put(
     };
     if let Some(hooks) = hooks {
         let bucket_type = req.r#type.as_deref().unwrap_or(b"");
-        let decision = hooks.router.route(bucket_type, &req.bucket, &key);
+        let decision = match hooks.router.try_route(bucket_type, &req.bucket, &key) {
+            Ok(d) => d,
+            Err(e) => return Ok(error_frame(format!("riak put: {e}"))),
+        };
         for replica in decision.replica_list() {
             hooks
                 .outbound
@@ -742,7 +748,10 @@ async fn handle_del(
     let req = RpbDelReq::decode(body)?;
     if let Some(hooks) = hooks {
         let bucket_type = req.r#type.as_deref().unwrap_or(b"");
-        let decision = hooks.router.route(bucket_type, &req.bucket, &req.key);
+        let decision = match hooks.router.try_route(bucket_type, &req.bucket, &req.key) {
+            Ok(d) => d,
+            Err(e) => return Ok(error_frame(format!("riak del: {e}"))),
+        };
         for replica in decision.replica_list() {
             hooks
                 .outbound
@@ -918,6 +927,10 @@ fn handle_get_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
             allow_mult: Some(false),
             last_write_wins: Some(false),
             chash_keyfun: Some(resolved.effective_keyfun().to_wire()),
+            chash_keyfun_module: resolved
+                .effective_keyfun()
+                .custom_module()
+                .map(|s| s.as_bytes().to_vec()),
             replication_strategy: Some(resolved.effective_strategy().to_wire()),
             ..RpbBucketProps::default()
         }
@@ -944,7 +957,28 @@ fn handle_set_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
             let mut bp = crate::bucket_props::BucketProps::default();
             if let Some(w) = props.chash_keyfun {
                 if let Ok(kf) = crate::datatypes::keyfun::KeyFun::from_wire(w) {
-                    bp.keyfun = Some(kf);
+                    if let crate::datatypes::keyfun::KeyFun::Custom(_) = kf {
+                        // CUSTOM names its module out-of-band
+                        // (Riak: {modfun, Mod, Fun}); dyniak takes
+                        // the module id from the dyniak-extension
+                        // `chash_keyfun_module` field. Reject the
+                        // write when the module is unnamed or not
+                        // registered so routing never silently
+                        // changes to a missing keyfun.
+                        let module_id = props
+                            .chash_keyfun_module
+                            .as_deref()
+                            .map(|b| String::from_utf8_lossy(b).into_owned())
+                            .unwrap_or_default();
+                        if let Err(msg) = validate_custom_keyfun(hooks, &module_id) {
+                            return Ok(error_frame(msg));
+                        }
+                        bp.keyfun =
+                            Some(crate::datatypes::keyfun::KeyFun::Custom(module_id.clone()));
+                        bp.custom_keyfun_module = Some(module_id);
+                    } else {
+                        bp.keyfun = Some(kf);
+                    }
                 }
             }
             if let Some(w) = props.replication_strategy {
@@ -967,6 +1001,43 @@ fn handle_set_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
         MessageCode::SetBucketResp.as_u8(),
         resp.encode_to_vec(),
     ))
+}
+
+/// Validate that a `CUSTOM` keyfun names a registered module.
+///
+/// Returns `Err(message)` (which the caller turns into an
+/// `RpbErrorResp`) when the module id is empty or, with the
+/// `wasm` feature, when no module with that id is registered in
+/// the router's keyfun store. Without the `wasm` feature a
+/// non-empty id is accepted (no store exists to consult), but a
+/// `Custom` route will then surface a clean error at request time.
+#[cfg(feature = "wasm")]
+fn validate_custom_keyfun(hooks: &RoutingHooks, module_id: &str) -> Result<(), String> {
+    if module_id.is_empty() {
+        return Err(
+            "set bucket: chash_keyfun CUSTOM requires a non-empty chash_keyfun_module".into(),
+        );
+    }
+    match hooks.router.keyfun_store() {
+        Some(store) if store.contains(module_id) => Ok(()),
+        Some(_) => Err(format!(
+            "set bucket: chash_keyfun CUSTOM module {module_id:?} is not registered"
+        )),
+        None => Err(
+            "set bucket: chash_keyfun CUSTOM selected but no keyfun WASM store is configured"
+                .into(),
+        ),
+    }
+}
+
+#[cfg(not(feature = "wasm"))]
+fn validate_custom_keyfun(_hooks: &RoutingHooks, module_id: &str) -> Result<(), String> {
+    if module_id.is_empty() {
+        return Err(
+            "set bucket: chash_keyfun CUSTOM requires a non-empty chash_keyfun_module".into(),
+        );
+    }
+    Err("set bucket: chash_keyfun CUSTOM requires the 'wasm' feature".into())
 }
 
 /// Run a MapReduce job submitted via PBC and stream the per-phase

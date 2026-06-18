@@ -165,15 +165,6 @@ impl RouteCtx {
             wasm: Some(wasm),
         }
     }
-
-    /// Attach a Wasm phase store to an existing context, preserving
-    /// any search registry already wired in.
-    #[cfg(feature = "wasm")]
-    #[must_use]
-    pub(crate) fn set_wasm(mut self, wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>) -> Self {
-        self.wasm = Some(wasm);
-        self
-    }
 }
 
 impl From<Arc<dyn Datastore>> for RouteCtx {

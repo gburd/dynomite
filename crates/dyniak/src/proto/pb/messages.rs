@@ -700,6 +700,21 @@ pub struct RpbBucketProps {
     /// `SUCCESSORS` for newly created bucket-types.
     #[prost(uint32, optional, tag = "31")]
     pub replication_strategy: Option<u32>,
+    /// Custom keyfun module id, used only when [`Self::chash_keyfun`]
+    /// is `CUSTOM` (99).
+    ///
+    /// Riak names the user-defined keyfun via a `{modfun, Mod,
+    /// Fun}` tuple carried in the `chash_keyfun` `RpbModFun`
+    /// message. dyniak realises the user-defined keyfun as an
+    /// operator-supplied WASM module and carries the module id in
+    /// this dyniak-extension field (tag 32) instead of modelling
+    /// the Erlang tuple. The id must name a module registered with
+    /// the keyfun WASM store; the bucket-property write path
+    /// rejects a `CUSTOM` selection whose module is absent or
+    /// unregistered. See
+    /// [`crate::datatypes::keyfun::KeyFun::Custom`].
+    #[prost(bytes = "vec", optional, tag = "32")]
+    pub chash_keyfun_module: Option<Vec<u8>>,
 }
 
 /// `chash_keyfun = STD`: hash `<bucket>/<key>` (default).

@@ -20,6 +20,12 @@ members = [
 ]
 exclude = [
     "crates/fuzz",
+    # WASM fixture crates compiled to wasm32-unknown-unknown by
+    # the dyniak custom-keyfun / mapreduce tests. They are cdylib
+    # crates built for a non-host target via a test harness, so
+    # they must never join the host workspace build graph.
+    "crates/dyniak/tests/fixtures/keyfun-reverse",
+    "crates/dyniak/tests/fixtures/mapreduce-double",
 ]
 
 [workspace.package]

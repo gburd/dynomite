@@ -204,20 +204,104 @@ impl WasmHook for WasmModuleStore {
         _fn_name: &str,
         inputs: &[Value],
     ) -> Result<Vec<Value>, MrError> {
+        // Encode inputs as a CBOR-serialised Vec<Value>.
+        let mut input_bytes: Vec<u8> = Vec::new();
+        ciborium::ser::into_writer(&inputs, &mut input_bytes)
+            .map_err(|e| MrError::WasmEncoding(format!("encode: {e}")))?;
+
+        let out_bytes = self
+            .run_module_raw(module_id, &input_bytes, "phase_alloc", "phase_apply")
+            .map_err(|e| e.into_mr_error(module_id))?;
+
+        let outputs: Vec<Value> = ciborium::de::from_reader(out_bytes.as_slice())
+            .map_err(|e| MrError::WasmEncoding(format!("decode: {e}")))?;
+        Ok(outputs)
+    }
+}
+
+/// Failure modes of [`WasmModuleStore::run_module_raw`].
+///
+/// The raw runner is protocol-agnostic (it moves bytes in and
+/// bytes out), so its errors are translated by each caller into
+/// their own typed error: MapReduce phases into [`MrError`], the
+/// keyfun store into
+/// [`crate::datatypes::keyfun::KeyFunError`].
+#[derive(Debug)]
+pub enum WasmRawError {
+    /// The module id was not registered with the store.
+    NotFound,
+    /// The module trapped after a denied memory growth.
+    MemoryLimit,
+    /// The module ran out of fuel or hit its wall-clock deadline.
+    Timeout,
+    /// The module returned a non-zero status code; the bytes are
+    /// the module's (UTF-8 lossy) error string.
+    Status {
+        /// Non-zero status the module returned.
+        code: i32,
+        /// Module-supplied error text.
+        message: String,
+    },
+    /// Any other host-side or wasm-level runtime failure.
+    Runtime(String),
+    /// Input length did not fit an `i32`.
+    InputTooLarge,
+}
+
+impl WasmRawError {
+    /// Translate into the MapReduce [`MrError`] taxonomy.
+    fn into_mr_error(self, module_id: &str) -> MrError {
+        match self {
+            Self::NotFound => MrError::WasmModuleNotFound(module_id.to_string()),
+            Self::MemoryLimit => MrError::WasmMemoryLimit,
+            Self::Timeout => MrError::WasmExecutionTimeout,
+            Self::Status { code, message } => {
+                MrError::WasmRuntime(format!("wasm phase returned error code {code}: {message}"))
+            }
+            Self::Runtime(m) => MrError::WasmRuntime(m),
+            Self::InputTooLarge => MrError::WasmEncoding("input length exceeds i32".into()),
+        }
+    }
+}
+
+impl WasmModuleStore {
+    /// Run the module registered as `module_id` over `input`,
+    /// returning its raw output bytes.
+    ///
+    /// The module is driven through the linear-memory ABI shared
+    /// by MapReduce phases and custom keyfuns: an allocator
+    /// export named `alloc_name` (`fn(i32) -> i32`) and an entry
+    /// point named `apply_name`
+    /// (`fn(in_ptr, in_len, out_ptr_ptr, out_len_ptr) -> i32`).
+    /// The host writes `input` at the allocated pointer, calls
+    /// the entry point, then reads back the `(out_ptr, out_len)`
+    /// the module wrote into the 8-byte meta slot. A zero return
+    /// code means the output bytes are the result; a non-zero
+    /// code means they are an error string.
+    ///
+    /// Each call runs in a fresh [`Store`] bounded by the store's
+    /// [`WasmLimits`] (memory cap + fuel + wall-clock deadline),
+    /// so a buggy or hostile module cannot hang or OOM the host.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmRawError`] describing the failure; callers
+    /// map it into their own typed error.
+    pub fn run_module_raw(
+        &self,
+        module_id: &str,
+        input: &[u8],
+        alloc_name: &str,
+        apply_name: &str,
+    ) -> Result<Vec<u8>, WasmRawError> {
         let module = {
             let modules = self.modules.lock().expect("WasmModuleStore mutex");
             modules
                 .get(module_id)
                 .cloned()
-                .ok_or_else(|| MrError::WasmModuleNotFound(module_id.to_string()))?
+                .ok_or(WasmRawError::NotFound)?
         };
-
-        // Encode inputs as a CBOR-serialised Vec<Value>.
-        let mut input_bytes: Vec<u8> = Vec::new();
-        ciborium::ser::into_writer(&inputs, &mut input_bytes)
-            .map_err(|e| MrError::WasmEncoding(format!("encode: {e}")))?;
-        let input_len = i32::try_from(input_bytes.len())
-            .map_err(|_| MrError::WasmEncoding("input length exceeds i32".into()))?;
+        let input_len = i32::try_from(input.len()).map_err(|_| WasmRawError::InputTooLarge)?;
 
         // Set up the per-call store with memory + fuel + epoch.
         let state = WasmState {
@@ -231,7 +315,7 @@ impl WasmHook for WasmModuleStore {
         store.limiter(|s| s as &mut dyn ResourceLimiter);
         store
             .set_fuel(self.limits.fuel)
-            .map_err(|e| MrError::WasmRuntime(format!("set_fuel: {e}")))?;
+            .map_err(|e| WasmRawError::Runtime(format!("set_fuel: {e}")))?;
         // Trap as soon as the engine epoch advances by one tick;
         // the watchdog increments the epoch when the wall-clock
         // deadline elapses.
@@ -242,67 +326,69 @@ impl WasmHook for WasmModuleStore {
             Duration::from_millis(self.limits.timeout_ms),
         );
 
-        let result = self.run_one(&mut store, &module, &input_bytes, input_len);
+        let result = self.run_raw_inner(
+            &mut store, &module, input, input_len, alloc_name, apply_name,
+        );
         drop(watchdog);
         result
     }
-}
 
-impl WasmModuleStore {
-    fn run_one(
+    fn run_raw_inner(
         &self,
         store: &mut Store<WasmState>,
         module: &Module,
         input_bytes: &[u8],
         input_len: i32,
-    ) -> Result<Vec<Value>, MrError> {
+        alloc_name: &str,
+        apply_name: &str,
+    ) -> Result<Vec<u8>, WasmRawError> {
         let linker: Linker<WasmState> = Linker::new(&self.engine);
         let instance = linker
             .instantiate(&mut *store, module)
-            .map_err(|e| classify(store, &e))?;
+            .map_err(|e| classify_raw(store, &e))?;
 
         let memory: Memory = instance
             .get_memory(&mut *store, "memory")
-            .ok_or_else(|| MrError::WasmRuntime("module did not export 'memory'".into()))?;
-        let phase_alloc: TypedFunc<i32, i32> = instance
-            .get_typed_func(&mut *store, "phase_alloc")
-            .map_err(|e| MrError::WasmRuntime(format!("missing phase_alloc: {e}")))?;
-        let phase_apply: TypedFunc<(i32, i32, i32, i32), i32> = instance
-            .get_typed_func(&mut *store, "phase_apply")
-            .map_err(|e| MrError::WasmRuntime(format!("missing phase_apply: {e}")))?;
+            .ok_or_else(|| WasmRawError::Runtime("module did not export 'memory'".into()))?;
+        let alloc: TypedFunc<i32, i32> = instance
+            .get_typed_func(&mut *store, alloc_name)
+            .map_err(|e| WasmRawError::Runtime(format!("missing {alloc_name}: {e}")))?;
+        let apply: TypedFunc<(i32, i32, i32, i32), i32> = instance
+            .get_typed_func(&mut *store, apply_name)
+            .map_err(|e| WasmRawError::Runtime(format!("missing {apply_name}: {e}")))?;
 
         // Allocate input buffer.
-        let in_ptr = phase_alloc
+        let in_ptr = alloc
             .call(&mut *store, input_len)
-            .map_err(|e| classify(store, &e))?;
+            .map_err(|e| classify_raw(store, &e))?;
         // Allocate 8 bytes for the output meta (out_ptr + out_len).
-        let out_meta_ptr = phase_alloc
+        let out_meta_ptr = alloc
             .call(&mut *store, 8)
-            .map_err(|e| classify(store, &e))?;
+            .map_err(|e| classify_raw(store, &e))?;
 
         // Write input bytes into module memory.
         let in_off = usize_from_i32(in_ptr)?;
         memory
             .write(&mut *store, in_off, input_bytes)
-            .map_err(|e| MrError::WasmRuntime(format!("memory.write input: {e}")))?;
+            .map_err(|e| WasmRawError::Runtime(format!("memory.write input: {e}")))?;
 
-        // Invoke phase_apply.
+        // Invoke the entry point.
         let out_meta_len_ptr = out_meta_ptr
             .checked_add(4)
-            .ok_or_else(|| MrError::WasmRuntime("output meta pointer overflow".into()))?;
-        let result_code = phase_apply
+            .ok_or_else(|| WasmRawError::Runtime("output meta pointer overflow".into()))?;
+        let result_code = apply
             .call(
                 &mut *store,
                 (in_ptr, input_len, out_meta_ptr, out_meta_len_ptr),
             )
-            .map_err(|e| classify(store, &e))?;
+            .map_err(|e| classify_raw(store, &e))?;
 
         // Read output meta.
         let mut meta = [0u8; 8];
         let out_meta_off = usize_from_i32(out_meta_ptr)?;
         memory
             .read(&*store, out_meta_off, &mut meta)
-            .map_err(|e| MrError::WasmRuntime(format!("memory.read meta: {e}")))?;
+            .map_err(|e| WasmRawError::Runtime(format!("memory.read meta: {e}")))?;
         let out_ptr = i32::from_le_bytes([meta[0], meta[1], meta[2], meta[3]]);
         let out_len = i32::from_le_bytes([meta[4], meta[5], meta[6], meta[7]]);
 
@@ -312,19 +398,18 @@ impl WasmModuleStore {
         if out_len_us > 0 {
             memory
                 .read(&*store, out_off, &mut out_bytes)
-                .map_err(|e| MrError::WasmRuntime(format!("memory.read output: {e}")))?;
+                .map_err(|e| WasmRawError::Runtime(format!("memory.read output: {e}")))?;
         }
 
         if result_code != 0 {
             let msg = String::from_utf8_lossy(&out_bytes).into_owned();
-            return Err(MrError::WasmRuntime(format!(
-                "wasm phase returned error code {result_code}: {msg}"
-            )));
+            return Err(WasmRawError::Status {
+                code: result_code,
+                message: msg,
+            });
         }
 
-        let outputs: Vec<Value> = ciborium::de::from_reader(out_bytes.as_slice())
-            .map_err(|e| MrError::WasmEncoding(format!("decode: {e}")))?;
-        Ok(outputs)
+        Ok(out_bytes)
     }
 }
 
@@ -362,27 +447,27 @@ impl ResourceLimiter for WasmState {
     }
 }
 
-fn usize_from_i32(v: i32) -> Result<usize, MrError> {
-    usize::try_from(v).map_err(|_| MrError::WasmRuntime(format!("invalid pointer/length: {v}")))
+fn usize_from_i32(v: i32) -> Result<usize, WasmRawError> {
+    usize::try_from(v).map_err(|_| WasmRawError::Runtime(format!("invalid pointer/length: {v}")))
 }
 
-/// Translate a [`wasmtime::Error`] into a typed [`MrError`].
+/// Translate a [`wasmtime::Error`] into a typed [`WasmRawError`].
 ///
 /// The runtime returns `Trap` values for fuel exhaustion, epoch
 /// interruption, and other wasm-level traps. The [`WasmState`]
 /// flag also tells us whether the failure was preceded by a
 /// denied memory growth, which lets us promote a generic
-/// `unreachable` trap to [`MrError::WasmMemoryLimit`].
-fn classify(store: &Store<WasmState>, e: &wasmtime::Error) -> MrError {
+/// `unreachable` trap to [`WasmRawError::MemoryLimit`].
+fn classify_raw(store: &Store<WasmState>, e: &wasmtime::Error) -> WasmRawError {
     if store.data().memory_limit_hit {
-        return MrError::WasmMemoryLimit;
+        return WasmRawError::MemoryLimit;
     }
     if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
         if matches!(trap, wasmtime::Trap::OutOfFuel | wasmtime::Trap::Interrupt) {
-            return MrError::WasmExecutionTimeout;
+            return WasmRawError::Timeout;
         }
     }
-    MrError::WasmRuntime(e.to_string())
+    WasmRawError::Runtime(e.to_string())
 }
 
 /// Wall-clock watchdog. The executor's per-call [`Store`] is set

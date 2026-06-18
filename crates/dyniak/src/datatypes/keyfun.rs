@@ -9,6 +9,12 @@
 //! * [`KeyFun::BucketOnly`] -- the hash input is `<bucket>`
 //!   alone, so every key in the bucket maps to the same
 //!   partition. Useful for bucket-as-shard layouts.
+//! * [`KeyFun::Custom`] -- the hash input is whatever an
+//!   operator-supplied WebAssembly module decides. The variant
+//!   carries the module id; the actual byte-shaping happens in
+//!   [`crate::router::BucketRouter`], which owns the keyfun WASM
+//!   store. This is the dyniak realisation of Riak's
+//!   user-defined `{chash_keyfun, {modfun, Mod, Fun}}` keyfun.
 //!
 //! This module models the in-memory choice and produces the byte
 //! sequence the dispatcher feeds to the existing distribution
@@ -20,11 +26,14 @@
 //!
 //! [`KeyFun::from_wire`] / [`KeyFun::to_wire`] convert between the
 //! protobuf [`crate::proto::pb::RpbBucketProps::chash_keyfun`]
-//! numeric selector and the in-memory enum. A wire value the
-//! crate does not yet honour (notably the reserved `CUSTOM = 99`
-//! slot) decodes to `Err(KeyFunError::Custom)` so a future slice
-//! that ships a user-defined keyfun can return the right enum
-//! variant without breaking older deployments.
+//! numeric selector and the in-memory enum. The `CUSTOM = 99`
+//! selector carries no module id on the wire (Riak names the
+//! module separately via `{modfun, Mod, Fun}`); dyniak therefore
+//! decodes `99` to [`KeyFun::Custom`] with an EMPTY module id and
+//! relies on the bucket-property field
+//! [`crate::bucket_props::BucketProps::custom_keyfun_module`] to
+//! name the registered WASM module. The bucket-property write path
+//! ([`crate::server`]) fills that field in.
 //!
 //! # Examples
 //!
@@ -46,7 +55,12 @@ use crate::proto::pb::{CHASH_KEYFUN_BUCKETONLY, CHASH_KEYFUN_CUSTOM, CHASH_KEYFU
 ///
 /// The variants line up with Riak's `chash_keyfun` selectors.
 /// Default is [`KeyFun::Std`].
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+///
+/// [`KeyFun::Custom`] carries the id of the registered keyfun WASM
+/// module that shapes the routing bytes. Because of that owned
+/// `String` the enum is `Clone` rather than `Copy`; the `Std` and
+/// `BucketOnly` variants stay cheap to clone (no allocation).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum KeyFun {
     /// Hash `<bucket>/<key>` (Riak's `chash_std_keyfun`).
     /// Every key is independently distributed across the ring.
@@ -55,16 +69,41 @@ pub enum KeyFun {
     /// Hash `<bucket>` only (Riak's `chash_bucketonly_keyfun`).
     /// Every key in the bucket maps to the same partition.
     BucketOnly,
+    /// Hash whatever the named operator-supplied WASM module
+    /// returns for `(bucket, key)` (Riak's user-defined
+    /// `{chash_keyfun, {modfun, Mod, Fun}}`). The `String` is the
+    /// module id registered with the keyfun WASM store.
+    Custom(String),
 }
 
-/// Errors produced when decoding a wire `chash_keyfun` value.
+/// Errors produced when decoding a wire `chash_keyfun` value or
+/// running a [`KeyFun::Custom`] module.
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum KeyFunError {
-    /// The wire value was the reserved `CUSTOM = 99` selector.
-    /// User-defined keyfuns are not implemented in this slice.
-    #[error("chash_keyfun: CUSTOM (user-defined) is reserved but not implemented")]
-    Custom,
+    /// [`Self::route_bytes`] was called on a [`KeyFun::Custom`]
+    /// keyfun, which needs the WASM store. Callers must route a
+    /// `Custom` keyfun through
+    /// [`crate::router::BucketRouter`], which owns the store.
+    #[error("chash_keyfun: CUSTOM keyfun {0:?} must be routed through the WASM keyfun store")]
+    Custom(String),
+    /// The bucket selected `CUSTOM` but named no module, or the
+    /// named module is not registered with the keyfun store.
+    #[error("chash_keyfun: CUSTOM keyfun module {0:?} is not registered")]
+    ModuleNotFound(String),
+    /// The WASM module trapped, ran out of fuel, or hit its
+    /// wall-clock deadline while computing the route bytes.
+    #[error("chash_keyfun: CUSTOM keyfun module {module:?} failed: {message}")]
+    Runtime {
+        /// Module id that failed.
+        module: String,
+        /// Human-readable failure reason.
+        message: String,
+    },
+    /// The WASM module asked for more linear memory than the
+    /// configured cap allows.
+    #[error("chash_keyfun: CUSTOM keyfun module {0:?} exceeded its memory limit")]
+    MemoryLimit(String),
     /// The wire value was outside the documented enum range.
     #[error("chash_keyfun: unknown selector {0}")]
     Unknown(u32),
@@ -78,10 +117,17 @@ impl KeyFun {
     /// separator is the literal forward slash so the bytes match
     /// the request keys downstream code (notably
     /// [`dynomite::proto::redis::bucket_name`]) already produces.
-    /// `BucketOnly` returns just the bucket name. The function
-    /// allocates a fresh `Vec<u8>`; callers that route many keys
-    /// in a row should reuse the buffer via
-    /// [`Self::route_bytes_into`].
+    /// `BucketOnly` returns just the bucket name.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on [`KeyFun::Custom`]: a custom keyfun
+    /// needs the WASM keyfun store, which this pure method does
+    /// not have. The router resolves `Custom` keyfuns through
+    /// [`crate::router::BucketRouter::route`] before this method
+    /// is reached, so production code never trips this. Use
+    /// [`Self::try_route_bytes`] when a `Custom` keyfun is
+    /// possible and a panic is not acceptable.
     ///
     /// # Examples
     ///
@@ -91,15 +137,56 @@ impl KeyFun {
     /// assert_eq!(KeyFun::BucketOnly.route_bytes(b"b", b"k"), b"b");
     /// ```
     #[must_use]
-    pub fn route_bytes(self, bucket: &[u8], key: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.route_len(bucket, key));
-        self.route_bytes_into(bucket, key, &mut out);
-        out
+    pub fn route_bytes(&self, bucket: &[u8], key: &[u8]) -> Vec<u8> {
+        self.try_route_bytes(bucket, key)
+            .expect("invariant: route_bytes called on KeyFun::Custom; route through BucketRouter")
+    }
+
+    /// Fallible analogue of [`Self::route_bytes`] for the pure
+    /// (storeless) variants.
+    ///
+    /// Returns the shaped bytes for `Std` / `BucketOnly`, and
+    /// [`KeyFunError::Custom`] for [`KeyFun::Custom`] (whose bytes
+    /// can only be produced by running the WASM module via the
+    /// router's keyfun store).
+    ///
+    /// # Errors
+    ///
+    /// [`KeyFunError::Custom`] when `self` is [`KeyFun::Custom`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dyniak::datatypes::keyfun::{KeyFun, KeyFunError};
+    /// assert_eq!(KeyFun::Std.try_route_bytes(b"b", b"k").unwrap(), b"b/k");
+    /// let id = "rev".to_string();
+    /// assert_eq!(
+    ///     KeyFun::Custom(id.clone()).try_route_bytes(b"b", b"k"),
+    ///     Err(KeyFunError::Custom(id)),
+    /// );
+    /// ```
+    pub fn try_route_bytes(&self, bucket: &[u8], key: &[u8]) -> Result<Vec<u8>, KeyFunError> {
+        match self {
+            Self::Std => {
+                let mut out = Vec::with_capacity(bucket.len() + 1 + key.len());
+                out.extend_from_slice(bucket);
+                out.push(b'/');
+                out.extend_from_slice(key);
+                Ok(out)
+            }
+            Self::BucketOnly => Ok(bucket.to_vec()),
+            Self::Custom(id) => Err(KeyFunError::Custom(id.clone())),
+        }
     }
 
     /// Append the route-input bytes for `(bucket, key)` onto
     /// `buf`. The buffer is NOT cleared first; reuse across calls
     /// is left to the caller.
+    ///
+    /// # Panics
+    ///
+    /// Panics on [`KeyFun::Custom`] for the same reason as
+    /// [`Self::route_bytes`].
     ///
     /// # Examples
     ///
@@ -109,7 +196,7 @@ impl KeyFun {
     /// KeyFun::Std.route_bytes_into(b"users", b"alice", &mut buf);
     /// assert_eq!(buf, b"users/alice");
     /// ```
-    pub fn route_bytes_into(self, bucket: &[u8], key: &[u8], buf: &mut Vec<u8>) {
+    pub fn route_bytes_into(&self, bucket: &[u8], key: &[u8], buf: &mut Vec<u8>) {
         match self {
             Self::Std => {
                 buf.extend_from_slice(bucket);
@@ -119,36 +206,62 @@ impl KeyFun {
             Self::BucketOnly => {
                 buf.extend_from_slice(bucket);
             }
+            Self::Custom(_) => {
+                panic!(
+                    "invariant: route_bytes_into called on KeyFun::Custom; route through BucketRouter"
+                );
+            }
+        }
+    }
+
+    /// `true` when this keyfun needs the WASM keyfun store to
+    /// produce its route bytes (i.e. it is [`KeyFun::Custom`]).
+    #[must_use]
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Self::Custom(_))
+    }
+
+    /// The custom keyfun module id, when `self` is
+    /// [`KeyFun::Custom`].
+    #[must_use]
+    pub fn custom_module(&self) -> Option<&str> {
+        match self {
+            Self::Custom(id) => Some(id.as_str()),
+            Self::Std | Self::BucketOnly => None,
         }
     }
 
     /// Length of the byte sequence [`Self::route_bytes`] would
-    /// return. Useful for pre-sizing a buffer when batching
-    /// routing calls.
+    /// return for the pure variants. `None` for [`KeyFun::Custom`]
+    /// (the length is only known after running the module).
     #[must_use]
-    pub fn route_len(self, bucket: &[u8], key: &[u8]) -> usize {
+    pub fn route_len(&self, bucket: &[u8], key: &[u8]) -> Option<usize> {
         match self {
-            Self::Std => bucket.len() + 1 + key.len(),
-            Self::BucketOnly => bucket.len(),
+            Self::Std => Some(bucket.len() + 1 + key.len()),
+            Self::BucketOnly => Some(bucket.len()),
+            Self::Custom(_) => None,
         }
     }
 
     /// Convert a wire `chash_keyfun` selector to the in-memory
-    /// enum. `None` means the field is unset on the wire and
-    /// the default applies; the caller decides what default to
-    /// use (Riak-mode pools default to `Std` for keyfun).
+    /// enum.
+    ///
+    /// The reserved `CUSTOM = 99` selector decodes to
+    /// `KeyFun::Custom(String::new())` -- an empty module id. The
+    /// wire selector alone carries no module name (Riak names it
+    /// separately via `{modfun, Mod, Fun}`), so the caller MUST
+    /// fill the id in from
+    /// [`crate::bucket_props::BucketProps::custom_keyfun_module`].
     ///
     /// # Errors
     ///
-    /// * [`KeyFunError::Custom`] when the wire value is the
-    ///   reserved `99` selector.
-    /// * [`KeyFunError::Unknown`] when the wire value is outside
-    ///   the documented enum range.
+    /// [`KeyFunError::Unknown`] when the wire value is outside the
+    /// documented enum range.
     pub fn from_wire(value: u32) -> Result<Self, KeyFunError> {
         match value {
             CHASH_KEYFUN_STD => Ok(Self::Std),
             CHASH_KEYFUN_BUCKETONLY => Ok(Self::BucketOnly),
-            CHASH_KEYFUN_CUSTOM => Err(KeyFunError::Custom),
+            CHASH_KEYFUN_CUSTOM => Ok(Self::Custom(String::new())),
             other => Err(KeyFunError::Unknown(other)),
         }
     }
@@ -157,10 +270,11 @@ impl KeyFun {
     /// selector ready to drop into
     /// [`crate::proto::pb::RpbBucketProps::chash_keyfun`].
     #[must_use]
-    pub fn to_wire(self) -> u32 {
+    pub fn to_wire(&self) -> u32 {
         match self {
             Self::Std => CHASH_KEYFUN_STD,
             Self::BucketOnly => CHASH_KEYFUN_BUCKETONLY,
+            Self::Custom(_) => CHASH_KEYFUN_CUSTOM,
         }
     }
 }
@@ -190,8 +304,26 @@ mod tests {
             let mut buf = Vec::new();
             kf.route_bytes_into(b"b", b"k", &mut buf);
             assert_eq!(owned, buf, "kf = {kf:?}");
-            assert_eq!(owned.len(), kf.route_len(b"b", b"k"));
+            assert_eq!(owned.len(), kf.route_len(b"b", b"k").unwrap());
         }
+    }
+
+    #[test]
+    fn custom_try_route_bytes_is_error() {
+        let kf = KeyFun::Custom("rev".to_string());
+        assert_eq!(
+            kf.try_route_bytes(b"b", b"k"),
+            Err(KeyFunError::Custom("rev".to_string()))
+        );
+        assert!(kf.is_custom());
+        assert_eq!(kf.custom_module(), Some("rev"));
+        assert_eq!(kf.route_len(b"b", b"k"), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "KeyFun::Custom")]
+    fn custom_route_bytes_panics() {
+        let _ = KeyFun::Custom("rev".to_string()).route_bytes(b"b", b"k");
     }
 
     #[test]
@@ -204,8 +336,13 @@ mod tests {
     }
 
     #[test]
-    fn from_wire_rejects_custom_and_unknown() {
-        assert_eq!(KeyFun::from_wire(99), Err(KeyFunError::Custom));
+    fn from_wire_custom_yields_empty_module_id() {
+        assert_eq!(KeyFun::from_wire(99), Ok(KeyFun::Custom(String::new())));
+        assert_eq!(KeyFun::Custom("anything".to_string()).to_wire(), 99);
+    }
+
+    #[test]
+    fn from_wire_rejects_unknown() {
         assert_eq!(KeyFun::from_wire(7), Err(KeyFunError::Unknown(7)));
     }
 

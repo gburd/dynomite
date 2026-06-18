@@ -1420,10 +1420,8 @@ models the canonical pair (`STD = 0`, `BUCKETONLY = 1`) as a
 numeric enum at
 `RpbBucketProps.chash_keyfun` (Dynomite extension at tag 30
 of the Riak proto schema). The reserved `CUSTOM = 99` slot is
-decoded but rejected with a typed error: we do not ship a
-user-defined keyfun. Operators who need a third shape are
-expected to file a request and a follow-up slice will land
-the required hooks.
+now implemented as an operator-supplied WebAssembly keyfun
+(see D4a below).
 
 The shaping happens before the cluster's hash function:
 [`KeyFun::route_bytes(bucket, key)`](crate::datatypes::keyfun::KeyFun::route_bytes)
@@ -1434,7 +1432,8 @@ sees the produced bytes verbatim; no modules under
 
 Pinned by:
 - `dyniak::datatypes::keyfun::tests` (route shape, wire
-  round-trip, defaulting, `CUSTOM` rejection).
+  round-trip, defaulting, `CUSTOM` decoding to an empty
+  module id).
 - `dyniak::router::tests::bucketonly_keyfun_collapses_keys_to_one_partition`
   (100-key workload at one peer).
 - `dyniak::router::tests::std_keyfun_distributes_within_5_percent_of_uniform`
@@ -1443,6 +1442,78 @@ Pinned by:
 - `crates/dyniak/tests/bucket_props_routing.rs::bucketonly_keyfun_routes_two_keys_to_same_primary`
   (end-to-end PBC PUT, two keys land on the same per-peer
   outbound channel).
+
+### D4a: `chash_keyfun = CUSTOM` as a WebAssembly keyfun
+
+**Deviation.** Riak's user-defined `chash_keyfun` is an Erlang
+`{modfun, Mod, Fun}` tuple: an operator-supplied function in a
+loaded Erlang module that selects the bytes fed to the
+consistent-hash ring. The Rust port preserves the *intent* (an
+operator-supplied function chooses the routing input) but
+realises it as an operator-supplied WebAssembly module rather
+than an Erlang modfun, because the Rust port has no BEAM and the
+MapReduce path already ships a sandboxed WASM runtime
+([`dyniak::mapreduce::wasm::WasmModuleStore`]) we reuse.
+
+Realisation:
+
+- [`KeyFun::Custom(String)`](crate::datatypes::keyfun::KeyFun::Custom)
+  carries the WASM module id. `KeyFun::from_wire(99)` decodes
+  `CUSTOM` to `Custom("")` (the wire selector carries no module
+  name, exactly as Riak's numeric `chash_keyfun` does not).
+- The module id comes from a dyniak-level bucket property
+  [`BucketProps::custom_keyfun_module`](crate::bucket_props::BucketProps::custom_keyfun_module),
+  carried on the wire as the dyniak-extension
+  `RpbBucketProps.chash_keyfun_module` field (tag 32). This
+  replaces Riak's `{Mod, Fun}` names.
+- Routing for `Custom` resolves through the router's keyfun
+  store ([`WasmKeyfunStore`](crate::datatypes::keyfun_wasm::WasmKeyfunStore)),
+  not the pure `route_bytes` path:
+  [`BucketRouter::try_route`](crate::router::BucketRouter::try_route)
+  frames the input as
+  `bucket_len(u32-le) ++ bucket ++ key_len(u32-le) ++ key`,
+  runs the module, and feeds the module's output bytes verbatim
+  to [`dynomite::hashkit::hash64`] exactly as the built-in
+  keyfuns' bytes are. The pure `route_bytes` panics and
+  `try_route_bytes` returns `KeyFunError::Custom` for the
+  `Custom` variant, so a `Custom` keyfun can only be routed
+  through the store.
+- ABI: a keyfun module exports `keyfun_alloc(len) -> ptr` and
+  `keyfun_route(in_ptr, in_len, out_ptr_ptr, out_len_ptr) -> i32`
+  (the same linear-memory shape as MapReduce's
+  `phase_alloc` / `phase_apply`, under keyfun-specific names so
+  a module cannot be used in the wrong role). Output bytes ARE
+  the route bytes; a non-zero return is an error string.
+- Limits: every call runs under the store's `WasmLimits`
+  (memory cap + fuel + wall-clock deadline). A trap, fuel
+  exhaustion, timeout, oversize-memory request, or non-zero
+  status surfaces as a typed
+  [`KeyFunError`](crate::datatypes::keyfun::KeyFunError); routing
+  never panics or hangs on a hostile or buggy keyfun.
+- Safety at config time: a `RpbSetBucketReq` selecting `CUSTOM`
+  is REJECTED with an `RpbErrorResp` when it names no module or
+  names a module not registered with the keyfun store, so
+  routing never silently switches to a missing keyfun (chosen
+  over a logged fall-back to Std).
+
+Pinned by:
+- `dyniak::datatypes::keyfun_wasm::tests` (reverse-key WAT
+  routes, empty/unregistered id -> ModuleNotFound, trap ->
+  Runtime, oversize -> MemoryLimit, non-zero status -> Runtime
+  with message, shared module store with MapReduce).
+- `crates/dyniak/tests/wasm_rust_fixtures.rs` -- THE headline
+  end-to-end tests: a real Rust fixture crate
+  (`tests/fixtures/keyfun-reverse`) compiled to
+  `wasm32-unknown-unknown` is registered as a custom keyfun and
+  routes live `(bucket, key)` pairs through
+  `BucketRouter::try_route`, asserting `<bucket>:<reversed key>`
+  exactly and proving a Std bucket routes to a different hash;
+  a sibling `tests/fixtures/mapreduce-double` proves the
+  Rust->WASM path for MapReduce phases too.
+- `crates/dyniak/tests/bucket_props_routing.rs` -- CUSTOM with
+  unregistered / empty module rejected at set-bucket time;
+  CUSTOM with a registered module round-trips through
+  GET-BUCKET.
 
 ### D5: `replication_strategy` walk-N-successors as Riak-mode opt-in
 

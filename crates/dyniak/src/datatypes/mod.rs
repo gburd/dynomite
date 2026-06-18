@@ -62,6 +62,13 @@ pub mod map;
 // the prior block so parallel branches do not conflict.
 pub mod keyfun;
 
+// WebAssembly-backed custom keyfun routing
+// ([`crate::datatypes::keyfun::KeyFun::Custom`]). Gated on the
+// `wasm` feature since it pulls in the wasmtime runtime via the
+// shared MapReduce module store.
+#[cfg(feature = "wasm")]
+pub mod keyfun_wasm;
+
 use std::cmp::Ordering;
 
 pub use crate::datatypes::counter::PnCounter;
@@ -74,6 +81,8 @@ pub use crate::datatypes::hll::HyperLogLog;
 pub use crate::datatypes::map::{FieldKey, FieldType, FieldValue, Map, MapOp, NestedOp};
 
 pub use crate::datatypes::keyfun::{KeyFun, KeyFunError};
+#[cfg(feature = "wasm")]
+pub use crate::datatypes::keyfun_wasm::{WasmKeyfunStore, KEYFUN_ALLOC, KEYFUN_ROUTE};
 
 /// Identifier for a replica that produces CRDT operations.
 ///
