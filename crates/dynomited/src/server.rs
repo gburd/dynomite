@@ -47,6 +47,7 @@
 //! * Config reload on `SIGHUP`. The brief defers it to the embed
 //!   API in Stage 13.
 
+use std::fmt;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
@@ -66,7 +67,9 @@ use dynomite::cluster::pool::{PoolConfig, ServerPool};
 use dynomite::conf::{ConfDynSeed, ConfListen, ConfPool, Config, EndpointKind, Transport};
 use dynomite::core::log::reopen_on_sighup;
 use dynomite::hashkit::DynToken;
-use dynomite::io::reactor::{ConnRole, TcpTransport};
+#[cfg(unix)]
+use dynomite::io::reactor::UnixTransport;
+use dynomite::io::reactor::{ConnRole, TcpTransport, Transport as IoTransport};
 use dynomite::net::server::OutboundRequest;
 use dynomite::net::tls::SharedTlsProfiles;
 use dynomite::net::{Conn, DnodeProxy, DnodeServerConn, NetError, Proxy};
@@ -74,6 +77,52 @@ use dynomite::stats::{Snapshot, StatsServer};
 
 use crate::reload::{reload_from_path, ReloadableSnapshot, ReloadableState};
 use crate::signals::{SignalEvent, SignalSet};
+
+/// Address of a RESP datastore backend the supervisor dials.
+///
+/// A backend is configured either as a `host:port` endpoint
+/// (dialed over TCP) or as a filesystem path (dialed over a Unix
+/// domain socket). The supervisor branches on this enum at connect
+/// time and wraps the resulting stream in the matching
+/// [`IoTransport`] before handing it to the run loop.
+#[derive(Debug, Clone)]
+enum BackendAddr {
+    /// TCP endpoint resolved from the datastore `host:port`.
+    Tcp(SocketAddr),
+    /// Unix-domain-socket filesystem path.
+    #[cfg(unix)]
+    Unix(PathBuf),
+}
+
+impl fmt::Display for BackendAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BackendAddr::Tcp(addr) => write!(f, "{addr}"),
+            #[cfg(unix)]
+            BackendAddr::Unix(path) => write!(f, "unix:{}", path.display()),
+        }
+    }
+}
+
+impl BackendAddr {
+    /// Connect to the backend, returning a boxed transport tagged
+    /// with [`ConnRole::Server`]. TCP connects set `TCP_NODELAY`;
+    /// the Unix path needs no equivalent.
+    async fn connect(&self) -> io::Result<Box<dyn IoTransport>> {
+        match self {
+            BackendAddr::Tcp(addr) => {
+                let stream = tokio::net::TcpStream::connect(addr).await?;
+                let _ = stream.set_nodelay(true);
+                Ok(Box::new(TcpTransport::new(stream, ConnRole::Server)))
+            }
+            #[cfg(unix)]
+            BackendAddr::Unix(path) => {
+                let stream = tokio::net::UnixStream::connect(path).await?;
+                Ok(Box::new(UnixTransport::new(stream, ConnRole::Server)))
+            }
+        }
+    }
+}
 
 /// Errors produced while building or running a [`Server`].
 #[derive(Debug, Error)]
@@ -479,27 +528,36 @@ impl Server {
                 None
             }
         } else {
-            if datastore.is_unix() {
-                return Err(ServerError::BadConfig {
-                    field: "servers",
-                    reason: "unix-socket datastores are not yet wired in the binary".into(),
-                });
-            }
-            let backend_addr: SocketAddr = format!("{}:{}", datastore.host(), datastore.port())
-                .parse()
-                .or_else(|_| -> Result<SocketAddr, ServerError> {
-                    let mut iter = (datastore.host(), datastore.port())
-                        .to_socket_addrs()
-                        .map_err(ServerError::Io)?;
-                    iter.next().ok_or(ServerError::BadConfig {
+            let backend_addr: BackendAddr = if datastore.is_unix() {
+                #[cfg(unix)]
+                {
+                    BackendAddr::Unix(PathBuf::from(datastore.host()))
+                }
+                #[cfg(not(unix))]
+                {
+                    return Err(ServerError::BadConfig {
                         field: "servers",
-                        reason: format!(
-                            "could not resolve datastore endpoint '{}:{}'",
-                            datastore.host(),
-                            datastore.port()
-                        ),
-                    })
-                })?;
+                        reason: "unix-socket datastores require a unix target".into(),
+                    });
+                }
+            } else {
+                let resolved: SocketAddr = format!("{}:{}", datastore.host(), datastore.port())
+                    .parse()
+                    .or_else(|_| -> Result<SocketAddr, ServerError> {
+                        let mut iter = (datastore.host(), datastore.port())
+                            .to_socket_addrs()
+                            .map_err(ServerError::Io)?;
+                        iter.next().ok_or(ServerError::BadConfig {
+                            field: "servers",
+                            reason: format!(
+                                "could not resolve datastore endpoint '{}:{}'",
+                                datastore.host(),
+                                datastore.port()
+                            ),
+                        })
+                    })?;
+                BackendAddr::Tcp(resolved)
+            };
             // Backend supervisor: keeps a single `ServerConn` alive
             // against the configured datastore. It runs in its own
             // task so `build()` does not block on a slow / refused
@@ -509,12 +567,7 @@ impl Server {
             // exponential-ish backoff on failure so a transient
             // backend restart does not break the proxy permanently.
             if preconnect {
-                match tokio::time::timeout(
-                    Duration::from_secs(5),
-                    tokio::net::TcpStream::connect(backend_addr),
-                )
-                .await
-                {
+                match tokio::time::timeout(Duration::from_secs(5), backend_addr.connect()).await {
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => {
                         return Err(ServerError::BadConfig {
@@ -1575,11 +1628,14 @@ async fn wait_finished(handle: &JoinHandle<Result<(), NetError>>) {
 /// The handshake is intentionally tiny: we read byte-by-byte
 /// until the first CRLF so we never over-consume into the
 /// run-loop's own read buffer. Bounded by `timeout`.
-async fn redis_auth_handshake(
-    stream: &mut tokio::net::TcpStream,
+async fn redis_auth_handshake<S>(
+    stream: &mut S,
     password: &str,
     timeout: Duration,
-) -> Result<(), NetError> {
+) -> Result<(), NetError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
+{
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let cmd = format!(
         "*2\r\n$4\r\nAUTH\r\n${}\r\n{}\r\n",
@@ -1666,7 +1722,7 @@ async fn redis_auth_handshake(
     ),
 )]
 async fn backend_supervisor(
-    addr: SocketAddr,
+    addr: BackendAddr,
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
     data_store: dynomite::conf::DataStore,
     requirepass: Option<String>,
@@ -1682,15 +1738,12 @@ async fn backend_supervisor(
         if rx.is_closed() && rx.is_empty() {
             return Ok(());
         }
-        let connect =
-            tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(addr))
-                .await;
-        let mut stream = match connect {
-            Ok(Ok(s)) => s,
+        let connect = tokio::time::timeout(Duration::from_secs(5), addr.connect()).await;
+        let mut transport = match connect {
+            Ok(Ok(t)) => t,
             Ok(Err(e)) => {
                 record_reconnect_and_back_off(
                     &backend_label,
-                    addr,
                     "connect_refused",
                     Some(&e.to_string()),
                     "backend connect failed; retrying",
@@ -1703,7 +1756,6 @@ async fn backend_supervisor(
             Err(_) => {
                 record_reconnect_and_back_off(
                     &backend_label,
-                    addr,
                     "connect_timeout",
                     None,
                     "backend connect timed out; retrying",
@@ -1714,19 +1766,18 @@ async fn backend_supervisor(
                 continue;
             }
         };
-        let _ = stream.set_nodelay(true);
 
         // Optional Redis AUTH handshake before the supervisor
         // hands the stream to the run loop. Memcache backends
         // skip this entirely (binary SASL is not implemented).
         if data_store == dynomite::conf::DataStore::Valkey {
             if let Some(pw) = requirepass.as_deref() {
-                if let Err(e) = redis_auth_handshake(&mut stream, pw, Duration::from_secs(5)).await
+                if let Err(e) =
+                    redis_auth_handshake(transport.as_mut(), pw, Duration::from_secs(5)).await
                 {
-                    drop(stream);
+                    drop(transport);
                     record_reconnect_and_back_off(
                         &backend_label,
-                        addr,
                         "auth_failed",
                         Some(&e.to_string()),
                         "backend AUTH failed; reconnecting after backoff",
@@ -1739,10 +1790,7 @@ async fn backend_supervisor(
             }
         }
 
-        let conn = Conn::new(
-            Box::new(TcpTransport::new(stream, ConnRole::Server)),
-            ConnRole::Server,
-        );
+        let conn = Conn::new(transport, ConnRole::Server);
         // The ServerConn takes the receiver by ownership; on its
         // exit we get the receiver back via the channel-half
         // pattern below. tokio's mpsc cannot move a Receiver in
@@ -1765,7 +1813,6 @@ async fn backend_supervisor(
                 let reason = classify_reconnect_reason(&e);
                 record_reconnect_and_back_off(
                     &backend_label,
-                    addr,
                     reason,
                     Some(&e.to_string()),
                     "backend connection ended; reconnecting",
@@ -1789,7 +1836,6 @@ async fn backend_supervisor(
 /// observes on the next iteration.
 async fn record_reconnect_and_back_off(
     backend_label: &str,
-    addr: SocketAddr,
     reason: &str,
     error: Option<&str>,
     message: &'static str,
@@ -1803,7 +1849,7 @@ async fn record_reconnect_and_back_off(
     if should_log_reconnect(*consecutive_failures) {
         if let Some(err) = error {
             tracing::warn!(
-                backend = %addr,
+                backend = %backend_label,
                 reason,
                 error = %err,
                 consecutive_failures = *consecutive_failures,
@@ -1811,7 +1857,7 @@ async fn record_reconnect_and_back_off(
             );
         } else {
             tracing::warn!(
-                backend = %addr,
+                backend = %backend_label,
                 reason,
                 consecutive_failures = *consecutive_failures,
                 "{}", message,
@@ -1899,7 +1945,33 @@ pub fn spawn_backend_supervisor_for_testing(
     data_store: dynomite::conf::DataStore,
     requirepass: Option<String>,
 ) -> tokio::task::JoinHandle<Result<(), NetError>> {
-    tokio::spawn(backend_supervisor(addr, rx, data_store, requirepass))
+    tokio::spawn(backend_supervisor(
+        BackendAddr::Tcp(addr),
+        rx,
+        data_store,
+        requirepass,
+    ))
+}
+
+/// Spawn a [`backend_supervisor`] task wired to a Unix-domain
+/// datastore socket at `path`. The unix sibling of
+/// [`spawn_backend_supervisor_for_testing`]; used by the
+/// integration suite to drive the supervisor against a fake
+/// `UnixListener` backend.
+#[cfg(unix)]
+#[doc(hidden)]
+pub fn spawn_backend_supervisor_unix_for_testing(
+    path: PathBuf,
+    rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
+    data_store: dynomite::conf::DataStore,
+    requirepass: Option<String>,
+) -> tokio::task::JoinHandle<Result<(), NetError>> {
+    tokio::spawn(backend_supervisor(
+        BackendAddr::Unix(path),
+        rx,
+        data_store,
+        requirepass,
+    ))
 }
 
 /// Drive one TCP connection to the backend. Reads requests from

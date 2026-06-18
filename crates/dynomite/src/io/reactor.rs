@@ -234,6 +234,110 @@ impl AsyncWrite for TcpTransport {
     }
 }
 
+/// Unix-domain-socket-backed [`Transport`].
+///
+/// Newtype around [`tokio::net::UnixStream`], used when a datastore
+/// backend is configured with a filesystem path rather than a
+/// `host:port` endpoint. Unix sockets do not expose a
+/// [`SocketAddr`], so [`Transport::peer_addr`] returns `None`.
+#[cfg(unix)]
+#[derive(Debug)]
+pub struct UnixTransport {
+    inner: tokio::net::UnixStream,
+    role: ConnRole,
+}
+
+#[cfg(unix)]
+impl UnixTransport {
+    /// Wrap a Unix-domain stream with the given role tag.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::io::reactor::{ConnRole, Transport, UnixTransport};
+    /// use tokio::net::{UnixListener, UnixStream};
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+    /// let dir = std::env::temp_dir().join(format!("dyn-ut-{}", std::process::id()));
+    /// let _ = std::fs::remove_file(&dir);
+    /// let listener = UnixListener::bind(&dir).unwrap();
+    /// let _accept = tokio::spawn(async move {
+    ///     let (s, _) = listener.accept().await.unwrap();
+    ///     drop(s);
+    /// });
+    /// let sock = UnixStream::connect(&dir).await.unwrap();
+    /// let t = UnixTransport::new(sock, ConnRole::Server);
+    /// assert_eq!(t.role(), ConnRole::Server);
+    /// assert!(t.peer_addr().is_none());
+    /// let _ = std::fs::remove_file(&dir);
+    /// # });
+    /// ```
+    pub fn new(stream: tokio::net::UnixStream, role: ConnRole) -> Self {
+        Self {
+            inner: stream,
+            role,
+        }
+    }
+
+    /// Consume the wrapper and return the inner stream.
+    pub fn into_inner(self) -> tokio::net::UnixStream {
+        self.inner
+    }
+}
+
+#[cfg(unix)]
+impl Transport for UnixTransport {
+    fn role(&self) -> ConnRole {
+        self.role
+    }
+
+    fn peer_addr(&self) -> Option<SocketAddr> {
+        None
+    }
+}
+
+#[cfg(unix)]
+impl AsyncRead for UnixTransport {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+#[cfg(unix)]
+impl AsyncWrite for UnixTransport {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
