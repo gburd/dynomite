@@ -36,6 +36,12 @@
 //! * `indexes` -- secondary-index `(name, value)` pairs. `name` ends
 //!   in `_int` (integer index) or `_bin` (binary index), mirroring the
 //!   PBC path's [`crate::proto::pb::messages::RpbPutReq::indexes`].
+//! * `links` -- typed object-to-object pointers. Each link is a
+//!   `(bucket, key, tag)` triple naming a target object and the tag
+//!   that classifies the relationship. Over HTTP these ride in
+//!   `Link:` headers; the storage form keeps them on the envelope so
+//!   they survive every codec round-trip and so a MapReduce link
+//!   phase can walk them.
 //!
 //! A dedicated envelope is used rather than reusing
 //! [`crate::proto::pb::messages::RpbGetResp`], whose `content` field
@@ -63,6 +69,37 @@ pub struct HttpIndex {
     pub value: String,
 }
 
+/// One typed link attached to an [`HttpObject`].
+///
+/// A link is a directed, tagged pointer from the carrying object to a
+/// target object named by `(bucket, key)`. The `tag` classifies the
+/// relationship (Riak calls it the `riaktag`); a MapReduce link phase
+/// filters on `bucket` and `tag` when deciding which links to walk.
+///
+/// # Examples
+///
+/// ```
+/// use dyniak::proto::http::object::HttpLink;
+/// let link = HttpLink {
+///     bucket: "people".to_string(),
+///     key: "bob".to_string(),
+///     tag: "friend".to_string(),
+/// };
+/// assert_eq!(link.tag, "friend");
+/// ```
+#[derive(Clone, Eq, PartialEq, Message, Serialize, Deserialize)]
+pub struct HttpLink {
+    /// Target object's bucket.
+    #[prost(string, tag = "1")]
+    pub bucket: String,
+    /// Target object's key.
+    #[prost(string, tag = "2")]
+    pub key: String,
+    /// Relationship tag (Riak's `riaktag`).
+    #[prost(string, tag = "3")]
+    pub tag: String,
+}
+
 /// A logical Riak object as carried by the HTTP K/V endpoints.
 ///
 /// The struct is the unit of cross-encoding round-tripping: a body
@@ -76,6 +113,7 @@ pub struct HttpIndex {
 ///     value: b"hello".to_vec(),
 ///     content_type: Some("text/plain".to_string()),
 ///     indexes: Vec::new(),
+///     links: Vec::new(),
 /// };
 /// assert_eq!(obj.value, b"hello");
 /// ```
@@ -94,6 +132,12 @@ pub struct HttpObject {
     #[prost(message, repeated, tag = "3")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub indexes: Vec<HttpIndex>,
+    /// Typed links from this object to other objects. Tag 4 was
+    /// previously unused, so objects stored before links existed
+    /// decode here with an empty list (backward compatible).
+    #[prost(message, repeated, tag = "4")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<HttpLink>,
 }
 
 impl WireValue for HttpObject {
@@ -189,6 +233,11 @@ mod tests {
                     value: "seattle".to_string(),
                 },
             ],
+            links: vec![HttpLink {
+                bucket: "people".to_string(),
+                key: "bob".to_string(),
+                tag: "friend".to_string(),
+            }],
         }
     }
 
@@ -198,6 +247,46 @@ mod tests {
         let bytes = obj.to_storage_bytes();
         let back = HttpObject::from_storage_bytes(&bytes).expect("decode");
         assert_eq!(back, obj);
+    }
+
+    #[test]
+    fn links_round_trip_through_storage_form() {
+        let obj = fixture();
+        let bytes = obj.to_storage_bytes();
+        let back = HttpObject::from_storage_bytes(&bytes).expect("decode");
+        assert_eq!(back.links, obj.links);
+        assert_eq!(back.links.len(), 1);
+        assert_eq!(back.links[0].tag, "friend");
+    }
+
+    #[test]
+    fn objects_stored_before_links_decode_with_empty_links() {
+        // Encode an envelope that carries only tags 1/2/3 (the
+        // pre-link schema) and confirm it decodes with no links and
+        // no error. This is the on-disk backward-compatibility
+        // guarantee: tag 4 was unused, so old bytes are still valid.
+        #[derive(Clone, PartialEq, ::prost::Message)]
+        struct LegacyObject {
+            #[prost(bytes = "vec", tag = "1")]
+            value: Vec<u8>,
+            #[prost(string, optional, tag = "2")]
+            content_type: Option<String>,
+            #[prost(message, repeated, tag = "3")]
+            indexes: Vec<HttpIndex>,
+        }
+        let legacy = LegacyObject {
+            value: b"old".to_vec(),
+            content_type: Some("text/plain".to_string()),
+            indexes: vec![HttpIndex {
+                name: "age_int".to_string(),
+                value: "7".to_string(),
+            }],
+        };
+        let bytes = legacy.encode_to_vec();
+        let obj = HttpObject::from_storage_bytes(&bytes).expect("decode legacy");
+        assert_eq!(obj.value, b"old");
+        assert_eq!(obj.indexes.len(), 1);
+        assert!(obj.links.is_empty());
     }
 
     #[test]

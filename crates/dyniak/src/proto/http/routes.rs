@@ -65,7 +65,7 @@ use dyn_encoding::WireValue;
 
 use crate::proto::http::content_type::{select_codec, SUPPORTED_CONTENT_TYPES};
 #[cfg(feature = "noxu")]
-use crate::proto::http::object::{object_codecs, HttpIndex, HttpObject};
+use crate::proto::http::object::{object_codecs, HttpIndex, HttpLink, HttpObject};
 use crate::txn::{HttpTxnRequest, HttpTxnResponse, TransactionalStore, TxnOutcome, TxnStoreError};
 
 /// Body type the gateway emits.
@@ -812,10 +812,23 @@ fn get_object_from_store(
     } else {
         Bytes::from(encoded)
     };
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, ct)
         .header("Server", SERVER_NAME)
+        // Riak always emits a bucket-up link so a client can
+        // navigate from an object back to its bucket.
+        .header("Link", format!("</buckets/{bucket}>; rel=\"up\""));
+    for link in &obj.links {
+        builder = builder.header(
+            "Link",
+            format!(
+                "</buckets/{}/keys/{}>; riaktag=\"{}\"",
+                link.bucket, link.key, link.tag
+            ),
+        );
+    }
+    builder
         .body(buffered_body(body))
         .expect("invariant: object response builder is well-formed")
 }
@@ -863,6 +876,7 @@ fn put_object_into_store(
     };
     let mut obj = obj.clone();
     obj.indexes.extend(collect_index_headers(headers));
+    obj.links.extend(collect_link_headers(headers));
 
     let indexes = obj.index_pairs();
     let storage = obj.to_storage_bytes();
@@ -919,6 +933,183 @@ fn collect_index_headers(headers: &HeaderMap) -> Vec<HttpIndex> {
         }
     }
     out
+}
+
+/// Collect `Link:` request headers into a list of [`HttpLink`]
+/// entries.
+///
+/// # Grammar
+///
+/// Riak's HTTP API carries object links in `Link:` headers. The
+/// grammar accepted here is:
+///
+/// ```text
+/// Link            = "Link" ":" link-value *( "," link-value )
+/// link-value      = "<" RESOURCE ">" ";" link-param
+/// RESOURCE        = "/buckets/" bucket "/keys/" key
+///                 | "/riak/" bucket "/" key        ; legacy form
+/// link-param      = ( "riaktag" | "tag" ) "=" quoted-string
+/// ```
+///
+/// Multiple `Link:` header lines are honoured, and a single header
+/// line may carry several comma-separated link-values. Each value
+/// becomes one [`HttpLink`].
+///
+/// # Deliberately skipped
+///
+/// Riak also emits a bucket-up link of the form
+/// `</buckets/BUCKET>; rel="up"` whose RESOURCE names a bucket and
+/// not an object. Those `rel`-style links carry no key and no
+/// `riaktag`, so they are not object links a MapReduce link phase
+/// can walk; they are skipped on parse (and re-synthesised on read,
+/// see [`get_object_from_store`]). A `link-value` that lacks a
+/// `riaktag`/`tag` parameter, or whose RESOURCE is not a
+/// `/buckets/.../keys/...` (or legacy `/riak/.../...`) object path,
+/// is skipped rather than rejected, matching Riak's lenient parse.
+#[cfg(feature = "noxu")]
+fn collect_link_headers(headers: &HeaderMap) -> Vec<HttpLink> {
+    let mut out = Vec::new();
+    for value in headers.get_all("link") {
+        let Ok(value) = value.to_str() else {
+            continue;
+        };
+        for part in split_link_values(value) {
+            if let Some(link) = parse_link_value(&part) {
+                out.push(link);
+            }
+        }
+    }
+    out
+}
+
+/// Split one `Link:` header value into its comma-separated
+/// link-values, respecting the angle brackets so a comma inside a
+/// `<RESOURCE>` is not mistaken for a separator.
+#[cfg(feature = "noxu")]
+fn split_link_values(header: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth: usize = 0;
+    let mut start = 0;
+    let bytes = header.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'<' => depth += 1,
+            b'>' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                parts.push(header[start..i].to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(header[start..].to_string());
+    parts
+}
+
+/// Parse a single `<RESOURCE>; riaktag="TAG"` link-value into an
+/// [`HttpLink`]. Returns `None` for `rel`-style bucket links or any
+/// value that does not name an object with a tag. See
+/// [`collect_link_headers`] for the accepted grammar.
+#[cfg(feature = "noxu")]
+fn parse_link_value(value: &str) -> Option<HttpLink> {
+    let value = value.trim();
+    let open = value.find('<')?;
+    let close = value[open + 1..].find('>')? + open + 1;
+    let resource = value[open + 1..close].trim();
+    let (target_bucket, target_key) = parse_link_resource(resource)?;
+
+    // Scan the `;`-delimited parameters for a `riaktag` / `tag`.
+    let mut tag = None;
+    for param in value[close + 1..].split(';') {
+        let param = param.trim();
+        let Some((name, raw)) = param.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.eq_ignore_ascii_case("riaktag") || name.eq_ignore_ascii_case("tag") {
+            tag = Some(unquote(raw.trim()).to_string());
+        }
+    }
+    let tag = tag?;
+    Some(HttpLink {
+        bucket: target_bucket,
+        key: target_key,
+        tag,
+    })
+}
+
+/// Parse a link RESOURCE path into `(bucket, key)`. Accepts the
+/// modern `/buckets/<bucket>/keys/<key>` form and the legacy
+/// `/riak/<bucket>/<key>` form. Returns `None` for any other shape
+/// (including `rel="up"` bucket-only paths).
+#[cfg(feature = "noxu")]
+fn parse_link_resource(resource: &str) -> Option<(String, String)> {
+    if let Some(rest) = resource.strip_prefix("/buckets/") {
+        let (bucket, rest) = rest.split_once('/')?;
+        let key = rest.strip_prefix("keys/")?;
+        if bucket.is_empty() || key.is_empty() {
+            return None;
+        }
+        return Some((decode_path_segment(bucket), decode_path_segment(key)));
+    }
+    if let Some(rest) = resource.strip_prefix("/riak/") {
+        let (bucket, key) = rest.split_once('/')?;
+        if bucket.is_empty() || key.is_empty() {
+            return None;
+        }
+        return Some((decode_path_segment(bucket), decode_path_segment(key)));
+    }
+    None
+}
+
+/// Strip one layer of surrounding double quotes from a parameter
+/// value, leaving an unquoted value untouched.
+#[cfg(feature = "noxu")]
+fn unquote(s: &str) -> &str {
+    s.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(s)
+}
+
+/// Percent-decode a single path segment (bucket or key) for the
+/// common `%XX` escapes Riak clients emit. Bytes that are not valid
+/// `%XX` escapes pass through verbatim; the decoded bytes are
+/// interpreted as UTF-8 (lossily) so the stored link stays ASCII-
+/// clean for well-formed input.
+#[cfg(feature = "noxu")]
+fn decode_path_segment(seg: &str) -> String {
+    if !seg.contains('%') {
+        return seg.to_string();
+    }
+    let bytes = seg.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = hex_digit(bytes[i + 1]);
+            let lo = hex_digit(bytes[i + 2]);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push(hi * 16 + lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Decode a single ASCII hex digit to its 0..16 value, as a `u8` so
+/// `hi * 16 + lo` stays a `u8` without a truncating cast.
+#[cfg(feature = "noxu")]
+fn hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Map a [`crate::datastore::NoxuDatastoreError`] onto an HTTP status.
@@ -1435,6 +1626,74 @@ mod tests {
 
     fn dummy_headers() -> HeaderMap {
         HeaderMap::new()
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn parse_link_value_modern_form() {
+        let link =
+            parse_link_value("</buckets/people/keys/bob>; riaktag=\"friend\"").expect("link");
+        assert_eq!(link.bucket, "people");
+        assert_eq!(link.key, "bob");
+        assert_eq!(link.tag, "friend");
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn parse_link_value_legacy_riak_form() {
+        let link = parse_link_value("</riak/people/bob>; riaktag=\"friend\"").expect("link");
+        assert_eq!(link.bucket, "people");
+        assert_eq!(link.key, "bob");
+        assert_eq!(link.tag, "friend");
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn parse_link_value_rejects_rel_up_bucket_link() {
+        // A bucket-up link names no key and carries no riaktag, so
+        // it is not an object link a phase can walk.
+        assert!(parse_link_value("</buckets/people>; rel=\"up\"").is_none());
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn collect_link_headers_handles_multiple_headers_and_values() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "link",
+            "</buckets/people/keys/bob>; riaktag=\"friend\", \
+             </buckets/work/keys/acme>; riaktag=\"employer\""
+                .parse()
+                .unwrap(),
+        );
+        headers.append(
+            "link",
+            "</buckets/people/keys/carol>; tag=\"friend\""
+                .parse()
+                .unwrap(),
+        );
+        let links = collect_link_headers(&headers);
+        assert_eq!(links.len(), 3);
+        assert_eq!(links[0].key, "bob");
+        assert_eq!(links[1].key, "acme");
+        assert_eq!(links[1].tag, "employer");
+        assert_eq!(links[2].key, "carol");
+        assert_eq!(links[2].tag, "friend");
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn collect_link_headers_skips_bucket_up_links() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "link",
+            "</buckets/people>; rel=\"up\", </buckets/people/keys/bob>; riaktag=\"friend\""
+                .parse()
+                .unwrap(),
+        );
+        let links = collect_link_headers(&headers);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].key, "bob");
     }
 
     #[test]

@@ -1140,6 +1140,58 @@ tag 4, because the v0.0.1 dyniak slice modelled
 documented deviation). The eventual `RpbContent` refactor will
 move the indexes back inside.
 
+### D0b: Object links wire format and shared storage form
+
+Riak object links are typed `(target_bucket, target_key, tag)`
+pointers. Over HTTP they ride in `Link:` headers; over PBC
+upstream Riak nests them in the content message's repeated
+`links` field (`RpbLink { bucket, key, tag }`). dyniak's PBC
+`RpbContent` is not yet on the wire (the put body is a flat
+`value: bytes`, see above), so there is no `RpbLink` field to
+mirror. Rather than add a one-off PBC link field that would be
+removed by the eventual `RpbContent` refactor, links live on
+the encoding-independent `HttpObject` storage envelope
+([`dyniak::proto::http::object::HttpLink`], protobuf tag 4 on
+`HttpObject`). Tag 4 was previously unused, so objects stored
+before links existed decode with an empty list (backward
+compatible on disk).
+
+Divergence: PBC and HTTP share this storage form. A PBC put
+wraps its `value: bytes` into an `HttpObject` envelope and
+stores `HttpObject::to_storage_bytes()`; a PBC get decodes the
+envelope and returns its `value`. This makes a value put over
+one transport readable over the other and keeps any links
+attached over HTTP intact when the object is fetched over PBC.
+The flat PBC `RpbPutReq` schema cannot express links, so a PBC
+put never adds them; that capability returns when `RpbContent`
+(with its nested `links`) lands and the PBC path maps
+`RpbContent.links` onto `HttpObject.links` directly.
+
+The accepted HTTP `Link:` header grammar is
+`<RESOURCE>; riaktag="TAG"` where RESOURCE is
+`/buckets/<bucket>/keys/<key>` (the legacy `/riak/<bucket>/<key>`
+form is also accepted). Multiple `Link:` header lines and
+multiple comma-separated link-values per line are both honoured.
+Deliberately skipped: `rel="up"` bucket-up links are not parsed
+on write (they name a bucket, not an object, and carry no
+`riaktag`, so a MapReduce link phase cannot walk them); the
+gateway does re-synthesise the `</buckets/BUCKET>; rel="up"`
+link on read for client parity. A link-value missing a
+`riaktag`/`tag` parameter or naming a non-object RESOURCE is
+skipped (lenient parse), matching Riak.
+
+The MapReduce link phase ([`dyniak::mapreduce::Phase::Link`])
+walks `HttpObject.links`: for each inbound `(bucket, key)`
+datum it fetches the object via `Datastore::riak_get`, decodes
+the envelope, keeps links matching the phase filter
+`{bucket: Option<String>, tag: Option<String>}` (`None` =
+wildcard), and emits each matched `(target_bucket, target_key)`
+as the same datum shape a map phase emits. A missing object
+contributes no links (not an error). The link phase requires a
+datastore-backed job; the pure in-memory executor path (PBC
+`/mapred`, the no-store entry points) cannot fetch objects and
+returns the typed `MrError::LinkNotImplemented`.
+
 ### D1: Hinted handoff at the proxy layer
 
 The C reference engine does NOT implement hinted handoff at

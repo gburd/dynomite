@@ -101,13 +101,15 @@ pub enum MrError {
     #[error("wasm phase encoding error: {0}")]
     WasmEncoding(String),
 
-    /// Link phase needs each object to persist its Riak links as
-    /// fetchable metadata. The current object model stores only an
-    /// opaque value plus 2i index pairs, so there are no links to
-    /// walk; the executor surfaces this rather than emitting an
-    /// empty result. Removing this variant waits on object-metadata
-    /// persistence (see the `Phase::Link` arm in the executor).
-    #[error("link phases are not implemented in this slice")]
+    /// Link phase needs a datastore-backed job: it fetches each
+    /// inbound object through [`Datastore::riak_get`] to read its
+    /// stored links. The buffered / streaming entry points that run
+    /// without a datastore (the pure in-memory paths) cannot fetch
+    /// objects, so a link phase on those paths surfaces this rather
+    /// than emitting an empty (and silently wrong) result. The
+    /// datastore-backed `run_job_full` / HTTP `POST /mapred` path
+    /// walks links normally.
+    #[error("link phases require a datastore-backed job")]
     LinkNotImplemented,
 
     /// Internal channel send / receive error. Surfaces if the
@@ -297,7 +299,15 @@ async fn stream_job_inner(
         let phase_idx = u32::try_from(idx)
             .map_err(|_| MrError::Pipeline("phase index exceeds u32 range".into()))?;
         let is_last = idx + 1 == n_phases;
-        let outputs = run_phase(phase_idx, phase, current, &registry, wasm.as_ref()).await?;
+        let outputs = run_phase(
+            phase_idx,
+            phase,
+            current,
+            &registry,
+            wasm.as_ref(),
+            datastore.as_ref(),
+        )
+        .await?;
 
         if (phase.keep() || is_last) && !outputs.is_empty() {
             let batch = PhaseBatch {
@@ -380,7 +390,15 @@ pub async fn run_job_full(
         let phase_idx = u32::try_from(idx)
             .map_err(|_| MrError::Pipeline("phase index exceeds u32 range".into()))?;
         let is_last = idx + 1 == n_phases;
-        let outputs = run_phase(phase_idx, phase, current, &registry, wasm.as_ref()).await?;
+        let outputs = run_phase(
+            phase_idx,
+            phase,
+            current,
+            &registry,
+            wasm.as_ref(),
+            datastore.as_ref(),
+        )
+        .await?;
 
         if phase.keep() || is_last {
             for v in &outputs {
@@ -404,6 +422,7 @@ async fn run_phase(
     inputs: Vec<Value>,
     registry: &Arc<PhaseRegistry>,
     wasm: Option<&Arc<dyn WasmHook>>,
+    datastore: Option<&Arc<dyn Datastore>>,
 ) -> Result<Vec<Value>, MrError> {
     // Channel sizing: 64 is plenty for serial map/reduce processing
     // since each phase task drains as fast as the previous one
@@ -430,6 +449,7 @@ async fn run_phase(
     let phase_clone = phase.clone();
     let registry_clone = Arc::clone(registry);
     let wasm_clone = wasm.cloned();
+    let datastore_clone = datastore.cloned();
     let phase_join = tokio::spawn(async move {
         run_phase_task(
             phase_idx,
@@ -438,6 +458,7 @@ async fn run_phase(
             tx_out,
             registry_clone,
             wasm_clone,
+            datastore_clone,
         )
         .await
     });
@@ -465,6 +486,7 @@ async fn run_phase_task(
     tx: mpsc::Sender<Value>,
     registry: Arc<PhaseRegistry>,
     wasm: Option<Arc<dyn WasmHook>>,
+    datastore: Option<Arc<dyn Datastore>>,
 ) -> Result<(), MrError> {
     match phase {
         Phase::Map { fn_name, arg, .. } => {
@@ -519,24 +541,16 @@ async fn run_phase_task(
             }
             Ok(())
         }
-        Phase::Link { .. } => {
-            // Link-walking needs each object to carry its Riak links
-            // as fetchable metadata. The persisted object model
-            // (crate::proto::http::object::HttpObject -> the bytes
-            // returned by Datastore::riak_get) stores only an opaque
-            // value, an optional content-type, and 2i index pairs:
-            // there is no link list to walk, and the put paths (HTTP
-            // and PBC) never accept or persist one. Walking links
-            // would therefore require an object-metadata-persistence
-            // change that is out of scope for this slice; returning
-            // a typed error keeps the limitation visible rather than
-            // emitting an empty (and silently wrong) result.
-            //
-            // The Phase::Link variant stays in the public enum and
-            // the JSON schema so a follow-up slice can implement
-            // execution mechanically once objects persist their
-            // links.
-            Err(MrError::LinkNotImplemented)
+        Phase::Link { bucket, tag, .. } => {
+            run_link_phase(
+                phase_idx,
+                bucket.as_deref(),
+                tag.as_deref(),
+                &mut rx,
+                &tx,
+                datastore,
+            )
+            .await
         }
         Phase::WasmModule {
             module_id, fn_name, ..
@@ -578,11 +592,95 @@ async fn run_phase_task(
     }
 }
 
+/// Walk the links stored on each inbound object and emit the
+/// matching `(bucket, key)` targets.
+///
+/// Each inbound item is a routing datum carrying at least
+/// `{bucket, key}` (see [`KeyDatum::to_value`]); the object is
+/// fetched through the datastore, its
+/// [`crate::proto::http::object::HttpObject`] envelope is decoded,
+/// and every stored link is filtered against the phase's
+/// `{bucket, tag}` patterns (a `None` pattern matches any value). A
+/// matching link is emitted as the same `{bucket, key}`-shaped datum
+/// a map phase emits, so the next phase consumes link output
+/// identically.
+///
+/// A missing object (`riak_get -> None`) contributes no links and is
+/// not an error. Walking links needs a datastore-backed job: the
+/// in-memory streaming path passes `None` here and the phase reports
+/// [`MrError::LinkNotImplemented`] rather than silently emitting
+/// nothing.
+async fn run_link_phase(
+    phase_idx: u32,
+    bucket: Option<&str>,
+    tag: Option<&str>,
+    rx: &mut mpsc::Receiver<Value>,
+    tx: &mpsc::Sender<Value>,
+    datastore: Option<Arc<dyn Datastore>>,
+) -> Result<(), MrError> {
+    let store = datastore.ok_or(MrError::LinkNotImplemented)?;
+    while let Some(v) = rx.recv().await {
+        let (in_bucket, in_key) = link_input_target(&v).ok_or_else(|| MrError::PhaseFailed {
+            phase: phase_idx,
+            kind: "link",
+            message: "link-phase input is missing bucket/key".into(),
+        })?;
+        let stored = store
+            .riak_get(in_bucket.as_bytes(), in_key.as_bytes())
+            .await
+            .map_err(|e| MrError::PhaseFailed {
+                phase: phase_idx,
+                kind: "link",
+                message: format!("riak get {in_bucket}/{in_key}: {e}"),
+            })?;
+        let Some(stored) = stored else {
+            // Missing object: no links, no error.
+            continue;
+        };
+        let obj =
+            crate::proto::http::object::HttpObject::from_storage_bytes(&stored).map_err(|e| {
+                MrError::PhaseFailed {
+                    phase: phase_idx,
+                    kind: "link",
+                    message: format!("decode {in_bucket}/{in_key}: {e}"),
+                }
+            })?;
+        for link in &obj.links {
+            let bucket_ok = bucket.is_none_or(|b| b == link.bucket);
+            let tag_ok = tag.is_none_or(|t| t == link.tag);
+            if bucket_ok && tag_ok {
+                let out = KeyDatum::pair(link.bucket.clone(), link.key.clone()).to_value();
+                if tx.send(out).await.is_err() {
+                    return Err(MrError::Pipeline(
+                        "downstream phase dropped its inbound channel".into(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Compile-time-style assertion that the materialised inputs are
 /// drainable. `Vec<Value>` already satisfies this; this function is
 /// a single-call seam so the executor's documentation can point at
 /// "the materialise step".
 fn materialised_initial_inputs_must_be_iterable<T>(_: &[T]) {}
+
+/// Extract the `(bucket, key)` routing pair from a phase datum for a
+/// link phase to fetch.
+///
+/// Phase data flow as JSON objects shaped
+/// `{"bucket": ..., "key": ..., "value": ..., "data": ...}` (see
+/// [`KeyDatum::to_value`]). A link phase only needs the routing
+/// pair; both fields must be JSON strings. Returns `None` when
+/// either is absent or not a string, so the executor can surface a
+/// typed phase error rather than silently dropping the input.
+fn link_input_target(v: &Value) -> Option<(String, String)> {
+    let bucket = v.get("bucket")?.as_str()?.to_string();
+    let key = v.get("key")?.as_str()?.to_string();
+    Some((bucket, key))
+}
 
 /// Materialise a job's inputs into the seed `Vec<Value>` the
 /// pipeline drains from phase 0.
@@ -880,7 +978,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn link_phase_returns_typed_error() {
+    async fn link_phase_without_datastore_returns_typed_error() {
+        // `run_job` has no datastore, so a link phase cannot fetch
+        // objects to read their links: it surfaces the typed error
+        // rather than emitting an empty result. The datastore-backed
+        // path is exercised in the integration tests.
         let job = MapReduceJob {
             inputs: Inputs::KeyData(vec![KeyDatum::pair("b", "k")]),
             phases: vec![Phase::Link {

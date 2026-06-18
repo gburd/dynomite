@@ -172,6 +172,7 @@ async fn put_json_then_get_json_round_trips_value() {
         value: b"the quick brown fox".to_vec(),
         content_type: Some("text/plain".to_string()),
         indexes: Vec::new(),
+        links: Vec::new(),
     };
     let body = serde_json::to_string(&obj).expect("json body");
 
@@ -206,6 +207,7 @@ async fn put_json_then_get_cbor_and_protobuf_cross_encode() {
             name: "age_int".to_string(),
             value: "42".to_string(),
         }],
+        links: Vec::new(),
     };
     let body = serde_json::to_string(&obj).expect("json body");
 
@@ -319,6 +321,7 @@ async fn delete_then_get_returns_404() {
         value: b"to be deleted".to_vec(),
         content_type: None,
         indexes: Vec::new(),
+        links: Vec::new(),
     };
     let body = serde_json::to_string(&obj).expect("json body");
     let resp = send_raw(
@@ -365,6 +368,7 @@ async fn x_riak_index_header_fans_out_and_round_trips() {
         value: b"indexed by header".to_vec(),
         content_type: None,
         indexes: Vec::new(),
+        links: Vec::new(),
     };
     let body = serde_json::to_string(&obj).expect("json body");
     let resp = send_raw(
@@ -415,6 +419,7 @@ async fn head_request_returns_headers_without_body() {
         value: b"head me".to_vec(),
         content_type: None,
         indexes: Vec::new(),
+        links: Vec::new(),
     };
     let body = serde_json::to_string(&obj).expect("json body");
     let resp = send_raw(
@@ -451,6 +456,7 @@ async fn memory_datastore_falls_back_without_panic() {
         value: b"value".to_vec(),
         content_type: None,
         indexes: Vec::new(),
+        links: Vec::new(),
     };
     let body = serde_json::to_string(&obj).expect("json body");
     let resp = send_raw(

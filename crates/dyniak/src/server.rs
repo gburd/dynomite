@@ -70,6 +70,7 @@ use dynomite::msg::{Msg, MsgType};
 use crate::aae::status::{AaeStatusProvider, AaeStatusSnapshot, NoopAaeStatusProvider};
 use crate::error::RiakError;
 use crate::mapreduce::{MrError, PhaseBatch};
+use crate::proto::http::object::{HttpIndex, HttpObject};
 use crate::proto::pb::framer::{read_frame, write_frame, Frame};
 use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 use crate::proto::pb::messages::{
@@ -594,6 +595,22 @@ fn handle_server_info(body: &[u8]) -> Result<Frame, RiakError> {
     ))
 }
 
+/// Extract the PBC content value from the canonical `HttpObject`
+/// storage form written by both transports.
+///
+/// The HTTP gateway and the PBC put path both persist an
+/// [`HttpObject`] protobuf blob, so a fetched value normally decodes
+/// to an envelope whose `value` field is the object payload. Bytes
+/// that predate the shared storage form (or that some other writer
+/// stored raw) fail to decode as an envelope; those are returned
+/// verbatim so a value never disappears on read.
+fn pbc_content_from_storage(stored: &[u8]) -> Vec<u8> {
+    match HttpObject::from_storage_bytes(stored) {
+        Ok(obj) => obj.value,
+        Err(_) => stored.to_vec(),
+    }
+}
+
 async fn handle_get(
     body: &[u8],
     datastore: &dyn Datastore,
@@ -628,7 +645,7 @@ async fn handle_get(
     // identically.
     let resp = match datastore.riak_get(&req.bucket, &req.key).await {
         Ok(Some(v)) => RpbGetResp {
-            content: vec![v],
+            content: vec![pbc_content_from_storage(&v)],
             ..RpbGetResp::default()
         },
         Ok(None) | Err(DatastoreError::Unsupported(_)) => RpbGetResp::default(),
@@ -683,8 +700,30 @@ async fn handle_put(
         .iter()
         .filter_map(|p| p.value.as_ref().map(|v| (p.key.clone(), v.clone())))
         .collect();
+    // Persist the PBC value in the same canonical `HttpObject`
+    // storage form the HTTP gateway writes, so a put over one
+    // transport is readable over the other and so any links carried
+    // on the object survive. The PBC `RpbPutReq` has no link field,
+    // so a PBC put never adds links; it preserves whatever links a
+    // prior HTTP put attached only if the client re-sends them,
+    // which the flat PBC schema cannot express. Index pairs are
+    // mirrored onto the envelope so an HTTP read echoes them, matching
+    // the HTTP put path.
+    let envelope = HttpObject {
+        value: req.value.clone(),
+        content_type: None,
+        indexes: indexes
+            .iter()
+            .map(|(n, v)| HttpIndex {
+                name: String::from_utf8_lossy(n).into_owned(),
+                value: String::from_utf8_lossy(v).into_owned(),
+            })
+            .collect(),
+        links: Vec::new(),
+    };
+    let storage = envelope.to_storage_bytes();
     match datastore
-        .riak_put(&req.bucket, &key, &req.value, &indexes)
+        .riak_put(&req.bucket, &key, &storage, &indexes)
         .await
     {
         Ok(()) | Err(DatastoreError::Unsupported(_)) => Ok(Frame::new(
