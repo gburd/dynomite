@@ -238,9 +238,9 @@ impl NoxuDatastore {
         let db = self.lock_db();
         match db.get(None, &key_entry, &mut value)? {
             OperationStatus::Success => Ok(Some(value.data().to_vec())),
-            OperationStatus::NotFound
-            | OperationStatus::KeyExists
-            | OperationStatus::KeyEmpty => Ok(None),
+            OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => {
+                Ok(None)
+            }
         }
     }
 
@@ -262,9 +262,9 @@ impl NoxuDatastore {
         let db = self.lock_db();
         match db.delete(None, &key_entry)? {
             OperationStatus::Success => Ok(true),
-            OperationStatus::NotFound
-            | OperationStatus::KeyExists
-            | OperationStatus::KeyEmpty => Ok(false),
+            OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => {
+                Ok(false)
+            }
         }
     }
 
@@ -785,9 +785,9 @@ pub(crate) fn get_object_in(
     let key_entry = DatabaseEntry::from_bytes(&storage_key);
     match db.get(txn, &key_entry, &mut value)? {
         OperationStatus::Success => Ok(Some(value.data().to_vec())),
-        OperationStatus::NotFound
-        | OperationStatus::KeyExists
-        | OperationStatus::KeyEmpty => Ok(None),
+        OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => {
+            Ok(None)
+        }
     }
 }
 
@@ -861,9 +861,7 @@ pub(crate) fn delete_object_in(
     let primary = primary_key(bucket, key);
     let removed_pri = match db.delete(txn, &DatabaseEntry::from_bytes(&primary))? {
         OperationStatus::Success => true,
-        OperationStatus::NotFound
-        | OperationStatus::KeyExists
-        | OperationStatus::KeyEmpty => false,
+        OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => false,
     };
     Ok(removed_pri || removed_2i)
 }
@@ -895,9 +893,9 @@ fn clear_forward_for(
             db.delete(txn, &DatabaseEntry::from_bytes(&rk))?;
             Ok(true)
         }
-        OperationStatus::NotFound
-        | OperationStatus::KeyExists
-        | OperationStatus::KeyEmpty => Ok(false),
+        OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => {
+            Ok(false)
+        }
     }
 }
 
