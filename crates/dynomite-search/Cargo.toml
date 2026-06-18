@@ -57,6 +57,7 @@ gen-fsm = { path = "../gen-fsm", version = "0.0.1" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
+ciborium = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

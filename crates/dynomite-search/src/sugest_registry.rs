@@ -147,6 +147,33 @@ impl SuggestionRegistry {
         guard.insert(key.to_vec(), fresh.clone());
         fresh
     }
+
+    /// Build the serialisable snapshot of every dictionary.
+    /// Used by the persistence path on [`crate::VectorRegistry`].
+    pub(crate) fn to_snapshot(&self) -> crate::registry::SuggestionsSnapshot {
+        let guard = self.inner.read();
+        let mut dicts = Vec::new();
+        for (key, dict) in guard.iter() {
+            let entries = dict.lock().snapshot_entries();
+            dicts.push(crate::registry::SuggestionDictSnapshot {
+                key: key.clone(),
+                entries,
+            });
+        }
+        crate::registry::SuggestionsSnapshot { dicts }
+    }
+
+    /// Repopulate dictionaries from a snapshot. Existing state
+    /// is preserved; snapshotted entries are added on top
+    /// (the registry is freshly built before load, so this is
+    /// effectively a full restore).
+    pub(crate) fn load_snapshot(&self, snapshot: &crate::registry::SuggestionsSnapshot) {
+        for dict in &snapshot.dicts {
+            for (value, score, payload) in &dict.entries {
+                self.add(&dict.key, value.clone(), *score, false, payload.clone());
+            }
+        }
+    }
 }
 
 #[cfg(test)]

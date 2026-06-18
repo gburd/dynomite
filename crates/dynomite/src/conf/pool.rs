@@ -256,6 +256,18 @@ pub struct ConfPool {
     /// reused, otherwise one is created.
     #[serde(default)]
     pub noxu_path: Option<PathBuf>,
+    /// `search_index_dir:` - filesystem directory the RediSearch
+    /// FT.* index registry snapshots to. When set, the search
+    /// surface persists its index definitions, indexed
+    /// documents, text fields, and suggestion dictionaries to a
+    /// snapshot file under this directory and reloads them on
+    /// restart, so a process kill no longer drops indexes. When
+    /// unset (the default) the registry is purely in-memory:
+    /// indexes are lost on restart and the client must recreate
+    /// them. Only consulted when the binary is built with the
+    /// `search` feature.
+    #[serde(default)]
+    pub search_index_dir: Option<PathBuf>,
     /// `preconnect:` - eagerly establish connections at startup.
     pub preconnect: Option<bool>,
     /// `redis_requirepass:` - optional password sent as `AUTH <pw>`

@@ -317,6 +317,12 @@ pub struct Server {
     /// of the [`Server`].
     #[cfg(feature = "search")]
     vector_registry: std::sync::Arc<dynomite_search::VectorRegistry>,
+    /// Suggestion-dictionary registry shared with the FT.*
+    /// search extension. Held so the run loop can snapshot it
+    /// alongside the vector registry when persistence is
+    /// configured. `None` when no `search_index_dir:` is set.
+    #[cfg(feature = "search")]
+    search_suggestions: Option<std::sync::Arc<dynomite_search::SuggestionRegistry>>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
 }
@@ -580,13 +586,46 @@ impl Server {
         // [`crate::server::Server`] accessor exposes it via
         // [`Self::vector_registry`]).
         #[cfg(feature = "search")]
-        let vector_registry = {
-            let registry = std::sync::Arc::new(dynomite_search::VectorRegistry::new());
-            let extension = std::sync::Arc::new(dynomite_search::SearchExtension::new(
-                std::sync::Arc::clone(&registry),
-            ));
+        let (vector_registry, search_suggestions) = {
+            let suggestions = std::sync::Arc::new(dynomite_search::SuggestionRegistry::new());
+            let registry = match conf_pool.search_index_dir.as_ref() {
+                Some(dir) => {
+                    // Durable mode: reload any prior snapshot
+                    // (index schemas, indexed documents, text
+                    // fields, suggestions) so a restart does not
+                    // drop the FT.* surface.
+                    match dynomite_search::VectorRegistry::open(dir.clone(), &suggestions) {
+                        Ok(reg) => {
+                            tracing::info!(
+                                search_index_dir = %dir.display(),
+                                indexes = reg.list().len(),
+                                "loaded persistent search index snapshot"
+                            );
+                            std::sync::Arc::new(reg)
+                        }
+                        Err(e) => {
+                            return Err(ServerError::BadConfig {
+                                field: "search_index_dir",
+                                reason: format!("{}: {e}", dir.display()),
+                            });
+                        }
+                    }
+                }
+                // In-memory mode: identical to the historical
+                // behaviour. Indexes are lost on restart.
+                None => std::sync::Arc::new(dynomite_search::VectorRegistry::new()),
+            };
+            let extension =
+                std::sync::Arc::new(dynomite_search::SearchExtension::with_suggestions(
+                    std::sync::Arc::clone(&registry),
+                    std::sync::Arc::clone(&suggestions),
+                ));
             dispatcher = dispatcher.with_command_extension(extension);
-            registry
+            // Only hold the suggestions handle for snapshotting
+            // when persistence is on; the in-memory path never
+            // touches disk.
+            let persisted_suggestions = registry.is_persistent().then_some(suggestions);
+            (registry, persisted_suggestions)
         };
         let mut peer_handles: Vec<JoinHandle<Result<(), NetError>>> = Vec::new();
         let mut gossip_peer_txs: Vec<(u32, String, tokio::sync::mpsc::Sender<OutboundRequest>)> =
@@ -805,6 +844,8 @@ impl Server {
             stats_sink,
             #[cfg(feature = "search")]
             vector_registry,
+            #[cfg(feature = "search")]
+            search_suggestions,
             shutdown_tx,
             shutdown_rx,
         })
@@ -1006,7 +1047,9 @@ impl Server {
             failure_metrics,
             stats_sink,
             #[cfg(feature = "search")]
-                vector_registry: _,
+            vector_registry,
+            #[cfg(feature = "search")]
+            search_suggestions,
             shutdown_tx,
             mut shutdown_rx,
         } = self;
@@ -1038,6 +1081,48 @@ impl Server {
                 }
             })
         };
+
+        // Periodic search-index snapshot task. Only spawned
+        // when `search_index_dir:` is configured. A full
+        // snapshot is written every few seconds and once more
+        // on shutdown so a clean stop never loses the latest
+        // delta. A SIGKILL between ticks loses at most the
+        // un-snapshotted delta; the client/workload tolerates
+        // re-creation, and the prior good snapshot survives
+        // because writes are atomic (write-temp + rename).
+        #[cfg(feature = "search")]
+        let search_snapshotter: Option<JoinHandle<()>> = match search_suggestions {
+            Some(suggestions) => {
+                let registry = vector_registry.clone();
+                let mut cancel_rx = shutdown_rx.clone();
+                Some(tokio::spawn(async move {
+                    let mut ticker = tokio::time::interval(Duration::from_secs(5));
+                    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = cancel_rx.changed() => {
+                                if *cancel_rx.borrow() {
+                                    // Final save on clean shutdown.
+                                    if let Err(e) = registry.save(&suggestions) {
+                                        tracing::warn!(error = %e, "search snapshot on shutdown failed");
+                                    }
+                                    return;
+                                }
+                            }
+                            _ = ticker.tick() => {
+                                if let Err(e) = registry.save(&suggestions) {
+                                    tracing::warn!(error = %e, "periodic search snapshot failed");
+                                }
+                            }
+                        }
+                    }
+                }))
+            }
+            None => None,
+        };
+        #[cfg(not(feature = "search"))]
+        let search_snapshotter: Option<JoinHandle<()>> = None;
 
         let entropy_handle: Option<JoinHandle<()>> = match entropy_driver {
             Some(driver) => {
@@ -1248,6 +1333,13 @@ impl Server {
         // Stop the periodic stats refresher.
         stats_refresher.abort();
         let _ = stats_refresher.await;
+        // Let the search snapshotter run its final save, then
+        // join it. It observes the shutdown flag, writes one
+        // last snapshot, and returns on its own; await rather
+        // than abort so the final save is not cut short.
+        if let Some(h) = search_snapshotter {
+            let _ = h.await;
+        }
         #[cfg(feature = "riak")]
         {
             for h in [

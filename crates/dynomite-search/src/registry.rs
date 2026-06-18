@@ -19,14 +19,22 @@
 //!   (FT.SEARCH) do not block write paths (HSET / FT.ADD).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::schema::{IndexAlgorithm, MetadataFieldType, VectorSchema};
+use crate::sugest_registry::SuggestionRegistry;
 use dyntext::TextIndex;
 use dynvec::Engine;
+
+/// File name of the registry snapshot under the configured
+/// persistence directory.
+const SNAPSHOT_FILE: &str = "search-snapshot.cbor";
 
 /// Errors returned by the registry.
 #[derive(Debug, Error)]
@@ -45,6 +53,30 @@ pub enum RegistryError {
     /// Engine-level failure during [`Engine::in_memory`].
     #[error("engine: {0}")]
     Engine(#[from] dynvec::storage::StoreError),
+}
+
+/// Errors raised by the snapshot persistence path.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum SnapshotError {
+    /// Filesystem failure reading or writing the snapshot.
+    #[error("snapshot io: {0}")]
+    Io(#[from] io::Error),
+    /// The snapshot bytes could not be encoded to CBOR.
+    #[error("snapshot encode: {0}")]
+    Encode(String),
+    /// The snapshot bytes could not be decoded from CBOR.
+    #[error("snapshot decode: {0}")]
+    Decode(String),
+    /// Replaying a snapshotted index back into the registry
+    /// failed (duplicate name, unsupported algorithm, or an
+    /// engine refusal).
+    #[error("snapshot replay: {0}")]
+    Replay(#[from] RegistryError),
+    /// A snapshotted vector payload could not be decoded back
+    /// to `f32` for re-insertion into the engine.
+    #[error("snapshot vector decode: {0}")]
+    VectorDecode(String),
 }
 
 /// Per-`TEXT` schema field state.
@@ -359,6 +391,11 @@ pub struct VectorTableInfo {
 #[derive(Clone, Default)]
 pub struct VectorRegistry {
     inner: Arc<RwLock<BTreeMap<String, Arc<VectorTable>>>>,
+    /// Persistence directory. `None` keeps the registry purely
+    /// in-memory (identical to the historical behaviour); when
+    /// set, [`VectorRegistry::save`] writes a CBOR snapshot
+    /// under it and [`VectorRegistry::open`] reloads it.
+    persist_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for VectorRegistry {
@@ -366,6 +403,7 @@ impl std::fmt::Debug for VectorRegistry {
         let names: Vec<String> = self.inner.read().keys().cloned().collect();
         f.debug_struct("VectorRegistry")
             .field("indexes", &names)
+            .field("persist_dir", &self.persist_dir)
             .finish()
     }
 }
@@ -481,6 +519,286 @@ impl VectorRegistry {
             live_rows: stats.live_rows,
             tracked_rows: stats.tracked_rows,
         })
+    }
+
+    /// Open a registry backed by the persistence directory
+    /// `dir`.
+    ///
+    /// When a snapshot file already exists under `dir` it is
+    /// loaded so every index (schema, indexed documents, text
+    /// fields) and every suggestion dictionary is reconstructed
+    /// without the client re-issuing `FT.CREATE` or re-feeding
+    /// data. When no snapshot exists the registry starts empty.
+    /// In both cases later calls to [`VectorRegistry::save`]
+    /// write back to the same `dir`.
+    ///
+    /// The supplied [`SuggestionRegistry`] is populated in place
+    /// with any snapshotted suggestion dictionaries; pass the
+    /// same handle the [`crate::SearchExtension`] will serve
+    /// FT.SUG* from.
+    ///
+    /// # Errors
+    ///
+    /// * [`SnapshotError::Io`] when `dir` cannot be created or
+    ///   the snapshot file cannot be read.
+    /// * [`SnapshotError::Decode`] when the snapshot bytes are
+    ///   not valid CBOR.
+    /// * [`SnapshotError::Replay`] / [`SnapshotError::VectorDecode`]
+    ///   when a snapshotted index cannot be reconstructed.
+    pub fn open(
+        dir: impl Into<PathBuf>,
+        suggestions: &SuggestionRegistry,
+    ) -> Result<Self, SnapshotError> {
+        let dir = dir.into();
+        std::fs::create_dir_all(&dir)?;
+        let reg = Self {
+            inner: Arc::new(RwLock::new(BTreeMap::new())),
+            persist_dir: Some(dir.clone()),
+        };
+        let path = dir.join(SNAPSHOT_FILE);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(reg),
+            Err(e) => return Err(SnapshotError::Io(e)),
+        };
+        let snapshot: RegistrySnapshot =
+            ciborium::from_reader(&bytes[..]).map_err(|e| SnapshotError::Decode(e.to_string()))?;
+        reg.load_snapshot(&snapshot, suggestions)?;
+        Ok(reg)
+    }
+
+    /// True when this registry persists to disk (was built via
+    /// [`VectorRegistry::open`]).
+    #[must_use]
+    pub fn is_persistent(&self) -> bool {
+        self.persist_dir.is_some()
+    }
+
+    /// Write a full snapshot of the registry plus `suggestions`
+    /// to the persistence directory.
+    ///
+    /// The write is atomic: the snapshot is written to a sibling
+    /// `*.tmp` file, flushed, and renamed over the live file, so
+    /// a crash mid-write never leaves a half-written snapshot
+    /// (the prior good snapshot, or no snapshot, survives). A
+    /// leftover `*.tmp` from an interrupted write is simply
+    /// overwritten on the next save and is never read by
+    /// [`VectorRegistry::open`].
+    ///
+    /// A registry built with [`VectorRegistry::new`] has no
+    /// persistence directory; `save` is then a no-op that
+    /// returns `Ok(())`.
+    ///
+    /// # Errors
+    ///
+    /// * [`SnapshotError::Encode`] when the state will not
+    ///   serialise to CBOR.
+    /// * [`SnapshotError::Io`] when the temp file cannot be
+    ///   written, flushed, or renamed.
+    pub fn save(&self, suggestions: &SuggestionRegistry) -> Result<(), SnapshotError> {
+        let Some(dir) = self.persist_dir.as_ref() else {
+            return Ok(());
+        };
+        let snapshot = self.build_snapshot(suggestions);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&snapshot, &mut buf)
+            .map_err(|e| SnapshotError::Encode(e.to_string()))?;
+        let path = dir.join(SNAPSHOT_FILE);
+        let tmp = dir.join(format!("{SNAPSHOT_FILE}.tmp"));
+        write_atomic(&tmp, &path, &buf)?;
+        Ok(())
+    }
+
+    /// Build the serialisable snapshot of the live registry and
+    /// the supplied suggestion registry.
+    fn build_snapshot(&self, suggestions: &SuggestionRegistry) -> RegistrySnapshot {
+        let mut indexes = Vec::new();
+        let guard = self.inner.read();
+        for (name, table) in guard.iter() {
+            indexes.push(table.to_snapshot(name));
+        }
+        drop(guard);
+        RegistrySnapshot {
+            indexes,
+            suggestions: suggestions.to_snapshot(),
+        }
+    }
+
+    /// Reconstruct every snapshotted index and suggestion
+    /// dictionary into this registry and `suggestions`.
+    fn load_snapshot(
+        &self,
+        snapshot: &RegistrySnapshot,
+        suggestions: &SuggestionRegistry,
+    ) -> Result<(), SnapshotError> {
+        for idx in &snapshot.indexes {
+            self.create(idx.name.clone(), idx.schema.clone())?;
+            let table = self
+                .get(&idx.name)
+                .ok_or_else(|| RegistryError::NotFound(idx.name.clone()))?;
+            // Provision any TEXT field added through FT.ALTER
+            // after FT.CREATE; schema-declared TEXT fields are
+            // already provisioned by `create`.
+            for field in &idx.text_alter_fields {
+                table.add_text_field(field);
+            }
+            for doc in &idx.docs {
+                let vector = decode_vector(&doc.vector)?;
+                let metadata = doc.metadata.clone();
+                table
+                    .engine
+                    .upsert(doc.key.clone(), &vector, metadata)
+                    .map_err(RegistryError::Engine)?;
+                table.record_indexed_key(doc.key.clone());
+            }
+            for field in &idx.text_fields {
+                for (key, bytes) in &field.entries {
+                    table.upsert_text_field(&field.field, key, bytes);
+                }
+            }
+        }
+        suggestions.load_snapshot(&snapshot.suggestions);
+        Ok(())
+    }
+}
+
+/// Decode a snapshotted vector payload back to `f32`.
+fn decode_vector(ev: &dynvec::encoding::EncodedVector) -> Result<Vec<f32>, SnapshotError> {
+    ev.codec
+        .encoder()
+        .decode(ev)
+        .map_err(|e| SnapshotError::VectorDecode(e.to_string()))
+}
+
+/// Atomically replace `final_path` with `bytes`: write `tmp`,
+/// flush + fsync, then rename over the target.
+fn write_atomic(tmp: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), io::Error> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(tmp)?;
+    f.write_all(bytes)?;
+    f.flush()?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(tmp, final_path)
+}
+
+/// Top-level on-disk snapshot of the whole search surface.
+#[derive(Debug, Serialize, Deserialize)]
+struct RegistrySnapshot {
+    /// One entry per registered index.
+    indexes: Vec<IndexSnapshot>,
+    /// Suggestion dictionaries (FT.SUG*).
+    suggestions: SuggestionsSnapshot,
+}
+
+/// On-disk snapshot of one registered index.
+#[derive(Debug, Serialize, Deserialize)]
+struct IndexSnapshot {
+    /// Index name.
+    name: String,
+    /// Compiled schema.
+    schema: VectorSchema,
+    /// Indexed documents (vector + metadata), keyed by the
+    /// user-visible document key.
+    docs: Vec<DocSnapshot>,
+    /// Per-TEXT-field stored bytes, so the trigram index can be
+    /// rebuilt on load.
+    text_fields: Vec<TextFieldSnapshot>,
+    /// TEXT fields provisioned through FT.ALTER after FT.CREATE
+    /// (not present in the original schema). Replayed via
+    /// [`VectorTable::add_text_field`] so `has_text_field`
+    /// reports them after a reload.
+    text_alter_fields: Vec<String>,
+}
+
+/// One indexed document inside an [`IndexSnapshot`].
+#[derive(Debug, Serialize, Deserialize)]
+struct DocSnapshot {
+    /// User-visible document key.
+    key: Vec<u8>,
+    /// Encoded vector payload (decoded back to `f32` on load).
+    vector: dynvec::encoding::EncodedVector,
+    /// Per-row metadata as stored by the engine.
+    metadata: std::collections::HashMap<String, serde_json::Value>,
+}
+
+/// Per-TEXT-field snapshot: the stored bytes per document key.
+#[derive(Debug, Serialize, Deserialize)]
+struct TextFieldSnapshot {
+    /// Schema field name.
+    field: String,
+    /// `(document key, stored bytes)` in document-id order.
+    entries: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+/// Snapshot of the suggestion registry: one entry per
+/// suggestion key.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub(crate) struct SuggestionsSnapshot {
+    /// `(suggestion key, [(value, score, payload)])`.
+    pub(crate) dicts: Vec<SuggestionDictSnapshot>,
+}
+
+/// Snapshot of one suggestion dictionary.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct SuggestionDictSnapshot {
+    /// FT.SUG* key (binary-safe).
+    pub(crate) key: Vec<u8>,
+    /// `(suggestion bytes, score, optional payload)`.
+    pub(crate) entries: Vec<(Vec<u8>, f64, Option<Vec<u8>>)>,
+}
+
+impl VectorTable {
+    /// Build the on-disk snapshot for this table. The vector
+    /// payloads are read back out of the engine (the engine is
+    /// the source of truth for stored vectors); text-field
+    /// bytes come from the per-field trigram-index doc store.
+    fn to_snapshot(&self, name: &str) -> IndexSnapshot {
+        let mut docs = Vec::new();
+        for key in self.indexed_keys() {
+            // A key recorded as indexed but absent from the
+            // engine (e.g. deleted out-of-band) is skipped
+            // rather than failing the whole snapshot.
+            if let Ok(Some(row)) = self.engine.get(&key) {
+                docs.push(DocSnapshot {
+                    key,
+                    vector: row.vector,
+                    metadata: row.metadata,
+                });
+            }
+        }
+        let guard = self.text_indexes.lock();
+        let mut text_fields = Vec::new();
+        let mut text_alter_fields = Vec::new();
+        let schema_text: BTreeSet<&str> = self
+            .schema
+            .metadata_fields
+            .iter()
+            .filter(|f| f.field_type == MetadataFieldType::Text)
+            .map(|f| f.name.as_str())
+            .collect();
+        for (field, state) in guard.iter() {
+            if !schema_text.contains(field.as_str()) {
+                text_alter_fields.push(field.clone());
+            }
+            let mut entries = Vec::new();
+            for (doc_id, key) in &state.doc_to_key {
+                if let Some(doc) = state.index.docs().get(doc_id) {
+                    entries.push((key.clone(), doc.text.clone()));
+                }
+            }
+            text_fields.push(TextFieldSnapshot {
+                field: field.clone(),
+                entries,
+            });
+        }
+        IndexSnapshot {
+            name: name.to_string(),
+            schema: self.schema.clone(),
+            docs,
+            text_fields,
+            text_alter_fields,
+        }
     }
 }
 

@@ -414,6 +414,9 @@ fn classify_non_reloadable(old: &ConfPool, new: &ConfPool, out: &mut ReloadOutco
     if old.noxu_path != new.noxu_path {
         out.non_reloadable.push("noxu_path");
     }
+    if old.search_index_dir != new.search_index_dir {
+        out.non_reloadable.push("search_index_dir");
+    }
     if old.enable_gossip != new.enable_gossip {
         out.non_reloadable.push("enable_gossip");
     }

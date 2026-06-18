@@ -57,8 +57,8 @@ use dynomite::embed::{CommandExtension, HsetOutcome, ServerBuilder};
 use dynomite::msg::MsgType;
 
 pub use crate::registry::{
-    RegistryError, TextFieldIndex, TextHit, TextRegexApproxResult, TextRegexResult, VectorRegistry,
-    VectorTable, VectorTableInfo,
+    RegistryError, SnapshotError, TextFieldIndex, TextHit, TextRegexApproxResult, TextRegexResult,
+    VectorRegistry, VectorTable, VectorTableInfo,
 };
 pub use crate::schema::{
     DistanceMetric, IndexAlgorithm, MetadataField, MetadataFieldType, VectorSchema, VectorType,

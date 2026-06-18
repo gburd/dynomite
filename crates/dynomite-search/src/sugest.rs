@@ -144,6 +144,17 @@ impl SuggestionDict {
         self.entries.remove(suggestion).is_some()
     }
 
+    /// Snapshot every entry as `(value, score, payload)` in
+    /// lexicographic order. Used by the registry persistence
+    /// path; not exposed on the wire.
+    #[must_use]
+    pub(crate) fn snapshot_entries(&self) -> Vec<(Vec<u8>, f64, Option<Vec<u8>>)> {
+        self.entries
+            .iter()
+            .map(|(value, entry)| (value.clone(), entry.score, entry.payload.clone()))
+            .collect()
+    }
+
     /// Run a `FT.SUGGET`-shaped lookup.
     ///
     /// `prefix` is the user-supplied query bytes. `max` caps

@@ -140,6 +140,42 @@ Operational notes:
   many peers come back at once. The default 30 seconds matches
   the gossip period.
 
+## Search index persistence
+
+The optional RediSearch FT.* surface (`crates/dynomite-search`)
+is wired into `dynomited` behind the `search` Cargo feature.
+By default the FT.* index registry is purely in-memory: index
+definitions, indexed documents, text fields, and suggestion
+dictionaries are lost on a process restart and the client must
+recreate them.
+
+* `search_index_dir` (path, default unset): when set, the
+  search registry snapshots its full state (index schemas,
+  indexed documents, per-`TEXT`-field contents, and FT.SUG*
+  suggestion dictionaries) to a CBOR file under this directory
+  and reloads it on restart. A clean checkout, a process kill,
+  or a chaos restart no longer drops the FT.* surface: the
+  snapshot survives on disk and the next startup reloads every
+  index without the client re-issuing `FT.CREATE` or re-feeding
+  data.
+
+Operational notes:
+
+* The snapshot is written atomically (write to a sibling
+  `*.tmp`, flush + fsync, rename over the live file), so a
+  crash mid-write never leaves a half-written snapshot; the
+  prior good snapshot survives. A stray `*.tmp` from an
+  interrupted write is ignored on load and overwritten on the
+  next save.
+* Snapshots are taken periodically (every five seconds) and
+  once more on clean shutdown. A crash between snapshots loses
+  at most the un-snapshotted delta; the FT.* workload tolerates
+  re-creation, so the recreate-on-miss path becomes a fallback
+  rather than the primary recovery once persistence is on.
+* When `search_index_dir` is unset the registry never touches
+  disk; behaviour is identical to releases before this knob
+  existed.
+
 ## Riak mode
 
 The optional Riak protocol surface (`crates/dyniak`) is
