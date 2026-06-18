@@ -462,6 +462,41 @@ def workload_list(c: RespConn) -> str:
     return op
 
 
+def _ft_create_index(c: RespConn, idx: str, prefix: str) -> None:
+    """Create the chaos FT.* index. Tolerates 'already exists'.
+
+    Factored out so any FT op that observes 'index not found'
+    (the in-memory registry was wiped by a chaos process-kill)
+    can recreate it and retry -- the same recreate-on-miss a
+    real client does with ephemeral search-index state after a
+    node restart. FT.* index state is in-process and not
+    persisted across a dynomited restart (a documented gap), so
+    the workload owns re-establishing it.
+    """
+    try:
+        c.call("FT.CREATE", idx,
+               "ON", "HASH",
+               "PREFIX", "1", prefix,
+               "SCHEMA",
+               "title", "TEXT",
+               "tag", "TAG",
+               "score", "NUMERIC",
+               "embedding", "VECTOR", "HNSW", "6",
+               "TYPE", "FLOAT32",
+               "DIM", "4",
+               "DISTANCE_METRIC", "COSINE")
+    except RespError as e:
+        if "already exists" not in str(e).lower():
+            raise
+
+
+def _ft_missing_index(e: RespError) -> bool:
+    """True when a RESP error means the index is absent (wiped by
+    a chaos kill of the in-memory registry)."""
+    low = str(e).lower()
+    return "index not found" in low or "unknown index" in low
+
+
 def workload_ft_search(c: RespConn) -> str:
     """Exercise the RediSearch FT.* command surface.
 
@@ -495,22 +530,7 @@ def workload_ft_search(c: RespConn) -> str:
     idx = "chaos_idx"
     prefix = "chaos:doc:"
     if op == "FT.CREATE":
-        # Best-effort create. Already-exists is fine.
-        try:
-            c.call("FT.CREATE", idx,
-                   "ON", "HASH",
-                   "PREFIX", "1", prefix,
-                   "SCHEMA",
-                   "title", "TEXT",
-                   "tag", "TAG",
-                   "score", "NUMERIC",
-                   "embedding", "VECTOR", "HNSW", "6",
-                   "TYPE", "FLOAT32",
-                   "DIM", "4",
-                   "DISTANCE_METRIC", "COSINE")
-        except RespError as e:
-            if "already exists" not in str(e).lower():
-                raise
+        _ft_create_index(c, idx, prefix)
         return op
     if op == "FT.LIST":
         c.call("FT.LIST")
@@ -519,11 +539,10 @@ def workload_ft_search(c: RespConn) -> str:
         try:
             c.call("FT.INFO", idx)
         except RespError as e:
-            _low = str(e).lower()
-            if ("unknown index" not in _low
-                    and "index not found" not in _low
-                    and "unknown command" not in _low
-                    and "unsupported" not in _low):
+            if _ft_missing_index(e):
+                _ft_create_index(c, idx, prefix)
+            elif ("unknown command" not in str(e).lower()
+                    and "unsupported" not in str(e).lower()):
                 raise
         return op
     if op == "FT.HSET_INDEX":
@@ -547,11 +566,10 @@ def workload_ft_search(c: RespConn) -> str:
                    random.choice(["@title:chaos", "chaos", "run"]),
                    "LIMIT", "0", "5")
         except RespError as e:
-            _low = str(e).lower()
-            if ("unknown index" not in _low
-                    and "index not found" not in _low
-                    and "unknown command" not in _low
-                    and "unsupported" not in _low):
+            if _ft_missing_index(e):
+                _ft_create_index(c, idx, prefix)
+            elif ("unknown command" not in str(e).lower()
+                    and "unsupported" not in str(e).lower()):
                 raise
         return op
     if op == "FT.SEARCH_TAG":
@@ -560,11 +578,10 @@ def workload_ft_search(c: RespConn) -> str:
                    "@tag:{" + random.choice(["alpha", "beta", "gamma"]) + "}",
                    "LIMIT", "0", "5")
         except RespError as e:
-            _low = str(e).lower()
-            if ("unknown index" not in _low
-                    and "index not found" not in _low
-                    and "unknown command" not in _low
-                    and "unsupported" not in _low):
+            if _ft_missing_index(e):
+                _ft_create_index(c, idx, prefix)
+            elif ("unknown command" not in str(e).lower()
+                    and "unsupported" not in str(e).lower()):
                 raise
         return op
     if op == "FT.SEARCH_NUMERIC":
@@ -575,11 +592,10 @@ def workload_ft_search(c: RespConn) -> str:
                    "@score:[" + str(lo) + " " + str(hi) + "]",
                    "LIMIT", "0", "5")
         except RespError as e:
-            _low = str(e).lower()
-            if ("unknown index" not in _low
-                    and "index not found" not in _low
-                    and "unknown command" not in _low
-                    and "unsupported" not in _low):
+            if _ft_missing_index(e):
+                _ft_create_index(c, idx, prefix)
+            elif ("unknown command" not in str(e).lower()
+                    and "unsupported" not in str(e).lower()):
                 raise
         return op
     if op == "FT.SEARCH_VECTOR":
@@ -591,9 +607,9 @@ def workload_ft_search(c: RespConn) -> str:
                    "PARAMS", "2", "V", vec,
                    "DIALECT", "2")
         except RespError as e:
-            low = str(e).lower()
-            if ("unknown index" not in low
-                    and "unsupported" not in low):
+            if _ft_missing_index(e):
+                _ft_create_index(c, idx, prefix)
+            elif "unsupported" not in str(e).lower():
                 raise
         return op
     if op == "FT.DROPINDEX":
