@@ -171,10 +171,7 @@ impl RouteCtx {
     /// serve path, which first builds a search-carrying context and
     /// then layers the Wasm store on top.
     #[cfg(all(feature = "wasm", feature = "search"))]
-    pub(crate) fn set_wasm(
-        mut self,
-        wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>,
-    ) -> Self {
+    pub(crate) fn set_wasm(mut self, wasm: Arc<crate::mapreduce::wasm::WasmModuleStore>) -> Self {
         self.wasm = Some(wasm);
         self
     }
