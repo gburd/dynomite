@@ -124,7 +124,7 @@ prost = "0.14"
 # in-process runtime, plus WAT support so tests can ship modules
 # as text. Pinned at the 26.x series; bumping requires a journal
 # entry.
-wasmtime = { version = "36.0.8", default-features = false, features = ["cranelift", "runtime", "wat"] }
+wasmtime = { version = "41.0", default-features = false, features = ["cranelift", "runtime", "wat"] }
 
 # Schema-first wire codecs (dyn-encoding crate). Pinned to track
 # the rest of the workspace; bumping requires a journal entry.
@@ -136,7 +136,7 @@ wasmtime = { version = "36.0.8", default-features = false, features = ["cranelif
 # format. `bson` is the MongoDB-shepherded BSON crate, used in
 # serde mode (no document-level API surface).
 flatbuffers = "25.12"
-capnp = "0.25"
+capnp = "0.26"
 bebop = "3.2"
 bson = { version = "3", features = ["serde"] }
 
@@ -152,7 +152,7 @@ noxu = "4.0.0"
 # https://github.com/hegeldev/hegel-rust. The `native` feature pulls in
 # the in-process backend (rand + num-bigint + num-traits) so tests do
 # not need an external server.
-hegeltest = { version = "0.14", features = ["native"] }
+hegeltest = { version = "0.20" }
 # Loom is a model checker for concurrent Rust. It only ships into
 # the build under `--cfg loom`; production code is unaffected. Tests
 # that depend on it live under `crates/<crate>/tests/loom_*.rs`,
