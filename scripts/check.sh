@@ -133,15 +133,13 @@ echo "==> cleanup-sweep (Stage 16)"
 echo "==> quickfuzz (60s smoke per target)"
 "$ROOT/scripts/quickfuzz.sh" 60
 
-echo "==> coverage gate (Stage 15)"
-# The Stage 15 brief allows the actual coverage percentage to fall
-# below the 95% threshold while the Stage 16 chaos test is
-# pending; the gate is informational on `main` until the chaos
-# test lifts the network and FSM modules. Run
-# `scripts/coverage_gate.sh` directly (without `|| true`) to
-# enforce the threshold locally; CI flips this to enforcing
-# once Stage 16 lands.
-"$ROOT/scripts/coverage_gate.sh" || true
+echo "==> coverage gate (tiered: core >= 95%, supporting/tool >= 75%)"
+# Blocking gate. Every source file must meet its tier threshold or
+# be listed in docs/coverage-deviations.md with a concrete reason
+# (an out-of-process-tested path, a re-export facade, process
+# bootstrap, rendering output, or only unreachable defensive arms).
+# A new below-tier file that is not documented fails the build.
+"$ROOT/scripts/coverage_gate.sh"
 
 echo "==> note: slow-tests are in scripts/slow_tests.sh; run weekly via slow-tests.yml workflow"
 

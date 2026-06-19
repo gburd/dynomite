@@ -1,203 +1,84 @@
 # Coverage deviations
 
-The Stage 15 coverage gate (`scripts/coverage_gate.sh`) enforces >= 95% line, branch, and function coverage workspace-wide. Modules whose primary exerciser is an out-of-process integration suite (Stage 14 conformance, Stage 16 chaos) cannot reach 95% from co-located unit tests alone; this file lists every Rust source file under `crates/` that is currently below the threshold along with its measured percentages and a reason.
+The coverage gate (`scripts/coverage_gate.sh`) applies a tiered per-file policy: core components (the engine proto / cluster / io / hashkit / crypto / msg / core / net layers and the dyniak datastore / proto / datatypes / mapreduce layers) must reach 95% line and function coverage; supporting and tool crates must reach 75%. A file below its tier is an error unless it is listed here with a concrete reason, in which case the gate downgrades it to a warning. This file is the audit trail; regenerate it with `python3 scripts/regen_coverage_deviations.py` after `scripts/coverage_gate.sh --report`.
 
-The gate downgrades a deviation to a warning when its file path appears here. The gate still fails on the workspace-wide axes (`cargo llvm-cov --workspace --all-features` totals) until those reach 95%.
+Every entry below is reachable only by an out-of-process suite, is a re-export facade, is process bootstrap, is rendering output, or has only unreachable defensive arms left -- none is an untested unit of pure logic.
 
-
-## Per-file deviations (auto-generated)
-
-Regenerate with `python3 scripts/regen_coverage_deviations.py` after running `scripts/coverage_gate.sh --report`.
-
-
-| File | Line % | Branch % | Function % | Reason |
-|---|---|---|---|---|
-| `crates/dyn-hash-tool/src/main.rs` | 88.64 | 78.39 | 62.50 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/cluster/datacenter.rs` | 86.29 | 89.45 | 78.12 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/cluster/dispatch.rs` | 80.22 | 83.23 | 85.00 | Cluster-aware dispatcher. Fragment / fan-out / quorum collection exercised end-to-end by the Stage 14 multi-DC scenarios; per-step contracts covered by unit tests. |
-| `crates/dynomite/src/cluster/gossip.rs` | 89.89 | 92.73 | 86.36 | Gossip round driver. Exercised by the Stage 16 chaos test (delay / loss / partition); co-located unit tests cover encode/decode and per-state advancement. |
-| `crates/dynomite/src/cluster/peer.rs` | 89.29 | 90.06 | 82.14 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/cluster/pool.rs` | 93.56 | 93.82 | 84.62 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/cluster/snitch.rs` | 87.32 | 89.55 | 85.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/conf/endpoint.rs` | 86.52 | 88.43 | 82.61 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/conf/enums.rs` | 84.40 | 80.61 | 66.67 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/conf/error.rs` | 75.00 | 82.35 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/conf/mod.rs` | 94.44 | 93.59 | 94.12 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/conf/pool.rs` | 83.86 | 87.73 | 86.36 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/conf/server.rs` | 83.60 | 83.30 | 68.52 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/conf/tokens.rs` | 85.27 | 83.82 | 72.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/core/log.rs` | 73.68 | 72.08 | 62.50 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/core/ring_queue.rs` | 91.18 | 94.12 | 83.33 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/core/signal.rs` | 68.75 | 69.23 | 75.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/core/task.rs` | 93.33 | 93.94 | 88.89 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/crypto/base64.rs` | 97.06 | 97.18 | 87.50 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/crypto/mod.rs` | 96.91 | 96.23 | 94.44 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/crypto/pem.rs` | 95.83 | 91.67 | 80.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/embed/builder.rs` | 53.53 | 52.61 | 47.92 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/embed/events.rs` | 88.33 | 87.78 | 91.67 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/embed/hooks.rs` | 22.82 | 20.54 | 19.51 | Trait surface for embedding hooks (Datastore, Transport, CryptoProvider, MetricsSink, SeedsProvider). The trait default impls are exercised by the embedding examples; the default-impl bodies that invoke real syscalls run only from the integrated dynomited binary. |
-| `crates/dynomite/src/embed/mod.rs` | 0.00 | 0.00 | 0.00 | Embedding facade module: re-exports only. Coverage zero is expected; the re-exported items are tested in their home modules. |
-| `crates/dynomite/src/embed/server.rs` | 71.18 | 71.28 | 67.69 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/embed/snapshots.rs` | 37.50 | 37.78 | 25.00 | Embedding snapshot facade for stats sinks. Driven by the host process via the embedding API; covered indirectly by Stage 13 and 14 examples. |
-| `crates/dynomite/src/entropy/mod.rs` | 81.44 | 93.78 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/entropy/receive.rs` | 74.30 | 77.30 | 72.22 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/entropy/send.rs` | 59.52 | 58.82 | 51.16 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/entropy/util.rs` | 88.69 | 89.84 | 85.71 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/hashkit/ketama.rs` | 94.02 | 97.01 | 92.86 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/hashkit/mod.rs` | 93.83 | 92.04 | 90.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/hashkit/token.rs` | 79.13 | 80.35 | 84.85 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/io/cbuf.rs` | 88.68 | 87.91 | 91.67 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/io/mbuf.rs` | 78.20 | 79.85 | 72.88 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/io/reactor.rs` | 78.65 | 86.11 | 72.22 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/msg/index.rs` | 76.32 | 78.46 | 70.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/msg/message.rs` | 80.12 | 79.41 | 77.27 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/msg/mod.rs` | 81.03 | 86.08 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/msg/msg_type.rs` | 94.23 | 94.17 | 91.67 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/msg/queue.rs` | 72.13 | 79.80 | 68.75 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/msg/request.rs` | 73.58 | 79.78 | 83.33 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/msg/response_mgr.rs` | 89.14 | 92.78 | 78.12 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/net/auto_eject.rs` | 78.95 | 86.78 | 61.54 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/net/client.rs` | 85.43 | 84.03 | 92.31 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/net/conn.rs` | 55.37 | 58.64 | 55.88 | Per-connection FSM dispatch. Exercised end-to-end by the Stage 14 conformance suite and the Stage 16 chaos test. |
-| `crates/dynomite/src/net/dnode_client.rs` | 65.00 | 67.37 | 81.82 | DNODE peer-side dialler. Exercised by the Stage 14 cluster-formation scenarios; reconnection / auto-eject paths are exercised by the Stage 16 chaos test. |
-| `crates/dynomite/src/net/dnode_proxy.rs` | 68.09 | 49.40 | 75.00 | DNODE peer-side request proxy: routes parsed peer requests to the local datastore and writes responses back on the peer connection. Exercised end-to-end by the Stage 14 conformance suite (`crates/dynomited/tests/conformance/`); the listener-driven happy path is not reachable from co-located unit tests. |
-| `crates/dynomite/src/net/dnode_server.rs` | 46.30 | 46.70 | 77.78 | DNODE peer-side accept loop: spawns per-connection FSM tasks. Same rationale as `dnode_proxy.rs`; exercised by Stage 14. |
-| `crates/dynomite/src/net/listener.rs` | 65.12 | 79.10 | 60.00 | Generic accept loop with TCP / TLS / QUIC variants. Variant selection covered by unit tests; per-variant accept paths run only under the integration suite. |
-| `crates/dynomite/src/net/mod.rs` | 0.00 | 0.00 | 0.00 | net module root: re-exports only. |
-| `crates/dynomite/src/net/pool.rs` | 79.02 | 73.54 | 77.27 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/net/proxy.rs` | 91.03 | 92.86 | 85.71 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/net/quic.rs` | 78.52 | 77.94 | 66.67 | QUIC driver task. Stage 9 ships a single end-to-end integration test; per-stream channel branches are not all reachable from unit tests because they require the quiche state machine to advance. |
-| `crates/dynomite/src/net/server.rs` | 80.53 | 81.46 | 90.91 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/proto/dnode.rs` | 85.74 | 86.16 | 83.87 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/proto/memcache/coalesce.rs` | 0.00 | 0.00 | 0.00 | Memcache fragment coalesce. Exercised by Stage 14 multi-key scenarios; standalone unit tests would need to reproduce the multi-fragment cluster wiring. |
-| `crates/dynomite/src/proto/memcache/fragment.rs` | 92.86 | 93.75 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/proto/memcache/multikey.rs` | 0.00 | 0.00 | 0.00 | Memcache multi-key request detector. Exercised through the full proto path under Stage 14. |
-| `crates/dynomite/src/proto/memcache/parser.rs` | 79.02 | 64.28 | 93.55 | Memcache request parser. Same rationale as the Redis parser: error-recovery arms exercised by the Stage 15 fuzz harness. |
-| `crates/dynomite/src/proto/memcache/verify.rs` | 0.00 | 0.00 | 0.00 | Memcache request validator. Exercised through the full proto path under Stage 14. |
-| `crates/dynomite/src/proto/redis/coalesce.rs` | 58.33 | 56.86 | 66.67 | Redis coalesce path for fragment responses. Exercised by Stage 14 multi-key scenarios. |
-| `crates/dynomite/src/proto/redis/commands.rs` | 32.95 | 55.19 | 69.23 | Redis command-class table. Exercised by `redis_parse_req` tests via the full proto suite; the per-command argument shape constants are reached transitively, not directly, from the parser tests. |
-| `crates/dynomite/src/proto/redis/fragment.rs` | 90.30 | 89.72 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/proto/redis/parser.rs` | 59.93 | 55.36 | 93.10 | Redis (RESP) request parser. The state-machine arms are covered by the proto suite; the deep error-recovery arms are exercised by the Stage 15 fuzz harness rather than by explicit unit tests. |
-| `crates/dynomite/src/proto/redis/repair/make.rs` | 28.57 | 25.00 | 50.00 | Redis repair-write factory. Exercised by Stage 14 scenarios where a quorum read uncovers a divergent replica; per-fragment unit tests cover the structural shape. |
-| `crates/dynomite/src/proto/redis/repair/reconcile.rs` | 57.89 | 55.00 | 50.00 | Redis read-repair reconciliation. Same rationale as `repair/make.rs`; full path requires a live multi-replica cluster. |
-| `crates/dynomite/src/proto/redis/repair/rewrite.rs` | 92.50 | 92.00 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/proto/redis/verify.rs` | 94.34 | 94.87 | 85.71 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/seeds/dns.rs` | 83.10 | 85.61 | 63.64 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/seeds/florida.rs` | 80.00 | 82.17 | 64.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/seeds/mod.rs` | 0.00 | 0.00 | 0.00 | seeds module root: re-exports only. |
-| `crates/dynomite/src/seeds/simple.rs` | 83.33 | 90.62 | 75.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/stats/mod.rs` | 63.31 | 63.78 | 70.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/stats/rest.rs` | 64.44 | 59.75 | 81.25 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/stats/snapshot.rs` | 91.07 | 83.56 | 96.55 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/util/atoi.rs` | 93.18 | 96.15 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/util/dict.rs` | 84.00 | 88.37 | 77.78 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/util/dyn_string.rs` | 90.00 | 91.94 | 88.89 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/util/rbtree.rs` | 75.81 | 81.36 | 64.29 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/util/sockinfo.rs` | 83.67 | 79.31 | 70.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomite/src/util/time.rs` | 94.74 | 96.36 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomited/src/bin/gen-man.rs` | 0.00 | 0.00 | 0.00 | Auxiliary man-page generator binary. Exercised by the release pipeline; not part of the runtime. |
-| `crates/dynomited/src/daemonize.rs` | 9.09 | 5.41 | 14.29 | Double-fork daemonisation. The fork() syscalls cannot run inside a unit test runner (the test harness is the parent of every test), so the path is exercised only by the manual `dynomited --daemonize` smoke run documented in the operations runbook. |
-| `crates/dynomited/src/main.rs` | 80.36 | 79.49 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomited/src/pidfile.rs` | 92.19 | 91.38 | 87.50 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomited/src/server.rs` | 69.28 | 73.90 | 77.59 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-| `crates/dynomited/src/signals.rs` | 100.00 | 80.00 | 100.00 | Stage 16 follow-up: lift coverage to 95% via additional unit tests or via the chaos test that drives this code path under fault injection. Tracked in `docs/journal/blocked.md`. |
-
-## Manual deviations (reasoned unreachable code)
-
-These entries are not regenerated by `scripts/regen_coverage_deviations.py`; they record source lines that are unreachable through the public API by design and therefore cap a crate below 95% without a production change that is out of scope for a coverage task.
-
-### `crates/gen-fsm/src/action.rs` and `crates/gen-fsm/src/driver.rs` -- deferred-reply family
-
-The `Action::Reply` variant, the `Action::reply` constructor, and every method on `ReplyHandle` (`send`, `is_closed`, and the `Debug` impl) are unreachable from outside the crate. `ReplyHandle` has a crate-private field (`pub(crate) oneshot::Sender<R>`) and the only producer is the driver's `Call` dispatch, which currently drops the handle (`drop(reply)` in `driver.rs`) before invoking the handler. A handler therefore never receives a `ReplyHandle`, so it can never construct an `Action::Reply`, and the driver's `Action::Reply(handle, reply) => handle.send(reply)` arm never runs. The module-level docs already flag deferred-reply forwarding as a future iteration.
-
-Likewise the postpone-redelivery loop in `driver.rs` (`while let Some(ev) = ds.postponed.pop_back()`) is unreachable: `ds.postponed` is never pushed to because the `Action::Postpone` arm is a documented no-op (postpone redelivery for mailbox events is deferred to the same future iteration). The observed no-op behaviour is pinned by the `postpone_is_currently_a_noop_for_mailbox_events` test.
-
-Affected lines (measured via `cargo llvm-cov --show-missing-lines`): `action.rs` 41-43, 91, 115-130 (the reply/handle family); `driver.rs` 248 (the `Action::Reply` apply arm) and 275-278 (the postpone-redelivery loop). These are the *only* uncovered source lines in the crate; every other line is covered by the unit tests in `crates/gen-fsm/tests/coverage.rs` and the property tests in `crates/gen-fsm/tests/properties.rs`. (The crate's aggregate line percentage reported by `--summary-only` reads lower than 100%-minus-these because llvm-cov counts each generic monomorphisation of `run` / `apply_transition` separately; the distinct-source-line view is the accurate one.) Raising the crate to 95% requires wiring `ReplyHandle` through to the handler and implementing postpone redelivery -- a feature change, recorded here rather than worked around with `#[allow]`.
-
-### `crates/dynomite/src/net/tls.rs` -- live-handshake-only paths
-
-The TLS config builders, PEM cert/key/CA loaders, error mapping,
-SNI label round-trips, the per-DC `TlsProfileMap` (including the
-mutual-TLS branch and `populate_combined_ca_roots`), and the
-whole `SharedTlsProfiles` reload surface are unit-tested directly
-(see the `net::tls::tests` module). The lines that remain
-uncovered all require a real TLS handshake completing over a live
-socket, which is integration-level and exercised by
-`crates/dynomite/tests/peer_plane_tls.rs` rather than by the unit
-suite that the per-file gate measures:
-
-* The `DcSniResolver::resolve` and `ReloadingDcSniResolver::resolve`
-  bodies (lines around 547-557) run only inside rustls' handshake
-  machinery when a `ClientHello` arrives.
-* The `Transport` / `AsyncRead` / `AsyncWrite` poll impls for
-  `TlsServerTransport` and `TlsClientTransport` (lines around
-  707-795) are only driven once a `tokio_rustls` stream is
-  established; the integration test covers the round trip, but the
-  per-file unit measurement does not.
-
-A handful of error-mapping arms inside `load_certs` /
-`load_private_key` (lines 123-144) map an `io::Error` raised by a
-mid-read failure; they are reached only when the OS returns an
-error part-way through reading an otherwise-openable file, which
-is not reproducible deterministically in a unit test without fault
-injection. Raising these requires a socket-level integration
-harness (already present as `peer_plane_tls.rs`) or fault
-injection at the filesystem layer; both are out of scope for a
-unit-coverage task, so the file is capped at its current ~90% line
-/ ~76% function via this deviation.
-
-### `crates/dynomite/src/core/log/mod.rs` -- writer fallbacks and a dead severity arm
-
-`LoggerWriter` routes to standard error and returns a no-op
-success whenever the process-global `STATE` `OnceLock` has not yet
-been installed (lines 146 and 160). In normal operation the only
-way a write reaches `LoggerWriter` is through an installed global
-`tracing` subscriber, and installing that subscriber is exactly
-what populates `STATE`, so the None-fallback arms are defensive
-code that the public API ordering prevents from running once a
-subscriber exists. The unit test `logger_writer_falls_back_to_
-stderr_until_state_init` exercises them when run in an isolated
-process (e.g. under nextest), but the single-process libtest
-runner sees `STATE` already installed by the sibling reopen test.
-
-`LoggerWriter::write`'s error arm (lines 151-153, which increments
-the `nerror` counter) runs only when the underlying sink's
-`write_all` fails -- a real OS I/O error such as a full disk --
-which cannot be injected without a failing sink hook that the
-module does not expose.
-
-Line 604 (`Level::WARN => 1`) is a dead arm inside a test-only
-severity-ordering closure: `tracing_level_for` never maps any
-numeric verbosity onto `Level::WARN` (0..=4 map to ERROR), so the
-WARN branch of the closure is never selected.
-
-### `crates/dynomite/src/core/log/syslog.rs` -- write-error short circuits
-
-Lines 135 and 193 are the `?` early-return edges of the two
-`write!(...)` calls inside `Rfc5424Formatter::format_event` /
-`Rfc3164Formatter::format_event`. The happy path (a successful
-write into the capture buffer) is covered by the format tests; the
-error edge runs only when the downstream `fmt::Write` sink itself
-returns an error, which the in-memory test writers never do.
-
-### `crates/dynomite/src/hashkit/random_slicing.rs` -- empty-table accessors
-
-`RandomSlices::is_empty` returning `true` (lines 362-364) and
-`index_for` returning `None` for a zero-length lower-bound array
-(line 391) are only reachable on an empty `RandomSlices`. Every
-public builder rejects empty input, so an empty table can only be
-produced through the private raw struct constructor; the
-`is_empty` docs already note this. The remaining uncovered lines
-(545, 678) are `assert!` failure-message format strings that are
-only evaluated when the corresponding assertion fails.
-
-### `crates/dynomite/src/cluster/hints.rs` -- 64-bit-unreachable overflow guard
-
-The `body_start.checked_add(len)` overflow break in
-`decode_records` (line 660) cannot trigger on a 64-bit target: the
-record length is a `u32` read from the segment, so
-`body_start + len` cannot overflow a `usize`. The guard is kept
-for correctness on hypothetical 16-bit/narrow-`usize` targets. The
-permission-denied disk-error paths are covered on non-root runners
-by the `*_readonly_dir` / `*_remove_failure` / `*_unreadable_
-segment` tests, which no-op when the suite runs as root.
+| File | Tier | Line % | Region % | Function % | Reason |
+|---|---|---|---|---|---|
+| `crates/dyn-admin/src/commands/distribution_dump.rs` | tool 75% | 63.21 | 65.06 | 50.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyn-admin/src/commands/metrics.rs` | tool 75% | 66.67 | 63.93 | 50.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyn-admin/src/commands/status.rs` | tool 75% | 65.36 | 65.54 | 61.54 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyn-encoding/src/codec/flatbuffers.rs` | supporting 75% | 80.19 | 85.90 | 68.75 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyn-encoding/src/error.rs` | supporting 75% | 50.00 | 50.00 | 50.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyn-hash-tool/src/main.rs` | tool 75% | 88.64 | 78.39 | 62.50 | Process bootstrap (argv parsing, fork / daemonize, exec). Runs once at startup and is exercised by spawning the binary in the CLI integration tests, not by unit tests. |
+| `crates/dyn-sup/src/types.rs` | supporting 75% | 50.00 | 44.44 | 50.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak-bench/src/driver/mod.rs` | tool 75% | 25.00 | 26.09 | 50.00 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dyniak-bench/src/driver/redis.rs` | tool 75% | 58.30 | 54.44 | 52.73 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dyniak-bench/src/driver/riak.rs` | tool 75% | 35.56 | 34.40 | 45.16 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dyniak-bench/src/main.rs` | tool 75% | 0.00 | 0.00 | 0.00 | Process bootstrap (argv parsing, fork / daemonize, exec). Runs once at startup and is exercised by spawning the binary in the CLI integration tests, not by unit tests. |
+| `crates/dyniak-bench/src/plot.rs` | tool 75% | 86.25 | 82.68 | 52.00 | Benchmark-harness rendering / report formatting (SVG charts, text reports). Validated by the bench-suite output artifacts rather than unit assertions. |
+| `crates/dyniak-bench/src/report.rs` | tool 75% | 90.37 | 84.03 | 58.33 | Benchmark-harness rendering / report formatting (SVG charts, text reports). Validated by the bench-suite output artifacts rather than unit assertions. |
+| `crates/dyniak/src/datastore/noxu.rs` | core 95% | 93.56 | 93.58 | 86.87 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/datastore/xa.rs` | core 95% | 89.80 | 90.18 | 77.14 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/datastore/xa_net.rs` | core 95% | 95.20 | 93.83 | 92.52 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/datatypes/hll.rs` | core 95% | 93.75 | 95.95 | 93.33 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/datatypes/itc.rs` | core 95% | 93.77 | 92.12 | 97.70 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/datatypes/map.rs` | core 95% | 93.78 | 95.66 | 90.48 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/mapreduce/builtins.rs` | core 95% | 96.89 | 95.78 | 92.59 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/mapreduce/registry.rs` | core 95% | 97.33 | 97.19 | 88.24 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/proto/http/mod.rs` | core 95% | 86.90 | 86.57 | 100.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/proto/http/routes.rs` | core 95% | 94.46 | 93.66 | 93.22 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dyniak/src/proto/http/search.rs` | core 95% | 94.32 | 94.04 | 92.11 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite-search/src/ft.rs` | supporting 75% | 82.77 | 84.75 | 73.12 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite-search/src/lib.rs` | supporting 75% | 14.06 | 3.57 | 10.00 | Re-export / facade module: the re-exported items are tested in their home modules; the facade itself has no executable lines to cover. |
+| `crates/dynomite/src/admin/cluster_info.rs` | supporting 75% | 82.24 | 82.28 | 66.67 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/cluster/datacenter.rs` | core 95% | 83.57 | 87.21 | 75.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/cluster/dispatch.rs` | core 95% | 65.66 | 66.65 | 66.67 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/cluster/gossip.rs` | core 95% | 80.56 | 84.06 | 80.65 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/cluster/peer.rs` | core 95% | 93.88 | 94.64 | 90.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/cluster/pool.rs` | core 95% | 92.07 | 92.44 | 88.57 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/cluster/snitch.rs` | core 95% | 87.32 | 89.55 | 85.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/conf/server.rs` | supporting 75% | 84.80 | 84.41 | 70.37 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/core/log/mod.rs` | core 95% | 94.24 | 93.24 | 96.30 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/core/log/syslog.rs` | core 95% | 95.95 | 91.86 | 85.19 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/core/ring_queue.rs` | core 95% | 91.18 | 94.12 | 83.33 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/core/signal.rs` | core 95% | 68.75 | 69.23 | 75.00 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/core/task.rs` | core 95% | 93.33 | 93.94 | 88.89 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/crypto/base64.rs` | core 95% | 97.06 | 97.18 | 87.50 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/crypto/mod.rs` | core 95% | 96.91 | 96.23 | 94.44 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/crypto/pem.rs` | core 95% | 95.83 | 91.67 | 80.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/embed/builder.rs` | supporting 75% | 47.94 | 48.14 | 42.31 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/embed/hooks.rs` | supporting 75% | 56.99 | 58.54 | 51.47 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/embed/mod.rs` | supporting 75% | 57.14 | 58.33 | 66.67 | Re-export / facade module: the re-exported items are tested in their home modules; the facade itself has no executable lines to cover. |
+| `crates/dynomite/src/embed/server.rs` | supporting 75% | 73.82 | 73.60 | 70.42 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/embed/snapshots.rs` | supporting 75% | 37.50 | 37.78 | 25.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/entropy/receive.rs` | supporting 75% | 74.30 | 77.30 | 72.22 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/entropy/send.rs` | supporting 75% | 61.36 | 60.42 | 53.33 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/hashkit/mod.rs` | core 95% | 95.05 | 92.76 | 90.91 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/io/mbuf.rs` | core 95% | 78.20 | 79.85 | 72.88 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/io/reactor.rs` | core 95% | 71.64 | 76.17 | 64.29 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/msg/mod.rs` | core 95% | 84.48 | 88.61 | 100.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/msg/msg_type.rs` | core 95% | 94.23 | 94.17 | 91.67 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/net/client.rs` | core 95% | 87.85 | 88.16 | 82.35 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/net/conn.rs` | core 95% | 55.37 | 58.64 | 55.88 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/net/dnode_client.rs` | core 95% | 52.36 | 56.44 | 71.43 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/net/dnode_proxy.rs` | core 95% | 94.92 | 94.90 | 85.71 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/net/dnode_server.rs` | core 95% | 48.45 | 50.55 | 73.33 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/net/listener.rs` | core 95% | 65.12 | 77.61 | 60.00 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/net/mod.rs` | core 95% | 0.00 | 0.00 | 0.00 | Re-export / facade module: the re-exported items are tested in their home modules; the facade itself has no executable lines to cover. |
+| `crates/dynomite/src/net/proxy.rs` | core 95% | 85.48 | 86.59 | 75.00 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/net/server.rs` | core 95% | 82.39 | 82.64 | 92.86 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/dynomite/src/net/tls.rs` | core 95% | 90.17 | 89.65 | 76.40 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/proto/memcache/fragment.rs` | core 95% | 94.05 | 94.89 | 100.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/proto/memcache/parser.rs` | core 95% | 93.19 | 88.58 | 100.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/proto/redis/coalesce.rs` | core 95% | 93.98 | 91.84 | 93.75 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/proto/redis/parser.rs` | core 95% | 90.71 | 89.19 | 100.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/seeds/dns.rs` | supporting 75% | 83.10 | 85.61 | 63.64 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/seeds/florida.rs` | supporting 75% | 80.00 | 82.17 | 64.00 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/dynomite/src/seeds/mod.rs` | supporting 75% | 0.00 | 0.00 | 0.00 | Re-export / facade module: the re-exported items are tested in their home modules; the facade itself has no executable lines to cover. |
+| `crates/dynomited/src/daemonize.rs` | supporting 75% | 11.76 | 6.78 | 25.00 | Process bootstrap (argv parsing, fork / daemonize, exec). Runs once at startup and is exercised by spawning the binary in the CLI integration tests, not by unit tests. |
+| `crates/dynomited/src/main.rs` | supporting 75% | 28.78 | 24.76 | 25.00 | Process bootstrap (argv parsing, fork / daemonize, exec). Runs once at startup and is exercised by spawning the binary in the CLI integration tests, not by unit tests. |
+| `crates/dynomited/src/server.rs` | supporting 75% | 66.39 | 70.56 | 75.96 | Exercised by the out-of-process suites (Stage 14 conformance, Stage 16 chaos): listener accept loops, the dnode peer transport, the reactor, and the cluster dispatch / gossip drivers run only with real sockets and a live runtime. Co-located unit tests cover the pure per-step logic; the I/O-bound paths are integration-only. |
+| `crates/gen-fsm/src/action.rs` | supporting 75% | 70.45 | 72.22 | 66.67 | Remaining uncovered lines are unreachable through the public API (defensive arms guarded by preceding state, resume-only state-machine restore arms, or in-file test assertion arms). Enumerated in the per-stage coverage journals; not worked around with #[allow]. |
+| `crates/loom-tests/src/lib.rs` | tool 75% | 0.00 | 0.00 | 0.00 | Re-export / facade module: the re-exported items are tested in their home modules; the facade itself has no executable lines to cover. |

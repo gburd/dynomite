@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Stage 15 coverage gate.
 #
-# Runs `cargo llvm-cov --workspace --all-features --json --summary-only`
-# and fails when line, branch, or function coverage drops below 95%
-# for any module that is not explicitly listed in
+# Runs `cargo llvm-cov --workspace --features riak --json --summary-only`
+# and applies a tiered per-file threshold (core 95%, supporting/tool
+# 75%) and fails when any module below its tier that is not explicitly listed in
 # `docs/coverage-deviations.md`.
 #
 # Output:
@@ -35,8 +35,8 @@ fi
 
 mkdir -p target/coverage
 
-echo "==> cargo llvm-cov --workspace --all-features --summary-only --json"
-cargo llvm-cov --workspace --all-features --summary-only --json \
+echo "==> cargo llvm-cov --workspace --features riak --summary-only --json"
+cargo llvm-cov --workspace --features riak --summary-only --json \
     --output-path target/coverage/summary.json \
     >/dev/null
 

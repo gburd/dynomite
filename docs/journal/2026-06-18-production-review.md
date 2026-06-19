@@ -82,3 +82,46 @@ Tier policy for the blocking gate:
 - Tools/benches (dyniak-bench, dyn-hash-tool, dyn-admin, the dynomited
   process-entry shims main.rs/daemonize.rs): >= 75% with documented
   Deviations for the un-coverable process bootstrap.
+
+## Outcome (2026-06-19)
+
+Workspace line coverage 82.54% -> 88.49% (function 80.38% -> 86.33%).
+All test additions are co-located unit tests, new integration test
+files, hegel property tests, and stateright model checks -- no
+production logic was changed to game coverage.
+
+Merged on main:
+- docs sync (rustdoc links, man page v0.1.0, README, mdBook): 84c9e81
+- version/authorship fix (dynomited reports 0.1.0; author Greg Burd): 4c5a1ab
+- stateright model-tests crate (XA 2PC atomicity/liveness with a
+  negative control, quorum, ring, gossip): 9d4a23c
+- engine proto/stats/util coverage + property tests: 8fac93c
+- search/gen-fsm/dyniak coverage + property tests: 5070ee9
+- model-tests doc-link fix: 93a78db
+- comment-accuracy audit (123 files, ~150 port-comment removals): 1bc7ec2
+- dyniak core coverage to 95% (XA, mapreduce, proto): 8acf18b
+- engine residual coverage (tls, log, capability, vec): 50489df
+- dynomited server + bench helper coverage: 3aae4c4
+- final unit-testable gaps (memcache, msg, hashkit, io): 32668b0
+
+Coverage gate is now TIERED and BLOCKING:
+- core (engine proto/cluster/io/hashkit/crypto/msg/core/net + dyniak
+  datastore/proto/datatypes/mapreduce) >= 95%,
+- supporting and tool crates >= 75%,
+- enforced by scripts/coverage_gate.py; check.sh runs it without
+  `|| true`.
+
+docs/coverage-deviations.md regenerated (76 entries) with a concrete
+reason per file: integration-only (listener/dnode/reactor/dispatch/
+gossip), re-export facades, process bootstrap (main/daemonize),
+bench rendering, or enumerated unreachable defensive arms. No file is
+an untested unit of pure logic.
+
+Stateright models: XA 2PC atomicity + no-commit-without-unanimous +
+durability + liveness, with a deliberately-broken variant the checker
+catches; quorum acceptance; ring determinism/coverage/bounded-
+disruption; gossip eventual convergence. Run via scripts/model.sh.
+
+Doc build is clean under RUSTDOCFLAGS=-D warnings cargo doc
+--workspace; man page regenerates byte-identical from the CLI source;
+mdbook build is clean.

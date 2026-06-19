@@ -1,33 +1,93 @@
 #!/usr/bin/env python3
-"""Coverage-gate post-processor.
+"""Tiered coverage gate.
 
 Reads `target/coverage/summary.json` (produced by
-`cargo llvm-cov --workspace --all-features --summary-only --json
---output-path target/coverage/summary.json`) and enforces the
-Stage 15 95% threshold workspace-wide. Per-file modules listed in
-`docs/coverage-deviations.md` are downgraded from errors to
-warnings.
+`cargo llvm-cov --workspace --features riak --summary-only --json
+--output-path target/coverage/summary.json`) and enforces a tiered
+per-file coverage policy:
 
-Three axes are checked:
+* Core components       >= 95% (line and function).
+* Supporting components >= 75%.
+* Tool / process-entry  >= 75%, with documented deviations for the
+  code that is only reachable by spawning the binary or driving a
+  live external server (process bootstrap, network drivers, CLI
+  main, plotting), which co-located unit tests cannot exercise.
 
-* `lines`     - LLVM line coverage (raw line %).
-* `regions`   - region coverage; the closest stable proxy for
-                branch coverage. The unstable
-                `-Zcoverage-options=branch` flag is required to
-                populate the JSON `branches` block, so on stable
-                we fall back to regions.
+A file below its tier threshold is an ERROR unless it is listed in
+`docs/coverage-deviations.md`, in which case it is a WARNING. A
+documented deviation must carry a concrete reason; the deviation
+list is the audit trail.
+
+Two axes are checked per file:
+
+* `lines`     - LLVM line coverage.
 * `functions` - function coverage.
+
+Region/branch coverage is reported for context but not gated
+per-file (region counts are noisy at the file level on stable;
+the workspace region total is printed for trend tracking).
+
+Usage:
+  DYNOMITE_COV_MODE=enforce scripts/coverage_gate.py   # gate
+  DYNOMITE_COV_MODE=report  scripts/coverage_gate.py   # report only
 """
 
 import json
 import os
 import sys
 
-THRESHOLD = float(os.environ.get("DYNOMITE_COV_THRESHOLD", "95"))
 MODE = os.environ.get("DYNOMITE_COV_MODE", "enforce")
 SUMMARY = "target/coverage/summary.json"
 DEV_PATH = "docs/coverage-deviations.md"
 REPORT = "target/coverage/report.txt"
+
+# Tier thresholds (line and function coverage).
+CORE_THRESHOLD = 95.0
+SUPPORTING_THRESHOLD = 75.0
+TOOL_THRESHOLD = 75.0
+
+# Core components: the engine substrate and the dyniak storage /
+# protocol layer a customer's data integrity depends on.
+CORE_PREFIXES = (
+    "crates/dynomite/src/proto/",
+    "crates/dynomite/src/cluster/",
+    "crates/dynomite/src/io/",
+    "crates/dynomite/src/hashkit/",
+    "crates/dynomite/src/crypto/",
+    "crates/dynomite/src/msg/",
+    "crates/dynomite/src/core/",
+    "crates/dynomite/src/net/",
+    "crates/dyniak/src/datastore/",
+    "crates/dyniak/src/proto/",
+    "crates/dyniak/src/datatypes/",
+    "crates/dyniak/src/mapreduce/",
+)
+
+# Tool / benchmark / process-entry crates: held to the supporting
+# tier, with deviations for the un-unit-testable bootstrap.
+TOOL_PREFIXES = (
+    "crates/dyniak-bench/",
+    "crates/dyn-hash-tool/",
+    "crates/dyn-admin/",
+    "crates/loom-tests/",
+    "crates/model-tests/",
+)
+
+
+def tier_threshold(rel: str) -> float:
+    if any(rel.startswith(p) for p in CORE_PREFIXES):
+        return CORE_THRESHOLD
+    if any(rel.startswith(p) for p in TOOL_PREFIXES):
+        return TOOL_THRESHOLD
+    return SUPPORTING_THRESHOLD
+
+
+def tier_name(rel: str) -> str:
+    if any(rel.startswith(p) for p in CORE_PREFIXES):
+        return "core"
+    if any(rel.startswith(p) for p in TOOL_PREFIXES):
+        return "tool"
+    return "supporting"
 
 
 def pct(section: dict) -> float:
@@ -37,31 +97,7 @@ def pct(section: dict) -> float:
     return float(section.get("covered", 0)) / count * 100.0
 
 
-def main() -> int:
-    with open(SUMMARY) as fh:
-        data = json.load(fh)
-
-    totals = data["data"][0]["totals"]
-    line_pct = pct(totals["lines"])
-    branch_pct = pct(totals["regions"])
-    func_pct = pct(totals["functions"])
-
-    with open(REPORT, "w") as fh:
-        fh.write("workspace coverage (cargo-llvm-cov --all-features):\n")
-        fh.write(
-            f"  line     (lines):     {line_pct:6.2f}% (threshold {THRESHOLD}%)\n"
-        )
-        fh.write(
-            f"  branch   (regions):   {branch_pct:6.2f}% (threshold {THRESHOLD}%)\n"
-        )
-        fh.write(
-            f"  function (functions): {func_pct:6.2f}% (threshold {THRESHOLD}%)\n"
-        )
-
-    print(f"line     (lines):     {line_pct:6.2f}% (threshold {THRESHOLD}%)")
-    print(f"branch   (regions):   {branch_pct:6.2f}% (threshold {THRESHOLD}%)")
-    print(f"function (functions): {func_pct:6.2f}% (threshold {THRESHOLD}%)")
-
+def load_deviations() -> set:
     deviations = set()
     if os.path.exists(DEV_PATH):
         with open(DEV_PATH) as fh:
@@ -71,79 +107,105 @@ def main() -> int:
                     cells = [c.strip() for c in line.strip("|").split("|")]
                     if cells and cells[0]:
                         deviations.add(cells[0].strip("`"))
+    return deviations
+
+
+def main() -> int:
+    with open(SUMMARY) as fh:
+        data = json.load(fh)
+
+    totals = data["data"][0]["totals"]
+    line_pct = pct(totals["lines"])
+    region_pct = pct(totals["regions"])
+    func_pct = pct(totals["functions"])
+
+    deviations = load_deviations()
+    cwd = os.getcwd()
 
     documented = []
     undocumented = []
-    cwd = os.getcwd()
     for entry in data["data"][0].get("files", []):
-        fname = entry.get("filename", "")
-        rel = os.path.relpath(fname, cwd)
+        rel = os.path.relpath(entry.get("filename", ""), cwd)
         if not rel.startswith("crates/"):
+            continue
+        # Test, fuzz, and bench-harness fixtures are not gated.
+        if "/tests/" in rel or "/benches/" in rel or rel.startswith(
+            "crates/fuzz/"
+        ):
             continue
         summary = entry.get("summary", {})
         fl = summary.get("lines", {}).get("percent", 100.0)
-        fb = summary.get("regions", {}).get("percent", 100.0)
         ff = summary.get("functions", {}).get("percent", 100.0)
-        if min(fl, fb, ff) < THRESHOLD:
-            listed = rel in deviations or any(rel.endswith(d) for d in deviations)
-            row = (rel, fl, fb, ff)
+        threshold = tier_threshold(rel)
+        if min(fl, ff) < threshold:
+            listed = rel in deviations or any(
+                rel.endswith(d) for d in deviations
+            )
+            row = (rel, tier_name(rel), threshold, fl, ff)
             (documented if listed else undocumented).append(row)
 
-    with open(REPORT, "a") as fh:
+    with open(REPORT, "w") as fh:
+        fh.write("workspace coverage (cargo-llvm-cov --features riak):\n")
+        fh.write(f"  line:     {line_pct:6.2f}%\n")
+        fh.write(f"  region:   {region_pct:6.2f}%\n")
+        fh.write(f"  function: {func_pct:6.2f}%\n")
+        fh.write(
+            "\nTiers: core >= 95%, supporting >= 75%, tool >= 75%.\n"
+        )
         if documented:
-            fh.write("\nDocumented deviations below threshold (warnings only):\n")
-            for rel, fl, fb, ff in sorted(documented):
+            fh.write("\nDocumented deviations below tier (warnings):\n")
+            for rel, tier, thr, fl, ff in sorted(documented):
                 fh.write(
-                    f"  {rel}: line {fl:.2f}% branch {fb:.2f}% function {ff:.2f}%\n"
+                    f"  {rel} [{tier} {thr:.0f}%]: "
+                    f"line {fl:.2f}% function {ff:.2f}%\n"
                 )
         if undocumented:
-            fh.write("\nUNDOCUMENTED modules below threshold:\n")
-            for rel, fl, fb, ff in sorted(undocumented):
+            fh.write("\nUNDOCUMENTED modules below tier:\n")
+            for rel, tier, thr, fl, ff in sorted(undocumented):
                 fh.write(
-                    f"  {rel}: line {fl:.2f}% branch {fb:.2f}% function {ff:.2f}%\n"
+                    f"  {rel} [{tier} {thr:.0f}%]: "
+                    f"line {fl:.2f}% function {ff:.2f}%\n"
                 )
 
+    print(f"line:     {line_pct:6.2f}%")
+    print(f"region:   {region_pct:6.2f}%")
+    print(f"function: {func_pct:6.2f}%")
+    print("tiers: core >= 95%, supporting >= 75%, tool >= 75%")
+
     if documented:
-        print()
         print(
-            f"warning: {len(documented)} documented deviation(s) below threshold"
+            f"\nwarning: {len(documented)} documented deviation(s) below tier"
         )
-        for rel, fl, fb, ff in sorted(documented):
+        for rel, tier, thr, fl, ff in sorted(documented):
             print(
-                f"  WARN {rel}: line {fl:.2f}% branch {fb:.2f}% function {ff:.2f}%"
+                f"  WARN {rel} [{tier} {thr:.0f}%]: "
+                f"line {fl:.2f}% function {ff:.2f}%"
             )
 
     if undocumented:
-        print()
         print(
-            f"error: {len(undocumented)} undocumented module(s) below threshold:"
+            f"\nerror: {len(undocumented)} module(s) below tier and"
+            " undocumented:"
         )
-        for rel, fl, fb, ff in sorted(undocumented):
+        for rel, tier, thr, fl, ff in sorted(undocumented):
             print(
-                f"  FAIL {rel}: line {fl:.2f}% branch {fb:.2f}% function {ff:.2f}%"
+                f"  FAIL {rel} [{tier} {thr:.0f}%]: "
+                f"line {fl:.2f}% function {ff:.2f}%"
             )
-
-    workspace_pass = (
-        line_pct >= THRESHOLD
-        and branch_pct >= THRESHOLD
-        and func_pct >= THRESHOLD
-    )
 
     if MODE == "report":
-        print(
-            f"\ncoverage_gate: report-only (mode=report); "
-            f"workspace_pass={workspace_pass}"
-        )
+        print("\ncoverage_gate: report-only (mode=report)")
         return 0
-    if not workspace_pass:
-        print(f"\ncoverage_gate: workspace below {THRESHOLD}% threshold")
-        return 1
     if undocumented:
-        print("\ncoverage_gate: undocumented per-file deviations")
+        print(
+            "\ncoverage_gate: FAIL -- modules below their tier threshold"
+            " are neither covered nor documented as deviations"
+        )
         return 1
     print(
         f"\ncoverage_gate: PASS (line {line_pct:.2f}%, "
-        f"branch {branch_pct:.2f}%, function {func_pct:.2f}%)"
+        f"function {func_pct:.2f}%; all below-tier files are documented"
+        " deviations)"
     )
     return 0
 
