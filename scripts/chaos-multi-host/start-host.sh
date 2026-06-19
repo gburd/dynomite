@@ -477,6 +477,21 @@ if [ "$ENABLE_NOXU" = "1" ]; then
 EOF
 fi
 
+# Append the search_index_dir directive so the RediSearch (FT.*)
+# index registry persists across a chaos process-kill. Without it
+# the in-memory index is wiped on every restart and the FT.*
+# workload sees transient index-not-found until it recreates the
+# index. The valkey instance (data_store=0) runs the FT.* workload,
+# so it gets a durable per-instance index directory under the run
+# scratch tree.
+if [ "$DATA_STORE_VAL" = "0" ]; then
+    SEARCH_IDX_DIR="$RUN/search-index"
+    mkdir -p "$SEARCH_IDX_DIR"
+    cat >> "$CONF" <<EOF
+  search_index_dir: $SEARCH_IDX_DIR
+EOF
+fi
+
 # Append the seeds block only when SEEDS is non-empty. The C
 # `simple_provider` and the Rust seeds parser both treat an
 # empty seeds list as "no peers" (single-host smoke); writing
