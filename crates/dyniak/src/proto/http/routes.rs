@@ -1630,6 +1630,465 @@ mod tests {
         HeaderMap::new()
     }
 
+    /// Datastore whose accounting trampoline (`dispatch`) always
+    /// fails, so the GET / PUT / DELETE handlers take their
+    /// 500-on-datastore-error arm.
+    struct DispatchFailsStore;
+
+    impl Datastore for DispatchFailsStore {
+        fn protocol(&self) -> dynomite::embed::Protocol {
+            dynomite::embed::Protocol::Custom
+        }
+        fn dispatch(
+            &self,
+            _req: Msg,
+        ) -> dynomite::embed::BoxFuture<'_, Result<Msg, dynomite::embed::DatastoreError>> {
+            Box::pin(async move {
+                Err(dynomite::embed::DatastoreError::Backend(
+                    "dispatch boom".into(),
+                ))
+            })
+        }
+    }
+
+    fn fail_store() -> Arc<dyn Datastore> {
+        Arc::new(DispatchFailsStore)
+    }
+
+    /// Headers requesting a content type no codec can satisfy, to
+    /// drive the 406 Not Acceptable arms.
+    fn unacceptable_headers() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(ACCEPT, "application/x-nonsense".parse().unwrap());
+        h
+    }
+
+    #[tokio::test]
+    async fn get_dispatch_error_is_500() {
+        let resp = handle_route(
+            Route::GetObject {
+                bucket: "u",
+                key: "k",
+            },
+            &Method::GET,
+            &dummy_headers(),
+            Bytes::new(),
+            fail_store(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn put_dispatch_error_is_500() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        let resp = handle_route(
+            Route::PutObject {
+                bucket: "u",
+                key: "k",
+            },
+            &Method::PUT,
+            &headers,
+            Bytes::from_static(b"{\"value\":\"v\"}"),
+            fail_store(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn delete_dispatch_error_is_500() {
+        let resp = handle_route(
+            Route::DeleteObject {
+                bucket: "u",
+                key: "k",
+            },
+            &Method::DELETE,
+            &dummy_headers(),
+            Bytes::new(),
+            fail_store(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn get_with_unsupported_accept_is_406() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let resp = handle_route(
+            Route::GetObject {
+                bucket: "u",
+                key: "k",
+            },
+            &Method::GET,
+            &unacceptable_headers(),
+            Bytes::new(),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
+    }
+
+    #[tokio::test]
+    async fn get_props_with_unsupported_accept_is_406() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let resp = handle_route(
+            Route::GetProps { bucket: "u" },
+            &Method::GET,
+            &unacceptable_headers(),
+            Bytes::new(),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
+    }
+
+    #[tokio::test]
+    async fn list_buckets_with_unsupported_accept_is_406() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let resp = handle_route(
+            Route::ListBuckets,
+            &Method::GET,
+            &unacceptable_headers(),
+            Bytes::new(),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
+    }
+
+    #[tokio::test]
+    async fn list_keys_with_unsupported_accept_is_406() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let resp = handle_route(
+            Route::ListKeys { bucket: "u" },
+            &Method::GET,
+            &unacceptable_headers(),
+            Bytes::new(),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn parse_link_resource_modern_legacy_and_rejections() {
+        assert_eq!(
+            parse_link_resource("/buckets/people/keys/bob"),
+            Some(("people".to_string(), "bob".to_string()))
+        );
+        assert_eq!(
+            parse_link_resource("/riak/people/bob"),
+            Some(("people".to_string(), "bob".to_string()))
+        );
+        // Empty bucket or key, or a bucket-only path, is not a link.
+        assert!(parse_link_resource("/buckets//keys/bob").is_none());
+        assert!(parse_link_resource("/buckets/people/keys/").is_none());
+        assert!(parse_link_resource("/buckets/people").is_none());
+        assert!(parse_link_resource("/riak//bob").is_none());
+        assert!(parse_link_resource("/riak/people/").is_none());
+        assert!(parse_link_resource("/elsewhere/x").is_none());
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn unquote_strips_one_layer_only() {
+        assert_eq!(unquote("\"x\""), "x");
+        assert_eq!(unquote("x"), "x");
+        assert_eq!(unquote("\"x"), "\"x"); // only a leading quote: untouched
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn decode_path_segment_handles_escapes_and_passthrough() {
+        assert_eq!(decode_path_segment("plain"), "plain");
+        assert_eq!(decode_path_segment("a%20b"), "a b");
+        // A malformed escape passes through verbatim.
+        assert_eq!(decode_path_segment("a%zzb"), "a%zzb");
+        assert_eq!(decode_path_segment("trailing%"), "trailing%");
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn hex_digit_decodes_all_cases() {
+        assert_eq!(hex_digit(b'0'), Some(0));
+        assert_eq!(hex_digit(b'9'), Some(9));
+        assert_eq!(hex_digit(b'a'), Some(10));
+        assert_eq!(hex_digit(b'f'), Some(15));
+        assert_eq!(hex_digit(b'A'), Some(10));
+        assert_eq!(hex_digit(b'F'), Some(15));
+        assert_eq!(hex_digit(b'g'), None);
+    }
+
+    #[cfg(feature = "noxu")]
+    #[test]
+    fn storage_error_response_maps_status() {
+        use crate::datastore::NoxuDatastoreError;
+        let bad_name = NoxuDatastoreError::InvalidName { what: "bucket" };
+        assert_eq!(
+            storage_error_response(&bad_name).status(),
+            StatusCode::BAD_REQUEST
+        );
+        let bad_int = NoxuDatastoreError::BadIntValue { got: 4 };
+        assert_eq!(
+            storage_error_response(&bad_int).status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn txn_outcome_and_error_responses_carry_expected_status() {
+        let committed = txn_outcome_response(&TxnOutcome::Committed { operations: 2 });
+        assert_eq!(committed.status(), StatusCode::OK);
+        let aborted = txn_outcome_response(&TxnOutcome::Aborted {
+            reason: "client".into(),
+        });
+        assert_eq!(aborted.status(), StatusCode::CONFLICT);
+        let err = txn_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &TxnStoreError::Backend("boom".into()),
+        );
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn set_props_bad_content_type_and_empty_body() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let mut bad_ct = HeaderMap::new();
+        bad_ct.insert(CONTENT_TYPE, "application/x-nonsense".parse().unwrap());
+        let resp = handle_route(
+            Route::SetProps { bucket: "u" },
+            &Method::PUT,
+            &bad_ct,
+            Bytes::from_static(b"{}"),
+            ds.clone(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        let mut json = HeaderMap::new();
+        json.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        let empty = handle_route(
+            Route::SetProps { bucket: "u" },
+            &Method::PUT,
+            &json,
+            Bytes::new(),
+            ds.clone(),
+        )
+        .await;
+        assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+
+        let ok = handle_route(
+            Route::SetProps { bucket: "u" },
+            &Method::PUT,
+            &json,
+            Bytes::from_static(b"{\"props\":{}}"),
+            ds,
+        )
+        .await;
+        assert_eq!(ok.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[cfg(feature = "noxu")]
+    mod noxu_backed {
+        use super::*;
+        use crate::datastore::NoxuDatastore;
+
+        fn noxu_ctx() -> (Arc<dyn Datastore>, tempfile::TempDir) {
+            let dir = tempfile::TempDir::new().expect("tempdir");
+            let ds: Arc<dyn Datastore> =
+                Arc::new(NoxuDatastore::open_transactional(dir.path()).expect("open"));
+            (ds, dir)
+        }
+
+        fn ct_headers(accept: &str, content_type: &str) -> HeaderMap {
+            let mut h = HeaderMap::new();
+            h.insert(ACCEPT, accept.parse().unwrap());
+            h.insert(CONTENT_TYPE, content_type.parse().unwrap());
+            h
+        }
+
+        #[tokio::test]
+        async fn put_json_then_get_transcodes_across_codecs() {
+            use crate::proto::http::object::HttpObject;
+            let (ds, _dir) = noxu_ctx();
+            let obj = HttpObject {
+                value: b"hello".to_vec(),
+                content_type: Some("text/plain".to_string()),
+                indexes: Vec::new(),
+                links: Vec::new(),
+            };
+            let body = Bytes::from(serde_json::to_vec(&obj).expect("json body"));
+            let put = handle_route(
+                Route::PutObject {
+                    bucket: "u",
+                    key: "k",
+                },
+                &Method::PUT,
+                &ct_headers("application/json", "application/json"),
+                body,
+                ds.clone(),
+            )
+            .await;
+            assert_eq!(put.status(), StatusCode::NO_CONTENT);
+
+            for accept in [
+                "application/json",
+                "application/cbor",
+                "application/x-protobuf",
+            ] {
+                let mut h = HeaderMap::new();
+                h.insert(ACCEPT, accept.parse().unwrap());
+                let get = handle_route(
+                    Route::GetObject {
+                        bucket: "u",
+                        key: "k",
+                    },
+                    &Method::GET,
+                    &h,
+                    Bytes::new(),
+                    ds.clone(),
+                )
+                .await;
+                assert_eq!(get.status(), StatusCode::OK, "accept {accept}");
+            }
+        }
+
+        #[tokio::test]
+        async fn get_missing_object_is_404() {
+            let (ds, _dir) = noxu_ctx();
+            let mut h = HeaderMap::new();
+            h.insert(ACCEPT, "application/json".parse().unwrap());
+            let get = handle_route(
+                Route::GetObject {
+                    bucket: "u",
+                    key: "ghost",
+                },
+                &Method::GET,
+                &h,
+                Bytes::new(),
+                ds,
+            )
+            .await;
+            assert_eq!(get.status(), StatusCode::NOT_FOUND);
+        }
+
+        #[tokio::test]
+        async fn head_object_returns_ok_without_body() {
+            use crate::proto::http::object::HttpObject;
+            let (ds, _dir) = noxu_ctx();
+            let obj = HttpObject {
+                value: b"hi".to_vec(),
+                content_type: None,
+                indexes: Vec::new(),
+                links: Vec::new(),
+            };
+            let body = Bytes::from(serde_json::to_vec(&obj).expect("json body"));
+            handle_route(
+                Route::PutObject {
+                    bucket: "u",
+                    key: "k",
+                },
+                &Method::PUT,
+                &ct_headers("application/json", "application/json"),
+                body,
+                ds.clone(),
+            )
+            .await;
+            let mut h = HeaderMap::new();
+            h.insert(ACCEPT, "application/json".parse().unwrap());
+            let head = handle_route(
+                Route::GetObject {
+                    bucket: "u",
+                    key: "k",
+                },
+                &Method::HEAD,
+                &h,
+                Bytes::new(),
+                ds,
+            )
+            .await;
+            assert_eq!(head.status(), StatusCode::OK);
+        }
+
+        #[tokio::test]
+        async fn put_with_invalid_bucket_is_storage_error() {
+            use crate::proto::http::object::HttpObject;
+            let (ds, _dir) = noxu_ctx();
+            let obj = HttpObject {
+                value: b"x".to_vec(),
+                content_type: None,
+                indexes: Vec::new(),
+                links: Vec::new(),
+            };
+            let body = Bytes::from(serde_json::to_vec(&obj).expect("json body"));
+            let put = handle_route(
+                Route::PutObject {
+                    bucket: "u\u{0}bad",
+                    key: "k",
+                },
+                &Method::PUT,
+                &ct_headers("application/json", "application/json"),
+                body,
+                ds,
+            )
+            .await;
+            assert_eq!(put.status(), StatusCode::BAD_REQUEST);
+        }
+
+        #[tokio::test]
+        async fn delete_object_against_store_is_204() {
+            let (ds, _dir) = noxu_ctx();
+            let del = handle_route(
+                Route::DeleteObject {
+                    bucket: "u",
+                    key: "k",
+                },
+                &Method::DELETE,
+                &dummy_headers(),
+                Bytes::new(),
+                ds,
+            )
+            .await;
+            assert_eq!(del.status(), StatusCode::NO_CONTENT);
+        }
+
+        #[tokio::test]
+        async fn transaction_bucket_mismatch_is_400() {
+            let (ds, _dir) = noxu_ctx();
+            let mut h = HeaderMap::new();
+            h.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+            let body = br#"{"operations":[{"op":"put","bucket":"other","key":"k","value":"v"}]}"#;
+            let resp = handle_route(
+                Route::Transaction { bucket: Some("u") },
+                &Method::POST,
+                &h,
+                Bytes::from_static(body),
+                ds,
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        }
+
+        #[tokio::test]
+        async fn transaction_decode_error_is_400() {
+            let (ds, _dir) = noxu_ctx();
+            let mut h = HeaderMap::new();
+            h.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+            let resp = handle_route(
+                Route::Transaction { bucket: None },
+                &Method::POST,
+                &h,
+                Bytes::from_static(b"not json"),
+                ds,
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
     #[cfg(feature = "noxu")]
     #[test]
     fn parse_link_value_modern_form() {

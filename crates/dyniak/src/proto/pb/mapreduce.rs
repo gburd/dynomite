@@ -117,4 +117,16 @@ mod tests {
         let back = RpbMapRedReq::decode(bytes.as_slice()).expect("decode");
         assert_eq!(back, req);
     }
+
+    #[test]
+    fn wire_type_ids_are_stable() {
+        assert_eq!(
+            RpbMapRedReq::wire_type_id(),
+            WireTypeId::new("riak.RpbMapRedReq")
+        );
+        assert_eq!(
+            RpbMapRedResp::wire_type_id(),
+            WireTypeId::new("riak.RpbMapRedResp")
+        );
+    }
 }

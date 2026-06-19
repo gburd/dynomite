@@ -1076,4 +1076,217 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].key, "origin");
     }
+
+    // ---- route-handler error and happy arms ------------------------
+
+    fn json_headers() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(ACCEPT, "application/json".parse().unwrap());
+        h
+    }
+
+    fn bad_accept() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(ACCEPT, "application/x-nonsense".parse().unwrap());
+        h
+    }
+
+    fn state() -> SearchState {
+        SearchState::new(Arc::new(VectorRegistry::new()))
+    }
+
+    #[test]
+    fn handlers_without_registry_reply_501() {
+        let h = json_headers();
+        let body = Bytes::new();
+        assert_eq!(
+            declare_text_index(None, "b", "f", &h).status(),
+            StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            create_vector_index(None, "b", &h, &body).status(),
+            StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            list_indexes(None, "b", &h).status(),
+            StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            search_text(None, "b", "f", Some("q=x"), &h).status(),
+            StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            search_regex(None, "b", "f", Some("pattern=x"), &h).status(),
+            StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            search_vector(None, "b", &h, &body).status(),
+            StatusCode::NOT_IMPLEMENTED
+        );
+    }
+
+    #[test]
+    fn handlers_with_unacceptable_accept_reply_406() {
+        let s = state();
+        let h = bad_accept();
+        let body = Bytes::new();
+        assert_eq!(
+            declare_text_index(Some(&s), "b", "f", &h).status(),
+            StatusCode::NOT_ACCEPTABLE
+        );
+        assert_eq!(
+            create_vector_index(Some(&s), "b", &h, &body).status(),
+            StatusCode::NOT_ACCEPTABLE
+        );
+        assert_eq!(
+            list_indexes(Some(&s), "b", &h).status(),
+            StatusCode::NOT_ACCEPTABLE
+        );
+        assert_eq!(
+            search_text(Some(&s), "b", "f", Some("q=x"), &h).status(),
+            StatusCode::NOT_ACCEPTABLE
+        );
+        assert_eq!(
+            search_regex(Some(&s), "b", "f", Some("pattern=x"), &h).status(),
+            StatusCode::NOT_ACCEPTABLE
+        );
+        assert_eq!(
+            search_vector(Some(&s), "b", &h, &body).status(),
+            StatusCode::NOT_ACCEPTABLE
+        );
+    }
+
+    #[test]
+    fn declare_then_list_index_ack_is_200() {
+        let s = state();
+        let h = json_headers();
+        assert_eq!(
+            declare_text_index(Some(&s), "b", "title", &h).status(),
+            StatusCode::OK
+        );
+        assert_eq!(list_indexes(Some(&s), "b", &h).status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn create_vector_index_handler_paths() {
+        let s = state();
+        let h = json_headers();
+        // Malformed JSON body -> 400.
+        assert_eq!(
+            create_vector_index(Some(&s), "b", &h, &Bytes::from_static(b"not json")).status(),
+            StatusCode::BAD_REQUEST
+        );
+        // Valid create -> 200.
+        let body = Bytes::from_static(br#"{"dim":3,"metric":"cosine"}"#);
+        assert_eq!(
+            create_vector_index(Some(&s), "b", &h, &body).status(),
+            StatusCode::OK
+        );
+        // Re-create the same index -> 409 Conflict.
+        assert_eq!(
+            create_vector_index(Some(&s), "b", &h, &body).status(),
+            StatusCode::CONFLICT
+        );
+        // dim == 0 -> 400 from the engine.
+        let zero = Bytes::from_static(br#"{"dim":0}"#);
+        assert_eq!(
+            create_vector_index(Some(&s), "other", &h, &zero).status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn search_text_handler_paths() {
+        let s = state();
+        let h = json_headers();
+        // Missing `q` -> 400.
+        assert_eq!(
+            search_text(Some(&s), "b", "f", None, &h).status(),
+            StatusCode::BAD_REQUEST
+        );
+        // No text index declared for the field -> NoTextField (404).
+        assert_eq!(
+            search_text(Some(&s), "b", "f", Some("q=x"), &h).status(),
+            StatusCode::NOT_FOUND
+        );
+        // Declared + indexed -> 200.
+        s.declare_text_field("b", "f").unwrap();
+        s.index_object("b", b"k", br#"{"f":"hello world"}"#);
+        assert_eq!(
+            search_text(Some(&s), "b", "f", Some("q=hello"), &h).status(),
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn search_regex_handler_paths() {
+        let s = state();
+        let h = json_headers();
+        // Missing pattern -> 400.
+        assert_eq!(
+            search_regex(Some(&s), "b", "f", None, &h).status(),
+            StatusCode::BAD_REQUEST
+        );
+        // Bad `k` -> 400.
+        assert_eq!(
+            search_regex(Some(&s), "b", "f", Some("pattern=x&k=notnum"), &h).status(),
+            StatusCode::BAD_REQUEST
+        );
+        // Declared field, valid pattern + k -> 200.
+        s.declare_text_field("b", "f").unwrap();
+        s.index_object("b", b"k", br#"{"f":"abcdef"}"#);
+        assert_eq!(
+            search_regex(Some(&s), "b", "f", Some("pattern=abc&k=1"), &h).status(),
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn search_vector_handler_paths() {
+        let s = state();
+        let h = json_headers();
+        // Malformed JSON -> 400.
+        assert_eq!(
+            search_vector(Some(&s), "b", &h, &Bytes::from_static(b"not json")).status(),
+            StatusCode::BAD_REQUEST
+        );
+        // Empty query vector -> 400.
+        let empty = Bytes::from_static(br#"{"query":[],"k":1}"#);
+        assert_eq!(
+            search_vector(Some(&s), "b", &h, &empty).status(),
+            StatusCode::BAD_REQUEST
+        );
+        // No vector index for the bucket -> NoVectorIndex (404).
+        let q = Bytes::from_static(br#"{"query":[0.1,0.2],"k":1}"#);
+        assert_eq!(
+            search_vector(Some(&s), "b", &h, &q).status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn search_error_into_response_maps_every_variant() {
+        assert_eq!(
+            SearchError::NoTextField.into_response().status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            SearchError::NoVectorIndex.into_response().status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            SearchError::AlreadyExists("x".into())
+                .into_response()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            SearchError::BadRequest("x".into()).into_response().status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            SearchError::Registry("x".into()).into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 }

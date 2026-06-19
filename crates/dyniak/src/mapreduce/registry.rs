@@ -139,4 +139,20 @@ mod tests {
         let out = (lookup)(&[serde_json::json!(1), serde_json::json!(2)], None).expect("ok");
         assert_eq!(out, vec![serde_json::json!(1), serde_json::json!(2)]);
     }
+
+    #[test]
+    fn names_are_returned_sorted() {
+        let mut r = PhaseRegistry::new();
+        let m: MapFn = Arc::new(|v: &Value, _: Option<&Value>| Ok(vec![v.clone()]));
+        let red: ReduceFn = Arc::new(|vs: &[Value], _: Option<&Value>| Ok(vs.to_vec()));
+        r.register_map("zeta", Arc::clone(&m));
+        r.register_map("alpha", m);
+        r.register_reduce("omega", Arc::clone(&red));
+        r.register_reduce("beta", red);
+        assert_eq!(r.map_names(), vec!["alpha".to_string(), "zeta".to_string()]);
+        assert_eq!(
+            r.reduce_names(),
+            vec!["beta".to_string(), "omega".to_string()]
+        );
+    }
 }

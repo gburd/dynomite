@@ -547,4 +547,112 @@ mod tests {
         let out = map_identity(&v, None).expect("ok");
         assert_eq!(out, vec![v]);
     }
+
+    #[test]
+    fn map_extract_field_from_array_value_reads_index_like_field() {
+        // A `value` that is already a JSON array stays as-is; reading
+        // a non-existent string field yields null (covers the
+        // Array(_) arm of the parse match).
+        let v = serde_json::json!({"value": [1, 2, 3]});
+        let out = map_extract_field(&v, Some(&serde_json::json!("name"))).expect("ok");
+        assert_eq!(out, vec![Value::Null]);
+    }
+
+    #[test]
+    fn map_extract_field_opaque_string_value_is_null() {
+        // A `value` string that is not JSON parses to null.
+        let v = serde_json::json!({"value": "not json at all"});
+        let out = map_extract_field(&v, Some(&serde_json::json!("name"))).expect("ok");
+        assert_eq!(out, vec![Value::Null]);
+    }
+
+    #[test]
+    fn map_extract_field_scalar_value_passes_through_to_null() {
+        // A scalar (non-object/array/string) `value` hits the `other`
+        // arm and then has no field, yielding null.
+        let v = serde_json::json!({"value": 7});
+        let out = map_extract_field(&v, Some(&serde_json::json!("name"))).expect("ok");
+        assert_eq!(out, vec![Value::Null]);
+    }
+
+    #[test]
+    fn map_extract_field_rejects_object_arg_without_string_field() {
+        let v = serde_json::json!({"value": {"x": 1}});
+        let err = map_extract_field(&v, Some(&serde_json::json!({"field": 5})))
+            .expect_err("non-string field");
+        assert!(matches!(err, MrError::Json(_)));
+    }
+
+    #[test]
+    fn map_extract_field_rejects_non_string_non_object_arg() {
+        let v = serde_json::json!({"value": {"x": 1}});
+        let err = map_extract_field(&v, Some(&serde_json::json!(42))).expect_err("bad arg shape");
+        assert!(matches!(err, MrError::Json(_)));
+    }
+
+    #[test]
+    fn reduce_sum_rejects_u64_above_i64_range() {
+        // A JSON integer above i64::MAX is stored as a u64; the sum
+        // path cannot fit it into the i64 accumulator and rejects it.
+        let too_big: u64 = u64::try_from(i64::MAX).expect("i64::MAX fits u64") + 1;
+        let err = reduce_sum(&[serde_json::json!(too_big)], None)
+            .expect_err("u64 over i64 range is rejected");
+        assert!(matches!(err, MrError::Json(_)));
+    }
+
+    #[test]
+    fn map_extract_field_null_value_yields_null() {
+        // A `value` that is explicitly JSON null hits the Null arm of
+        // the parse match and extracts to null.
+        let v = serde_json::json!({"value": null});
+        let out = map_extract_field(&v, Some(&serde_json::json!("name"))).expect("ok");
+        assert_eq!(out, vec![Value::Null]);
+    }
+
+    #[test]
+    fn reduce_sum_mixes_int_and_float() {
+        let out = reduce_sum(&[serde_json::json!(10), serde_json::json!(2.5)], None).expect("ok");
+        let n = out[0].as_f64().expect("f64");
+        assert!((n - 12.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reduce_sort_breaks_number_ties_deterministically() {
+        // 1 and 1.0 share an f64 value; the tie-break by textual form
+        // keeps the order total and stable.
+        let a = reduce_sort(&[serde_json::json!(1.0), serde_json::json!(1)], None).expect("ok");
+        let b = reduce_sort(&[serde_json::json!(1), serde_json::json!(1.0)], None).expect("ok");
+        assert_eq!(a, b, "sort order is independent of input order");
+    }
+
+    #[test]
+    fn reduce_sort_orders_arrays_and_objects() {
+        // Arrays compared element-wise then by length; objects by
+        // canonical serialisation; equal nulls/bools are stable.
+        let out = reduce_sort(
+            &[
+                serde_json::json!([1, 2]),
+                serde_json::json!([1]),
+                serde_json::json!({"b": 2}),
+                serde_json::json!({"a": 1}),
+                serde_json::json!(null),
+                serde_json::json!(null),
+                serde_json::json!(true),
+                serde_json::json!(false),
+                serde_json::json!("s"),
+            ],
+            None,
+        )
+        .expect("ok");
+        // null, null, bool, bool, string, array, array, object, object
+        assert!(out[0].is_null() && out[1].is_null());
+        assert!(out[2].is_boolean() && out[3].is_boolean());
+        assert!(out[4].is_string());
+        // [1] sorts before [1,2] (shorter array is less when prefix equal).
+        assert_eq!(out[5], serde_json::json!([1]));
+        assert_eq!(out[6], serde_json::json!([1, 2]));
+        // {"a":1} sorts before {"b":2} by canonical serialisation.
+        assert_eq!(out[7], serde_json::json!({"a": 1}));
+        assert_eq!(out[8], serde_json::json!({"b": 2}));
+    }
 }

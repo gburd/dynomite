@@ -1373,3 +1373,642 @@ pub async fn serve_xa_peer(
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::txn::TxnBatch;
+    use tempfile::TempDir;
+
+    /// Scratch root for env / log paths (AGENTS.md: /scratch, not /tmp;
+    /// short paths stay under the unix socket / env-name limits).
+    fn scratch_dir() -> TempDir {
+        let base = Path::new("/scratch");
+        if base.is_dir() {
+            TempDir::new_in(base).expect("tempdir in /scratch")
+        } else {
+            TempDir::new().expect("tempdir")
+        }
+    }
+
+    fn open_participant(dir: &TempDir, name: &[u8]) -> XaParticipant {
+        XaParticipant::open(dir.path(), name.to_vec()).expect("open participant")
+    }
+
+    fn wire(g: u64, bqual: &[u8]) -> WireXid {
+        WireXid {
+            format_id: DYNIAK_XA_FORMAT_ID,
+            gtrid: g.to_be_bytes().to_vec(),
+            bqual: bqual.to_vec(),
+        }
+    }
+
+    fn put(key: &[u8]) -> TxnOp {
+        TxnOp::Put {
+            bucket: b"u".to_vec(),
+            key: key.to_vec(),
+            value: b"v".to_vec(),
+            indexes: vec![],
+        }
+    }
+
+    /// Borrow the local participant behind branch `idx`. Panics with a
+    /// clear message if the branch is not local (a test-setup bug, not
+    /// a runtime condition), keeping the assertion on one covered line.
+    fn local_branch(coord: &CrossNodeCoordinator, idx: usize) -> &XaParticipant {
+        match coord.branch(idx) {
+            Some(XaBranch::Local(p)) => p,
+            _ => panic!("branch {idx} is not local"),
+        }
+    }
+
+    // --- hex / unhex pure helpers ---------------------------------
+
+    #[test]
+    fn hex_of_empty_is_dash_and_round_trips() {
+        assert_eq!(hex(&[]), "-");
+        assert_eq!(unhex("-").unwrap(), Vec::<u8>::new());
+        for bytes in [&b"\x00\x01\xfe\xff"[..], &b"hello"[..], &[0x42][..]] {
+            assert_eq!(unhex(&hex(bytes)).unwrap(), bytes.to_vec());
+        }
+    }
+
+    #[test]
+    fn unhex_rejects_odd_length_and_non_hex() {
+        assert!(unhex("abc").is_none(), "odd length");
+        assert!(unhex("zz").is_none(), "non-hex digit");
+        assert!(unhex("0g").is_none(), "second nibble non-hex");
+    }
+
+    #[test]
+    fn line_tag_parses_known_and_rejects_unknown() {
+        assert_eq!(LineTag::from_str("+"), Some(LineTag::Record));
+        assert_eq!(LineTag::from_str("-"), Some(LineTag::Tombstone));
+        assert_eq!(LineTag::from_str("x"), None);
+        assert_eq!(LineTag::Record.as_char(), '+');
+        assert_eq!(LineTag::Tombstone.as_char(), '-');
+    }
+
+    // --- InDoubtLog edges -----------------------------------------
+
+    #[test]
+    fn log_load_on_missing_file_is_empty() {
+        let d = scratch_dir();
+        let log = InDoubtLog::new(d.path().join("never-written.log"));
+        assert_eq!(log.path(), d.path().join("never-written.log"));
+        assert!(log.load().expect("missing file -> empty").is_empty());
+    }
+
+    #[test]
+    fn log_load_skips_unparseable_and_truncated_lines() {
+        use std::io::Write as _;
+        let d = scratch_dir();
+        let path = d.path().join("indoubt.log");
+        let log = InDoubtLog::new(&path);
+        log.record(&wire(1, b"west"), b"west").unwrap();
+        // Append a junk line and a truncated (mid-write) final line.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        // garbage tag, then a record-tag line cut short (no env field).
+        writeln!(f, "garbage not a record").unwrap();
+        write!(f, "+ 17 deadbeef").unwrap(); // no trailing newline: truncated
+        f.sync_all().unwrap();
+        let live = log.load().expect("load tolerates junk");
+        assert_eq!(live.len(), 1, "only the well-formed record survives");
+        assert_eq!(live[0].env, b"west");
+    }
+
+    #[test]
+    fn log_load_propagates_non_not_found_io_error() {
+        // A path whose parent is a regular file makes read_to_string
+        // fail with something other than NotFound (NotADirectory),
+        // exercising the error arm of load().
+        let d = scratch_dir();
+        let file = d.path().join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+        let log = InDoubtLog::new(file.join("under-a-file.log"));
+        assert!(log.load().is_err(), "non-NotFound io error surfaces");
+    }
+
+    #[test]
+    fn record_from_line_round_trips_every_field() {
+        let rec = InDoubtRecord {
+            format_id: -7,
+            gtrid: vec![0xab, 0xcd],
+            bqual: vec![],
+            env: b"east".to_vec(),
+        };
+        let line = rec.to_line(LineTag::Record);
+        let (tag, back) = InDoubtRecord::from_line(&line).expect("parse");
+        assert_eq!(tag, LineTag::Record);
+        assert_eq!(back, rec);
+        assert_eq!(rec.xid().format_id, -7);
+    }
+
+    // --- XaPeer handle_prepare / resolve --------------------------
+
+    #[test]
+    fn handle_prepare_unknown_env_votes_abort() {
+        let d = scratch_dir();
+        let peer = XaPeer::new(vec![(b"west".to_vec(), open_participant(&d, b"west"))]);
+        let vote = peer
+            .handle_prepare(&wire(1, b"ghost"), b"ghost", &[])
+            .expect("vote");
+        assert_eq!(vote, XaVote::Abort);
+    }
+
+    #[test]
+    fn handle_prepare_apply_failure_votes_abort() {
+        let d = scratch_dir();
+        let peer = XaPeer::new(vec![(b"west".to_vec(), open_participant(&d, b"west"))]);
+        // A bucket containing the structural separator byte (0) makes
+        // apply_op fail, driving the apply-failure rollback path.
+        let bad = vec![XaWriteOp::Put {
+            bucket: b"u\0bad".to_vec(),
+            key: b"k".to_vec(),
+            value: b"v".to_vec(),
+            indexes: vec![],
+        }];
+        let vote = peer
+            .handle_prepare(&wire(2, b"west"), b"west", &bad)
+            .expect("vote");
+        assert_eq!(vote, XaVote::Abort);
+    }
+
+    #[test]
+    fn handle_prepare_malformed_xid_is_transport_error() {
+        let d = scratch_dir();
+        let peer = XaPeer::new(vec![(b"west".to_vec(), open_participant(&d, b"west"))]);
+        // gtrid over the 64-byte XA limit makes Xid::new fail.
+        let bad_xid = WireXid {
+            format_id: DYNIAK_XA_FORMAT_ID,
+            gtrid: vec![0u8; 65],
+            bqual: b"west".to_vec(),
+        };
+        let err = peer
+            .handle_prepare(&bad_xid, b"west", &[])
+            .expect_err("malformed xid");
+        assert!(matches!(err, XaTransportError::Transport(_)));
+    }
+
+    #[test]
+    fn handle_commit_and_rollback_unknown_env_are_false() {
+        let d = scratch_dir();
+        let peer = XaPeer::new(vec![(b"west".to_vec(), open_participant(&d, b"west"))]);
+        assert!(!peer.handle_commit(&wire(1, b"ghost"), b"ghost"));
+        assert!(!peer.handle_rollback(&wire(1, b"ghost"), b"ghost"));
+    }
+
+    #[test]
+    fn resolve_malformed_xid_is_false() {
+        let d = scratch_dir();
+        let peer = XaPeer::new(vec![(b"west".to_vec(), open_participant(&d, b"west"))]);
+        let bad_xid = WireXid {
+            format_id: DYNIAK_XA_FORMAT_ID,
+            gtrid: vec![0u8; 65],
+            bqual: b"west".to_vec(),
+        };
+        assert!(!peer.handle_commit(&bad_xid, b"west"));
+    }
+
+    #[test]
+    fn handle_commit_of_never_prepared_branch_is_idempotent_success() {
+        // The env is known and the Xid was never prepared, so xa_commit
+        // reports NotFound, which resolve() treats as idempotent
+        // success (a retry after the branch was already resolved looks
+        // identical). This is the documented idempotency contract.
+        let d = scratch_dir();
+        let peer = XaPeer::new(vec![(b"west".to_vec(), open_participant(&d, b"west"))]);
+        assert!(peer.handle_commit(&wire(999, b"west"), b"west"));
+    }
+
+    #[test]
+    fn resolve_commit_in_wrong_state_is_false() {
+        // A branch that is started + ended but NOT prepared cannot be
+        // committed: xa_commit returns a non-NotFound protocol error,
+        // so resolve() reports false (the Err(_) arm).
+        let d = scratch_dir();
+        let peer = XaPeer::new(vec![(b"west".to_vec(), open_participant(&d, b"west"))]);
+        let p = peer.participant_for(b"west").unwrap();
+        let xid = Xid::new(DYNIAK_XA_FORMAT_ID, &42u64.to_be_bytes(), b"west").unwrap();
+        p.xa().xa_start(&xid, XaFlags::NOFLAGS).unwrap();
+        p.apply_op(&xid, &put(b"k")).unwrap();
+        p.xa().mark_write(&xid).unwrap();
+        p.xa().xa_end(&xid, XaFlags::TMSUCCESS).unwrap();
+        // No xa_prepare: committing an unprepared branch is a protocol
+        // error (not NotFound), so handle_commit reports false.
+        assert!(!peer.handle_commit(&wire(42, b"west"), b"west"));
+    }
+
+    // --- CrossNodeCoordinator accessors and execute guards --------
+
+    #[test]
+    fn coordinator_len_and_is_empty() {
+        let d = scratch_dir();
+        let empty = CrossNodeCoordinator::new(vec![], InDoubtLog::new(d.path().join("l")));
+        assert_eq!(empty.len(), 0);
+        assert!(empty.is_empty());
+        assert!(empty.branch(0).is_none());
+
+        let one = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(open_participant(&d, b"east")))],
+            InDoubtLog::new(d.path().join("l2")),
+        );
+        assert_eq!(one.len(), 1);
+        assert!(!one.is_empty());
+        assert!(one.branch(0).is_some());
+        assert_eq!(one.branch(0).unwrap().name(), b"east");
+    }
+
+    #[tokio::test]
+    async fn execute_empty_batch_is_rejected() {
+        let d = scratch_dir();
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(open_participant(&d, b"east")))],
+            InDoubtLog::new(d.path().join("l")),
+        );
+        let err = coord
+            .execute(&TxnBatch::default(), |_| 0)
+            .await
+            .expect_err("empty");
+        assert!(matches!(err, TxnStoreError::EmptyBatch));
+    }
+
+    #[tokio::test]
+    async fn execute_out_of_range_route_is_backend_error() {
+        let d = scratch_dir();
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(open_participant(&d, b"east")))],
+            InDoubtLog::new(d.path().join("l")),
+        );
+        let batch = TxnBatch {
+            ops: vec![put(b"a")],
+            force_abort: false,
+        };
+        let err = coord
+            .execute(&batch, |_| 9)
+            .await
+            .expect_err("out of range");
+        assert!(matches!(err, TxnStoreError::Backend(_)));
+    }
+
+    #[tokio::test]
+    async fn execute_all_local_commits_atomically() {
+        let d0 = scratch_dir();
+        let d1 = scratch_dir();
+        let dl = scratch_dir();
+        let coord = CrossNodeCoordinator::new(
+            vec![
+                XaBranch::Local(Box::new(open_participant(&d0, b"east"))),
+                XaBranch::Local(Box::new(open_participant(&d1, b"west"))),
+            ],
+            InDoubtLog::new(dl.path().join("l")),
+        );
+        // bob (0x62 even) -> branch 0, alice (0x61 odd) -> branch 1.
+        let batch = TxnBatch {
+            ops: vec![put(b"bob"), put(b"alice")],
+            force_abort: false,
+        };
+        let outcome = coord
+            .execute(&batch, |op| usize::from(op.key()[0] & 1))
+            .await
+            .expect("commit");
+        assert_eq!(outcome, TxnOutcome::Committed { operations: 2 });
+        let b0 = local_branch(&coord, 0);
+        assert_eq!(
+            b0.get_object(b"u", b"bob").unwrap().as_deref(),
+            Some(&b"v"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_force_abort_local_rolls_back() {
+        let d = scratch_dir();
+        let dl = scratch_dir();
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(open_participant(&d, b"east")))],
+            InDoubtLog::new(dl.path().join("l")),
+        );
+        let batch = TxnBatch {
+            ops: vec![put(b"bob")],
+            force_abort: true,
+        };
+        let outcome = coord.execute(&batch, |_| 0).await.expect("aborted");
+        assert!(matches!(outcome, TxnOutcome::Aborted { .. }));
+        let b0 = local_branch(&coord, 0);
+        assert!(b0.get_object(b"u", b"bob").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn execute_local_prepare_apply_failure_aborts() {
+        let d = scratch_dir();
+        let dl = scratch_dir();
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(open_participant(&d, b"east")))],
+            InDoubtLog::new(dl.path().join("l")),
+        );
+        // A separator byte in the bucket fails local apply_op, so the
+        // local branch votes Abort and execute presumes abort.
+        let batch = TxnBatch {
+            ops: vec![TxnOp::Put {
+                bucket: b"u\0bad".to_vec(),
+                key: b"k".to_vec(),
+                value: b"v".to_vec(),
+                indexes: vec![],
+            }],
+            force_abort: false,
+        };
+        let err = coord.execute(&batch, |_| 0).await.expect_err("abort");
+        assert!(matches!(err, TxnStoreError::Backend(_)));
+        assert!(format!("{err}").contains("aborted"));
+    }
+
+    // --- recovery: local redrive + unknown env --------------------
+
+    #[tokio::test]
+    async fn recover_local_branch_drives_commit_forward() {
+        // Prepare a local branch directly, record it in-doubt, then a
+        // recovery pass over a Local branch re-drives xa_commit.
+        let d = scratch_dir();
+        let dl = scratch_dir();
+        let log_path = dl.path().join("indoubt.log");
+        let participant = open_participant(&d, b"east");
+        let xid = Xid::new(DYNIAK_XA_FORMAT_ID, &5u64.to_be_bytes(), b"east").unwrap();
+        participant.xa().xa_start(&xid, XaFlags::NOFLAGS).unwrap();
+        participant.apply_op(&xid, &put(b"alice")).unwrap();
+        participant.xa().mark_write(&xid).unwrap();
+        participant.xa().xa_end(&xid, XaFlags::TMSUCCESS).unwrap();
+        assert_eq!(
+            participant.xa().xa_prepare(&xid, XaFlags::NOFLAGS).unwrap(),
+            PrepareResult::Ok
+        );
+        let w = wire_xid(&xid);
+        InDoubtLog::new(&log_path).record(&w, b"east").unwrap();
+
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(participant))],
+            InDoubtLog::new(&log_path),
+        );
+        let report = coord.recover_in_doubt().await.expect("scan");
+        assert_eq!(report.recovered, 1);
+        assert_eq!(report.still_in_doubt, 0);
+        assert_eq!(report.errors, 0);
+        let b0 = local_branch(&coord, 0);
+        assert_eq!(
+            b0.get_object(b"u", b"alice").unwrap().as_deref(),
+            Some(&b"v"[..])
+        );
+        // Record retired; a second pass is a no-op.
+        assert!(InDoubtLog::new(&log_path).load().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn recover_local_redrive_of_committed_branch_is_idempotent() {
+        // The branch was already committed; recovery's xa_commit hits
+        // NotFound, which redrive_commit treats as success.
+        let d = scratch_dir();
+        let dl = scratch_dir();
+        let log_path = dl.path().join("indoubt.log");
+        let participant = open_participant(&d, b"east");
+        let xid = Xid::new(DYNIAK_XA_FORMAT_ID, &6u64.to_be_bytes(), b"east").unwrap();
+        participant.xa().xa_start(&xid, XaFlags::NOFLAGS).unwrap();
+        participant.apply_op(&xid, &put(b"bob")).unwrap();
+        participant.xa().mark_write(&xid).unwrap();
+        participant.xa().xa_end(&xid, XaFlags::TMSUCCESS).unwrap();
+        participant.xa().xa_prepare(&xid, XaFlags::NOFLAGS).unwrap();
+        participant.xa().xa_commit(&xid, XaFlags::NOFLAGS).unwrap();
+        let w = wire_xid(&xid);
+        InDoubtLog::new(&log_path).record(&w, b"east").unwrap();
+
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(participant))],
+            InDoubtLog::new(&log_path),
+        );
+        let report = coord.recover_in_doubt().await.expect("scan");
+        assert_eq!(report.recovered, 1, "NotFound is idempotent success");
+        assert!(InDoubtLog::new(&log_path).load().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn recover_local_malformed_xid_stays_in_doubt() {
+        // A record whose gtrid is over the XA limit cannot rebuild an
+        // Xid; redrive returns Err -> still_in_doubt, record stays.
+        let d = scratch_dir();
+        let dl = scratch_dir();
+        let log_path = dl.path().join("indoubt.log");
+        let bad = WireXid {
+            format_id: DYNIAK_XA_FORMAT_ID,
+            gtrid: vec![0u8; 65],
+            bqual: b"east".to_vec(),
+        };
+        InDoubtLog::new(&log_path).record(&bad, b"east").unwrap();
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(open_participant(&d, b"east")))],
+            InDoubtLog::new(&log_path),
+        );
+        let report = coord.recover_in_doubt().await.expect("scan");
+        assert_eq!(report.still_in_doubt, 1);
+        assert_eq!(report.recovered, 0);
+        assert_eq!(InDoubtLog::new(&log_path).load().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn recover_unknown_env_counts_as_error_and_keeps_record() {
+        // The in-doubt record names an env no branch owns: never drop
+        // the commit, count it as an error, leave the record.
+        let dl = scratch_dir();
+        let d = scratch_dir();
+        let log_path = dl.path().join("indoubt.log");
+        InDoubtLog::new(&log_path)
+            .record(&wire(1, b"nobody"), b"nobody")
+            .unwrap();
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(open_participant(&d, b"east")))],
+            InDoubtLog::new(&log_path),
+        );
+        let report = coord.recover_in_doubt().await.expect("scan");
+        assert_eq!(report.errors, 1);
+        assert_eq!(report.recovered, 0);
+        assert_eq!(InDoubtLog::new(&log_path).load().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn recover_in_doubt_load_error_surfaces() {
+        // in-doubt log path under a regular file -> load() errors ->
+        // recover_in_doubt maps it to a Backend error.
+        let d = scratch_dir();
+        let file = d.path().join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+        let coord = CrossNodeCoordinator::new(vec![], InDoubtLog::new(file.join("under.log")));
+        let err = coord.recover_in_doubt().await.expect_err("load error");
+        assert!(matches!(err, TxnStoreError::Backend(_)));
+    }
+
+    #[tokio::test]
+    async fn new_with_recovery_runs_a_clean_scan() {
+        // The default-retry recovery constructor over an empty log
+        // returns a zeroed report.
+        let dl = scratch_dir();
+        let (coord, report) = CrossNodeCoordinator::new_with_recovery(
+            vec![],
+            InDoubtLog::new(dl.path().join("empty.log")),
+        )
+        .await
+        .expect("recovery");
+        assert_eq!(report, RecoveryReport::default());
+        assert!(coord.is_empty());
+    }
+
+    #[test]
+    fn wire_xid_round_trips_through_xid() {
+        let xid = Xid::new(DYNIAK_XA_FORMAT_ID, &7u64.to_be_bytes(), b"east").unwrap();
+        let w = wire_xid(&xid);
+        assert_eq!(w.format_id, DYNIAK_XA_FORMAT_ID);
+        assert_eq!(w.gtrid, 7u64.to_be_bytes().to_vec());
+        assert_eq!(w.bqual, b"east".to_vec());
+    }
+
+    // --- a transport that always fails commit, for the in-doubt and
+    //     tombstone-write failure paths -----------------------------
+    struct AlwaysFailCommit;
+
+    impl XaTransport for AlwaysFailCommit {
+        fn prepare<'a>(
+            &'a self,
+            _xid: &'a WireXid,
+            _env: &'a [u8],
+            _writes: &'a [XaWriteOp],
+        ) -> XaFuture<'a, Result<XaVote, XaTransportError>> {
+            Box::pin(async move { Ok(XaVote::Ok) })
+        }
+        fn commit<'a>(
+            &'a self,
+            _xid: &'a WireXid,
+            _env: &'a [u8],
+        ) -> XaFuture<'a, Result<(), XaTransportError>> {
+            Box::pin(async move { Err(XaTransportError::Timeout) })
+        }
+        fn rollback<'a>(
+            &'a self,
+            _xid: &'a WireXid,
+            _env: &'a [u8],
+        ) -> XaFuture<'a, Result<(), XaTransportError>> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    fn one_attempt_retry() -> RetryPolicy {
+        RetryPolicy {
+            max_attempts: 1,
+            base_backoff: Duration::from_millis(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_commit_in_doubt_and_log_write_failure_is_backend_error() {
+        // A remote branch whose commit always fails ends in-doubt; if
+        // the in-doubt log write ALSO fails (parent path is a file),
+        // execute surfaces a Backend error from the failed record
+        // write rather than the generic in-doubt error.
+        let dl = scratch_dir();
+        let file = dl.path().join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+        let log = InDoubtLog::new(file.join("under.log")); // parent is a file
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Remote(RemoteXaBranch::new(
+                Arc::new(AlwaysFailCommit),
+                b"west".to_vec(),
+            ))],
+            log,
+        )
+        .with_retry(one_attempt_retry());
+        let batch = TxnBatch {
+            ops: vec![put(b"alice")],
+            force_abort: false,
+        };
+        let err = coord
+            .execute(&batch, |_| 0)
+            .await
+            .expect_err("log write fails");
+        match err {
+            TxnStoreError::Backend(msg) => {
+                assert!(msg.contains("in-doubt log write failed"), "{msg}");
+            }
+            other => panic!("expected backend error, got {other:?}"),
+        }
+        // Cover the mock's rollback arm directly (the in-doubt commit
+        // path never rolls a prepared branch back).
+        AlwaysFailCommit
+            .rollback(&wire(1, b"west"), b"west")
+            .await
+            .expect("rollback is a no-op ok");
+    }
+
+    #[tokio::test]
+    async fn redrive_local_non_not_found_error_stays_in_doubt() {
+        // A local branch that is started + ended but NOT prepared
+        // cannot be committed by redrive: xa_commit returns a
+        // non-NotFound protocol error, so redrive_commit reports Err
+        // and the record stays in-doubt (never dropped).
+        let d = scratch_dir();
+        let dl = scratch_dir();
+        let log_path = dl.path().join("indoubt.log");
+        let participant = open_participant(&d, b"east");
+        let xid = Xid::new(DYNIAK_XA_FORMAT_ID, &8u64.to_be_bytes(), b"east").unwrap();
+        participant.xa().xa_start(&xid, XaFlags::NOFLAGS).unwrap();
+        participant.apply_op(&xid, &put(b"k")).unwrap();
+        participant.xa().mark_write(&xid).unwrap();
+        participant.xa().xa_end(&xid, XaFlags::TMSUCCESS).unwrap();
+        // No prepare: a commit now is a protocol error.
+        let w = wire_xid(&xid);
+        InDoubtLog::new(&log_path).record(&w, b"east").unwrap();
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(participant))],
+            InDoubtLog::new(&log_path),
+        );
+        let report = coord.recover_in_doubt().await.expect("scan");
+        assert_eq!(report.still_in_doubt, 1);
+        assert_eq!(report.recovered, 0);
+        assert_eq!(InDoubtLog::new(&log_path).load().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn recover_tombstone_write_failure_counts_as_error() {
+        use std::os::unix::fs::PermissionsExt as _;
+        // The commit is confirmed (idempotent local commit) but the
+        // tombstone append fails because the log file is read-only:
+        // recovery counts the record as an error and does NOT mark it
+        // recovered, so a later pass (with a writable log) can retire
+        // it. Never drop the commit.
+        let d = scratch_dir();
+        let dl = scratch_dir();
+        let log_path = dl.path().join("indoubt.log");
+        let participant = open_participant(&d, b"east");
+        let xid = Xid::new(DYNIAK_XA_FORMAT_ID, &9u64.to_be_bytes(), b"east").unwrap();
+        participant.xa().xa_start(&xid, XaFlags::NOFLAGS).unwrap();
+        participant.apply_op(&xid, &put(b"alice")).unwrap();
+        participant.xa().mark_write(&xid).unwrap();
+        participant.xa().xa_end(&xid, XaFlags::TMSUCCESS).unwrap();
+        participant.xa().xa_prepare(&xid, XaFlags::NOFLAGS).unwrap();
+        let w = wire_xid(&xid);
+        InDoubtLog::new(&log_path).record(&w, b"east").unwrap();
+        // Make the log file read-only so the tombstone append fails
+        // while load() still reads the record.
+        std::fs::set_permissions(&log_path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let coord = CrossNodeCoordinator::new(
+            vec![XaBranch::Local(Box::new(participant))],
+            InDoubtLog::new(&log_path),
+        );
+        let report = coord.recover_in_doubt().await.expect("scan");
+        assert_eq!(report.errors, 1, "tombstone write failed -> error");
+        assert_eq!(report.recovered, 0);
+
+        // Restore write permission so the temp dir can be cleaned up
+        // and prove the record is still present for a later pass.
+        std::fs::set_permissions(&log_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(InDoubtLog::new(&log_path).load().unwrap().len(), 1);
+    }
+}

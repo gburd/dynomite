@@ -728,6 +728,55 @@ mod tests {
         Arc::new(default_registry())
     }
 
+    /// Minimal in-test datastore whose `riak_get` is scripted: it can
+    /// return a fixed byte body, raw (non-envelope) bytes, or an
+    /// error, so the link-phase error arms can be exercised without a
+    /// real storage engine.
+    struct ScriptedStore {
+        body: Option<Result<Option<Vec<u8>>, ()>>,
+    }
+
+    impl dynomite::embed::Datastore for ScriptedStore {
+        fn protocol(&self) -> dynomite::embed::Protocol {
+            dynomite::embed::Protocol::Custom
+        }
+        fn dispatch(
+            &self,
+            req: dynomite::msg::Msg,
+        ) -> dynomite::embed::BoxFuture<
+            '_,
+            Result<dynomite::msg::Msg, dynomite::embed::DatastoreError>,
+        > {
+            Box::pin(async move {
+                Ok(dynomite::msg::Msg::new(
+                    req.id(),
+                    dynomite::msg::MsgType::Unknown,
+                    false,
+                ))
+            })
+        }
+        fn riak_get<'a>(
+            &'a self,
+            _bucket: &'a [u8],
+            _key: &'a [u8],
+        ) -> dynomite::embed::BoxFuture<'a, Result<Option<Vec<u8>>, dynomite::embed::DatastoreError>>
+        {
+            let body = self.body.clone();
+            Box::pin(async move {
+                match body {
+                    Some(Ok(v)) => Ok(v),
+                    Some(Err(())) | None => Err(dynomite::embed::DatastoreError::Backend(
+                        "scripted failure".into(),
+                    )),
+                }
+            })
+        }
+    }
+
+    fn store_with(body: Option<Result<Option<Vec<u8>>, ()>>) -> Arc<dyn Datastore> {
+        Arc::new(ScriptedStore { body })
+    }
+
     #[tokio::test]
     async fn empty_phase_list_is_identity() {
         let job = MapReduceJob {
@@ -1165,5 +1214,243 @@ mod tests {
         assert_eq!(b.phase, 0);
         assert_eq!(b.data.len(), 1);
         assert_eq!(b.data[0]["value"], serde_json::json!(42));
+    }
+
+    // ---- link-phase error arms (scripted datastore) ----------------
+
+    fn link_job() -> MapReduceJob {
+        MapReduceJob {
+            inputs: Inputs::KeyData(vec![KeyDatum::pair("people", "a")]),
+            phases: vec![Phase::Link {
+                bucket: None,
+                tag: None,
+                keep: true,
+            }],
+            timeout_ms: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn link_phase_riak_get_error_is_phase_failed() {
+        let ds = store_with(Some(Err(())));
+        let err = run_job_full(link_job(), registry(), None, Some(ds))
+            .await
+            .expect_err("riak get fails");
+        assert!(matches!(err, MrError::PhaseFailed { kind: "link", .. }));
+    }
+
+    #[tokio::test]
+    async fn link_phase_undecodable_object_is_phase_failed() {
+        // riak_get returns bytes that are not a valid HttpObject
+        // envelope; decode fails and the link phase reports it.
+        let ds = store_with(Some(Ok(Some(vec![0xff, 0xff, 0xff]))));
+        let err = run_job_full(link_job(), registry(), None, Some(ds))
+            .await
+            .expect_err("decode fails");
+        assert!(matches!(err, MrError::PhaseFailed { kind: "link", .. }));
+    }
+
+    #[tokio::test]
+    async fn link_phase_missing_object_yields_empty_via_scripted_store() {
+        // riak_get returns None: no links, no error.
+        let ds = store_with(Some(Ok(None)));
+        let out = run_job_full(link_job(), registry(), None, Some(ds))
+            .await
+            .expect("missing is not an error");
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn link_phase_input_missing_bucket_key_is_phase_failed() {
+        // A link phase fed a datum with no bucket/key strings cannot
+        // resolve a target and reports a typed phase error. A reduce
+        // upstream produces an integer datum (no bucket/key).
+        let ds = store_with(Some(Ok(None)));
+        let job = MapReduceJob {
+            inputs: Inputs::KeyData(vec![KeyDatum::with_value("b", "k", serde_json::json!(1))]),
+            phases: vec![
+                Phase::Map {
+                    fn_name: "map_object_value".into(),
+                    arg: None,
+                    keep: false,
+                },
+                Phase::Link {
+                    bucket: None,
+                    tag: None,
+                    keep: true,
+                },
+            ],
+            timeout_ms: None,
+        };
+        let err = run_job_full(job, registry(), None, Some(ds))
+            .await
+            .expect_err("non-routing datum into link");
+        assert!(matches!(err, MrError::PhaseFailed { kind: "link", .. }));
+    }
+
+    #[tokio::test]
+    async fn link_phase_emits_matching_targets_via_scripted_store() {
+        // A valid HttpObject envelope with links drives the matching
+        // and emit path of run_link_phase without needing the noxu
+        // engine.
+        let obj = crate::proto::http::object::HttpObject {
+            value: b"src".to_vec(),
+            content_type: None,
+            indexes: Vec::new(),
+            links: vec![
+                crate::proto::http::object::HttpLink {
+                    bucket: "people".into(),
+                    key: "b".into(),
+                    tag: "friend".into(),
+                },
+                crate::proto::http::object::HttpLink {
+                    bucket: "work".into(),
+                    key: "acme".into(),
+                    tag: "colleague".into(),
+                },
+            ],
+        };
+        let ds = store_with(Some(Ok(Some(obj.to_storage_bytes()))));
+        let job = MapReduceJob {
+            inputs: Inputs::KeyData(vec![KeyDatum::pair("people", "a")]),
+            phases: vec![Phase::Link {
+                bucket: Some("people".into()),
+                tag: Some("friend".into()),
+                keep: true,
+            }],
+            timeout_ms: None,
+        };
+        let out = run_job_full(job, registry(), None, Some(ds))
+            .await
+            .expect("ok");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value["bucket"], "people");
+        assert_eq!(out[0].value["key"], "b");
+    }
+
+    // ---- WasmModule error mapping ----------------------------------
+
+    struct ScriptedWasm {
+        outcome: WasmOutcome,
+    }
+
+    enum WasmOutcome {
+        Ok(Vec<Value>),
+        WasmError,
+        GenericError,
+    }
+
+    impl WasmHook for ScriptedWasm {
+        fn apply_phase(
+            &self,
+            _module_id: &str,
+            _fn_name: &str,
+            _inputs: &[Value],
+        ) -> Result<Vec<Value>, MrError> {
+            match &self.outcome {
+                WasmOutcome::Ok(v) => Ok(v.clone()),
+                WasmOutcome::WasmError => Err(MrError::WasmExecutionTimeout),
+                WasmOutcome::GenericError => Err(MrError::Json("boom".into())),
+            }
+        }
+    }
+
+    fn wasm_job() -> MapReduceJob {
+        MapReduceJob {
+            inputs: Inputs::KeyData(vec![KeyDatum::with_value("b", "k", serde_json::json!(1))]),
+            phases: vec![Phase::WasmModule {
+                module_id: "m".into(),
+                fn_name: "f".into(),
+                arg: None,
+                keep: true,
+            }],
+            timeout_ms: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn wasm_phase_success_threads_output() {
+        let hook: Arc<dyn WasmHook> = Arc::new(ScriptedWasm {
+            outcome: WasmOutcome::Ok(vec![serde_json::json!("done")]),
+        });
+        let out = run_job_with_wasm(wasm_job(), registry(), Some(hook))
+            .await
+            .expect("ok");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, serde_json::json!("done"));
+    }
+
+    #[tokio::test]
+    async fn wasm_phase_wasm_error_passes_through_untouched() {
+        // A Wasm-specific error variant is surfaced verbatim, not
+        // re-wrapped as a generic PhaseFailed.
+        let hook: Arc<dyn WasmHook> = Arc::new(ScriptedWasm {
+            outcome: WasmOutcome::WasmError,
+        });
+        let err = run_job_with_wasm(wasm_job(), registry(), Some(hook))
+            .await
+            .expect_err("wasm timeout");
+        assert!(matches!(err, MrError::WasmExecutionTimeout));
+    }
+
+    #[tokio::test]
+    async fn wasm_phase_generic_error_is_wrapped_as_phase_failed() {
+        // A non-Wasm error from the hook is wrapped with the phase
+        // index and "wasm" kind.
+        let hook: Arc<dyn WasmHook> = Arc::new(ScriptedWasm {
+            outcome: WasmOutcome::GenericError,
+        });
+        let err = run_job_with_wasm(wasm_job(), registry(), Some(hook))
+            .await
+            .expect_err("wrapped");
+        assert!(matches!(err, MrError::PhaseFailed { kind: "wasm", .. }));
+    }
+
+    #[tokio::test]
+    async fn streaming_with_wasm_threads_phase_output() {
+        // The wasm streaming entry point yields one batch for the
+        // kept wasm phase.
+        let hook: Arc<dyn WasmHook> = Arc::new(ScriptedWasm {
+            outcome: WasmOutcome::Ok(vec![serde_json::json!("w")]),
+        });
+        let rx = run_job_streaming_with_wasm(wasm_job(), registry(), Some(hook));
+        let items = drain_stream(rx).await;
+        assert_eq!(items.len(), 1);
+        let b = items[0].as_ref().expect("ok");
+        assert_eq!(b.data, vec![serde_json::json!("w")]);
+    }
+
+    #[tokio::test]
+    async fn bucket_scan_stream_error_surfaces_as_pipeline_error() {
+        // ScriptedStore does not override list_keys_stream, so the
+        // default yields a single Unsupported error item; the bucket
+        // resolver maps it to a Pipeline error.
+        let ds = store_with(Some(Ok(None)));
+        let job = MapReduceJob {
+            inputs: Inputs::Bucket("b".into()),
+            phases: vec![],
+            timeout_ms: None,
+        };
+        let err = run_job_full(job, registry(), None, Some(ds))
+            .await
+            .expect_err("scan errors");
+        assert!(matches!(err, MrError::Pipeline(_)));
+    }
+
+    #[tokio::test]
+    async fn scripted_store_protocol_and_dispatch_are_exercised() {
+        // Cover the ScriptedStore trampoline helpers directly so the
+        // test fixture itself does not drag coverage.
+        let store = ScriptedStore { body: None };
+        assert_eq!(store.protocol(), dynomite::embed::Protocol::Custom);
+        let rsp = store
+            .dispatch(dynomite::msg::Msg::new(
+                7,
+                dynomite::msg::MsgType::Unknown,
+                true,
+            ))
+            .await
+            .expect("dispatch ok");
+        assert_eq!(rsp.id(), 7);
     }
 }

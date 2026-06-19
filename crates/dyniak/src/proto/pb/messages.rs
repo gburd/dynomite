@@ -2134,4 +2134,69 @@ mod admin_tests {
         let back = DynRpbAaeStatusResp::decode(bytes.as_slice()).expect("decode");
         assert_eq!(back, resp);
     }
+
+    #[test]
+    fn every_message_reports_its_wire_type_id() {
+        // Each WireValue impl maps its type to a stable, unique
+        // protobuf type name. Asserting them all in one place covers
+        // every wire_type_id() body and guards against an accidental
+        // duplicate (which would mis-route a frame through the codec).
+        let ids = [
+            RpbErrorResp::wire_type_id(),
+            RpbPingReq::wire_type_id(),
+            RpbPingResp::wire_type_id(),
+            RpbGetReq::wire_type_id(),
+            RpbLink::wire_type_id(),
+            RpbContent::wire_type_id(),
+            RpbGetResp::wire_type_id(),
+            RpbPutReq::wire_type_id(),
+            RpbPutResp::wire_type_id(),
+            RpbDelReq::wire_type_id(),
+            RpbServerInfoReq::wire_type_id(),
+            RpbGetServerInfoResp::wire_type_id(),
+            RpbListBucketsReq::wire_type_id(),
+            RpbListBucketsResp::wire_type_id(),
+            RpbListKeysReq::wire_type_id(),
+            RpbListKeysResp::wire_type_id(),
+            RpbBucketProps::wire_type_id(),
+            RpbGetBucketReq::wire_type_id(),
+            RpbGetBucketResp::wire_type_id(),
+            RpbSetBucketReq::wire_type_id(),
+            RpbSetBucketResp::wire_type_id(),
+            RpbPair::wire_type_id(),
+            RpbIndexReq::wire_type_id(),
+            RpbIndexResp::wire_type_id(),
+            DynRpbPeerInfo::wire_type_id(),
+            DynRpbStagedChange::wire_type_id(),
+            DynRpbListPeersReq::wire_type_id(),
+            DynRpbListPeersResp::wire_type_id(),
+            DynRpbClusterJoinReq::wire_type_id(),
+            DynRpbClusterJoinResp::wire_type_id(),
+            DynRpbClusterLeaveReq::wire_type_id(),
+            DynRpbClusterLeaveResp::wire_type_id(),
+            DynRpbClusterPlanReq::wire_type_id(),
+            DynRpbClusterPlanResp::wire_type_id(),
+            DynRpbClusterCommitReq::wire_type_id(),
+            DynRpbClusterCommitResp::wire_type_id(),
+            DynRpbAaePeerStatus::wire_type_id(),
+            DynRpbAaeStatusReq::wire_type_id(),
+            DynRpbAaeStatusResp::wire_type_id(),
+        ];
+        // Spot-check a couple of representative names.
+        assert_eq!(RpbLink::wire_type_id(), WireTypeId::new("riak.RpbLink"));
+        assert_eq!(
+            RpbContent::wire_type_id(),
+            WireTypeId::new("riak.RpbContent")
+        );
+        assert_eq!(
+            DynRpbAaeStatusResp::wire_type_id(),
+            WireTypeId::new("dynomite.DynRpbAaeStatusResp")
+        );
+        // No two message types share a wire type id.
+        let mut seen = std::collections::HashSet::new();
+        for id in ids {
+            assert!(seen.insert(id), "duplicate wire type id: {id}");
+        }
+        assert_eq!(seen.len(), ids.len());
+    }
 }

@@ -544,6 +544,102 @@ mod tests {
     }
 
     #[test]
+    fn coordinator_accessors_reflect_participants() {
+        let (coord, _d0, _d1) = two_branch_coordinator();
+        assert_eq!(coord.len(), 2);
+        assert!(!coord.is_empty());
+        assert!(coord.participant(0).is_some());
+        assert!(coord.participant(2).is_none());
+
+        let empty = XaCoordinator::new(vec![]);
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+    }
+
+    #[test]
+    fn delete_op_commits_through_branch_work() {
+        // A committed Put followed by a transactional Delete through
+        // the coordinator exercises the Delete arm of `apply` and the
+        // delete branch of `run_branch_work`.
+        let (coord, _d0, _d1) = two_branch_coordinator();
+        // "alice" -> branch 1; write then delete it in two batches.
+        coord
+            .execute(
+                &TxnBatch {
+                    ops: vec![put(b"alice", b"a")],
+                    force_abort: false,
+                },
+                route_by_key_parity,
+            )
+            .expect("put");
+        let del = TxnBatch {
+            ops: vec![TxnOp::Delete {
+                bucket: b"u".to_vec(),
+                key: b"alice".to_vec(),
+            }],
+            force_abort: false,
+        };
+        let outcome = coord.execute(&del, route_by_key_parity).expect("delete");
+        assert_eq!(outcome, TxnOutcome::Committed { operations: 1 });
+        let west = coord.participant(1).expect("west");
+        assert!(west.get_object(b"u", b"alice").unwrap().is_none());
+    }
+
+    #[test]
+    fn map_xa_error_classifies_conflict_vs_backend() {
+        use noxu::xa::XaError;
+        // Lock/serialization wording maps to a retryable Conflict.
+        for needle in [
+            "deadlock detected",
+            "lock timeout",
+            "write conflict",
+            "would block",
+        ] {
+            let err = XaError::Protocol(needle.to_string());
+            assert!(
+                matches!(map_xa_error(&err), TxnStoreError::Conflict(_)),
+                "{needle} should map to Conflict"
+            );
+        }
+        // Anything else is a generic Backend error.
+        let other = XaError::Protocol("branch in bad state".to_string());
+        assert!(matches!(map_xa_error(&other), TxnStoreError::Backend(_)));
+    }
+
+    #[test]
+    fn phase_one_apply_failure_rolls_back_started_branches() {
+        // Branch 0 starts and ends cleanly (a Put for "bob"), then
+        // branch 1's apply fails (a bucket holding the structural
+        // separator byte), exercising the phase-1 error path: the
+        // failing branch is rolled back AND the already-ended branch 0
+        // is rolled back via rollback_active. Nothing is durable.
+        let (coord, _d0, _d1) = two_branch_coordinator();
+        let batch = TxnBatch {
+            ops: vec![
+                put(b"bob", b"b"), // even -> branch 0, applies cleanly
+                TxnOp::Put {
+                    bucket: b"u\0bad".to_vec(), // separator -> apply fails
+                    key: b"alice".to_vec(),     // odd -> branch 1
+                    value: b"a".to_vec(),
+                    indexes: vec![],
+                },
+            ],
+            force_abort: false,
+        };
+        let err = coord
+            .execute(&batch, route_by_key_parity)
+            .expect_err("phase-1 apply failure");
+        assert!(matches!(err, TxnStoreError::Backend(_)));
+        // Branch 0's started write was rolled back; nothing committed.
+        assert!(coord
+            .participant(0)
+            .unwrap()
+            .get_object(b"u", b"bob")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn out_of_range_route_is_a_backend_error() {
         let (coord, _d0, _d1) = two_branch_coordinator();
         let batch = TxnBatch {

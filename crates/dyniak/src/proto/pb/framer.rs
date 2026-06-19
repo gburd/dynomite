@@ -214,4 +214,46 @@ mod tests {
         let err = read_frame(&mut b).await.expect_err("truncated");
         assert!(matches!(err, RiakError::UnexpectedEof { .. }));
     }
+
+    #[tokio::test]
+    async fn write_frame_rejects_body_over_max() {
+        // A body that pushes the announced length past MAX_FRAME_LEN
+        // is rejected before any bytes go on the wire.
+        let body = vec![0u8; MAX_FRAME_LEN as usize]; // +1 code byte tips it over
+        let frame = Frame::new(11, body);
+        let (mut a, _b) = duplex(64);
+        let err = write_frame(&mut a, &frame).await.expect_err("too large");
+        assert!(matches!(
+            err,
+            RiakError::FrameTooLarge { announced, max }
+                if announced == MAX_FRAME_LEN + 1 && max == MAX_FRAME_LEN
+        ));
+    }
+
+    #[tokio::test]
+    async fn read_exact_classifies_non_eof_io_error() {
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+        use tokio::io::{AsyncRead, ReadBuf};
+
+        // A reader that always fails with a non-EOF io error drives
+        // the generic Io arm of read_exact_or_classify.
+        struct BrokenReader;
+        impl AsyncRead for BrokenReader {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _buf: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "reset",
+                )))
+            }
+        }
+
+        let mut r = BrokenReader;
+        let err = read_frame(&mut r).await.expect_err("io error");
+        assert!(matches!(err, RiakError::Io(_)));
+    }
 }
