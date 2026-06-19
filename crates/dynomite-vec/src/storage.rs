@@ -2,14 +2,14 @@
 //!
 //! [`VectorStore`] persists [`VectorRow`] records keyed by
 //! `(table, row_key)` and maintains a per-table HNSW index for
-//! ANN search. The MVP ships a [`MemoryStore`] backend that
+//! ANN search. The MVP ships a [`MemoryBackend`] backend that
 //! satisfies the [`Backend`] trait without external dependencies;
 //! a Noxu-backed implementation lives behind the optional `noxu`
 //! feature in a follow-up storage backend.
 //!
 //! Layout:
 //!
-//! * Per [`VectorTable`] there is one HNSW index, one map of
+//! * Per logical vector table there is one HNSW index, one map of
 //!   live rows, and one tombstone counter.
 //! * Inserts update both the row map and the index in lockstep.
 //! * Deletes soft-delete the index node and remove the row.

@@ -20,7 +20,7 @@
 //!   works against an in-memory backend (default) or a Noxu DB
 //!   (off-by-default `noxu` feature).
 //! * [`engine`] -- per-table handle exposed to embedders.
-//! * [`api`] -- the HTTP API (gated on the `http` feature; kept
+//! * `api` -- the HTTP API (gated on the `http` feature; kept
 //!   as a debug surface only).
 //!
 //! The distributed k-NN coordinator that used to live here has

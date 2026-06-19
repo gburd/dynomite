@@ -14,8 +14,8 @@
 //!   uses to fan a query out to every primary peer.
 //!
 //! The crate is designed to be wired into a Dynomite
-//! [`ServerBuilder`](dynomite::embed::ServerBuilder) via the
-//! [`CommandExtension`](dynomite::embed::CommandExtension)
+//! [`ServerBuilder`] via the
+//! [`CommandExtension`]
 //! hook. The [`install`] helper does this in one call;
 //! [`SearchExtension`] is the underlying impl for embedders
 //! who want finer control.

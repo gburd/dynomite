@@ -132,7 +132,7 @@ pub trait Datastore: Send + Sync {
     /// extra capability does not have to override anything. A
     /// backend that wants to expose itself for downcasting (for
     /// example the Riak multi-key transaction store, which a
-    /// transport probes for via [`std::any::Any::downcast_ref`])
+    /// transport probes for via [`std::any::Any`] `downcast_ref`)
     /// returns `Some(self)`.
     fn as_any(&self) -> Option<&(dyn std::any::Any + 'static)> {
         None

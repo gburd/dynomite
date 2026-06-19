@@ -556,7 +556,7 @@ impl ServerHandle {
     /// This is the test/embedding entry point that bypasses the
     /// proxy listener. The dispatcher computes a routing plan; if
     /// the plan resolves to the local datastore, the
-    /// [`Datastore::dispatch`](crate::embed::hooks::Datastore::dispatch)
+    /// [`Datastore::dispatch`]
     /// hook is invoked. If the plan resolves to a remote peer
     /// co-located in the same process (via the in-process
     /// registry), the request is forwarded to that peer's

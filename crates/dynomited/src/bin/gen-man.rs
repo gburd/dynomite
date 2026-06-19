@@ -8,44 +8,66 @@
 //! recorded in `docs/journal/2026-05-19-stage-12b-runloop.md`.
 //!
 //! The OPTIONS table is augmented with a free-form preamble that
-//! mirrors the wording of the reference manpage at
-//! `_/dynomite/man/dynomite.8` so existing operator-facing
-//! documentation still applies. Anything clap can derive
+//! describes the server for operators. Anything clap can derive
 //! automatically (the option list, defaults) flows through
 //! `clap_mangen`.
+//!
+//! The version string is read from `CARGO_PKG_VERSION` at build
+//! time so the manpage cannot drift from the crate version.
 
 use std::path::PathBuf;
 
 use clap::CommandFactory;
 use dynomited::cli::Cli;
 
-const HEADER: &str = ".TH DYNOMITED 8 \"2026-05-19\" \"v0.0.1\"
+const HEADER: &str = concat!(
+    ".TH DYNOMITED 8 \"2026-06-18\" \"v",
+    env!("CARGO_PKG_VERSION"),
+    "\"
 .SH NAME
-dynomited - a generic dynamo implementation for different key/value storage engines (Rust port).
+dynomited - a generic Dynamo implementation for different key/value storage engines (Rust port).
 .SH DESCRIPTION
-.B Dynomited
-is a thin, distributed Dynamo layer for different storage engines and protocols. Dynomite provides sharding and multi-data center replication. It has a shared nothing architecture with no single point of failure (SPOF) that delivers high availability (HA) even when a server, rack or entire data center goes offline.
+.B dynomited
+is a distributed, Dynamo-style replication layer that fronts a per-node data store. It provides sharding and multi-data-center replication on a shared-nothing architecture with no single point of failure (SPOF), so the cluster stays available even when a server, rack, or entire data center goes offline.
 .PP
-Redis is currently the primary backend and protocol supported by Dynomite, while support for Memcached is partially implemented.
+The data store backing each node is selected by the
+.B data_store
+configuration key and may be one of three first-class backends:
+.IP \\[bu]
+.B valkey
+(alias
+.BR redis ):
+the Valkey / RESP wire protocol, vendor neutral.
+.IP \\[bu]
+.B memcache :
+the Memcached text protocol.
+.IP \\[bu]
+.B dyniak :
+the built-in Riak-compatible store (Riak PBC and HTTP surfaces, backed by an embedded noxu engine).
 .PP
-Dynomite provides the following functionality:
+Client and inter-node traffic run over TCP or QUIC, on IPv4 or IPv6.
+.PP
+dynomited provides the following functionality:
 .IP \\[bu]
-Linear scalability
+Multi-data-center (DC) replication
 .IP \\[bu]
-High availability (HA)
+Gossip-based cluster membership and topology discovery
 .IP \\[bu]
-Shared nothing architecture with symmetric nodes
+Tunable quorum reads and writes
 .IP \\[bu]
-Multi-data center (DC) replication
+Hinted handoff for writes to temporarily unavailable peers
 .IP \\[bu]
-Data replication and sharding
+Read repair on divergent replicas
 .IP \\[bu]
-Support for any Redis client plus a specialized Dyno client for Java
+Active anti-entropy (Merkle-tree) reconciliation
 .IP \\[bu]
-Reduced connections to and lower connection overhead on backend storage engines via persistent connections
+Shared-nothing architecture with symmetric nodes and no SPOF
+.IP \\[bu]
+Data replication and consistent-hash sharding
 .IP \\[bu]
 Observability via easily accessible statistics
-";
+"
+);
 
 const FOOTER: &str = ".SH SEE ALSO
 .BR memcached (8),

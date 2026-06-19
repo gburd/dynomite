@@ -109,8 +109,8 @@ pub struct SweepTick {
     /// was built per-token via
     /// [`SweepPlan::new_per_token`]. The hex encoding is the
     /// same one [`DynToken::to_hex`] returns and round-trips
-    /// via [`dynomite::hashkit::parse_token`] when prefixed
-    /// with `0x`.
+    /// via the engine's `dynomite::hashkit::parse_token` when
+    /// prefixed with `0x`.
     pub token_hex: Option<String>,
 }
 
@@ -255,7 +255,7 @@ impl SweepPlan {
 /// supplied trait implementations and so lives in the dynomited
 /// integration. This driver owns the cadence: it tells the
 /// caller "fire the next tick now" and advances its internal
-/// rotation cursor on each [`Scheduler::tick`] call.
+/// rotation cursor on each [`Self::poll`] call.
 pub struct Scheduler<C: Clock> {
     cfg: ConfAae,
     clock: Arc<C>,

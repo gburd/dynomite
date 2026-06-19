@@ -26,7 +26,7 @@
 //!
 //! All of the atomics are imported through a small `cfg(loom)` shim:
 //! production builds use [`std::sync::atomic`]; loom builds use
-//! [`loom::sync::atomic`]. The rest of the API is identical.
+//! `loom::sync::atomic`. The rest of the API is identical.
 //!
 //! [loom]: https://docs.rs/loom
 

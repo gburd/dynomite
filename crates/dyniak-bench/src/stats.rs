@@ -86,9 +86,10 @@ impl WorkerSlot {
 
 /// Process-wide stats aggregator.
 ///
-/// Thread model: each worker calls [`record_ok`] / [`record_err`]
-/// on its own slot through a [`WorkerHandle`]. The reporter thread
-/// calls [`flush`] from a separate task; the slot mutex protects
+/// Thread model: each worker calls [`WorkerHandle::record_ok`] /
+/// [`WorkerHandle::record_err`] on its own slot through a
+/// [`WorkerHandle`]. The reporter thread calls [`Self::flush`]
+/// from a separate task; the slot mutex protects
 /// the merge itself but the typical (record) path is uncontended
 /// because each worker uses its own slot.
 pub struct StatsAggregator {

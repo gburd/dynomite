@@ -1869,13 +1869,13 @@ async fn record_reconnect_and_back_off(
 }
 
 /// Initial reconnect delay (50 ms) and ceiling (5 000 ms) used
-/// by the [`backend_supervisor`] backoff schedule. Exposed at
+/// by the `backend_supervisor` backoff schedule. Exposed at
 /// module scope so the regression test in
 /// `tests/regression_busy_loop.rs` can reason about the
 /// expected wall-clock spread.
 pub const BACKEND_BACKOFF_INIT_MS: u64 = 50;
 /// Ceiling on the per-attempt sleep imposed by the
-/// [`backend_supervisor`] backoff schedule.
+/// `backend_supervisor` backoff schedule.
 pub const BACKEND_BACKOFF_MAX_MS: u64 = 5_000;
 
 /// Compute the next non-jittered backoff value: double the

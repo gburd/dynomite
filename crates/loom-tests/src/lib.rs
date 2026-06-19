@@ -37,12 +37,12 @@
 //! # What is modeled here
 //!
 //! 1. A simplified hint-store enqueue/drain primitive (mirrors
-//!    [`dyniak::handoff::HintStore`]'s contended path).
+//!    the `dyniak::handoff::HintStore` contended path).
 //! 2. A simplified phi-accrual sample-record/observe primitive
-//!    (mirrors [`dynomite::cluster::failure_detector`]'s running
+//!    (mirrors the `dynomite::cluster::failure_detector` running
 //!    statistics).
 //! 3. A simplified mbuf alloc/free primitive (mirrors
-//!    [`dynomite::io::mbuf::MbufPool`]'s free list).
+//!    the `dynomite::io::mbuf::MbufPool` free list).
 //!
 //! The token-bucket throttle is NOT modeled here: it is exercised
 //! directly under loom in `crates/throttle-core/tests/loom.rs`,

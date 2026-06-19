@@ -470,8 +470,7 @@ impl ReaperHandler {
     }
 
     /// Last [`State`] the FSM was in. Mirrors the field of
-    /// the same name on [`super::HandoffHandler`] in the
-    /// handoff module; surfaced for diagnostics.
+    /// the same name on the handoff handler; surfaced for diagnostics.
     #[must_use]
     pub const fn last_state(&self) -> State {
         self.last_state

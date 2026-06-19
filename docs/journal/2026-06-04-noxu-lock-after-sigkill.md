@@ -1,4 +1,4 @@
-# Chaos investigation: "Environment is locked" under SIGKILL — MISDIAGNOSED, then corrected
+# Chaos investigation: "Environment is locked" under SIGKILL -- MISDIAGNOSED, then corrected
 
 Date: 2026-06-04 (finding), 2026-06-05 (correction)
 Surfaced by: the unified chaos mode (Redis-KV + Riak-PBC + Riak-HTTP

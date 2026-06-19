@@ -22,7 +22,7 @@
 //!
 //! Tests wire a `BucketRouter` directly with a fixture
 //! [`RingView`]; production code constructs one from the live
-//! [`dynomite::cluster::ServerPool`] via [`BucketRouter::from_pool`].
+//! cluster server pool via [`BucketRouter::new`].
 //!
 //! # Examples
 //!

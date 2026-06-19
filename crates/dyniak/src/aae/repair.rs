@@ -394,7 +394,7 @@ impl RepairScheduler {
     }
 
     /// Resolve every divergence in the slice. Convenience
-    /// wrapper over repeated calls to [`resolve`].
+    /// wrapper over repeated calls to [`Self::resolve`].
     pub fn resolve_all(&self, divergences: &[Divergence]) -> Vec<Outcome> {
         let mut out = Vec::new();
         for d in divergences {

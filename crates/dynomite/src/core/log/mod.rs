@@ -395,8 +395,8 @@ where
 /// state is wired as a side effect.
 ///
 /// This is the OTLP-off install path; the OTLP-on install path
-/// lives in [`dynomited::observability::install_global`] and
-/// stacks an `OpenTelemetryLayer` on top of the same fmt layer.
+/// lives in the `dynomited` binary's `observability::install_global`
+/// and stacks an `OpenTelemetryLayer` on top of the same fmt layer.
 ///
 /// May only be called once per process.
 ///

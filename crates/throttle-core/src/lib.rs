@@ -18,7 +18,7 @@
 //! # Loom support
 //!
 //! Under `RUSTFLAGS='--cfg loom'` the atomics and mutex used by
-//! [`Throttle`] are sourced from the [`loom`] crate's
+//! [`Throttle`] are sourced from the `loom` crate's
 //! shadow-`std` modules. This lets a model checker explore every
 //! legal interleaving of the CAS loop in
 //! [`Throttle::try_acquire`] and verify that no interleaving

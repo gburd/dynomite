@@ -1,7 +1,9 @@
-//! Dynomite is a distributed replication layer for Redis and Memcached
-//! datastores. This crate provides the engine as a library so it can be
-//! embedded in another Rust program, and is also driven by the `dynomited`
-//! binary as a standalone server.
+//! Dynomite is a distributed replication layer for Valkey, Memcache, and
+//! the built-in Riak-compatible dyniak datastores. This crate provides the
+//! engine as a library so it can be embedded in another Rust program, and
+//! is also driven by the `dynomited` binary as a standalone server. The
+//! crate is published on crates.io as `dynomite-engine`; its library name
+//! is `dynomite`.
 //!
 //! # Embedding
 //!

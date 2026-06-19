@@ -370,7 +370,7 @@ type ListenerHandles = (
 ///
 /// # Returns
 ///
-/// A [`ListenerHandles`] tuple of `(pbc_handle, http_handle,
+/// A `ListenerHandles` tuple of `(pbc_handle, http_handle,
 /// quic_handle)`; any may be `None` when the corresponding
 /// address was not configured. `quic_handle` is always `None`
 /// unless the binary is built with the `quic` Cargo feature.

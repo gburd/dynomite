@@ -83,7 +83,7 @@ static DYNIAK_SUPPORTED: AtomicBool = AtomicBool::new(false);
 
 /// Set the process-wide "dyniak data_store is supported" flag.
 ///
-/// Idempotent. See [`DYNIAK_SUPPORTED`] for the contract.
+/// Idempotent. See the `DYNIAK_SUPPORTED` flag for the contract.
 pub fn set_dyniak_supported(on: bool) {
     DYNIAK_SUPPORTED.store(on, Ordering::SeqCst);
 }

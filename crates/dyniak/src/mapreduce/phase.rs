@@ -5,8 +5,9 @@
 //! next phase's inbound. Phases are dispatched by name through the
 //! [`crate::mapreduce::registry::PhaseRegistry`] except for
 //! [`Phase::Link`] (whose semantics are baked into the executor) and
-//! [`Phase::WasmModule`] (dispatched through a
-//! [`crate::mapreduce::wasm::WasmModuleStore`] when one is wired into
+//! [`Phase::WasmModule`] (dispatched through the MapReduce
+//! Wasm module store (`crate::mapreduce::wasm::WasmModuleStore`,
+//! available with the `wasm` feature) when one is wired into
 //! the executor; without a store the executor returns
 //! [`crate::mapreduce::MrError::WasmNotImplemented`]).
 
@@ -70,8 +71,9 @@ pub enum Phase {
     /// Wasm phase: invoke `fn_name` in the registered Wasm module
     /// `module_id` for each phase invocation. Present in the enum
     /// so the JSON schema is forwards-compatible. The executor
-    /// dispatches this variant through a
-    /// [`crate::mapreduce::wasm::WasmModuleStore`] when one is wired
+    /// dispatches this variant through the MapReduce Wasm module
+    /// store (`crate::mapreduce::wasm::WasmModuleStore`, available
+    /// with the `wasm` feature) when one is wired
     /// in; without a store it returns
     /// [`crate::mapreduce::MrError::WasmNotImplemented`].
     WasmModule {

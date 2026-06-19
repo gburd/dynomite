@@ -100,8 +100,8 @@ pub enum TokenCoverageError {
 ///
 /// The check is per-rack: a fault in DC2 still rejects even if
 /// DC1 is fully populated, because the dispatcher walks each
-/// rack independently when planning ([`collect_routable`]
-/// pushes one entry per `(dc, rack)`).
+/// rack independently when planning (the dispatcher's internal
+/// `collect_routable` step pushes one entry per `(dc, rack)`).
 ///
 /// Returns the *first* fault encountered. The traversal order is
 /// the natural `BTreeMap` order over `(dc, rack)` strings, which

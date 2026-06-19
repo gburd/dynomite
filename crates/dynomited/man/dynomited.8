@@ -1,40 +1,57 @@
-.TH DYNOMITED 8 "2026-05-19" "v0.0.1"
+.TH DYNOMITED 8 "2026-06-18" "v0.0.1"
 .SH NAME
-dynomited - a generic dynamo implementation for different key/value storage engines (Rust port).
+dynomited - a generic Dynamo implementation for different key/value storage engines (Rust port).
 .SH DESCRIPTION
-.B Dynomited
-is a thin, distributed Dynamo layer for different storage engines and protocols. Dynomite provides sharding and multi-data center replication. It has a shared nothing architecture with no single point of failure (SPOF) that delivers high availability (HA) even when a server, rack or entire data center goes offline.
+.B dynomited
+is a distributed, Dynamo-style replication layer that fronts a per-node data store. It provides sharding and multi-data-center replication on a shared-nothing architecture with no single point of failure (SPOF), so the cluster stays available even when a server, rack, or entire data center goes offline.
 .PP
-Redis is currently the primary backend and protocol supported by Dynomite, while support for Memcached is partially implemented.
+The data store backing each node is selected by the
+.B data_store
+configuration key and may be one of three first-class backends:
+.IP \[bu]
+.B valkey
+(alias
+.BR redis ):
+the Valkey / RESP wire protocol, vendor neutral.
+.IP \[bu]
+.B memcache :
+the Memcached text protocol.
+.IP \[bu]
+.B dyniak :
+the built-in Riak-compatible store (Riak PBC and HTTP surfaces, backed by an embedded noxu engine).
 .PP
-Dynomite provides the following functionality:
+Client and inter-node traffic run over TCP or QUIC, on IPv4 or IPv6.
+.PP
+dynomited provides the following functionality:
 .IP \[bu]
-Linear scalability
+Multi-data-center (DC) replication
 .IP \[bu]
-High availability (HA)
+Gossip-based cluster membership and topology discovery
 .IP \[bu]
-Shared nothing architecture with symmetric nodes
+Tunable quorum reads and writes
 .IP \[bu]
-Multi-data center (DC) replication
+Hinted handoff for writes to temporarily unavailable peers
 .IP \[bu]
-Data replication and sharding
+Read repair on divergent replicas
 .IP \[bu]
-Support for any Redis client plus a specialized Dyno client for Java
+Active anti-entropy (Merkle-tree) reconciliation
 .IP \[bu]
-Reduced connections to and lower connection overhead on backend storage engines via persistent connections
+Shared-nothing architecture with symmetric nodes and no SPOF
+.IP \[bu]
+Data replication and consistent-hash sharding
 .IP \[bu]
 Observability via easily accessible statistics
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .SH SYNOPSIS
-\fBdynomited\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fB\-t\fR|\fB\-\-test\-conf\fR] [\fB\-d\fR|\fB\-\-daemonize\fR] [\fB\-D\fR|\fB\-\-describe\-stats\fR] [\fB\-v\fR|\fB\-\-verbosity\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-c\fR|\fB\-\-conf\-file\fR] [\fB\-p\fR|\fB\-\-pid\-file\fR] [\fB\-x\fR|\fB\-\-admin\-operation\fR] [\fB\-m\fR|\fB\-\-mbuf\-size\fR] [\fB\-M\fR|\fB\-\-max\-msgs\fR] [\fB\-g\fR|\fB\-\-gossip\fR] 
+\fBdynomited\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fB\-t\fR|\fB\-\-test\-conf\fR] [\fB\-d\fR|\fB\-\-daemonize\fR] [\fB\-D\fR|\fB\-\-describe\-stats\fR] [\fB\-v\fR|\fB\-\-verbosity\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-c\fR|\fB\-\-conf\-file\fR] [\fB\-p\fR|\fB\-\-pid\-file\fR] [\fB\-x\fR|\fB\-\-admin\-operation\fR] [\fB\-m\fR|\fB\-\-mbuf\-size\fR] [\fB\-M\fR|\fB\-\-max\-msgs\fR] [\fB\-g\fR|\fB\-\-gossip\fR] [\fB\-\-log\-format\fR] [\fB\-\-distribution\-shadow\fR] 
 
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Show the help banner and exit (sets [`Self::show_version`])
+Show the help banner and exit
 .TP
 \fB\-V\fR, \fB\-\-version\fR
 Show the version banner and exit
@@ -71,12 +88,17 @@ Deprecated maximum allocated messages override
 .TP
 \fB\-g\fR, \fB\-\-gossip\fR
 Force\-enable gossip regardless of the YAML setting
+.TP
+\fB\-\-log\-format\fR \fI<FMT>\fR
+Override the YAML `log_format:` knob. Accepts `default`, `rfc5424`, `rfc3164`, `json`, or `ndjson`
+.TP
+\fB\-\-distribution\-shadow\fR \fI<MODE>\fR
+Run the dispatcher with a shadow distribution alongside the configured one. When set, every routing decision is computed under both the configured `distribution:` (the live route) and the shadow distribution; disagreements are counted on the `distribution_shadow_disagreement_total` metric. Useful for validating a migration before flipping the live distribution. Accepted values: `vnode`, `random_slicing`
 
 .SH SEE ALSO
 .BR memcached (8),
 .BR valkey-server (1)
 .br
 .SH AUTHOR
-This is the Rust port of Netflix Dynomite. The original C
-project is at https://github.com/Netflix/dynomite. The Rust
-port lives at https://github.com/gburd/dynomite.
+Greg Burd <greg@burd.me> and contributors.
+Project home: https://github.com/gburd/dynomite

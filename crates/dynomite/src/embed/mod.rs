@@ -28,7 +28,7 @@
 //! * [`hooks::MetricsSink`] - exporter integration.
 //! * [`crate::io::reactor::Transport`] - already exposed by
 //!   `io::reactor`; re-exported here as
-//!   [`Transport`](crate::embed::Transport) for discoverability.
+//!   [`Transport`] for discoverability.
 //!
 //! Every trait has at least one default implementation shipped
 //! in-crate, and the crate-root re-exports below mean a typical

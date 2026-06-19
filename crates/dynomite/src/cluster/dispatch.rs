@@ -1,4 +1,4 @@
-//! Cluster-aware [`Dispatcher`](crate::net::Dispatcher).
+//! Cluster-aware [`Dispatcher`].
 //!
 //! Routes parsed [`Msg`]s based on the configured consistency level
 //! and the [`crate::cluster::pool::ServerPool`] topology:

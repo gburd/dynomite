@@ -175,8 +175,8 @@ pub enum FsmRequest {
 ///
 /// The handler owns the local [`Tree`] reference and the
 /// per-exchange context. It does not perform I/O directly:
-/// every state-entry posts an [`FsmRequest`] on
-/// [`ExchangeHandler::request_tx`] and waits for the I/O
+/// every state-entry posts an [`FsmRequest`] on its internal
+/// request channel and waits for the I/O
 /// worker to reply with one or more [`Event`]s.
 pub struct ExchangeHandler {
     /// Index of the peer the exchange is running against.

@@ -8,8 +8,8 @@ pub enum Transition<H: FsmHandler> {
     /// Stay in the current state. Run the listed actions.
     Keep(Vec<Action<H>>),
     /// Transition to a new state. Run the listed actions on the way;
-    /// then synthesize an [`crate::EventType::Enter`] event for the
-    /// new state's handler.
+    /// then synthesize an entry event routed to the new state's
+    /// [`crate::FsmHandler::on_enter`].
     Next(H::State, Vec<Action<H>>),
     /// Stop the FSM. The driver's [`crate::FsmDriver`] resolves with
     /// the given reason.

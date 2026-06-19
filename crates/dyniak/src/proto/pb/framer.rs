@@ -14,8 +14,8 @@ use crate::error::RiakError;
 /// adopt the same default. The cap excludes the 4-byte length prefix.
 ///
 /// The cap is deliberately liberal: large MapReduce inputs and 2i
-/// query results approach this in practice. The follow-up slice will
-/// expose the cap as a [`crate::server::ServeConfig`] knob.
+/// query results approach this in practice. A future revision may
+/// expose the cap as a per-server configuration knob.
 pub const MAX_FRAME_LEN: u32 = 16 * 1024 * 1024;
 
 /// Decoded PBC frame: a message code byte plus its protobuf body.

@@ -53,7 +53,7 @@ const MAX_RHO: u8 = 51;
 /// HyperLogLog cardinality estimator CRDT.
 ///
 /// Each register holds a `u8` (the observed `rho` value, capped
-/// at [`MAX_RHO`]). The register array is held as a `Box<[u8]>`
+/// at the internal `MAX_RHO` limit). The register array is held as a `Box<[u8]>`
 /// so the type stays `Sized` while the 16-KiB array lives on
 /// the heap.
 ///

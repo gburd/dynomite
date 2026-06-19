@@ -46,7 +46,8 @@
 //!
 //! # Optional features
 //!
-//! * `noxu` -- enables the [`persist`] module that serialises
+//! * `noxu` -- enables the `persist` module (built only with this
+//!   feature) that serialises
 //!   a [`TextIndex`] to an embedded Noxu DB environment so
 //!   the trigram postings, per-doc bloom filters, and raw
 //!   text survive a process restart. The feature pulls in

@@ -1,8 +1,8 @@
 //! Lazy-registered Prometheus metric families owned by the
 //! `dynomited` binary.
 //!
-//! The engine exports its own metric families through
-//! [`dynomite::runtime::metrics`]; this module is reserved for
+//! The engine exports its own metric families through its
+//! `dynomite::runtime::metrics` module; this module is reserved for
 //! counters and histograms that only make sense at the binary
 //! layer (currently: backend reconnect attempts emitted from the
 //! supervisor in [`crate::server`]).

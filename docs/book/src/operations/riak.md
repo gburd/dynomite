@@ -24,13 +24,20 @@ Two independent listeners are available:
 * **PBC (Protocol Buffers Client)** -- Riak's binary wire format.
   Hand-rolled `prost`-derived messages plus the standard
   `[4-byte BE length][1-byte msg-code][prost body]` framing. The
-  v0.0.1 surface covers `RpbPing`, `RpbGetReq`/`Resp`,
-  `RpbPutReq`/`Resp`, `RpbDelReq`, `RpbServerInfoReq`/`Resp`,
-  `RpbGetBucket`, `RpbSetBucket`, plus error responses for
-  `RpbListBuckets`, `RpbListKeys`, `RpbIndex` (which return a
-  `not implemented for this datastore` error pending the
-  follow-up slice that wires the richer K/V trait against the
-  storage engine).
+  surface covers `RpbPingReq`/`Resp`, `RpbGetServerInfoReq`/`Resp`,
+  `RpbGetReq`/`Resp`, `RpbPutReq`/`Resp`, `RpbDelReq`/`Resp`,
+  `RpbGetBucketReq`/`Resp`, `RpbSetBucketReq`/`Resp`,
+  `RpbListBucketsReq`/`Resp`, `RpbListKeysReq`/`Resp` (both chunked
+  into a multi-frame stream), `RpbIndexReq`/`Resp` (secondary
+  indexes), and `RpbMapRedReq`/`Resp` (MapReduce), plus the
+  Dynomite cluster-admin extensions (`DynListPeers`,
+  `DynClusterJoin` / `Leave` / `Plan` / `Commit`, `DynAaeStatus`)
+  and error responses. Whether a given operation succeeds also
+  depends on the backing datastore's capabilities: 2i and
+  MapReduce require an object-capable store such as the
+  Noxu-backed `dyniak` datastore; against a plain RESP / memcache
+  backend those calls return a `not implemented for this
+  datastore` error.
 * **HTTP gateway** -- the same operations exposed over
   `application/x-protobuf`, `application/json`, or
   `application/cbor` via the

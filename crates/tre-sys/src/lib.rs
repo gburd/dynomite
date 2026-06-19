@@ -27,11 +27,11 @@
 //! # Safety boundary
 //!
 //! All `unsafe extern "C"` declarations are confined to the
-//! [`raw`] module. Callers must uphold:
+//! private `raw` module. Callers must uphold:
 //!
-//! * `regex_t` is initialised by [`raw::tre_regncomp`] before
+//! * `regex_t` is initialised by [`tre_regncomp`] before
 //!   any other call uses it.
-//! * `regex_t` is freed by [`raw::tre_regfree`] exactly once.
+//! * `regex_t` is freed by [`tre_regfree`] exactly once.
 //! * `regamatch_t::pmatch` either points to a writable buffer
 //!   of `nmatch` `regmatch_t` slots or `nmatch` is zero.
 //! * Strings passed to `tre_regncomp` and `tre_reganexec` are

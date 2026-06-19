@@ -610,8 +610,8 @@ pub struct ConfRiak {
     /// entry pairs a logical `id` with the on-disk `path` of a
     /// Wasm binary (`.wasm`) or WAT text (`.wat`) file. When
     /// `dynomited` is built with the `wasm` Cargo feature it
-    /// loads every entry through
-    /// [`dyniak::mapreduce::wasm::load_modules_from_config`]
+    /// loads every entry through the dyniak MapReduce Wasm
+    /// loader (`dyniak::mapreduce::wasm::load_modules_from_config`)
     /// and exposes the resulting store on the executor; without
     /// the feature the field is parsed and validated but the
     /// loader is never called (the runtime returns the typed

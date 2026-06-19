@@ -63,7 +63,7 @@ struct Bucket {
     directory: BTreeMap<u32, BTreeSet<KeyEntry>>,
 }
 
-/// One entry recorded in [`Bucket::directory`]. The entry
+/// One entry recorded in a bucket's per-segment directory. The entry
 /// represents one observation of a (bucket, key) at a given
 /// vclock.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]

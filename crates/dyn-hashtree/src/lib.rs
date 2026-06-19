@@ -98,7 +98,8 @@ pub enum HashTreeError {
 /// One leaf cell of a [`HashTree`].
 ///
 /// A `Segment` owns the keys whose [`HashTree::segment_for`]
-/// index equals its position in [`HashTree::segments`]. The
+/// index equals its position in the tree's leaf-segment vector
+/// (its length is [`HashTree::segment_count`]). The
 /// `hash` field is the cached BLAKE3 digest of the segment's
 /// contents and is invalidated by [`HashTree::insert`] /
 /// [`HashTree::remove`].

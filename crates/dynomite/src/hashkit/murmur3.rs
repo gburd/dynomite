@@ -358,7 +358,8 @@ pub(super) fn murmur3_x64_128(key: &[u8], seed: u64) -> (u64, u64) {
 
 /// MurmurHash3 truncated to 64 bits.
 ///
-/// Returns the low 64 bits of [`murmur3_x64_128`]. Used by the
+/// Returns the low 64 bits of the 128-bit `murmur3_x64_128`
+/// digest. Used by the
 /// random-slicing distribution table; the high bits of the
 /// 128-bit fingerprint are not stored, matching the standard
 /// 64-bit variant referenced by the random-slicing literature.

@@ -28,8 +28,8 @@
 //! Riak's CRDTs key per-replica metadata by an Erlang `vnode_id`
 //! tuple. This crate models actors as a value-typed
 //! [`ActorId`] carrying the (datacenter name, peer name) pair the
-//! Dynomite substrate already exposes through
-//! [`dynomite::embed::TopologySnapshot`]. The pair is stable across
+//! Dynomite substrate already exposes through its
+//! topology snapshots. The pair is stable across
 //! gossip rounds and totally ordered, which is exactly what an
 //! OR-Set tag generator and an LWW-register tiebreaker need.
 //!

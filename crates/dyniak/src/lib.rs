@@ -11,7 +11,8 @@
 //!
 //! * [`proto::pb`] -- the Riak Protocol Buffers wire format. Hand-rolled
 //!   `prost::Message` structs for the v0.0.1 operation set
-//!   ([`proto::pb::RpbPing`], [`proto::pb::RpbGetReq`] /
+//!   ([`proto::pb::RpbPingReq`] / [`proto::pb::RpbPingResp`],
+//!   [`proto::pb::RpbGetReq`] /
 //!   [`proto::pb::RpbGetResp`], [`proto::pb::RpbPutReq`] /
 //!   [`proto::pb::RpbPutResp`], [`proto::pb::RpbDelReq`]) plus an
 //!   error response. The framing layer is exposed through
@@ -57,9 +58,9 @@
 //!
 //! The PBC path is hard-coded to `application/x-protobuf`; the bytes
 //! travel through a [`dyn_encoding::ProtobufCodec`] wired up in
-//! [`proto::pb::codec_registry`]. The `dyn-encoding` machinery is in
-//! place so the upcoming HTTP gateway can negotiate JSON / CBOR /
-//! protobuf per-request through the same registry.
+//! [`proto::pb::codec_registry`]. The HTTP gateway ([`serve_http`])
+//! negotiates JSON / CBOR / protobuf per-request through the same
+//! registry.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

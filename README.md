@@ -9,12 +9,46 @@ functionally identical to the original C codebase while being usable
 both as:
 
 * a standalone server binary (`dynomited`), and
-* a library crate (`dynomite`) that can be embedded directly in another
+* a library crate published on crates.io as `dynomite-engine` (its
+  library name is `dynomite`) that can be embedded directly in another
   Rust program through a stable, documented API.
 
+## Data stores
+
+Each node fronts one backend, selected by the `data_store:` key in the
+YAML config (or the integer form):
+
+* `valkey` (alias `redis`, integer `0`) -- the Valkey / RESP wire
+  protocol. The `redis` spelling is accepted for back-compat and maps
+  to the same backend.
+* `memcache` (alias `memcached`, integer `1`) -- the Memcached ASCII
+  protocol.
+* `dyniak` (integer `2`) -- the built-in Riak-compatible store. It
+  serves the Riak PBC and HTTP surfaces from an embedded transactional
+  Noxu environment and requires `dynomited` built with `--features riak`
+  plus a `noxu_path:` knob. A dyniak pool does not run a RESP client
+  proxy.
+
+## Capabilities
+
+What the engine does today:
+
+* Consistent-hash sharding and multi-data-center replication on a
+  shared-nothing architecture with no single point of failure.
+* Gossip-based cluster membership and topology discovery.
+* Tunable quorum reads and writes.
+* Hinted handoff (durable, persisted under `hint_dir:`) for writes to
+  temporarily unavailable peers.
+* Read repair on divergent replicas.
+* Active anti-entropy (Merkle-tree) reconciliation.
+* For dyniak: cross-node XA transactions, object links and link
+  walking, secondary indexes (2i), MapReduce (with optional WASM map /
+  reduce phases, gated on the `wasm` feature), and `FT.*` full-text /
+  vector / regex search with a durable index.
+
 Network communication between Dynomite nodes can run over TCP (default,
-matching the original) or QUIC (via the `quiche` crate). Both transports
-support IPv4 and IPv6.
+matching the original) or QUIC (via the `quiche` crate, gated on the
+`quic` feature). Both transports support IPv4 and IPv6.
 
 ## Status
 
@@ -33,9 +67,53 @@ cargo nextest run --workspace
 The Nix flake pins every tool needed to build, test, fuzz, bench, and
 package the project.
 
+Run the server against a config file:
+
+```
+cargo run -p dynomited -- --conf-file conf/dynomite.yml
+```
+
+Validate a config without starting the server with `--test-conf`, and
+see `dynomited --help` (or the `dynomited.8` man page) for the full flag
+list.
+
 For a ten-minute walk-through that takes a fresh checkout to a running
 search stack with vector, text, and regex queries over `valkey-cli`,
 see [`docs/book/src/tutorial-search.md`](./docs/book/src/tutorial-search.md).
+
+## Embedding
+
+Add the engine to another Rust project:
+
+```
+cargo add dynomite-engine
+```
+
+The crate is imported as `dynomite`. Build a server with `ServerBuilder`
+and drive it via the returned handle:
+
+```rust,no_run
+use dynomite::{Server, ServerBuilder};
+use dynomite::conf::DataStore;
+
+#[tokio::main]
+async fn main() {
+    let server = ServerBuilder::new("dyn_o_mite")
+        .listen("127.0.0.1:0".parse().unwrap())
+        .dyn_listen("127.0.0.1:0".parse().unwrap())
+        .data_store(DataStore::Valkey)
+        .servers(vec![dynomite::conf::ConfServer::parse("127.0.0.1:6379:1").unwrap()])
+        .tokens_str("0")
+        .build()
+        .unwrap();
+    let handle = server.start().await.unwrap();
+    handle.shutdown().await.unwrap();
+}
+```
+
+The full embedding cookbook lives in the `dynomite::embed` module docs
+and in [`docs/book/`](./docs/book/); runnable examples are under
+[`crates/dynomite/examples/`](./crates/dynomite/examples/).
 
 ## Acknowledgements
 

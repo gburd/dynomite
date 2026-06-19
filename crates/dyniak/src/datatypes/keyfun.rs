@@ -81,7 +81,7 @@ pub enum KeyFun {
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum KeyFunError {
-    /// [`Self::route_bytes`] was called on a [`KeyFun::Custom`]
+    /// [`KeyFun::route_bytes`] was called on a [`KeyFun::Custom`]
     /// keyfun, which needs the WASM store. Callers must route a
     /// `Custom` keyfun through
     /// [`crate::router::BucketRouter`], which owns the store.

@@ -21,7 +21,7 @@
 //! vector to within their respective error budgets and preserve
 //! dimension count exactly. `Turbovec` round-trips losslessly at
 //! the row layer because the compressed representation lives in
-//! the table's [`crate::index::TurboTable`] alongside the row
+//! the table's [`crate::turbo_index::TurboTable`] alongside the row
 //! store, not in the row payload itself; quantisation loss is
 //! exposed through the search-path scoring (see
 //! [`distance_turbovec`]).
@@ -301,7 +301,7 @@ impl Encoder for Int8Quantized {
 
 /// IEEE 754 half-precision encoder.
 ///
-/// Each component is converted via [`f16::from_f32`]. Storage is
+/// Each component is converted via `half::f16::from_f32`. Storage is
 /// `2 * dim` bytes; no per-vector parameters are needed because
 /// the codec does not depend on the input distribution.
 #[derive(Clone, Copy, Debug, Default)]
@@ -363,7 +363,7 @@ impl Encoder for Fp16 {
 ///
 /// The on-row payload is the original vector's `f32`
 /// little-endian bytes. Compression and SIMD scoring happen at
-/// the per-table layer (see [`crate::index::TurboTable`]) where
+/// the per-table layer (see [`crate::turbo_index::TurboTable`]) where
 /// a [`turbovec::TurboQuantIndex`] holds every vector in its
 /// 2/3/4-bit packed form. Per-row storage stays at 4 * `dim`
 /// bytes; the in-memory ANN index achieves the headline 8x

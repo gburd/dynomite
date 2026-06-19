@@ -5,6 +5,49 @@ pool stanza. Refer to the inline rustdoc on
 [`dynomite::conf::ConfPool`] for the exhaustive field list; the
 pages here describe the operator-facing surface in more detail.
 
+## Endpoints and Unix sockets
+
+The `listen:` (client plane), `dyn_listen:` (peer plane), and
+`stats_listen:` (HTTP stats) directives take a `host:port`
+address (IPv4 or IPv6). A value that begins with `/` is treated
+as a Unix domain socket path instead:
+
+```yaml
+dyn_o_mite:
+  listen: /var/run/dynomite/client.sock
+  dyn_listen: 127.0.0.1:8101
+  stats_listen: 127.0.0.1:22222
+```
+
+The `servers:` entries (the backend datastore) accept the same
+shape: `host:port:weight [name]` or, for a Unix-socket backend,
+`/path/to/socket:weight [name]`. The port is reported as `0` for
+Unix-socket entries.
+
+```yaml
+  servers:
+  - /var/run/valkey/valkey.sock:1 valkey-local
+```
+
+## Backend authentication
+
+* `redis_requirepass` (string, default unset): when set, the
+  password is sent as `AUTH <pw>` on every backend connection
+  immediately after the TCP handshake. It mirrors the Valkey /
+  Redis `requirepass` server option. Memcache backends are not
+  authenticated (`AUTH` is RESP-specific; memcache binary SASL
+  is not implemented), so the knob is ignored for a memcache
+  `data_store`.
+
+## Dyniak store
+
+* `noxu_path` (path): filesystem directory the in-process Noxu
+  DB environment opens at. **Required** when `data_store:
+  dyniak` is selected and ignored otherwise. The directory must
+  be writable; an existing environment is reused, otherwise one
+  is created. A `dyniak` pool serving the Riak surface needs a
+  binary built with `--features riak`.
+
 ## Bucket types
 
 A *bucket type* is a named bundle of routing properties that
@@ -92,6 +135,7 @@ dyn_o_mite:
   hint_ttl_seconds: 86400
   hint_store_max_bytes: 67108864
   hint_drain_interval_ms: 30000
+  hint_dir: /var/lib/dynomite/hints
 ```
 
 Knobs:
@@ -101,7 +145,7 @@ Knobs:
   and a Down or unreachable target is silently skipped.
 * `hint_ttl_seconds` (uint, default `86400` / 24 hours):
   per-hint expiry. Hints older than this are dropped during the
-  next drainer sweep so the in-memory store stays bounded.
+  next drainer sweep so the store stays bounded.
 * `hint_store_max_bytes` (uint, default `67108864` / 64 MiB):
   upper bound on the cumulative payload bytes of pending hints.
   Once the store is full the dispatcher falls back to its
@@ -112,6 +156,13 @@ Knobs:
   the drainer sweep. Every tick (a) drops expired hints and
   (b) replays the queued hints for every peer that has
   transitioned to `Normal`.
+* `hint_dir` (path, default unset): when set, the hint store is
+  durable. It keeps one append-only segment file per peer under
+  this directory and replays them at startup, so hints queued
+  for a temporarily down peer survive a coordinator restart.
+  When unset the hint store is RAM-only and queued hints are
+  lost on restart. Ignored when `enable_hinted_handoff` is
+  `false`.
 
 Operational notes:
 
@@ -119,12 +170,12 @@ Operational notes:
   Down peer remain a no-data-to-hint situation and continue to
   follow the legacy "skip the target and fall through to the
   consistency check" path.
-* The hint store is RAM-only in this release. An on-disk
-  variant (one segment file per peer, replayed at startup) is
-  on the roadmap; until then a node restart drops every
-  pending hint. Operators that need cross-restart durability
-  should size `hint_store_max_bytes` and the drainer cadence
-  conservatively.
+* The hint store is RAM-only by default. Set `hint_dir` to make
+  it durable: the store then writes one append-only segment
+  file per peer under that directory and replays them at
+  startup, so pending hints survive a node restart. Without
+  `hint_dir`, a node restart drops every pending hint, so size
+  `hint_store_max_bytes` and the drainer cadence conservatively.
 * The synthesised reply that the dispatcher feeds the
   coalescer on a hinted target's behalf is `+OK\r\n`. This is
   the correct shape for `SET`-style writes (the dominant
@@ -194,9 +245,16 @@ my_pool:
   riak:
     pbc_listen: 127.0.0.1:8087
     http_listen: 127.0.0.1:8098
+    quic_listen: 127.0.0.1:8089
     aae_enabled: true
     aae_full_sweep_interval_seconds: 86400
     aae_segment_interval_seconds: 60
+    tls_cert: /etc/dynomited/riak.crt
+    tls_key: /etc/dynomited/riak.key
+    tls_ca: /etc/dynomited/ca.pem
+    wasm_modules:
+    - id: wordcount
+      path: /etc/dynomited/wasm/wordcount.wasm
 ```
 
 Every field is optional. Setting only `pbc_listen` enables the
@@ -207,11 +265,16 @@ place.
 
 | Key | Type | Meaning |
 | --- | --- | --- |
-| `pbc_listen` | `host:port` | Riak PBC listener bind address. |
+| `pbc_listen` | `host:port` | Riak PBC listener bind address (TCP). |
 | `http_listen` | `host:port` | Riak HTTP gateway bind address. |
+| `quic_listen` | `host:port` | Riak PBC listener bind address over QUIC (a UDP socket; same framing as `pbc_listen`). Requires `tls_cert` + `tls_key` and a binary built with the `quic` feature; rejected otherwise. |
 | `aae_enabled` | bool | Spawn the AAE scheduler. Default `false`. |
 | `aae_full_sweep_interval_seconds` | u64 | Cadence over which one full sweep across every peer pair completes. Default 86400. |
 | `aae_segment_interval_seconds` | u64 | Cadence of one (peer, time-bucket) exchange tick. Default 60. Must be <= `aae_full_sweep_interval_seconds`. |
+| `tls_cert` | path | PEM certificate for the Riak listeners. When `tls_cert` + `tls_key` are both set the listeners terminate TLS; both absent runs plaintext. Setting one without the other is rejected. |
+| `tls_key` | path | PEM private key matching `tls_cert`. |
+| `tls_ca` | path | Optional PEM CA bundle. When set, inbound clients must present a cert signed by a CA in the bundle (mutual TLS). |
+| `wasm_modules` | list | Wasm map/reduce modules registered with the MapReduce executor at startup. Each entry is `{id, path}` where `path` points at a `.wasm` or `.wat` file. Loaded only when the binary is built with the `wasm` feature; otherwise parsed and validated but a `Phase::WasmModule` submission returns a `WasmNotImplemented` error. Every `id` must be unique and every `path` must exist at validation time. |
 
 The CLI offers three matching overrides for the same knobs:
 `--riak-pbc-listen=HOST:PORT`, `--riak-http-listen=HOST:PORT`,

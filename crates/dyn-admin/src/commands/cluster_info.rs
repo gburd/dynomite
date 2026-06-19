@@ -72,8 +72,8 @@ pub fn validate_shape(body: &str) -> Result<(), AdminError> {
 }
 
 /// Section headers every well-formed dump contains. The list
-/// must stay in sync with
-/// [`dynomite::admin::cluster_info::format_text`]; the engine
+/// must stay in sync with the engine's
+/// `dynomite::admin::cluster_info::format_text`; the engine
 /// integration test pins both ends.
 pub const REQUIRED_HEADERS: &[&str] = &[
     "=== build ===",

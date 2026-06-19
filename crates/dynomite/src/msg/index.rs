@@ -32,7 +32,7 @@ use super::message::Msg;
 /// to another task or thread, e.g. when a connection migrates) but
 /// is intentionally not exposed through any synchronisation
 /// primitive. The wrapped [`std::collections::HashMap`] inside
-/// [`DictMap`](crate::util::dict::DictMap) is not `Sync`, so two
+/// [`DictMap`] is not `Sync`, so two
 /// tasks cannot share a `&MsgIndex` and call its mutating methods
 /// concurrently. Stages 9 and beyond keep the index private to the
 /// per-connection FSM; if a future caller ever needs cross-thread

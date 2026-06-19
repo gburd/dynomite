@@ -61,7 +61,7 @@ pub const MAX_VERBOSITY: u8 = 11;
 )]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Cli {
-    /// Show the help banner and exit (sets [`Self::show_version`]).
+    /// Show the help banner and exit.
     #[arg(short = 'h', long = "help")]
     pub show_help: bool,
 

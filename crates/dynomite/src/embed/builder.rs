@@ -179,7 +179,7 @@ impl ServerBuilder {
     /// the embedded server does not currently bind the stats
     /// listener; the `dynomited` binary does. Embedders that want
     /// a Prometheus-style scrape endpoint should plug a
-    /// [`MetricsSink`](crate::embed::MetricsSink) implementation
+    /// [`MetricsSink`] implementation
     /// instead.
     #[must_use]
     pub fn stats_listen(mut self, addr: SocketAddr) -> Self {
