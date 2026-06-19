@@ -301,17 +301,20 @@ async fn riak_pbc_2i_against_noxu_round_trip() {
     let put = dyniak::proto::pb::RpbPutReq {
         bucket: b"users".to_vec(),
         key: Some(b"alice".to_vec()),
-        value: b"profile".to_vec(),
-        indexes: vec![
-            dyniak::proto::pb::RpbPair {
-                key: b"age_int".to_vec(),
-                value: Some(b"42".to_vec()),
-            },
-            dyniak::proto::pb::RpbPair {
-                key: b"city_bin".to_vec(),
-                value: Some(b"seattle".to_vec()),
-            },
-        ],
+        content: Some(dyniak::proto::pb::RpbContent {
+            value: b"profile".to_vec(),
+            indexes: vec![
+                dyniak::proto::pb::RpbPair {
+                    key: b"age_int".to_vec(),
+                    value: Some(b"42".to_vec()),
+                },
+                dyniak::proto::pb::RpbPair {
+                    key: b"city_bin".to_vec(),
+                    value: Some(b"seattle".to_vec()),
+                },
+            ],
+            ..dyniak::proto::pb::RpbContent::default()
+        }),
         ..dyniak::proto::pb::RpbPutReq::default()
     };
     pbc_send(&mut sock, 11, &put.encode_to_vec()).await;
