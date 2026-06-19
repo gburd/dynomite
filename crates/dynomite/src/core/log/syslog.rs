@@ -230,6 +230,10 @@ pub(crate) fn rfc5424_prefix(level: tracing::Level) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::fmt::MakeWriter;
+
     use super::*;
 
     #[test]
@@ -251,5 +255,95 @@ mod tests {
     fn rfc5424_prefix_shape() {
         let s = rfc5424_prefix(tracing::Level::INFO);
         assert_eq!(s, "<14>1 ");
+    }
+
+    /// A `MakeWriter` that appends every byte into a shared buffer
+    /// so a test can assert on the formatted line.
+    #[derive(Clone)]
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedBuf {
+        type Writer = SharedBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn emit_with<E>(formatter: E) -> String
+    where
+        E: for<'w> FormatEvent<
+                tracing_subscriber::Registry,
+                tracing_subscriber::fmt::format::DefaultFields,
+            > + Send
+            + Sync
+            + 'static,
+    {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        // Exercise the writer's Write impl (including flush)
+        // directly: tracing emits without an explicit flush, so
+        // this keeps the no-op flush path covered.
+        {
+            use std::io::Write as _;
+            let mut probe = SharedBuf(buf.clone());
+            probe.flush().unwrap();
+        }
+        let sub = tracing_subscriber::fmt()
+            .event_format(formatter)
+            .with_writer(SharedBuf(buf.clone()))
+            .finish();
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!(probe = 1, "hello world");
+        });
+        let bytes = buf.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn rfc5424_default_equals_new() {
+        let a = Rfc5424Formatter::default();
+        let b = Rfc5424Formatter::new();
+        assert_eq!(a.pid, b.pid);
+        assert_eq!(a.hostname, b.hostname);
+    }
+
+    #[test]
+    fn rfc3164_default_equals_new() {
+        let a = Rfc3164Formatter::default();
+        let b = Rfc3164Formatter::new();
+        assert_eq!(a.pid, b.pid);
+        assert_eq!(a.hostname, b.hostname);
+    }
+
+    #[test]
+    fn rfc5424_format_event_emits_well_formed_line() {
+        let line = emit_with(Rfc5424Formatter::new());
+        // INFO -> facility 1, severity 6 -> PRI 14, version 1.
+        assert!(line.starts_with("<14>1 "), "line: {line}");
+        assert!(
+            line.contains(&format!("[{STRUCTURED_DATA_ID} ")),
+            "line: {line}"
+        );
+        assert!(line.contains("level=\"INFO\""), "line: {line}");
+        assert!(line.contains("hello world"), "line: {line}");
+        assert!(line.ends_with('\n'), "line: {line}");
+    }
+
+    #[test]
+    fn rfc3164_format_event_emits_well_formed_line() {
+        let line = emit_with(Rfc3164Formatter::new());
+        assert!(line.starts_with("<14>"), "line: {line}");
+        assert!(line.contains(&format!("{TAG}[")), "line: {line}");
+        assert!(line.contains("hello world"), "line: {line}");
+        assert!(line.ends_with('\n'), "line: {line}");
     }
 }

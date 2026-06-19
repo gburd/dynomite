@@ -653,6 +653,41 @@ mod tests {
     }
 
     #[test]
+    fn fmt_layer_builds_for_every_format() {
+        // `fmt_layer_for_format` is STATE-independent: it only
+        // constructs a boxed layer wired to `LoggerWriter`. We
+        // build one per shape so each match arm is exercised
+        // without touching the process-global writer state.
+        for format in [
+            LogFormat::Default,
+            LogFormat::Json,
+            LogFormat::Rfc5424,
+            LogFormat::Rfc3164,
+        ] {
+            let _layer = fmt_layer_for_format::<Registry>(format);
+        }
+    }
+
+    #[test]
+    fn logger_writer_falls_back_to_stderr_until_state_init() {
+        // The `LoggerWriter` routes to stderr (write) and a no-op
+        // success (flush) until STATE is installed. nextest runs
+        // this in its own process where STATE is fresh; under a
+        // single-process runner the guard keeps the assertions
+        // honest after a sibling test has installed STATE.
+        let mut w = LoggerWriter;
+        if STATE.get().is_none() {
+            // Empty write reports zero bytes via the stderr fallback.
+            let n = w.write(b"").expect("stderr write");
+            assert_eq!(n, 0);
+            w.flush().expect("stderr flush");
+        } else {
+            // STATE present: the write/flush thread through the sink.
+            w.flush().expect("sink flush");
+        }
+    }
+
+    #[test]
     fn build_logs_layer_writer_state_swaps_on_reopen() {
         // The fmt layer returned by `build_logs_layer` writes
         // through the shared STATE.sink. Renaming the configured
@@ -707,6 +742,16 @@ mod tests {
             !new_contents.contains("first-line-marker"),
             "new file unexpectedly contained first marker: {new_contents:?}",
         );
+
+        // STATE is now installed (this test owns the OnceLock for
+        // this binary). Exercise the writer's STATE-present
+        // write and flush arms directly so they are covered even
+        // when a sibling guard-test sees STATE already set.
+        let mut w = LoggerWriter;
+        let n = w.write(b"direct-write\n").expect("sink write");
+        assert_eq!(n, "direct-write\n".len());
+        w.flush().expect("sink flush");
+        assert_eq!(write_error_count(), 0);
     }
 }
 
@@ -768,6 +813,12 @@ mod format_tests {
     /// buffer. The functions are factored out so the assertions are
     /// next to the regex and not next to the subscriber wiring.
     fn run_default(buf: &CaptureBuffer) {
+        // Exercise the capture buffer's no-op flush path; tracing
+        // itself writes without flushing.
+        {
+            let mut probe = buf.clone();
+            probe.flush().unwrap();
+        }
         let sub = tracing_subscriber::fmt()
             .with_writer(buf.clone())
             .with_target(true)

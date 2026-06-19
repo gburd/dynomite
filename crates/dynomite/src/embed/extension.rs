@@ -135,4 +135,71 @@ mod tests {
         let outcome = ext.try_intercept_hset(&[b"key" as &[u8], b"f", b"v"]);
         assert_eq!(outcome, HsetOutcome::NotIndexed);
     }
+
+    #[test]
+    fn no_op_extension_handles_nothing_and_dispatches_nothing() {
+        let ext = NoOp;
+        assert!(!ext.handles_msg_type(MsgType::ReqRedisFtSearch));
+        assert!(!ext.handles_msg_type(MsgType::ReqRedisGet));
+        assert_eq!(ext.try_dispatch(&[b"FT.SEARCH" as &[u8], b"idx"]), None);
+    }
+
+    /// Exercises every `CommandExtension` method and every
+    /// `HsetOutcome` variant via a small concrete extension.
+    #[derive(Debug)]
+    struct Stub;
+
+    impl CommandExtension for Stub {
+        fn handles_msg_type(&self, ty: MsgType) -> bool {
+            matches!(ty, MsgType::ReqRedisFtSearch)
+        }
+        fn try_dispatch(&self, args: &[&[u8]]) -> Option<Vec<u8>> {
+            if args.first() == Some(&(b"FT.SEARCH" as &[u8])) {
+                Some(b"+OK\r\n".to_vec())
+            } else {
+                None
+            }
+        }
+        fn try_intercept_hset(&self, args: &[&[u8]]) -> HsetOutcome {
+            match args.first() {
+                Some(key) if key.starts_with(b"idx:") => HsetOutcome::Absorbed,
+                Some(key) if key.starts_with(b"bad:") => {
+                    HsetOutcome::Error("malformed".to_string())
+                }
+                _ => HsetOutcome::NotIndexed,
+            }
+        }
+    }
+
+    #[test]
+    fn stub_extension_dispatch_and_intercept_arms() {
+        let ext = Stub;
+        assert!(ext.handles_msg_type(MsgType::ReqRedisFtSearch));
+        assert!(!ext.handles_msg_type(MsgType::ReqRedisFtInfo));
+        assert_eq!(
+            ext.try_dispatch(&[b"FT.SEARCH" as &[u8], b"idx"]),
+            Some(b"+OK\r\n".to_vec())
+        );
+        assert_eq!(ext.try_dispatch(&[b"FT.INFO" as &[u8]]), None);
+        assert_eq!(
+            ext.try_intercept_hset(&[b"idx:1" as &[u8], b"f", b"v"]),
+            HsetOutcome::Absorbed
+        );
+        assert_eq!(
+            ext.try_intercept_hset(&[b"bad:1" as &[u8]]),
+            HsetOutcome::Error("malformed".to_string())
+        );
+        assert_eq!(
+            ext.try_intercept_hset(&[b"plain" as &[u8]]),
+            HsetOutcome::NotIndexed
+        );
+    }
+
+    #[test]
+    fn hset_outcome_is_cloneable_and_debug() {
+        let err = HsetOutcome::Error("x".to_string());
+        assert_eq!(err.clone(), err);
+        assert!(format!("{err:?}").contains("Error"));
+        assert_ne!(HsetOutcome::Absorbed, HsetOutcome::NotIndexed);
+    }
 }

@@ -978,4 +978,177 @@ mod tests {
         let err = TlsProfileMap::build(None, per_dc).expect_err("missing");
         assert!(matches!(err, TlsError::Io { .. }), "got {err:?}");
     }
+
+    #[test]
+    fn load_private_key_rejects_empty_key_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_pem, _key_pem) = issue_self_signed();
+        let cert = write_pem(&dir, "cert.pem", &cert_pem);
+        // A well-formed PEM that holds a CERTIFICATE but no private
+        // key parses cleanly yet yields NoMaterial for the key.
+        let key = write_pem(&dir, "key.pem", &cert_pem);
+        let err = load_server_config(&cert, &key, None).expect_err("no key");
+        assert!(
+            matches!(
+                err,
+                TlsError::NoMaterial {
+                    kind: "private key",
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn server_name_owned_rejects_invalid_label() {
+        let err = server_name_owned("not a valid host").expect_err("invalid");
+        assert!(matches!(err, TlsError::Rustls(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn load_client_config_with_pinned_ca() {
+        // A self-signed cert doubles as its own CA bundle; the
+        // client config loads it as the sole trust anchor.
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_pem, _key_pem) = issue_self_signed();
+        let ca = write_pem(&dir, "ca.pem", &cert_pem);
+        let cfg = load_client_config(Some(&ca)).unwrap();
+        assert!(Arc::strong_count(&cfg) >= 1);
+    }
+
+    #[test]
+    fn load_server_config_with_client_ca_enables_mtls() {
+        // Supplying a client CA exercises the mTLS branch of
+        // load_server_config (WebPkiClientVerifier).
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_pem, key_pem) = issue_self_signed();
+        let cert = write_pem(&dir, "cert.pem", &cert_pem);
+        let key = write_pem(&dir, "key.pem", &key_pem);
+        let ca = write_pem(&dir, "ca.pem", &cert_pem);
+        let cfg = load_server_config(&cert, &key, Some(&ca)).unwrap();
+        assert!(Arc::strong_count(&cfg) >= 1);
+    }
+
+    #[test]
+    fn acceptor_and_connector_adapters_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_self_signed(&dir, "adapt");
+        let server = load_server_config(&cert, &key, None).unwrap();
+        let client = load_client_config(None).unwrap();
+        let _acceptor = acceptor_from(server);
+        let _connector = connector_from(client);
+    }
+
+    #[test]
+    fn tls_profile_map_debug_lists_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_self_signed(&dir, "dbg");
+        let map = TlsProfileMap::build(
+            Some(TlsProfileSpec {
+                cert,
+                key,
+                ca: None,
+            }),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let s = format!("{map:?}");
+        assert!(s.contains("TlsProfileMap"), "debug: {s}");
+        assert!(s.contains("has_default"), "debug: {s}");
+        assert!(map.default_server_config().is_some());
+    }
+
+    #[test]
+    fn mtls_profile_map_requires_client_auth_and_builds_acceptor() {
+        // A profile carrying a CA flips requires_client_auth and
+        // drives the mTLS branch of build_sni_acceptor plus
+        // populate_combined_ca_roots, for both the default and
+        // per-DC slots.
+        let dir = tempfile::tempdir().unwrap();
+        let (def_cert_pem, def_key_pem) = issue_self_signed();
+        let (dc_cert_pem, dc_key_pem) = issue_self_signed();
+        let def_cert = write_pem(&dir, "def-cert.pem", &def_cert_pem);
+        let def_key = write_pem(&dir, "def-key.pem", &def_key_pem);
+        let def_ca = write_pem(&dir, "def-ca.pem", &def_cert_pem);
+        let dc_cert = write_pem(&dir, "dc-cert.pem", &dc_cert_pem);
+        let dc_key = write_pem(&dir, "dc-key.pem", &dc_key_pem);
+        let dc_ca = write_pem(&dir, "dc-ca.pem", &dc_cert_pem);
+        let mut per_dc = BTreeMap::new();
+        per_dc.insert(
+            "dc1".into(),
+            TlsProfileSpec {
+                cert: dc_cert,
+                key: dc_key,
+                ca: Some(dc_ca),
+            },
+        );
+        let map = TlsProfileMap::build(
+            Some(TlsProfileSpec {
+                cert: def_cert,
+                key: def_key,
+                ca: Some(def_ca),
+            }),
+            per_dc,
+        )
+        .unwrap();
+        assert!(map.requires_client_auth());
+        let acceptor = map.build_sni_acceptor().unwrap();
+        assert!(acceptor.is_some(), "mTLS map must yield an acceptor");
+    }
+
+    #[test]
+    fn shared_tls_profiles_surface_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = write_self_signed(&dir, "shared");
+        let map = TlsProfileMap::build(
+            Some(TlsProfileSpec {
+                cert,
+                key,
+                ca: None,
+            }),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let shared = SharedTlsProfiles::from_map(map);
+        assert!(!shared.is_empty());
+        assert!(shared.client_config_for_dc("anything").is_some());
+        assert!(!shared.requires_client_auth());
+        assert!(shared.dc_names().is_empty());
+        // Non-empty, no-CA map yields a non-mTLS SNI acceptor.
+        assert!(shared.build_sni_acceptor().unwrap().is_some());
+
+        // Replacing with an empty map flips is_empty and drops the
+        // acceptor.
+        shared.replace(TlsProfileMap::build(None, BTreeMap::new()).unwrap());
+        assert!(shared.is_empty());
+        assert!(shared.build_sni_acceptor().unwrap().is_none());
+        assert!(shared.client_config_for_dc("dc1").is_none());
+    }
+
+    #[test]
+    fn shared_tls_profiles_mtls_acceptor() {
+        // A CA-bearing profile drives the mTLS branch of
+        // SharedTlsProfiles::build_sni_acceptor and
+        // requires_client_auth, plus the per-DC dc_names path.
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_pem, key_pem) = issue_self_signed();
+        let cert = write_pem(&dir, "m-cert.pem", &cert_pem);
+        let key = write_pem(&dir, "m-key.pem", &key_pem);
+        let ca = write_pem(&dir, "m-ca.pem", &cert_pem);
+        let mut per_dc = BTreeMap::new();
+        per_dc.insert(
+            "dcm".into(),
+            TlsProfileSpec {
+                cert,
+                key,
+                ca: Some(ca),
+            },
+        );
+        let map = TlsProfileMap::build(None, per_dc).unwrap();
+        let shared = SharedTlsProfiles::from_map(map);
+        assert!(shared.requires_client_auth());
+        assert_eq!(shared.dc_names(), vec!["dcm".to_string()]);
+        assert!(shared.build_sni_acceptor().unwrap().is_some());
+    }
 }

@@ -697,6 +697,8 @@ fn crc32(data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
 
     fn payload(b: u8, n: usize) -> Vec<u8> {
         vec![b; n]
@@ -1084,5 +1086,179 @@ mod tests {
         // CRC-32 of "123456789" is 0xCBF43926.
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
         assert_eq!(crc32(b""), 0);
+    }
+
+    #[test]
+    fn open_fails_when_path_is_a_file() {
+        // `create_dir_all` cannot turn an existing regular file
+        // into a directory, so `open` surfaces a Dir error rather
+        // than panicking.
+        let dir = scratch_dir();
+        let file_path = dir.path().join("not-a-dir");
+        std::fs::write(&file_path, b"x").unwrap();
+        let err = HintStore::open(&file_path, 1024).expect_err("open on a file");
+        assert!(matches!(err, HintStoreOpenError::Dir { .. }), "got {err:?}");
+    }
+
+    /// True when the current process is the superuser, in which
+    /// case file-permission denials do not apply and the
+    /// permission-error tests are skipped.
+    fn running_as_root() -> bool {
+        // SAFETY-free: `geteuid` is a pure syscall wrapper. We
+        // avoid pulling extra deps by reading it through `nix`,
+        // which is already a workspace dependency.
+        nix::unistd::Uid::effective().is_root()
+    }
+
+    #[test]
+    fn enqueue_surfaces_disk_append_error_on_readonly_dir() {
+        if running_as_root() {
+            return; // root bypasses the permission bits.
+        }
+        let dir = scratch_dir();
+        let store = HintStore::open(dir.path(), 1024).unwrap();
+        // Make the directory read-only so creating a new segment
+        // file fails inside the disk append.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let err = store
+            .enqueue(5, payload(b'a', 4), Duration::from_secs(600))
+            .expect_err("append into read-only dir must fail");
+        assert!(matches!(err, HintStoreError::Io { .. }), "got {err:?}");
+        // Restore so the tempdir can be cleaned up.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn take_for_tolerates_segment_remove_failure() {
+        if running_as_root() {
+            return;
+        }
+        let dir = scratch_dir();
+        let store = HintStore::open(dir.path(), 1024).unwrap();
+        store
+            .enqueue(8, payload(b'a', 4), Duration::from_secs(600))
+            .unwrap();
+        // Read-only dir: take_for still returns the drained hint,
+        // but the durable segment removal fails. The failure is
+        // logged and swallowed (at-least-once handoff), so the
+        // call still yields the hint.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let drained = store.take_for(8);
+        assert_eq!(drained.len(), 1);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn expire_now_tolerates_compaction_failure() {
+        if running_as_root() {
+            return;
+        }
+        let dir = scratch_dir();
+        let store = HintStore::open(dir.path(), 1024).unwrap();
+        // One short-lived + one long-lived hint for the same peer,
+        // so expiry compacts (rewrites) the segment rather than
+        // removing it.
+        store
+            .enqueue(6, payload(b'a', 4), Duration::from_millis(1))
+            .unwrap();
+        store
+            .enqueue(6, payload(b'b', 4), Duration::from_secs(600))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        // Read-only dir: the compaction rewrite fails, but expiry
+        // still drops the in-memory hint and reports it. The disk
+        // failure is logged and swallowed.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let dropped = store.expire_now(Instant::now());
+        assert_eq!(dropped, 1);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn replay_surfaces_unreadable_segment_error() {
+        if running_as_root() {
+            return;
+        }
+        let dir = scratch_dir();
+        // A correctly-named segment file that cannot be read makes
+        // replay surface a Segment error instead of silently
+        // skipping it.
+        let seg = dir.path().join("peer-1.hints");
+        std::fs::write(&seg, b"").unwrap();
+        std::fs::set_permissions(&seg, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let err = HintStore::open(dir.path(), 1024).expect_err("unreadable segment");
+        assert!(
+            matches!(err, HintStoreOpenError::Segment { .. }),
+            "got {err:?}"
+        );
+        std::fs::set_permissions(&seg, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn take_for_unknown_peer_is_empty() {
+        // A peer with no queued hints returns an empty vec without
+        // touching disk.
+        let store = HintStore::new(1024);
+        assert!(store.take_for(123).is_empty());
+    }
+
+    #[test]
+    fn take_for_twice_is_idempotent_on_disk() {
+        // The first take removes the segment; the second take has
+        // no in-RAM queue and no segment, so the durable
+        // remove_peer hits its NotFound -> Ok arm.
+        let dir = scratch_dir();
+        let store = HintStore::open(dir.path(), 1024).unwrap();
+        store
+            .enqueue(7, payload(b'a', 4), Duration::from_secs(600))
+            .unwrap();
+        assert_eq!(store.take_for(7).len(), 1);
+        // Second drain: nothing to return, segment already gone.
+        assert!(store.take_for(7).is_empty());
+        assert!(!dir.path().join("peer-7.hints").exists());
+    }
+
+    #[test]
+    fn replay_ignores_stray_non_segment_files() {
+        // A directory holding files that are not `peer-<idx>.hints`
+        // (e.g. a leftover `.tmp` rewrite scratch file) must be
+        // skipped during replay rather than treated as a segment.
+        let dir = scratch_dir();
+        {
+            let store = HintStore::open(dir.path(), 1024).unwrap();
+            store
+                .enqueue(2, payload(b'a', 4), Duration::from_secs(600))
+                .unwrap();
+        }
+        std::fs::write(dir.path().join("peer-2.hints.tmp"), b"junk").unwrap();
+        std::fs::write(dir.path().join("README"), b"not a segment").unwrap();
+        let reopened = HintStore::open(dir.path(), 1024).unwrap();
+        // Only the real segment for peer 2 is replayed.
+        assert_eq!(reopened.peers_with_hints(), vec![2]);
+        assert_eq!(reopened.len_for(2), 1);
+    }
+
+    #[test]
+    fn replay_drops_peer_whose_records_all_expired() {
+        // When every record in a segment has expired, replay must
+        // drop the peer entry entirely rather than surface an
+        // empty queue.
+        let dir = scratch_dir();
+        {
+            let store = HintStore::open(dir.path(), 1024).unwrap();
+            store
+                .enqueue(3, payload(b'a', 4), Duration::from_millis(1))
+                .unwrap();
+            store
+                .enqueue(3, payload(b'b', 4), Duration::from_millis(1))
+                .unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(5));
+        let reopened = HintStore::open(dir.path(), 1024).unwrap();
+        assert!(
+            reopened.peers_with_hints().is_empty(),
+            "a peer with only expired records must not be replayed"
+        );
+        assert_eq!(reopened.total_len(), 0);
     }
 }

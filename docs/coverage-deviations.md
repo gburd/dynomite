@@ -113,3 +113,91 @@ The `Action::Reply` variant, the `Action::reply` constructor, and every method o
 Likewise the postpone-redelivery loop in `driver.rs` (`while let Some(ev) = ds.postponed.pop_back()`) is unreachable: `ds.postponed` is never pushed to because the `Action::Postpone` arm is a documented no-op (postpone redelivery for mailbox events is deferred to the same future iteration). The observed no-op behaviour is pinned by the `postpone_is_currently_a_noop_for_mailbox_events` test.
 
 Affected lines (measured via `cargo llvm-cov --show-missing-lines`): `action.rs` 41-43, 91, 115-130 (the reply/handle family); `driver.rs` 248 (the `Action::Reply` apply arm) and 275-278 (the postpone-redelivery loop). These are the *only* uncovered source lines in the crate; every other line is covered by the unit tests in `crates/gen-fsm/tests/coverage.rs` and the property tests in `crates/gen-fsm/tests/properties.rs`. (The crate's aggregate line percentage reported by `--summary-only` reads lower than 100%-minus-these because llvm-cov counts each generic monomorphisation of `run` / `apply_transition` separately; the distinct-source-line view is the accurate one.) Raising the crate to 95% requires wiring `ReplyHandle` through to the handler and implementing postpone redelivery -- a feature change, recorded here rather than worked around with `#[allow]`.
+
+### `crates/dynomite/src/net/tls.rs` -- live-handshake-only paths
+
+The TLS config builders, PEM cert/key/CA loaders, error mapping,
+SNI label round-trips, the per-DC `TlsProfileMap` (including the
+mutual-TLS branch and `populate_combined_ca_roots`), and the
+whole `SharedTlsProfiles` reload surface are unit-tested directly
+(see the `net::tls::tests` module). The lines that remain
+uncovered all require a real TLS handshake completing over a live
+socket, which is integration-level and exercised by
+`crates/dynomite/tests/peer_plane_tls.rs` rather than by the unit
+suite that the per-file gate measures:
+
+* The `DcSniResolver::resolve` and `ReloadingDcSniResolver::resolve`
+  bodies (lines around 547-557) run only inside rustls' handshake
+  machinery when a `ClientHello` arrives.
+* The `Transport` / `AsyncRead` / `AsyncWrite` poll impls for
+  `TlsServerTransport` and `TlsClientTransport` (lines around
+  707-795) are only driven once a `tokio_rustls` stream is
+  established; the integration test covers the round trip, but the
+  per-file unit measurement does not.
+
+A handful of error-mapping arms inside `load_certs` /
+`load_private_key` (lines 123-144) map an `io::Error` raised by a
+mid-read failure; they are reached only when the OS returns an
+error part-way through reading an otherwise-openable file, which
+is not reproducible deterministically in a unit test without fault
+injection. Raising these requires a socket-level integration
+harness (already present as `peer_plane_tls.rs`) or fault
+injection at the filesystem layer; both are out of scope for a
+unit-coverage task, so the file is capped at its current ~90% line
+/ ~76% function via this deviation.
+
+### `crates/dynomite/src/core/log/mod.rs` -- writer fallbacks and a dead severity arm
+
+`LoggerWriter` routes to standard error and returns a no-op
+success whenever the process-global `STATE` `OnceLock` has not yet
+been installed (lines 146 and 160). In normal operation the only
+way a write reaches `LoggerWriter` is through an installed global
+`tracing` subscriber, and installing that subscriber is exactly
+what populates `STATE`, so the None-fallback arms are defensive
+code that the public API ordering prevents from running once a
+subscriber exists. The unit test `logger_writer_falls_back_to_
+stderr_until_state_init` exercises them when run in an isolated
+process (e.g. under nextest), but the single-process libtest
+runner sees `STATE` already installed by the sibling reopen test.
+
+`LoggerWriter::write`'s error arm (lines 151-153, which increments
+the `nerror` counter) runs only when the underlying sink's
+`write_all` fails -- a real OS I/O error such as a full disk --
+which cannot be injected without a failing sink hook that the
+module does not expose.
+
+Line 604 (`Level::WARN => 1`) is a dead arm inside a test-only
+severity-ordering closure: `tracing_level_for` never maps any
+numeric verbosity onto `Level::WARN` (0..=4 map to ERROR), so the
+WARN branch of the closure is never selected.
+
+### `crates/dynomite/src/core/log/syslog.rs` -- write-error short circuits
+
+Lines 135 and 193 are the `?` early-return edges of the two
+`write!(...)` calls inside `Rfc5424Formatter::format_event` /
+`Rfc3164Formatter::format_event`. The happy path (a successful
+write into the capture buffer) is covered by the format tests; the
+error edge runs only when the downstream `fmt::Write` sink itself
+returns an error, which the in-memory test writers never do.
+
+### `crates/dynomite/src/hashkit/random_slicing.rs` -- empty-table accessors
+
+`RandomSlices::is_empty` returning `true` (lines 362-364) and
+`index_for` returning `None` for a zero-length lower-bound array
+(line 391) are only reachable on an empty `RandomSlices`. Every
+public builder rejects empty input, so an empty table can only be
+produced through the private raw struct constructor; the
+`is_empty` docs already note this. The remaining uncovered lines
+(545, 678) are `assert!` failure-message format strings that are
+only evaluated when the corresponding assertion fails.
+
+### `crates/dynomite/src/cluster/hints.rs` -- 64-bit-unreachable overflow guard
+
+The `body_start.checked_add(len)` overflow break in
+`decode_records` (line 660) cannot trigger on a 64-bit target: the
+record length is a `u32` read from the segment, so
+`body_start + len` cannot overflow a `usize`. The guard is kept
+for correctness on hypothetical 16-bit/narrow-`usize` targets. The
+permission-denied disk-error paths are covered on non-root runners
+by the `*_readonly_dir` / `*_remove_failure` / `*_unreadable_
+segment` tests, which no-op when the suite runs as root.

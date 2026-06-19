@@ -288,6 +288,24 @@ mod tests {
                 MsgType::RspRedisErrorReadonly,
                 b"-READONLY Unknown Error\r\n",
             ),
+            (
+                MsgType::RspRedisErrorWrongtype,
+                b"-WRONGTYPE Unknown Error\r\n",
+            ),
+            (
+                MsgType::RspRedisErrorExecabort,
+                b"-EXECABORT Unknown Error\r\n",
+            ),
+            (
+                MsgType::RspRedisErrorMasterdown,
+                b"-MASTERDOWN Unknown Error\r\n",
+            ),
+            (
+                MsgType::RspRedisErrorNoreplicas,
+                b"-NOREPLICAS Unknown Error\r\n",
+            ),
+            (MsgType::RspMcServerError, b"SERVER_ERROR Unknown Error\r\n"),
+            (MsgType::RspMcClientError, b"CLIENT_ERROR Unknown Error\r\n"),
         ];
         for (ty, expected) in cases {
             let rsp = make_error(&req, *ty, 0, dyn_err, &pool);
@@ -297,6 +315,16 @@ mod tests {
                 "wire mismatch for {ty:?}"
             );
         }
+    }
+
+    #[test]
+    fn make_error_non_error_type_yields_empty_payload() {
+        // `render_error_wire` returns an empty payload for any
+        // non-error MsgType. We exercise the helper directly to
+        // cover the fallthrough arm without tripping the
+        // `debug_assert` in `make_error`.
+        let wire = super::render_error_wire(MsgType::RspRedisStatus, "x");
+        assert!(wire.is_empty());
     }
 
     #[test]

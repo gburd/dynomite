@@ -76,6 +76,43 @@ async fn throttle_request_above_capacity_fails_fast() {
 }
 
 #[tokio::test]
+async fn throttle_accessors_report_construction_parameters() {
+    let t = Throttle::with_name("acc", 16, 3);
+    assert_eq!(t.capacity(), 16);
+    assert_eq!(t.refill_per_sec(), 3);
+    // Bucket starts full.
+    assert_eq!(t.available(), 16);
+}
+
+#[tokio::test]
+async fn throttle_debug_includes_state_fields() {
+    let t = Throttle::with_name("dbg", 7, 2);
+    let s = format!("{t:?}");
+    assert!(s.contains("Throttle"), "missing struct name: {s}");
+    assert!(s.contains("dbg"), "missing queue name: {s}");
+    assert!(s.contains("capacity"), "missing capacity field: {s}");
+    assert!(s.contains("refill_per_sec"), "missing refill field: {s}");
+    assert!(s.contains("available"), "missing available field: {s}");
+}
+
+#[tokio::test]
+#[should_panic(expected = "zero refill rate")]
+async fn throttle_zero_refill_acquire_panics_when_drained() {
+    // capacity 2, refill 0: after draining, acquire can never
+    // recover, so the contract is to panic rather than deadlock.
+    let t = Throttle::new(2, 0);
+    assert!(t.try_acquire(2));
+    t.acquire(2).await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "> capacity")]
+async fn throttle_acquire_above_capacity_panics() {
+    let t = Throttle::new(4, 1);
+    t.acquire(5).await;
+}
+
+#[tokio::test]
 async fn throttle_concurrent_acquires_share_budget() {
     let t = Arc::new(Throttle::with_name("shared", 8, 1));
     let granted = Arc::new(AtomicU64::new(0));

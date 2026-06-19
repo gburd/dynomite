@@ -417,6 +417,39 @@ mod tests {
     }
 
     #[test]
+    fn threshold_accessor_and_setter_round_trip() {
+        let mut fd = PhiAccrual::new(10, 8.0);
+        assert!((fd.threshold() - 8.0).abs() < f64::EPSILON);
+        fd.set_threshold(12.5);
+        assert!((fd.threshold() - 12.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn mean_interval_on_empty_window_is_the_min_clamp() {
+        // With no samples, `mean_interval_ms` returns the
+        // configured min-mean clamp directly.
+        let fd = PhiAccrual::new(10, 8.0).with_min_mean(Duration::from_millis(250));
+        assert!((fd.mean_interval_ms() - 250.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn phi_returns_zero_when_clamp_is_disabled_and_samples_are_zero() {
+        // min_mean = 0 plus a run of zero-length intervals makes
+        // the mean 0.0; `phi` must guard against the division and
+        // return 0.0 rather than NaN/inf.
+        let mut fd = PhiAccrual::new(10, 8.0).with_min_mean(Duration::from_millis(0));
+        // Record several heartbeats at the exact same instant so
+        // every inter-arrival is zero.
+        let anchor = t(0, 0);
+        for _ in 0..5 {
+            fd.record_heartbeat(anchor);
+        }
+        assert!(fd.sample_count() > 0);
+        assert!((fd.mean_interval_ms()).abs() < f64::EPSILON);
+        assert!(fd.phi(t(60, 0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
     fn min_mean_clamp_prevents_runaway_phi() {
         // With a tiny mean (e.g. burst arrivals at sub-ms spacing)
         // a 1s silence should NOT immediately flag suspect under

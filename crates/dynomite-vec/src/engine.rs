@@ -182,4 +182,40 @@ mod tests {
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].0.key, b"origin");
     }
+
+    #[test]
+    fn engine_delete_removes_a_row() {
+        let engine = Engine::in_memory(schema("t", 2)).unwrap();
+        engine
+            .upsert(b"k".to_vec(), &[1.0, 2.0], HashMap::new())
+            .unwrap();
+        assert!(engine.delete(b"k").unwrap(), "first delete reports removal");
+        assert!(engine.get(b"k").unwrap().is_none());
+        // Deleting a missing key reports false, not an error.
+        assert!(!engine.delete(b"k").unwrap());
+    }
+
+    #[test]
+    fn engine_with_store_shares_underlying_table() {
+        // Build one engine, then wrap a second handle on the same
+        // store via `with_store`; the second handle observes rows
+        // written through the first.
+        let first = Engine::in_memory(schema("shared", 2)).unwrap();
+        first
+            .upsert(b"k".to_vec(), &[1.0, 2.0], HashMap::new())
+            .unwrap();
+        let second = Engine::with_store(first.store().clone(), "shared".to_string());
+        assert_eq!(second.table_name(), "shared");
+        assert!(second.get(b"k").unwrap().is_some());
+        // The borrowed store is the same Arc.
+        assert!(Arc::ptr_eq(first.store(), second.store()));
+    }
+
+    #[test]
+    fn engine_debug_names_the_table() {
+        let engine = Engine::in_memory(schema("dbgtbl", 2)).unwrap();
+        let s = format!("{engine:?}");
+        assert!(s.contains("Engine"), "debug: {s}");
+        assert!(s.contains("dbgtbl"), "debug: {s}");
+    }
 }

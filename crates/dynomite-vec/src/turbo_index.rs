@@ -349,4 +349,126 @@ mod tests {
             Err(IndexError::DimensionMismatch { .. })
         ));
     }
+
+    #[test]
+    fn new_rejects_bad_parameters() {
+        // Zero dim.
+        assert!(matches!(
+            TurboTable::new(Distance::Cosine, 0, 4),
+            Err(IndexError::Empty)
+        ));
+        // Dim not a multiple of 8 suggests the next multiple.
+        match TurboTable::new(Distance::Cosine, 60, 4) {
+            Err(IndexError::DimensionMismatch { expected, got }) => {
+                assert_eq!(got, 60);
+                assert_eq!(expected, 64);
+            }
+            Err(other) => panic!("expected DimensionMismatch, got {other:?}"),
+            Ok(_) => panic!("expected DimensionMismatch, got Ok"),
+        }
+        // Bits outside {2,3,4}.
+        assert!(matches!(
+            TurboTable::new(Distance::Cosine, 64, 1),
+            Err(IndexError::Empty)
+        ));
+        assert!(matches!(
+            TurboTable::new(Distance::Cosine, 64, 5),
+            Err(IndexError::Empty)
+        ));
+    }
+
+    #[test]
+    fn accessors_report_construction_state() {
+        let mut t = TurboTable::new(Distance::Euclidean, 64, 3).unwrap();
+        assert_eq!(t.dim(), 64);
+        assert_eq!(t.distance(), Distance::Euclidean);
+        assert_eq!(t.bits(), 3);
+        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
+        t.insert(1, rand_vec(1, 64)).unwrap();
+        assert!(!t.is_empty());
+        assert_eq!(t.len(), 1);
+        assert!(t.contains(1));
+        assert!(!t.contains(2));
+        // Soft delete drops the live count and `contains`.
+        assert!(t.delete(1));
+        assert_eq!(t.len(), 0);
+        assert!(!t.contains(1));
+        // Deleting a missing id is a no-op false.
+        assert!(!t.delete(99));
+    }
+
+    #[test]
+    fn insert_rejects_empty_vector() {
+        let mut t = TurboTable::new(Distance::Cosine, 64, 4).unwrap();
+        assert!(matches!(t.insert(0, Vec::new()), Err(IndexError::Empty)));
+    }
+
+    #[test]
+    fn dot_product_metric_round_trips() {
+        // DotProduct skips normalisation on both insert and
+        // search, and maps similarity to `-similarity`.
+        let mut t = TurboTable::new(Distance::DotProduct, 64, 4).unwrap();
+        let target = rand_vec(11, 64);
+        t.insert(0, target.clone()).unwrap();
+        for i in 1..20_u64 {
+            t.insert(i, rand_vec(i.wrapping_mul(7) + 3, 64)).unwrap();
+        }
+        let res = t.search(&target, 3, None).unwrap();
+        assert!(!res.is_empty());
+        // Smaller-is-closer convention: scores ascend.
+        for w in res.windows(2) {
+            assert!(w[0].score <= w[1].score);
+        }
+    }
+
+    #[test]
+    fn euclidean_metric_search_maps_score() {
+        let mut t = TurboTable::new(Distance::Euclidean, 64, 4).unwrap();
+        let target = rand_vec(5, 64);
+        t.insert(0, target.clone()).unwrap();
+        for i in 1..20_u64 {
+            t.insert(i, rand_vec(i + 100, 64)).unwrap();
+        }
+        let res = t.search(&target, 3, None).unwrap();
+        assert!(!res.is_empty());
+        // Euclidean score is sqrt(max(2 - 2*sim, 0)) >= 0.
+        assert!(res.iter().all(|r| r.score >= 0.0));
+        assert_eq!(res[0].id, 0);
+    }
+
+    #[test]
+    fn search_with_all_slots_deleted_is_empty() {
+        let mut t = TurboTable::new(Distance::Cosine, 64, 4).unwrap();
+        for i in 0..5_u64 {
+            t.insert(i, rand_vec(i + 1, 64)).unwrap();
+        }
+        for i in 0..5_u64 {
+            assert!(t.delete(i));
+        }
+        // Slots are non-empty but every entry is masked out.
+        let res = t.search(&rand_vec(1, 64), 3, None).unwrap();
+        assert!(res.is_empty());
+    }
+
+    #[test]
+    fn search_dimension_mismatch_rejected() {
+        let mut t = TurboTable::new(Distance::Cosine, 64, 4).unwrap();
+        t.insert(0, rand_vec(1, 64)).unwrap();
+        assert!(matches!(
+            t.search(&[0.1; 32], 3, None),
+            Err(IndexError::DimensionMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn l2_normalise_zero_vector_is_returned_unchanged() {
+        let zero = vec![0.0_f32; 8];
+        assert_eq!(l2_normalise(&zero), zero);
+        // A unit-ish vector normalises to magnitude ~1.
+        let v = vec![3.0_f32, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let n = l2_normalise(&v);
+        let mag: f32 = n.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((mag - 1.0).abs() < 1e-5, "magnitude {mag}");
+    }
 }

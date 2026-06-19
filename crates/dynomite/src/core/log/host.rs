@@ -32,6 +32,13 @@ pub fn local_hostname() -> String {
         .ok()
         .and_then(|os| os.into_string().ok())
         .unwrap_or_default();
+    sanitize_hostname(&raw)
+}
+
+/// Sanitise a raw hostname into a single non-empty printable
+/// US-ASCII token, replacing any non-graphic byte with `_` and
+/// substituting `"localhost"` for an empty result.
+fn sanitize_hostname(raw: &str) -> String {
     let cleaned: String = raw
         .chars()
         .map(|c| if c.is_ascii_graphic() { c } else { '_' })
@@ -57,5 +64,17 @@ mod tests {
                 "non-ASCII-graphic char in hostname: {c:?}"
             );
         }
+    }
+
+    #[test]
+    fn sanitize_replaces_non_graphic_and_falls_back_when_empty() {
+        // Empty input falls back to the literal localhost token.
+        assert_eq!(sanitize_hostname(""), "localhost");
+        // Whitespace and control bytes become underscores.
+        assert_eq!(sanitize_hostname("a b\tc"), "a_b_c");
+        // An all-whitespace name still yields a non-empty token.
+        assert_eq!(sanitize_hostname("   "), "___");
+        // A clean name is returned verbatim.
+        assert_eq!(sanitize_hostname("node-1.dc"), "node-1.dc");
     }
 }

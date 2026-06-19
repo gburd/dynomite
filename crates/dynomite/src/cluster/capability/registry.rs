@@ -516,4 +516,41 @@ mod tests {
         let err = CapabilityAd::decode(&[]).unwrap_err();
         assert!(matches!(err, CapabilityCodecError::Truncated));
     }
+
+    #[test]
+    fn ad_decode_rejects_bad_version() {
+        // Correct magic but an unsupported version byte.
+        let mut blob = b"CAP".to_vec();
+        blob.push(99); // wrong version
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        let err = CapabilityAd::decode(&blob).unwrap_err();
+        assert!(matches!(err, CapabilityCodecError::BadMagic));
+    }
+
+    #[test]
+    fn registry_default_is_empty() {
+        let reg = CapabilityRegistry::default();
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn register_negotiate_and_current_exercise_merge_path() {
+        // Drives the type-erased merge closure (and thus the
+        // U32Cap merge / decode_value) plus the `current` decode
+        // path end to end.
+        let mut reg = CapabilityRegistry::new();
+        reg.register(U32Cap {
+            name: "framing",
+            supported: vec![1, 2, 3],
+        });
+        let peer = CapabilityAd::from_entries(vec![CapabilityAdEntry::new(
+            "framing".into(),
+            vec![2u32.to_le_bytes().to_vec(), 3u32.to_le_bytes().to_vec()],
+        )]);
+        let result = reg.negotiate(&peer);
+        assert_eq!(result.get("framing"), Some(3u32.to_le_bytes().as_slice()));
+        assert_eq!(reg.current::<U32Cap>("framing"), Some(3));
+        // Unknown name yields None.
+        assert!(reg.current::<U32Cap>("missing").is_none());
+    }
 }

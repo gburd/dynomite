@@ -606,6 +606,73 @@ mod tests {
     }
 
     #[test]
+    fn join_inherits_dc_rack_from_config_when_no_local_peer() {
+        // A pool with no local peer forces `cluster_join` down the
+        // map_or_else fallback that inherits dc / rack from the
+        // pool config rather than from a local peer.
+        let cfg = PoolConfig {
+            dc: "dcX".into(),
+            rack: "rX".into(),
+            ..PoolConfig::default()
+        };
+        let remote = Peer::new(
+            0,
+            PeerEndpoint::tcp("127.0.0.1".into(), 9001),
+            "rX".into(),
+            "dcX".into(),
+            vec![DynToken::from_u32(0)],
+            false,
+            true,
+            false,
+        );
+        let pool = Arc::new(ServerPool::new(cfg, vec![remote]));
+        let admin = PoolClusterAdmin::new(pool);
+        let target: SocketAddr = "127.0.0.1:9002".parse().unwrap();
+        let plan = admin.cluster_join(target).expect("plan");
+        let spec = plan.change.peer.expect("spec");
+        assert_eq!(spec.dc, "dcX");
+        assert_eq!(spec.rack, "rX");
+    }
+
+    #[test]
+    fn commit_rejects_add_for_endpoint_already_present() {
+        // Stage an Add directly whose endpoint duplicates an
+        // existing pool peer. `cluster_join` would normally reject
+        // this, but a stale plan committed after the topology
+        // changed can still hit the commit-time guard.
+        let admin = PoolClusterAdmin::new(small_pool());
+        let dup = PeerSpec {
+            host: "127.0.0.1".into(),
+            port: 8102,
+            dc: "dc1".into(),
+            rack: "r1".into(),
+            tokens: vec![1],
+            is_secure: false,
+        };
+        admin.staged.lock().push(ClusterChange {
+            kind: ClusterChangeKind::Add,
+            peer_idx: None,
+            peer: Some(dup),
+        });
+        let err = admin.cluster_commit().expect_err("commit dup add");
+        assert!(matches!(err, ClusterError::PeerAlreadyExists { .. }));
+    }
+
+    #[test]
+    fn commit_rejects_remove_of_local_peer() {
+        // Stage a Remove for the local peer's idx directly so the
+        // commit-time `is_local` guard fires.
+        let admin = PoolClusterAdmin::new(small_pool());
+        admin.staged.lock().push(ClusterChange {
+            kind: ClusterChangeKind::Remove,
+            peer_idx: Some(0),
+            peer: None,
+        });
+        let err = admin.cluster_commit().expect_err("commit remove local");
+        assert!(matches!(err, ClusterError::CannotRemoveLocal));
+    }
+
+    #[test]
     fn derive_token_is_stable_per_endpoint() {
         let a = derive_token("10.0.0.1", 8101);
         let b = derive_token("10.0.0.1", 8101);

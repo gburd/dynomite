@@ -164,6 +164,11 @@ mod tests {
     }
 
     #[test]
+    fn default_trait_matches_default_variant() {
+        assert_eq!(LogFormat::default(), LogFormat::Default);
+    }
+
+    #[test]
     fn display_and_as_str_match() {
         for variant in [
             LogFormat::Default,

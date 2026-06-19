@@ -583,6 +583,95 @@ mod tests {
     }
 
     #[test]
+    fn from_sizes_bumps_tail_to_cover_full_ring() {
+        // Small explicit sizes leave a large remainder; the tail
+        // interval absorbs it so coverage is exactly u64::MAX.
+        let pairs = vec![("a".to_string(), 10u64), ("b".to_string(), 20u64)];
+        let s = RandomSlices::from_sizes(&pairs).unwrap();
+        let total: u128 = s.interval_sizes().iter().map(|&v| u128::from(v)).sum();
+        assert_eq!(total, u128::from(u64::MAX));
+        // Head size is untouched; only the tail grew.
+        assert_eq!(s.interval_sizes()[0], 10);
+        assert!(s.interval_sizes()[1] >= 20);
+        // Every hash resolves and the boundaries are exact.
+        assert!(s.claimant_for(0).is_some());
+        assert!(s.claimant_for(u64::MAX).is_some());
+    }
+
+    #[test]
+    fn from_weights_promotes_zero_slice_to_one() {
+        // A tiny-but-nonzero weight beside a huge one rounds to a
+        // zero-sized slice; the builder promotes it to a single
+        // byte so the claimant is never silently masked, and
+        // steals that byte from the tail.
+        let pairs = vec![
+            ("big".to_string(), 1_000_000.0),
+            ("small".to_string(), 0.01),
+        ];
+        let s = RandomSlices::from_weights(&pairs, 2).unwrap();
+        assert_eq!(s.len(), 2);
+        // Both claimants own a non-empty slice.
+        assert!(s.interval_sizes().iter().all(|&v| v >= 1));
+        let total: u128 = s.interval_sizes().iter().map(|&v| u128::from(v)).sum();
+        assert_eq!(total, u128::from(u64::MAX));
+    }
+
+    #[test]
+    fn from_weights_tail_saturated_carves_one_byte() {
+        // When the leading claimants consume the entire ring the
+        // tail would be zero-sized; the builder carves out one
+        // byte so coverage stays total and the tail claimant is
+        // still reachable.
+        let pairs = vec![
+            ("first".to_string(), 1.0),
+            ("second".to_string(), 1.0),
+            ("third".to_string(), 1.0),
+        ];
+        let s = RandomSlices::from_weights(&pairs, 4).unwrap();
+        assert_eq!(s.len(), 3);
+        assert!(s.interval_sizes().iter().all(|&v| v >= 1));
+        let total: u128 = s.interval_sizes().iter().map(|&v| u128::from(v)).sum();
+        assert_eq!(total, u128::from(u64::MAX));
+    }
+
+    #[test]
+    fn from_weights_promotes_zeroed_middle_slice() {
+        // A middle claimant whose rounded weight is zero produces
+        // a zero-sized non-tail slice; the builder promotes it to
+        // one byte (the `raw <= 0.0` and zero-promotion arms).
+        let pairs = vec![
+            ("big1".to_string(), 1_000_000.0),
+            ("tiny".to_string(), 0.0001),
+            ("big2".to_string(), 1_000_000.0),
+        ];
+        let s = RandomSlices::from_weights(&pairs, 2).unwrap();
+        assert_eq!(s.len(), 3);
+        // Every claimant, including the promoted middle one, owns
+        // a non-empty slice.
+        assert!(s.interval_sizes().iter().all(|&v| v >= 1));
+        let total: u128 = s.interval_sizes().iter().map(|&v| u128::from(v)).sum();
+        assert_eq!(total, u128::from(u64::MAX));
+        // The promoted middle slice is exactly one byte wide.
+        assert_eq!(s.interval_sizes()[1], 1);
+    }
+
+    #[test]
+    fn accessor_arrays_are_parallel_and_intervals_iterate() {
+        let s = RandomSlices::from_uniform(&["a", "b", "c"]).unwrap();
+        assert_eq!(s.claimants().len(), 3);
+        assert_eq!(s.lower_bounds().len(), 3);
+        assert_eq!(s.interval_sizes().len(), 3);
+        let rows: Vec<(&str, u64, u64)> = s.intervals().collect();
+        assert_eq!(rows.len(), 3);
+        // The first interval starts at zero.
+        assert_eq!(rows[0].1, 0);
+        // Names line up with the claimant array order.
+        for (row, name) in rows.iter().zip(s.claimants()) {
+            assert_eq!(row.0, name);
+        }
+    }
+
+    #[test]
     fn round_trip_1k_random_keys_under_5_percent() {
         // A 4-claimant uniform partition fed `Murmur3X64_64`
         // hashes of a thousand synthetic keys lands within 5%
