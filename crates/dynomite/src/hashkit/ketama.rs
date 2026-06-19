@@ -316,4 +316,36 @@ mod tests {
         }
         assert!(counts[1] > counts[0]);
     }
+
+    #[test]
+    fn len_reports_point_count() {
+        // len() echoes the number of continuum points; default is 0.
+        assert_eq!(Continuum::default().len(), 0);
+        let c = Continuum::build(&equal_servers(1)).unwrap();
+        assert_eq!(c.len(), POINTS_PER_SERVER as usize);
+        assert!(!c.is_empty());
+    }
+
+    #[test]
+    fn zero_total_weight_yields_empty_continuum() {
+        // A server set whose weights sum to zero short-circuits to an
+        // empty continuum (the total_weight == 0 guard).
+        let servers = vec![ServerSpec {
+            name: "s0".into(),
+            weight: 0,
+        }];
+        let c = Continuum::build(&servers).unwrap();
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn overlong_host_string_is_rejected() {
+        // A server name long enough to push the per-point host string
+        // past MAX_HOSTLEN is rejected with an error.
+        let servers = vec![ServerSpec {
+            name: "x".repeat(MAX_HOSTLEN + 8),
+            weight: 1,
+        }];
+        assert!(Continuum::build(&servers).is_err());
+    }
 }

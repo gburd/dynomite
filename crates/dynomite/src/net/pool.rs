@@ -542,4 +542,96 @@ mod tests {
         pool.shutdown();
         assert!(matches!(w.await.unwrap(), Err(NetError::PoolShutdown)));
     }
+
+    #[tokio::test]
+    async fn accessors_report_pool_state() {
+        // config / idle_count / in_flight / auto_eject / is_ejected
+        // expose the pool bookkeeping without driving any I/O.
+        let pool: ConnPool<u32> = ConnPool::with_factory(
+            ConnPoolConfig {
+                max_connections: 4,
+                server_failure_limit: 2,
+                server_retry_timeout_ms: 1_000,
+                auto_eject: true,
+            },
+            || async { Ok::<u32, NetError>(9) },
+        );
+        assert_eq!(pool.config().max_connections, 4);
+        assert_eq!(pool.idle_count(), 0);
+        assert_eq!(pool.in_flight(), 0);
+        assert_eq!(pool.auto_eject().failure_limit(), 2);
+        assert!(!pool.is_ejected(Instant::now()));
+
+        let h = pool.get().await.unwrap();
+        assert_eq!(pool.in_flight(), 1);
+        // Releasing returns the connection to the idle list.
+        h.release();
+        assert_eq!(pool.in_flight(), 0);
+        assert_eq!(pool.idle_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn discard_drops_connection_without_returning_it() {
+        // discard decrements in_flight but does not refill idle.
+        let pool: ConnPool<u32> = ConnPool::with_factory(
+            ConnPoolConfig {
+                max_connections: 2,
+                ..ConnPoolConfig::default()
+            },
+            || async { Ok::<u32, NetError>(5) },
+        );
+        let h = pool.get().await.unwrap();
+        assert_eq!(pool.in_flight(), 1);
+        h.discard();
+        assert_eq!(pool.in_flight(), 0);
+        assert_eq!(pool.idle_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn handle_get_mut_mutates_in_place() {
+        // get_mut hands back a mutable borrow of the connection.
+        let pool: ConnPool<u32> = ConnPool::with_factory(ConnPoolConfig::default(), || async {
+            Ok::<u32, NetError>(1)
+        });
+        let mut h = pool.get().await.unwrap();
+        *h.get_mut() = 42;
+        assert_eq!(*h.get(), 42);
+        h.release();
+    }
+
+    #[tokio::test]
+    async fn debug_impls_render_state() {
+        // The Debug impls on the pool and the handle render the
+        // bookkeeping summary fields.
+        let pool: ConnPool<u32> = ConnPool::with_factory(ConnPoolConfig::default(), || async {
+            Ok::<u32, NetError>(1)
+        });
+        let s = format!("{pool:?}");
+        assert!(s.contains("ConnPool"), "got {s}");
+        assert!(s.contains("factory_installed: true"), "got {s}");
+        let h = pool.get().await.unwrap();
+        let hs = format!("{h:?}");
+        assert!(hs.contains("ConnHandle"), "got {hs}");
+        assert!(hs.contains("alive: true"), "got {hs}");
+        h.release();
+    }
+
+    #[tokio::test]
+    async fn dropping_handle_returns_connection() {
+        // The Drop impl routes through return_conn just like
+        // release().
+        let pool: ConnPool<u32> = ConnPool::with_factory(
+            ConnPoolConfig {
+                max_connections: 1,
+                ..ConnPoolConfig::default()
+            },
+            || async { Ok::<u32, NetError>(3) },
+        );
+        {
+            let _h = pool.get().await.unwrap();
+            assert_eq!(pool.in_flight(), 1);
+        }
+        assert_eq!(pool.in_flight(), 0);
+        assert_eq!(pool.idle_count(), 1);
+    }
 }

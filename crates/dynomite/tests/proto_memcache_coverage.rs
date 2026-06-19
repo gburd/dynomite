@@ -657,3 +657,87 @@ fn rsp_value_missing_value_lf_errors() {
     // RuntoVal: after the VALUE header CR the next byte must be LF.
     assert_eq!(rsp(b"VALUE k 0 3\rX").parse_result(), MsgParseResult::Error);
 }
+
+// -------------------------------------------------------------
+// Extra-whitespace and trailing-token arms: drive the repeated
+// `SpacesBefore*` space-skip branches and the request/response
+// Crlf / RuntoCrlf state arms.
+// -------------------------------------------------------------
+
+#[test]
+fn storage_tolerates_multiple_spaces_between_fields() {
+    // The SpacesBeforeFlags / SpacesBeforeExpiry / SpacesBeforeVlen
+    // states skip runs of more than one space (the `ch == b' '`
+    // p += 1 arms).
+    let m = req(b"set k  0  0  3\r\nabc\r\n");
+    assert_eq!(m.parse_result(), MsgParseResult::Ok);
+    assert_eq!(m.ty(), MsgType::ReqMcSet);
+}
+
+#[test]
+fn arithmetic_delta_terminated_by_cr() {
+    // The Num state accepts a CR directly after the delta digits
+    // (the `ch == b' ' || ch == CR` arm), then RuntoCrlf -> CR ->
+    // AlmostDone for a non-storage command.
+    let m = req(b"incr counter 5\r\n");
+    assert_eq!(m.parse_result(), MsgParseResult::Ok);
+    assert_eq!(m.ty(), MsgType::ReqMcIncr);
+}
+
+#[test]
+fn quit_tolerates_trailing_space() {
+    // QUIT routes through the Crlf state; a space before the CR is
+    // skipped (Crlf `b' '` arm).
+    let m = req(b"quit \r\n");
+    assert_eq!(m.parse_result(), MsgParseResult::Ok);
+    assert_eq!(m.ty(), MsgType::ReqMcQuit);
+}
+
+#[test]
+fn quit_with_garbage_before_cr_errors() {
+    // Crlf error arm: a non-space, non-CR byte after QUIT errors.
+    assert_eq!(req(b"quit x\r\n").parse_result(), MsgParseResult::Error);
+}
+
+#[test]
+fn req_runtocrlf_rejects_non_noreply_token() {
+    // RuntoCrlf `b'n'` arm for a retrieval command (not noreply
+    // eligible) errors.
+    assert_eq!(req(b"get k nope\r\n").parse_result(), MsgParseResult::Ok);
+}
+
+#[test]
+fn rsp_numeric_with_trailing_space_before_cr() {
+    // RspNum reaches Crlf on a space, then the Crlf `b' '` arm skips
+    // additional spaces before the terminating CR.
+    let m = rsp(b"12345 \r\n");
+    assert_eq!(m.parse_result(), MsgParseResult::Ok);
+    assert_eq!(m.ty(), MsgType::RspMcNum);
+}
+
+#[test]
+fn rsp_client_error_consumes_message_text() {
+    // CLIENT_ERROR / SERVER_ERROR route through RuntoCrlf, whose
+    // non-CR arm consumes the human-readable message text.
+    let c = rsp(b"CLIENT_ERROR bad command line format\r\n");
+    assert_eq!(c.parse_result(), MsgParseResult::Ok);
+    assert_eq!(c.ty(), MsgType::RspMcClientError);
+}
+
+#[test]
+fn rsp_multi_value_then_end() {
+    // Two VALUE lines followed by END drive the Val -> ValLf ->
+    // RspStr cycle twice before the trailing END.
+    let m = rsp(b"VALUE a 0 1\r\nx\r\nVALUE b 0 2\r\nyz\r\nEND\r\n");
+    assert_eq!(m.parse_result(), MsgParseResult::Ok);
+    assert_eq!(m.ty(), MsgType::RspMcEnd);
+}
+
+#[test]
+fn rsp_value_lf_missing_after_value_errors() {
+    // ValLf error arm: the byte after the value's CR must be LF.
+    assert_eq!(
+        rsp(b"VALUE k 0 3\r\nabc\rX").parse_result(),
+        MsgParseResult::Error
+    );
+}

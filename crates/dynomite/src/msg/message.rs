@@ -882,4 +882,113 @@ mod tests {
         m.decr_awaiting_rsps();
         assert_eq!(m.awaiting_rsps(), 1);
     }
+
+    #[test]
+    fn routing_name_covers_every_variant() {
+        // Each MsgRouting variant has a stable diagnostic name.
+        assert_eq!(MsgRouting::Normal.name(), "ROUTING_NORMAL");
+        assert_eq!(MsgRouting::LocalNodeOnly.name(), "ROUTING_LOCAL_NODE_ONLY");
+        assert_eq!(
+            MsgRouting::TokenOwnerLocalRackOnly.name(),
+            "ROUTING_TOKEN_OWNER_LOCAL_RACK_ONLY"
+        );
+        assert_eq!(
+            MsgRouting::AllNodesLocalRackOnly.name(),
+            "ROUTING_ALL_NODES_LOCAL_RACK_ONLY"
+        );
+        assert_eq!(
+            MsgRouting::AllNodesAllRacksAllDcs.name(),
+            "ROUTING_ALL_NODES_ALL_RACKS_ALL_DCS"
+        );
+    }
+
+    #[test]
+    fn key_and_arg_lists_mutate_through_accessors() {
+        // keys_mut / push_key and args expose the parsed lists.
+        use crate::msg::keypos::KeyPos;
+        let mut m = Msg::new(1, MsgType::ReqRedisGet, true);
+        m.push_key(KeyPos::new(b"k".to_vec(), 0..1));
+        assert_eq!(m.keys().len(), 1);
+        m.keys_mut().clear();
+        assert!(m.keys().is_empty());
+        assert!(m.args().is_empty());
+    }
+
+    #[test]
+    fn scalar_setters_round_trip() {
+        // The plain setter/getter pairs round-trip their values.
+        use crate::msg::{ConsistencyLevel, DynErrorCode};
+        let mut m = Msg::new(1, MsgType::ReqRedisGet, true);
+        m.set_mlen(123);
+        assert_eq!(m.mlen(), 123);
+        m.set_parse_result(MsgParseResult::Again);
+        assert_eq!(m.parse_result(), MsgParseResult::Again);
+        m.set_dyn_parse_state(DynParseState::Start);
+        assert_eq!(m.dyn_parse_state(), DynParseState::Start);
+        m.set_routing(MsgRouting::LocalNodeOnly);
+        assert_eq!(m.routing(), MsgRouting::LocalNodeOnly);
+        m.set_consistency(ConsistencyLevel::DcQuorum);
+        assert_eq!(m.consistency(), ConsistencyLevel::DcQuorum);
+        m.set_timestamp_us(9_999);
+        assert_eq!(m.timestamp_us(), 9_999);
+        m.set_error_code(13);
+        assert_eq!(m.error_code(), 13);
+        m.set_dyn_error_code(DynErrorCode::PeerHostDown);
+        assert_eq!(m.dyn_error_code(), DynErrorCode::PeerHostDown);
+        m.set_awaiting_rsps(4);
+        assert_eq!(m.awaiting_rsps(), 4);
+        m.set_owner(Some(77));
+        assert_eq!(m.owner(), Some(77));
+        m.set_selected_rsp(Some(5));
+        assert_eq!(m.selected_rsp(), Some(5));
+    }
+
+    #[test]
+    fn flag_setters_and_id_lists() {
+        // swallow / done / is_error setters plus the fragment and
+        // response id lists and their accessors.
+        let mut m = Msg::new(1, MsgType::ReqRedisMget, true);
+        m.set_swallow(true);
+        assert!(m.flags().swallow);
+        m.set_done(true);
+        assert!(m.flags().done);
+        m.set_is_error(true);
+        assert!(m.flags().is_error);
+        m.push_fragment_id(2);
+        assert_eq!(m.fragment_ids(), &[2]);
+        m.push_response_id(3);
+        assert_eq!(m.response_ids(), &[3]);
+    }
+
+    #[test]
+    fn dmsg_attach_and_borrow() {
+        // set_dmsg / dmsg / dmsg_mut attach and expose the DNODE
+        // header.
+        use crate::proto::dnode::Dmsg;
+        let mut m = Msg::new(1, MsgType::Unknown, true);
+        assert!(m.dmsg().is_none());
+        m.set_dmsg(Dmsg::default());
+        assert!(m.dmsg().is_some());
+        assert!(m.dmsg_mut().is_some());
+    }
+
+    #[test]
+    fn rspmgr_install_seeds_awaiting_and_borrows() {
+        // set_rspmgr marks rspmgrs_inited, seeds awaiting_rsps from
+        // the manager's max, and exposes mutable borrows of both the
+        // local and the additional managers.
+        use crate::msg::response_mgr::ResponseMgr;
+        let mut m = Msg::new(1, MsgType::ReqRedisGet, true);
+        let probe = Msg::new(2, MsgType::ReqRedisGet, true);
+        let mgr = ResponseMgr::new(&probe, 3, None);
+        m.set_rspmgr(mgr);
+        assert!(m.flags().rspmgrs_inited);
+        assert_eq!(m.awaiting_rsps(), 3);
+        assert!(m.rspmgr().is_some());
+        assert!(m.rspmgr_mut().is_some());
+        assert!(m.additional_rspmgrs().is_empty());
+        let extra = ResponseMgr::new(&probe, 1, Some("dc2".to_string()));
+        m.additional_rspmgrs_mut().push(extra);
+        assert_eq!(m.additional_rspmgrs().len(), 1);
+    }
 }

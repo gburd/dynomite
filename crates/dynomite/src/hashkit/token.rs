@@ -587,4 +587,138 @@ mod tests {
         assert!(parse_token(b"").is_err());
         assert!(parse_token(b"-").is_err());
     }
+
+    #[test]
+    fn new_matches_default() {
+        // new() forwards to default(): empty, sign zero.
+        let t = DynToken::new();
+        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
+        assert_eq!(t.sign(), Sign::Zero);
+    }
+
+    #[test]
+    fn from_u32_populates_single_word() {
+        // from_u32 sizes to 1 and sets the value with positive sign.
+        let t = DynToken::from_u32(0xdead_beef);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t.get_int(), 0xdead_beef);
+        assert_eq!(t.sign(), Sign::Positive);
+        assert_eq!(t.mag(), &[0xdead_beef]);
+    }
+
+    #[test]
+    fn get_int_on_empty_is_zero() {
+        // The len == 0 arm of get_int returns 0 without indexing.
+        let t = DynToken::default();
+        assert_eq!(t.get_int(), 0);
+    }
+
+    #[test]
+    fn set_len_keep_preserves_words() {
+        // set_len_keep changes len without zeroing the magnitude.
+        let mut t = DynToken::default();
+        t.mag_mut()[0] = 0xaa;
+        t.set_len_keep(1);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t.get_int(), 0xaa);
+    }
+
+    #[test]
+    fn size_rejects_overcapacity() {
+        // size beyond TOKEN_WORD_CAPACITY is an error and leaves the
+        // length untouched.
+        let mut t = DynToken::default();
+        assert!(t.size(TOKEN_WORD_CAPACITY).is_ok());
+        assert!(t.size(TOKEN_WORD_CAPACITY + 1).is_err());
+    }
+
+    #[test]
+    fn to_hex_pads_each_word() {
+        // to_hex emits 8 hex chars per in-use word, declaration order.
+        assert_eq!(DynToken::from_u32(0xdead).to_hex(), "0000dead");
+        let mut t = DynToken::default();
+        t.size(2).unwrap();
+        t.mag_mut()[0] = 1;
+        t.mag_mut()[1] = 0xff;
+        assert_eq!(t.to_hex(), "00000001000000ff");
+        assert_eq!(DynToken::default().to_hex(), "");
+    }
+
+    #[test]
+    fn display_reports_sign_len_and_mag() {
+        // The Display impl prints the signed sign field, len, and the
+        // in-use magnitude slice.
+        let s = format!("{}", DynToken::from_u32(7));
+        assert_eq!(s, "Token(sign=1, len=1, mag=[7])");
+        let mut neg = DynToken::from_u32(7);
+        neg.set_sign(Sign::Negative);
+        assert_eq!(format!("{neg}"), "Token(sign=-1, len=1, mag=[7])");
+    }
+
+    #[test]
+    fn hash_agrees_with_eq() {
+        // Equal tokens hash equally; the Hash impl walks sign/len/mag.
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        fn digest(t: &DynToken) -> u64 {
+            let mut h = DefaultHasher::new();
+            t.hash(&mut h);
+            h.finish()
+        }
+
+        let a = DynToken::from_u32(99);
+        let b = DynToken::from_u32(99);
+        assert_eq!(a, b);
+        assert_eq!(digest(&a), digest(&b));
+        assert_ne!(digest(&a), digest(&DynToken::from_u32(100)));
+    }
+
+    #[test]
+    fn cmp_equal_multiword_magnitudes() {
+        // Two same-length, same-sign tokens with identical words are
+        // Equal (the mag loop falls through to Ordering::Equal).
+        let mut a = DynToken::default();
+        a.size(2).unwrap();
+        a.mag_mut()[0] = 5;
+        a.mag_mut()[1] = 9;
+        a.set_sign(Sign::Positive);
+        let b = a.clone();
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+    }
+
+    #[test]
+    fn parse_multi_group_uses_add_next_word() {
+        // A payload longer than DIGITS_PER_INT drives the
+        // `while p < digits` loop and add_next_word's carry path.
+        // The first group is digits % 10, then full 10-digit groups.
+        let t = parse_token(b"12345678901").unwrap();
+        assert_eq!(t.sign(), Sign::Positive);
+        // The exact word value is the C-reference radix folding; the
+        // invariant under test is that it parses and does not panic.
+        assert!(!t.is_empty());
+    }
+
+    #[test]
+    fn parse_full_first_group_of_ten_digits() {
+        // When digits % 10 == 0 the first group is a full 10 digits
+        // (first_group_len defaults to DIGITS_PER_INT).
+        let t = parse_token(b"1000000000").unwrap();
+        assert_eq!(t.sign(), Sign::Positive);
+        assert_eq!(t.len(), 1);
+    }
+
+    #[test]
+    fn parse_negative_multi_group() {
+        // A negative sign in front of a multi-group payload.
+        let t = parse_token(b"-99999999999").unwrap();
+        assert_eq!(t.sign(), Sign::Negative);
+    }
+
+    #[test]
+    fn parse_rejects_non_digit_in_later_group() {
+        // atoui rejects a non-digit byte inside a trailing group.
+        assert!(parse_token(b"1234567890x23456789").is_err());
+    }
 }

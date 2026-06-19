@@ -183,4 +183,27 @@ mod tests {
         assert_eq!(popped.id(), 42);
         assert!(!idx.contains_key(42));
     }
+
+    #[test]
+    fn get_and_get_mut_borrow_the_entry() {
+        // get borrows immutably; get_mut allows in-place mutation.
+        let mut idx = MsgIndex::new();
+        idx.insert(Msg::new(7, MsgType::ReqRedisGet, true));
+        assert_eq!(idx.get(7).unwrap().id(), 7);
+        assert!(idx.get(8).is_none());
+        idx.get_mut(7).unwrap().set_done(true);
+        assert!(idx.get(7).unwrap().flags().done);
+        assert!(idx.get_mut(8).is_none());
+    }
+
+    #[test]
+    fn len_and_is_empty_track_population() {
+        // len counts entries; is_empty flips once an entry exists.
+        let mut idx = MsgIndex::new();
+        assert!(idx.is_empty());
+        assert_eq!(idx.len(), 0);
+        idx.insert(Msg::new(1, MsgType::ReqRedisGet, true));
+        assert!(!idx.is_empty());
+        assert_eq!(idx.len(), 1);
+    }
 }

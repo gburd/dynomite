@@ -245,4 +245,47 @@ mod tests {
         assert_eq!(q.msg_get_id_lookup(22).unwrap().id(), 22);
         assert!(q.msg_get_id_lookup(33).is_none());
     }
+
+    #[test]
+    fn with_capacity_starts_empty() {
+        // with_capacity reserves storage but holds no messages.
+        let q = MsgQueue::with_capacity(8);
+        assert!(q.is_empty());
+        assert_eq!(q.len(), 0);
+    }
+
+    #[test]
+    fn push_front_and_pop_back_are_lifo_ends() {
+        // push_front prepends; pop_back removes the tail.
+        let mut q = MsgQueue::new();
+        q.push_back(Msg::new(1, MsgType::ReqRedisGet, true));
+        q.push_front(Msg::new(0, MsgType::ReqRedisGet, true));
+        // Order is now [0, 1].
+        assert_eq!(q.front().unwrap().id(), 0);
+        assert_eq!(q.pop_back().unwrap().id(), 1);
+        assert_eq!(q.pop_back().unwrap().id(), 0);
+        assert!(q.pop_back().is_none());
+    }
+
+    #[test]
+    fn front_mut_mutates_head_in_place() {
+        // front_mut yields a mutable borrow of the head.
+        let mut q = MsgQueue::new();
+        q.push_back(Msg::new(5, MsgType::ReqRedisGet, true));
+        q.front_mut().unwrap().set_swallow(true);
+        assert!(q.front().unwrap().flags().swallow);
+        // front_mut on an empty queue is None.
+        let mut empty = MsgQueue::new();
+        assert!(empty.front_mut().is_none());
+    }
+
+    #[test]
+    fn into_iter_for_reference_yields_front_to_back() {
+        // The &MsgQueue IntoIterator impl walks in queue order.
+        let mut q = MsgQueue::new();
+        q.push_back(Msg::new(1, MsgType::ReqRedisGet, true));
+        q.push_back(Msg::new(2, MsgType::ReqRedisSet, true));
+        let ids: Vec<u64> = (&q).into_iter().map(Msg::id).collect();
+        assert_eq!(ids, vec![1, 2]);
+    }
 }

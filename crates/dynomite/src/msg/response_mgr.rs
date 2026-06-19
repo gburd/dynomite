@@ -473,4 +473,42 @@ mod tests {
         }
         assert_eq!(mgr.good_responses() as usize, MAX_REPLICAS_PER_DC);
     }
+
+    #[test]
+    fn accessors_report_construction_state() {
+        // The plain accessors echo the values fixed at construction.
+        let mgr = ResponseMgr::new(&req(), 3, Some("dc-east".into()));
+        assert!(mgr.is_read());
+        assert_eq!(mgr.max_responses(), 3);
+        assert_eq!(mgr.error_responses(), 0);
+        assert_eq!(mgr.dc_name(), Some("dc-east"));
+        assert_eq!(mgr.msg_id(), 1);
+        assert_eq!(mgr.msg_type(), MsgType::ReqRedisGet);
+        assert!(mgr.error_response().is_none());
+        // A None dc-name reports None.
+        let anon = ResponseMgr::new(&req(), 1, None);
+        assert_eq!(anon.dc_name(), None);
+    }
+
+    #[test]
+    fn good_iter_yields_msg_and_checksum_pairs() {
+        // good_iter walks the accepted responses with their checksums.
+        let mut mgr = ResponseMgr::new(&req(), 3, None);
+        mgr.submit_response(rsp(2, false), 7);
+        mgr.submit_response(rsp(3, false), 9);
+        let pairs: Vec<(u64, u32)> = mgr.good_iter().map(|(m, c)| (m.id(), c)).collect();
+        assert_eq!(pairs, vec![(2, 7), (3, 9)]);
+    }
+
+    #[test]
+    fn pick_response_three_way_first_and_third_match() {
+        // The c0 == c2 arm: replies 0 and 2 agree, reply 1 dissents.
+        // pick_response returns the index-0 response.
+        let mut mgr = ResponseMgr::new(&req(), 3, None);
+        mgr.submit_response(rsp(2, false), 5);
+        mgr.submit_response(rsp(3, false), 9);
+        mgr.submit_response(rsp(4, false), 5);
+        assert_eq!(mgr.outcome(), QuorumOutcome::Achieved);
+        assert_eq!(mgr.pick_response().unwrap().id(), 2);
+    }
 }

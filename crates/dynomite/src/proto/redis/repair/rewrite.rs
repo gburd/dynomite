@@ -178,4 +178,62 @@ mod tests {
             RepairOutcome::NoOp,
         ));
     }
+
+    #[test]
+    fn rewrite_query_on_response_is_noop() {
+        // A non-request message short-circuits at the is_request
+        // guard (the first NoOp arm).
+        let mut rsp = Msg::new(0, MsgType::RspRedisStatus, false);
+        let pool = MbufPool::default();
+        assert!(matches!(
+            redis_rewrite_query(&mut rsp, &pool).unwrap(),
+            RepairOutcome::NoOp,
+        ));
+    }
+
+    #[test]
+    fn timestamp_rewrite_on_response_is_noop() {
+        // The timestamp-rewrite variant also guards on is_request.
+        let mut rsp = Msg::new(0, MsgType::RspRedisStatus, false);
+        assert!(matches!(
+            redis_rewrite_query_with_timestamp_md(&mut rsp).unwrap(),
+            RepairOutcome::NoOp,
+        ));
+    }
+
+    #[test]
+    fn timestamp_rewrite_supported_command_falls_through_to_noop() {
+        // A supported write command with rewrite_with_ts_possible set
+        // passes the `supported` match and reaches the final NoOp
+        // (full Lua generation is not yet wired in).
+        let mut req = Msg::new(0, MsgType::ReqRedisSet, true);
+        assert!(req.flags().rewrite_with_ts_possible);
+        assert!(matches!(
+            redis_rewrite_query_with_timestamp_md(&mut req).unwrap(),
+            RepairOutcome::NoOp,
+        ));
+    }
+
+    #[test]
+    fn timestamp_rewrite_unsupported_command_is_noop() {
+        // An unsupported command is filtered by the `supported`
+        // match (the !supported NoOp arm).
+        let mut req = Msg::new(0, MsgType::ReqRedisLpush, true);
+        assert!(matches!(
+            redis_rewrite_query_with_timestamp_md(&mut req).unwrap(),
+            RepairOutcome::NoOp,
+        ));
+    }
+
+    #[test]
+    fn timestamp_rewrite_blocked_when_ts_not_possible() {
+        // When the parse crossed an mbuf boundary the parser clears
+        // rewrite_with_ts_possible, and the rewrite bails early.
+        let mut req = Msg::new(0, MsgType::ReqRedisSet, true);
+        req.flags_mut().rewrite_with_ts_possible = false;
+        assert!(matches!(
+            redis_rewrite_query_with_timestamp_md(&mut req).unwrap(),
+            RepairOutcome::NoOp,
+        ));
+    }
 }

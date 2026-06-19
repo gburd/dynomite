@@ -158,4 +158,15 @@ mod tests {
         let q: CBuf<u32> = CBuf::new(13);
         assert_eq!(q.capacity(), 13);
     }
+
+    #[test]
+    fn debug_reports_capacity_and_len() {
+        // The Debug impl exposes capacity and the live element count.
+        let q: CBuf<u32> = CBuf::new(4);
+        q.push(1).unwrap();
+        q.push(2).unwrap();
+        let s = format!("{q:?}");
+        assert!(s.contains("capacity: 4"), "got {s}");
+        assert!(s.contains("len: 2"), "got {s}");
+    }
 }

@@ -122,4 +122,22 @@ mod tests {
         r.push_key(KeyPos::without_tag(b"._add-set".to_vec()));
         assert!(redis_verify_request(&r, &OddEven).is_ok());
     }
+
+    #[test]
+    fn dispatcher_shard_count_is_reported() {
+        // Exercise the test dispatcher's shard_count accessor so the
+        // FragmentDispatcher contract is covered end to end.
+        assert_eq!(OddEven.shard_count(), 2);
+        assert_eq!(OddEven.shard_for(b"b"), 0);
+    }
+
+    #[test]
+    fn eval_two_keys_same_shard_is_ok() {
+        // Two EVAL keys that hash to the same shard pass the
+        // single-shard check (the prev == idx arm).
+        let mut r = Msg::new(0, MsgType::ReqRedisEval, true);
+        r.push_key(KeyPos::without_tag(b"a".to_vec())); // shard 1
+        r.push_key(KeyPos::without_tag(b"c".to_vec())); // 0x63 -> shard 1
+        assert!(redis_verify_request(&r, &OddEven).is_ok());
+    }
 }

@@ -272,4 +272,38 @@ mod tests {
         assert_eq!(ae.record_attempt(now), AutoEjectState::Reachable);
         assert_eq!(ae.failure_count(), 0);
     }
+
+    #[test]
+    fn accessors_echo_configuration() {
+        // The config accessors report the values passed to new().
+        let ae = AutoEject::new(true, 5, Duration::from_millis(250));
+        assert!(ae.is_enabled());
+        assert_eq!(ae.failure_limit(), 5);
+        assert_eq!(ae.retry_after(), Duration::from_millis(250));
+        assert!(ae.next_retry().is_none());
+        assert!(!AutoEject::new(false, 1, Duration::from_secs(1)).is_enabled());
+    }
+
+    #[test]
+    fn next_retry_is_set_once_ejected() {
+        // next_retry exposes the armed eject deadline.
+        let mut ae = AutoEject::new(true, 1, Duration::from_millis(10));
+        let now = Instant::now();
+        assert!(ae.next_retry().is_none());
+        ae.record_failure(now);
+        assert_eq!(ae.next_retry(), Some(now + Duration::from_millis(10)));
+    }
+
+    #[test]
+    fn reset_restores_post_construction_state() {
+        // reset clears both the failure count and the eject window.
+        let mut ae = AutoEject::new(true, 1, Duration::from_millis(10));
+        let now = Instant::now();
+        ae.record_failure(now);
+        assert!(ae.next_retry().is_some());
+        ae.reset();
+        assert_eq!(ae.failure_count(), 0);
+        assert!(ae.next_retry().is_none());
+        assert_eq!(ae.record_attempt(now), AutoEjectState::Reachable);
+    }
 }
