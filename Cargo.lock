@@ -1724,6 +1724,7 @@ dependencies = [
 name = "gen-fsm"
 version = "0.0.1"
 dependencies = [
+ "hegeltest",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
