@@ -89,20 +89,23 @@ changed.
   `XaError::NotFound`; `XaPeer::resolve` maps that to success, so a
   coordinator retry never double-applies or errors.
 
-## Recovery-scan boundary (scoped follow-up)
+## Recovery-scan boundary (now implemented)
 
-Implemented: the durable in-doubt log (write + read) and the bounded
-commit retry, which together resolve transient peer unavailability
-within one coordinator run. Left as the remaining boundary: the
-automatic cold-restart recovery scan -- a coordinator that has itself
-restarted re-reading `InDoubtLog::load()` and re-driving the commits,
-paired with a peer whose noxu env recovered a prepared branch via
-`xa_recover()`. The durable record is already written and readable, so
-the scan is a thin loop on top; `CrossNodeCoordinator` does not run it
-on construction. The test
+The cold-restart recovery scan is implemented; see
+`docs/journal/2026-06-18-xa-recovery-scan.md`.
+[`CrossNodeCoordinator::recover_in_doubt`] re-reads
+`InDoubtLog::load()` and re-drives each unconfirmed commit forward to
+completion over the same transport path phase 2 uses; a confirmed
+commit retires its record with a tombstone, and a record whose peer
+is still down stays in the log for a later, re-runnable pass.
+[`CrossNodeCoordinator::new_with_recovery`] runs the scan at
+construction for the server boot path, while `new` keeps a
+non-scanning constructor for in-memory and test coordinators.
+Recovery only ever drives a prepared branch forward (presumed
+commit); it never rolls one back. The test
 `commit_phase_exhausts_retry_then_in_doubt_log_drives_recovery`
-demonstrates a manual recovery pass (re-read the durable record,
-re-drive `handle_commit`) completing the transaction atomically.
+remains as the in-run manual-pass demonstration; the automatic
+cold-restart path is covered by `tests/xa_recovery.rs`.
 
 ## Tests (10 new + codec)
 

@@ -24,7 +24,9 @@
 //!   voted Ok but whose commit could not be confirmed, so a recovery
 //!   pass can drive them forward.
 //! * [`CrossNodeCoordinator`] -- the async coordinator that runs the
-//!   protocol over [`XaBranch`]es.
+//!   protocol over [`XaBranch`]es and, on a cold restart, re-drives
+//!   any logged in-doubt commits with
+//!   [`CrossNodeCoordinator::recover_in_doubt`].
 //!
 //! # Failure model (presumed abort, forward commit)
 //!
@@ -39,17 +41,23 @@
 //!   surfaces an in-doubt error to the caller. It never rolls back a
 //!   branch that voted Ok in the commit phase.
 //!
-//! # Recovery-scan boundary
+//! # Cold-restart recovery scan
 //!
-//! This module implements the durable in-doubt log and the bounded
-//! commit retry, which together resolve transient peer
-//! unavailability. The cold-restart recovery scan -- a coordinator
-//! that has itself restarted re-reading the in-doubt log and
-//! re-driving commits, and a peer whose `noxu` env recovered a
-//! prepared branch being driven by that scan -- is the remaining
-//! boundary. [`InDoubtLog::load`] makes the durable records readable
-//! so that scan can be built on top; [`CrossNodeCoordinator`] does
-//! not run it automatically on construction.
+//! The durable in-doubt log and the bounded commit retry resolve
+//! transient peer unavailability *within* one coordinator run. A
+//! coordinator that itself restarts recovers any still-unconfirmed
+//! commits with [`CrossNodeCoordinator::recover_in_doubt`]: it reads
+//! the records back with [`InDoubtLog::load`] and re-drives each
+//! commit over the same transport path phase 2 uses. Because the peer
+//! commits idempotently, re-driving a commit that already landed is a
+//! safe no-op; a confirmed commit retires its record (a tombstone),
+//! and a record whose peer is still down stays in the log for a later,
+//! re-runnable pass. Recovery only ever drives a prepared branch
+//! *forward* (presumed commit); it never rolls one back.
+//! [`CrossNodeCoordinator::new_with_recovery`] runs the scan at
+//! construction for the server's boot path, while
+//! [`CrossNodeCoordinator::new`] keeps a non-scanning constructor for
+//! in-memory and test coordinators.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -339,11 +347,14 @@ impl InDoubtRecord {
         }
     }
 
-    fn to_line(&self) -> String {
-        // One record per line: `format_id hex(gtrid) hex(bqual)
-        // hex(env)`. Hex keeps the line ASCII and unambiguous.
+    fn to_line(&self, tag: LineTag) -> String {
+        // One record per line: `tag format_id hex(gtrid) hex(bqual)
+        // hex(env)`. `tag` is `+` for an in-doubt record and `-` for a
+        // tombstone retiring an earlier record. Hex keeps every field
+        // ASCII and unambiguous.
         format!(
-            "{} {} {} {}",
+            "{} {} {} {} {}",
+            tag.as_char(),
             self.format_id,
             hex(&self.gtrid),
             hex(&self.bqual),
@@ -351,18 +362,58 @@ impl InDoubtRecord {
         )
     }
 
-    fn from_line(line: &str) -> Option<Self> {
+    fn from_line(line: &str) -> Option<(LineTag, Self)> {
         let mut it = line.split_whitespace();
+        let tag = LineTag::from_str(it.next()?)?;
         let format_id: i32 = it.next()?.parse().ok()?;
         let gtrid = unhex(it.next()?)?;
         let bqual = unhex(it.next()?)?;
         let env = unhex(it.next()?)?;
-        Some(Self {
-            format_id,
-            gtrid,
-            bqual,
-            env,
-        })
+        Some((
+            tag,
+            Self {
+                format_id,
+                gtrid,
+                bqual,
+                env,
+            },
+        ))
+    }
+
+    /// Identity used to net records against tombstones: a record is
+    /// retired by a tombstone with the same xid and env.
+    fn key(&self) -> (i32, Vec<u8>, Vec<u8>, Vec<u8>) {
+        (
+            self.format_id,
+            self.gtrid.clone(),
+            self.bqual.clone(),
+            self.env.clone(),
+        )
+    }
+}
+
+/// Whether a log line records a new in-doubt branch (`Record`) or
+/// retires an earlier one (`Tombstone`).
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum LineTag {
+    Record,
+    Tombstone,
+}
+
+impl LineTag {
+    fn as_char(self) -> char {
+        match self {
+            Self::Record => '+',
+            Self::Tombstone => '-',
+        }
+    }
+
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "+" => Some(Self::Record),
+            "-" => Some(Self::Tombstone),
+            _ => None,
+        }
     }
 }
 
@@ -403,8 +454,21 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 /// before returning, so a coordinator crash immediately afterwards
 /// still leaves the record on disk for [`Self::load`] to surface to a
 /// recovery pass. The log is the artifact that makes cold-restart
-/// commit recovery possible; this slice writes and reads it but does
-/// not yet run the automatic restart scan (see the module docs).
+/// commit recovery possible.
+///
+/// # Retirement (tombstone-on-resolve)
+///
+/// When a recovery pass confirms a branch's commit it does not
+/// rewrite the log; it appends a *tombstone* line ([`Self::resolve`])
+/// naming the same xid and env. [`Self::load`] nets tombstones
+/// against records, so a retired branch is invisible to the next
+/// scan. This keeps the log strictly append-only and crash-safe: a
+/// crash after the commit lands on the peer but before the tombstone
+/// is written simply leaves the record in place, and the next scan
+/// re-drives the commit -- which is idempotent on the peer, so the
+/// replay is a no-op. (Compaction would also work; tombstoning is
+/// chosen because it needs no temp-file rename and a partial write
+/// only ever leaves a truncated last line, which `load` skips.)
 #[derive(Clone, Debug)]
 pub struct InDoubtLog {
     path: PathBuf,
@@ -430,6 +494,21 @@ impl InDoubtLog {
     /// Returns the underlying [`std::io::Error`] if the line cannot be
     /// written or `fsync`ed.
     pub fn record(&self, xid: &WireXid, env: &[u8]) -> std::io::Result<()> {
+        self.append(LineTag::Record, &InDoubtRecord::from_parts(xid, env))
+    }
+
+    /// Durably append a tombstone retiring an earlier in-doubt record
+    /// for the same xid and env, after its commit has been confirmed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`std::io::Error`] if the line cannot be
+    /// written or `fsync`ed.
+    pub fn resolve(&self, xid: &WireXid, env: &[u8]) -> std::io::Result<()> {
+        self.append(LineTag::Tombstone, &InDoubtRecord::from_parts(xid, env))
+    }
+
+    fn append(&self, tag: LineTag, rec: &InDoubtRecord) -> std::io::Result<()> {
         use std::io::Write as _;
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -438,29 +517,55 @@ impl InDoubtLog {
             .create(true)
             .append(true)
             .open(&self.path)?;
-        let rec = InDoubtRecord::from_parts(xid, env);
-        let mut line = rec.to_line();
+        let mut line = rec.to_line(tag);
         line.push('\n');
         f.write_all(line.as_bytes())?;
         // Durability: a coordinator crash after this point still
-        // leaves the record for the recovery pass.
+        // leaves the line for the recovery pass.
         f.sync_all()?;
         Ok(())
     }
 
-    /// Read every recorded in-doubt branch. Returns an empty vector
-    /// when the log has never been written.
+    /// Read every still-unresolved in-doubt branch. Returns an empty
+    /// vector when the log has never been written or when every
+    /// recorded branch has since been retired by a tombstone.
+    ///
+    /// Records and tombstones are netted in append order: each
+    /// tombstone retires the matching earlier record. A record that
+    /// outlives every tombstone for its key is returned; the result
+    /// preserves the order in which the surviving records were first
+    /// written.
     ///
     /// # Errors
     ///
     /// Returns the underlying [`std::io::Error`] if the file exists
     /// but cannot be read.
     pub fn load(&self) -> std::io::Result<Vec<InDoubtRecord>> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(s) => Ok(s.lines().filter_map(InDoubtRecord::from_line).collect()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(e),
+        let s = match std::fs::read_to_string(&self.path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        // Net tombstones against records. A truncated final line (a
+        // crash mid-write) fails to parse and is skipped, leaving the
+        // matching record live so the scan re-drives the idempotent
+        // commit.
+        let mut live: Vec<InDoubtRecord> = Vec::new();
+        for line in s.lines() {
+            let Some((tag, rec)) = InDoubtRecord::from_line(line) else {
+                continue;
+            };
+            match tag {
+                LineTag::Record => live.push(rec),
+                LineTag::Tombstone => {
+                    let key = rec.key();
+                    if let Some(pos) = live.iter().position(|r| r.key() == key) {
+                        live.remove(pos);
+                    }
+                }
+            }
         }
+        Ok(live)
     }
 }
 
@@ -481,6 +586,24 @@ impl Default for RetryPolicy {
             base_backoff: Duration::from_millis(20),
         }
     }
+}
+
+/// Outcome of one [`CrossNodeCoordinator::recover_in_doubt`] pass.
+///
+/// The counts sum to the number of in-doubt records the scan read:
+/// `recovered + still_in_doubt + errors == records examined`.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct RecoveryReport {
+    /// Branches whose commit was confirmed and whose record was
+    /// retired (tombstoned) from the log.
+    pub recovered: usize,
+    /// Branches whose owning peer was still unreachable; the record
+    /// stays in the log for a later, re-runnable pass.
+    pub still_in_doubt: usize,
+    /// Records that could not be acted on (no branch owns the env, a
+    /// malformed xid, or a tombstone write failed); the record stays
+    /// in the log.
+    pub errors: usize,
 }
 
 /// Async coordinator for a cross-node transaction.
@@ -533,6 +656,155 @@ impl CrossNodeCoordinator {
     #[must_use]
     pub fn branch(&self, index: usize) -> Option<&XaBranch> {
         self.branches.get(index)
+    }
+
+    /// Build a coordinator over `branches` and immediately run a
+    /// cold-restart recovery scan against `in_doubt` before returning.
+    ///
+    /// This is the startup entry point: a server constructs its
+    /// coordinator this way on boot so any commit a previous incarnation
+    /// left in-doubt is driven forward before normal operation begins.
+    /// The scan is a bounded blocking pass (in-doubt sets are small and
+    /// commit is idempotent on the peer, so a re-driven commit that
+    /// already landed is a cheap no-op); it runs to completion before
+    /// the constructed coordinator is handed back.
+    ///
+    /// Test and in-memory coordinators that have no durable backlog
+    /// keep using [`Self::new`], which never scans -- so there is no
+    /// behaviour change for them. Use this constructor only when a real
+    /// durable in-doubt log path is configured.
+    ///
+    /// Returns the coordinator paired with the scan's
+    /// [`RecoveryReport`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TxnStoreError::Backend`] if the in-doubt log exists but
+    /// cannot be read.
+    pub async fn new_with_recovery(
+        branches: Vec<XaBranch>,
+        in_doubt: InDoubtLog,
+    ) -> Result<(Self, RecoveryReport), TxnStoreError> {
+        Self::new_with_recovery_retry(branches, in_doubt, RetryPolicy::default()).await
+    }
+
+    /// [`Self::new_with_recovery`] with an explicit commit retry policy
+    /// for the recovery pass.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new_with_recovery`].
+    pub async fn new_with_recovery_retry(
+        branches: Vec<XaBranch>,
+        in_doubt: InDoubtLog,
+        retry: RetryPolicy,
+    ) -> Result<(Self, RecoveryReport), TxnStoreError> {
+        let coord = Self::new(branches, in_doubt).with_retry(retry);
+        let report = coord.recover_in_doubt().await?;
+        Ok((coord, report))
+    }
+
+    /// Re-drive every still-unresolved in-doubt branch forward to
+    /// commit.
+    ///
+    /// Reads the durable in-doubt log with [`InDoubtLog::load`] and,
+    /// for each surviving record, re-issues the commit over the same
+    /// path phase 2 uses: a local branch commits inline, a remote
+    /// branch re-sends `XA_COMMIT` through its [`XaTransport`]. Because
+    /// the receiver commits idempotently, re-driving a commit that
+    /// actually landed before the crash returns success and is not a
+    /// double-apply.
+    ///
+    /// On a confirmed commit the record is retired with
+    /// [`InDoubtLog::resolve`] (a tombstone), so a second pass does not
+    /// re-drive it. A record whose peer is still unreachable is left in
+    /// the log; the scan is re-runnable and never rolls a prepared
+    /// branch back -- the only correct resolution for a branch that
+    /// voted Ok is forward (presumed commit).
+    ///
+    /// Running the scan with no surviving records is a no-op. Running
+    /// it twice in a row, the second pass sees only the records the
+    /// first could not resolve.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TxnStoreError::Backend`] if the in-doubt log cannot be
+    /// read. Per-record failures (unreachable peer, unknown env,
+    /// failed tombstone write) are counted in the returned
+    /// [`RecoveryReport`], not surfaced as an error, so one bad record
+    /// never aborts the scan of the rest.
+    pub async fn recover_in_doubt(&self) -> Result<RecoveryReport, TxnStoreError> {
+        let records = self
+            .in_doubt
+            .load()
+            .map_err(|e| TxnStoreError::Backend(format!("in-doubt log read failed: {e}")))?;
+        let mut report = RecoveryReport::default();
+        for rec in &records {
+            let wire = rec.xid();
+            let Some(branch_idx) = self
+                .branches
+                .iter()
+                .position(|b| b.name() == rec.env.as_slice())
+            else {
+                // No branch owns this env on this coordinator; leave
+                // the record for an incarnation that does. Never drop
+                // an unconfirmed commit.
+                report.errors += 1;
+                continue;
+            };
+            match self.redrive_commit(branch_idx, &wire).await {
+                Ok(()) => {
+                    // Commit confirmed: retire the record. A crash
+                    // before this tombstone lands just replays the
+                    // idempotent commit on the next pass.
+                    if let Err(e) = self.in_doubt.resolve(&wire, &rec.env) {
+                        tracing::warn!("in-doubt resolve (tombstone) write failed: {e}");
+                        report.errors += 1;
+                    } else {
+                        report.recovered += 1;
+                    }
+                }
+                Err(()) => {
+                    // Peer still unreachable; the record stays. The
+                    // scan is re-runnable.
+                    report.still_in_doubt += 1;
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    /// Re-drive the commit for an in-doubt branch identified by
+    /// `branch_idx` and `wire`. `Ok(())` when the commit was confirmed
+    /// (idempotently), `Err(())` when the peer is still unreachable.
+    async fn redrive_commit(&self, branch_idx: usize, wire: &WireXid) -> Result<(), ()> {
+        match &self.branches[branch_idx] {
+            XaBranch::Local(participant) => {
+                let Ok(xid) = Xid::new(wire.format_id, &wire.gtrid, &wire.bqual) else {
+                    return Err(());
+                };
+                // A local commit is idempotent the same way the peer's
+                // is: noxu reports `NotFound` for a branch already
+                // committed, which is success for recovery.
+                match participant.xa().xa_commit(&xid, XaFlags::NOFLAGS) {
+                    Ok(()) | Err(XaError::NotFound) => Ok(()),
+                    Err(_) => Err(()),
+                }
+            }
+            XaBranch::Remote(remote) => {
+                let mut backoff = self.retry.base_backoff;
+                for attempt in 0..self.retry.max_attempts {
+                    if remote.transport.commit(wire, &remote.env).await.is_ok() {
+                        return Ok(());
+                    }
+                    if attempt + 1 < self.retry.max_attempts {
+                        tokio::time::sleep(backoff).await;
+                        backoff = backoff.saturating_mul(2);
+                    }
+                }
+                Err(())
+            }
+        }
     }
 
     /// Run a cross-node transaction over `batch`, routing each op to a
