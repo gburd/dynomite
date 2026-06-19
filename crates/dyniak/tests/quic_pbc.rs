@@ -25,7 +25,8 @@ use prost::Message as _;
 use tempfile::tempdir;
 
 use dyniak::proto::pb::{
-    read_frame, write_frame, Frame, MessageCode, RpbGetReq, RpbGetResp, RpbPutReq, RpbPutResp,
+    read_frame, write_frame, Frame, MessageCode, RpbContent, RpbGetReq, RpbGetResp, RpbPutReq,
+    RpbPutResp,
 };
 use dyniak::serve_pbc_quic;
 use dynomite::embed::hooks::{BoxFuture, DatastoreError, Protocol};
@@ -158,7 +159,10 @@ async fn quic_pbc_ping_put_get_round_trip() {
     let put = RpbPutReq {
         bucket: b"users".to_vec(),
         key: Some(b"alice".to_vec()),
-        value: b"hello-quic".to_vec(),
+        content: Some(RpbContent {
+            value: b"hello-quic".to_vec(),
+            ..RpbContent::default()
+        }),
         ..RpbPutReq::default()
     };
     tokio::time::timeout(
@@ -200,9 +204,10 @@ async fn quic_pbc_ping_put_get_round_trip() {
         .expect("get read");
     assert_eq!(get_resp.code, MessageCode::GetResp.as_u8());
     let body = RpbGetResp::decode(get_resp.body.as_slice()).expect("decode get resp");
+    assert_eq!(body.content.len(), 1);
     assert_eq!(
-        body.content,
-        vec![b"hello-quic".to_vec()],
+        body.content[0].value,
+        b"hello-quic".to_vec(),
         "object stored over QUIC must round-trip back through get"
     );
 

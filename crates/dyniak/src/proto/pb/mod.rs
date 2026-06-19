@@ -43,6 +43,11 @@ pub use crate::proto::pb::messages::{
     RpbPutReq, RpbPutResp,
 };
 
+// Nested content message and link type -- PBC RpbContent slice.
+// Re-exported below the prior block so parallel branches do not
+// conflict.
+pub use crate::proto::pb::messages::{RpbContent, RpbLink};
+
 // New message types added by the v0.0.2 PBC ops slice. Re-exported
 // below the existing block so parallel branches do not conflict.
 pub use crate::proto::pb::messages::{

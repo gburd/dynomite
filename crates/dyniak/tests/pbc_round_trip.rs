@@ -29,10 +29,10 @@ use tokio::task::JoinHandle;
 
 use dyniak::error::RiakError;
 use dyniak::proto::pb::{
-    read_frame, write_frame, Frame, MessageCode, RpbBucketProps, RpbDelReq, RpbErrorResp,
-    RpbGetBucketReq, RpbGetBucketResp, RpbGetReq, RpbGetResp, RpbGetServerInfoResp, RpbIndexReq,
-    RpbIndexResp, RpbListBucketsReq, RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp,
-    RpbPutReq, RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
+    read_frame, write_frame, Frame, MessageCode, RpbBucketProps, RpbContent, RpbDelReq,
+    RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp, RpbGetReq, RpbGetResp, RpbGetServerInfoResp,
+    RpbIndexReq, RpbIndexResp, RpbListBucketsReq, RpbListBucketsResp, RpbListKeysReq,
+    RpbListKeysResp, RpbPutReq, RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
     INDEX_QUERY_TYPE_EQ,
 };
 use dyniak::serve_pbc;
@@ -336,7 +336,10 @@ async fn exchange_put(r: &mut Reader, w: &mut Writer) {
     let req = RpbPutReq {
         bucket: b"users".to_vec(),
         key: Some(b"alice".to_vec()),
-        value: b"hello".to_vec(),
+        content: Some(RpbContent {
+            value: b"hello".to_vec(),
+            ..RpbContent::default()
+        }),
         ..RpbPutReq::default()
     };
     write_req(w, MessageCode::PutReq, req.encode_to_vec()).await;

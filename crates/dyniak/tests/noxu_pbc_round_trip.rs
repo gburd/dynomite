@@ -18,8 +18,9 @@ use tokio::net::{TcpListener, TcpStream};
 
 use dyniak::datastore::NoxuDatastore;
 use dyniak::proto::pb::{
-    read_frame, write_frame, Frame, MessageCode, RpbDelReq, RpbGetReq, RpbGetResp, RpbIndexReq,
-    RpbIndexResp, RpbPair, RpbPutReq, RpbPutResp, INDEX_QUERY_TYPE_EQ, INDEX_QUERY_TYPE_RANGE,
+    read_frame, write_frame, Frame, MessageCode, RpbContent, RpbDelReq, RpbGetReq, RpbGetResp,
+    RpbIndexReq, RpbIndexResp, RpbPair, RpbPutReq, RpbPutResp, INDEX_QUERY_TYPE_EQ,
+    INDEX_QUERY_TYPE_RANGE,
 };
 use dyniak::serve_pbc;
 use dynomite::embed::Datastore;
@@ -57,8 +58,11 @@ async fn put_with_indexes(
     let req = RpbPutReq {
         bucket: bucket.to_vec(),
         key: Some(key.to_vec()),
-        value: value.to_vec(),
-        indexes: rpb_indexes,
+        content: Some(RpbContent {
+            value: value.to_vec(),
+            indexes: rpb_indexes,
+            ..RpbContent::default()
+        }),
         ..RpbPutReq::default()
     };
     let frame = Frame::new(MessageCode::PutReq.as_u8(), req.encode_to_vec());
@@ -146,7 +150,8 @@ async fn put_get_del_round_trip_against_noxu() {
     let resp = read_frame(&mut r).await.expect("recv get");
     assert_eq!(resp.code, MessageCode::GetResp.as_u8());
     let body = RpbGetResp::decode(resp.body.as_slice()).expect("decode get");
-    assert_eq!(body.content, vec![b"hello".to_vec()]);
+    assert_eq!(body.content.len(), 1);
+    assert_eq!(body.content[0].value, b"hello".to_vec());
 
     // Delete it.
     let dreq = RpbDelReq {

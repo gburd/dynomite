@@ -1133,39 +1133,82 @@ the encoder accepts ASCII decimal input as well, mirroring
 the shape Riak clients send. `_bin` and unsuffixed indexes
 store value bytes verbatim.
 
-The wire shape of `RpbPutReq` carries the indexes at a
-top-level tag (100) rather than nested under `RpbContent` at
-tag 4, because the v0.0.1 dyniak slice modelled
-`RpbPutReq.value` as a flat `bytes` field at tag 4 (already a
-documented deviation). The eventual `RpbContent` refactor will
-move the indexes back inside.
+The wire shape of `RpbPutReq` now matches Riak's published
+schema: the object payload (value, content-type, links, 2i
+indexes, ...) is nested in a single `RpbContent` message at
+tag 4, and `RpbGetResp` / `RpbPutResp` carry a repeated
+`RpbContent`. An earlier dyniak slice modelled the put body as
+a flat `value: bytes` at tag 4 with a top-level `indexes` shim
+at tag 100; that shim is removed (see the tag-4 migration note
+in D0b).
 
 ### D0b: Object links wire format and shared storage form
 
 Riak object links are typed `(target_bucket, target_key, tag)`
 pointers. Over HTTP they ride in `Link:` headers; over PBC
-upstream Riak nests them in the content message's repeated
-`links` field (`RpbLink { bucket, key, tag }`). dyniak's PBC
-`RpbContent` is not yet on the wire (the put body is a flat
-`value: bytes`, see above), so there is no `RpbLink` field to
-mirror. Rather than add a one-off PBC link field that would be
-removed by the eventual `RpbContent` refactor, links live on
-the encoding-independent `HttpObject` storage envelope
-([`dyniak::proto::http::object::HttpLink`], protobuf tag 4 on
-`HttpObject`). Tag 4 was previously unused, so objects stored
-before links existed decode with an empty list (backward
-compatible on disk).
+Riak nests them in the content message's repeated `links`
+field (`RpbLink { bucket, key, tag }`, each an `optional
+bytes`). dyniak now carries the full Riak `RpbContent` message
+on the PBC wire (`RpbContent { value, content_type, charset,
+content_encoding, vtag, links, last_mod, last_mod_usecs,
+usermeta, indexes, deleted }`), so PBC puts and gets carry
+links natively:
 
-Divergence: PBC and HTTP share this storage form. A PBC put
-wraps its `value: bytes` into an `HttpObject` envelope and
-stores `HttpObject::to_storage_bytes()`; a PBC get decodes the
-envelope and returns its `value`. This makes a value put over
-one transport readable over the other and keeps any links
-attached over HTTP intact when the object is fetched over PBC.
-The flat PBC `RpbPutReq` schema cannot express links, so a PBC
-put never adds them; that capability returns when `RpbContent`
-(with its nested `links`) lands and the PBC path maps
-`RpbContent.links` onto `HttpObject.links` directly.
+* `RpbPutReq.content` is an `RpbContent` at tag 4 (replacing
+  the prior flat `value: bytes`). The links it carries are
+  mapped onto `HttpObject.links` and persisted.
+* `RpbGetResp.content` and `RpbPutResp.content` are a repeated
+  `RpbContent` (replacing the prior `repeated bytes`). A get
+  builds one `RpbContent` from the stored `HttpObject`,
+  re-emitting the value, content-type, 2i indexes, and links.
+
+Links live on the encoding-independent `HttpObject` storage
+envelope ([`dyniak::proto::http::object::HttpLink`], protobuf
+tag 4 on `HttpObject`). Tag 4 was previously unused on the
+envelope, so objects stored before links existed decode with
+an empty list (backward compatible on disk).
+
+Cross-protocol: PBC and HTTP share this storage form. A PBC
+put maps `RpbContent` (value, content-type, indexes, links)
+into an `HttpObject` envelope and stores
+`HttpObject::to_storage_bytes()`; a PBC get decodes the
+envelope and rebuilds an `RpbContent`. A link attached over
+PBC is therefore re-emitted as an HTTP `Link:` header on read,
+and a link attached over HTTP is returned in
+`RpbGetResp.content[0].links` over PBC.
+
+Non-UTF-8 handling: `RpbLink` components are `optional bytes`
+and `HttpLink` components are `String`. The PBC->envelope
+direction decodes bytes lossily (`String::from_utf8_lossy`);
+the envelope->PBC direction encodes the string's UTF-8 bytes,
+mapping an empty component to `None`. This matches the PBC 2i
+index path and the HTTP link-header path, both of which
+already treat link and index components as text. A non-UTF-8
+link component can therefore be perturbed on a PBC put / get
+round-trip; this is an accepted deviation -- bucket and key
+names and `riaktag` values are text in practice.
+
+Tag-4 migration (accepted break): before this slice
+`RpbPutReq` carried a flat `value: bytes` at tag 4 (wire type
+2, length-delimited) plus a top-level `indexes` shim at tag
+100. Tag 4 is now an `RpbContent` submessage (also wire type
+2), so a legacy client that sends raw value bytes at tag 4 has
+those bytes re-interpreted as an `RpbContent` on decode: if the
+bytes do not parse as a valid submessage the put is rejected
+with a decode error, and the tag-100 index shim is now an
+unknown field that `prost` silently skips. dyniak is pre-1.0
+and the prior slice flagged the `RpbContent` refactor as the
+planned breaking follow-up, so this is the faithful-to-Riak
+path; a migrating client moves its value into `content.value`
+and its indexes into `content.indexes`. The
+`legacy_flat_value_put_migration` unit test pins this
+behaviour.
+
+The MapReduce link phase ([`dyniak::mapreduce::Phase::Link`])
+walks `HttpObject.links`, so links persisted by a PBC put feed
+link-walking exactly as HTTP-persisted links do
+(`mapreduce_link_phase_walks_pbc_persisted_links` integration
+test).
 
 The accepted HTTP `Link:` header grammar is
 `<RESOURCE>; riaktag="TAG"` where RESOURCE is

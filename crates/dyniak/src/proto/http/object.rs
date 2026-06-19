@@ -35,18 +35,22 @@
 //!   header, which names the codec that framed the envelope.
 //! * `indexes` -- secondary-index `(name, value)` pairs. `name` ends
 //!   in `_int` (integer index) or `_bin` (binary index), mirroring the
-//!   PBC path's [`crate::proto::pb::messages::RpbPutReq::indexes`].
+//!   PBC path's [`crate::proto::pb::messages::RpbContent::indexes`].
 //! * `links` -- typed object-to-object pointers. Each link is a
 //!   `(bucket, key, tag)` triple naming a target object and the tag
 //!   that classifies the relationship. Over HTTP these ride in
-//!   `Link:` headers; the storage form keeps them on the envelope so
-//!   they survive every codec round-trip and so a MapReduce link
-//!   phase can walk them.
+//!   `Link:` headers; over PBC they ride in
+//!   [`crate::proto::pb::messages::RpbContent::links`]. The storage
+//!   form keeps them on the envelope so they survive every codec
+//!   round-trip, so a put over either transport persists them, and so
+//!   a MapReduce link phase can walk them.
 //!
 //! A dedicated envelope is used rather than reusing
-//! [`crate::proto::pb::messages::RpbGetResp`], whose `content` field
-//! is a flat `repeated bytes` with no place for the per-object
-//! content-type or structured index metadata the HTTP path round-trips.
+//! [`crate::proto::pb::messages::RpbContent`] directly so the HTTP
+//! object store has one serde- and codec-friendly type with `String`
+//! index and link components; the PBC path maps between
+//! [`crate::proto::pb::messages::RpbContent`] and this envelope on the
+//! way in and out.
 
 use std::sync::OnceLock;
 

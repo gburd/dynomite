@@ -279,17 +279,126 @@ impl WireValue for RpbGetReq {
     }
 }
 
+/// `RpbLink` -- a typed object-to-object pointer nested inside an
+/// [`RpbContent`]. A link names a target object by `(bucket, key)`
+/// and classifies the relationship with `tag` (Riak's `riaktag`).
+///
+/// Every field is `optional bytes`, matching Riak's published
+/// schema. The HTTP envelope carries the same triple as
+/// [`crate::proto::http::object::HttpLink`] with `String` fields;
+/// see [`crate::proto::http::object`] for the byte / string mapping.
+///
+/// # Examples
+///
+/// ```
+/// use dyniak::proto::pb::RpbLink;
+/// let link = RpbLink {
+///     bucket: Some(b"people".to_vec()),
+///     key: Some(b"bob".to_vec()),
+///     tag: Some(b"friend".to_vec()),
+/// };
+/// assert_eq!(link.tag.as_deref(), Some(b"friend".as_slice()));
+/// ```
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct RpbLink {
+    /// Target object's bucket. Optional in the schema.
+    #[prost(bytes = "vec", optional, tag = "1")]
+    pub bucket: Option<Vec<u8>>,
+    /// Target object's key. Optional in the schema.
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub key: Option<Vec<u8>>,
+    /// Relationship tag (Riak's `riaktag`). Optional in the schema.
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub tag: Option<Vec<u8>>,
+}
+
+impl WireValue for RpbLink {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.RpbLink")
+    }
+}
+
+/// `RpbContent` -- one sibling value plus its metadata.
+///
+/// This is Riak's nested content message. A get response carries a
+/// repeated list of these (one per sibling); a put request carries
+/// one. The full published field set is modelled so a conforming
+/// Riak client interoperates byte-for-byte; the fields dyniak
+/// populates today are `value`, `content_type`, `links`, and
+/// `indexes`. The remaining fields (`charset`, `content_encoding`,
+/// `vtag`, `last_mod`, `last_mod_usecs`, `usermeta`, `deleted`)
+/// decode and encode as `None` / empty, preserving wire-shape
+/// parity at no runtime cost.
+///
+/// # Examples
+///
+/// ```
+/// use dyniak::proto::pb::{RpbContent, RpbLink};
+/// let content = RpbContent {
+///     value: b"hello".to_vec(),
+///     content_type: Some(b"text/plain".to_vec()),
+///     links: vec![RpbLink {
+///         bucket: Some(b"people".to_vec()),
+///         key: Some(b"bob".to_vec()),
+///         tag: Some(b"friend".to_vec()),
+///     }],
+///     ..RpbContent::default()
+/// };
+/// assert_eq!(content.value, b"hello");
+/// assert_eq!(content.links.len(), 1);
+/// ```
+#[derive(Clone, Eq, PartialEq, Message)]
+pub struct RpbContent {
+    /// Object value bytes. Required in the schema.
+    #[prost(bytes = "vec", tag = "1")]
+    pub value: Vec<u8>,
+    /// Declared media type of [`Self::value`].
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub content_type: Option<Vec<u8>>,
+    /// Character set of [`Self::value`].
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub charset: Option<Vec<u8>>,
+    /// Content encoding (for example `gzip`) of [`Self::value`].
+    #[prost(bytes = "vec", optional, tag = "4")]
+    pub content_encoding: Option<Vec<u8>>,
+    /// Sibling version tag assigned by the server.
+    #[prost(bytes = "vec", optional, tag = "5")]
+    pub vtag: Option<Vec<u8>>,
+    /// Typed object-to-object links.
+    #[prost(message, repeated, tag = "6")]
+    pub links: Vec<RpbLink>,
+    /// Last-modification time, whole seconds since the Unix epoch.
+    #[prost(uint32, optional, tag = "7")]
+    pub last_mod: Option<u32>,
+    /// Last-modification time, microsecond remainder.
+    #[prost(uint32, optional, tag = "8")]
+    pub last_mod_usecs: Option<u32>,
+    /// User-supplied metadata `(key, value)` pairs.
+    #[prost(message, repeated, tag = "9")]
+    pub usermeta: Vec<RpbPair>,
+    /// Secondary-index `(name, value)` pairs. `name` ends in `_int`
+    /// (integer index) or `_bin` (binary index).
+    #[prost(message, repeated, tag = "10")]
+    pub indexes: Vec<RpbPair>,
+    /// Whether this sibling is a tombstone.
+    #[prost(bool, optional, tag = "11")]
+    pub deleted: Option<bool>,
+}
+
+impl WireValue for RpbContent {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.RpbContent")
+    }
+}
+
 /// `RpbGetResp` -- response carrying zero or more sibling content
-/// records. The v0.0.1 slice models the response as opaque content
-/// bytes; full sibling materialisation lands with the `RiakObject`
-/// schema in a follow-up slice.
+/// records. Each [`RpbContent`] is one sibling value with its
+/// metadata (`content_type`, `links`, `indexes`, ...).
 #[derive(Clone, Eq, PartialEq, Message)]
 pub struct RpbGetResp {
-    /// Raw concatenated content bytes. The follow-up slice replaces
-    /// this single field with a repeated `RpbContent` once that
-    /// nested message is on the wire.
-    #[prost(bytes = "vec", repeated, tag = "1")]
-    pub content: Vec<Vec<u8>>,
+    /// Sibling content records. Empty when the key is absent.
+    #[prost(message, repeated, tag = "1")]
+    pub content: Vec<RpbContent>,
     /// Vector clock for the stored object.
     #[prost(bytes = "vec", optional, tag = "2")]
     pub vclock: Option<Vec<u8>>,
@@ -320,11 +429,13 @@ pub struct RpbPutReq {
     /// conditional updates.
     #[prost(bytes = "vec", optional, tag = "3")]
     pub vclock: Option<Vec<u8>>,
-    /// Object value bytes. The follow-up slice splits this into
-    /// `RpbContent { value, content_type, ... }`; for the v0.0.1
-    /// slice the body is an opaque blob.
-    #[prost(bytes = "vec", tag = "4")]
-    pub value: Vec<u8>,
+    /// Object content: value plus its metadata (`content_type`,
+    /// `links`, `indexes`, ...). Riak nests all per-object payload
+    /// in this single message at tag 4. The links carried here
+    /// persist onto the shared storage envelope, so a PBC put can
+    /// attach links natively and an HTTP get sees them.
+    #[prost(message, optional, tag = "4")]
+    pub content: Option<RpbContent>,
     /// Replica write count W.
     #[prost(uint32, optional, tag = "5")]
     pub w: Option<u32>,
@@ -361,20 +472,6 @@ pub struct RpbPutReq {
     /// Bucket type.
     #[prost(bytes = "vec", optional, tag = "16")]
     pub r#type: Option<Vec<u8>>,
-    /// Secondary-index entries to associate with this object.
-    /// Each [`RpbPair`] carries `(name, value)` where `name`
-    /// ends in `_int` (integer index) or `_bin` (binary index).
-    ///
-    /// In Riak's published schema this field lives nested inside
-    /// an `RpbContent` message at tag 4. The v0.0.1 slice models
-    /// the put body as a flat `value: bytes` (see
-    /// `docs/parity.md`); to keep the 2i path usable the index
-    /// list is exposed at a top-level tag here. The follow-up
-    /// slice that replaces `value` with `content: RpbContent`
-    /// will remove this field and forward to
-    /// `RpbContent.indexes` instead.
-    #[prost(message, repeated, tag = "100")]
-    pub indexes: Vec<RpbPair>,
 }
 
 impl WireValue for RpbPutReq {
@@ -386,10 +483,11 @@ impl WireValue for RpbPutReq {
 /// `RpbPutResp` -- response acknowledging a put.
 #[derive(Clone, Eq, PartialEq, Message)]
 pub struct RpbPutResp {
-    /// Optional content echoed back when the request asked for
-    /// `return_body` or `return_head`.
-    #[prost(bytes = "vec", repeated, tag = "1")]
-    pub content: Vec<Vec<u8>>,
+    /// Sibling content echoed back when the request asked for
+    /// `return_body` or `return_head`. Each [`RpbContent`] is one
+    /// sibling value with its metadata.
+    #[prost(message, repeated, tag = "1")]
+    pub content: Vec<RpbContent>,
     /// Updated vector clock.
     #[prost(bytes = "vec", optional, tag = "2")]
     pub vclock: Option<Vec<u8>>,
@@ -1021,7 +1119,17 @@ mod tests {
     #[test]
     fn get_resp_round_trips() {
         let resp = RpbGetResp {
-            content: vec![b"value-a".to_vec(), b"value-b".to_vec()],
+            content: vec![
+                RpbContent {
+                    value: b"value-a".to_vec(),
+                    content_type: Some(b"text/plain".to_vec()),
+                    ..RpbContent::default()
+                },
+                RpbContent {
+                    value: b"value-b".to_vec(),
+                    ..RpbContent::default()
+                },
+            ],
             vclock: Some(b"vclk".to_vec()),
             unchanged: Some(false),
         };
@@ -1036,7 +1144,15 @@ mod tests {
             bucket: b"users".to_vec(),
             key: Some(b"alice".to_vec()),
             vclock: Some(b"vclk".to_vec()),
-            value: b"hello".to_vec(),
+            content: Some(RpbContent {
+                value: b"hello".to_vec(),
+                content_type: Some(b"application/json".to_vec()),
+                indexes: vec![RpbPair {
+                    key: b"age_int".to_vec(),
+                    value: Some(b"42".to_vec()),
+                }],
+                ..RpbContent::default()
+            }),
             w: Some(2),
             dw: Some(1),
             return_body: Some(true),
@@ -1049,7 +1165,6 @@ mod tests {
             sloppy_quorum: None,
             n_val: Some(3),
             r#type: None,
-            indexes: Vec::new(),
         };
         let bytes = req.encode_to_vec();
         let back = RpbPutReq::decode(bytes.as_slice()).expect("decode");
@@ -1057,15 +1172,173 @@ mod tests {
     }
 
     #[test]
+    fn legacy_flat_value_put_migration() {
+        // Migration note: before this slice, RpbPutReq carried a flat
+        // `value: bytes` at tag 4 and a top-level `indexes` at tag
+        // 100. Tag 4 is now a nested `RpbContent` message (wire type
+        // 2, the same as the old bytes field). A legacy client that
+        // sends `value: bytes` at tag 4 therefore has those bytes
+        // re-interpreted as an `RpbContent` submessage on decode.
+        //
+        // Build the legacy wire shape explicitly and confirm the new
+        // decoder treats tag-4 bytes as a nested content message.
+        #[derive(Clone, PartialEq, ::prost::Message)]
+        struct LegacyPutReq {
+            #[prost(bytes = "vec", tag = "1")]
+            bucket: Vec<u8>,
+            #[prost(bytes = "vec", optional, tag = "2")]
+            key: Option<Vec<u8>>,
+            #[prost(bytes = "vec", tag = "4")]
+            value: Vec<u8>,
+            #[prost(message, repeated, tag = "100")]
+            indexes: Vec<RpbPair>,
+        }
+
+        // A legacy value whose bytes happen NOT to be a valid
+        // protobuf message fails to decode under the new schema. This
+        // is the documented, accepted break: dyniak is pre-1.0 and
+        // the prior slice flagged the RpbContent refactor as the
+        // planned breaking follow-up.
+        let legacy_bad = LegacyPutReq {
+            bucket: b"users".to_vec(),
+            key: Some(b"alice".to_vec()),
+            value: vec![0xff, 0xff, 0xff],
+            indexes: Vec::new(),
+        };
+        let bytes = legacy_bad.encode_to_vec();
+        assert!(
+            RpbPutReq::decode(bytes.as_slice()).is_err(),
+            "legacy flat value that is not a valid submessage is rejected"
+        );
+
+        // The top-level tag-100 indexes shim is gone; bytes carrying
+        // a tag-100 field are skipped by prost (unknown field), so an
+        // index set sent the old way is silently dropped under the
+        // new schema. A migrating client must move indexes into
+        // `content.indexes`.
+        let new_shape = RpbPutReq {
+            bucket: b"users".to_vec(),
+            key: Some(b"alice".to_vec()),
+            content: Some(RpbContent {
+                value: b"hello".to_vec(),
+                indexes: vec![RpbPair {
+                    key: b"age_int".to_vec(),
+                    value: Some(b"42".to_vec()),
+                }],
+                ..RpbContent::default()
+            }),
+            ..RpbPutReq::default()
+        };
+        let back = RpbPutReq::decode(new_shape.encode_to_vec().as_slice()).expect("decode");
+        let content = back.content.expect("content present");
+        assert_eq!(content.value, b"hello");
+        assert_eq!(content.indexes.len(), 1);
+    }
+
+    #[test]
     fn put_resp_round_trips() {
         let resp = RpbPutResp {
-            content: vec![b"echoed".to_vec()],
+            content: vec![RpbContent {
+                value: b"echoed".to_vec(),
+                ..RpbContent::default()
+            }],
             vclock: Some(b"vclk2".to_vec()),
             key: Some(b"alice".to_vec()),
         };
         let bytes = resp.encode_to_vec();
         let back = RpbPutResp::decode(bytes.as_slice()).expect("decode");
         assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn rpb_link_round_trips() {
+        let link = RpbLink {
+            bucket: Some(b"people".to_vec()),
+            key: Some(b"bob".to_vec()),
+            tag: Some(b"friend".to_vec()),
+        };
+        let bytes = link.encode_to_vec();
+        let back = RpbLink::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, link);
+
+        // Empty link (every field absent) encodes to nothing and
+        // round-trips to the default.
+        let empty = RpbLink::default();
+        assert!(empty.encode_to_vec().is_empty());
+        assert_eq!(RpbLink::decode([].as_slice()).expect("decode"), empty);
+    }
+
+    #[test]
+    fn rpb_content_round_trips_with_links_and_indexes() {
+        let content = RpbContent {
+            value: b"payload".to_vec(),
+            content_type: Some(b"text/plain".to_vec()),
+            links: vec![
+                RpbLink {
+                    bucket: Some(b"people".to_vec()),
+                    key: Some(b"bob".to_vec()),
+                    tag: Some(b"friend".to_vec()),
+                },
+                RpbLink {
+                    bucket: Some(b"work".to_vec()),
+                    key: Some(b"acme".to_vec()),
+                    tag: Some(b"employer".to_vec()),
+                },
+            ],
+            indexes: vec![RpbPair {
+                key: b"age_int".to_vec(),
+                value: Some(b"42".to_vec()),
+            }],
+            ..RpbContent::default()
+        };
+        let bytes = content.encode_to_vec();
+        let back = RpbContent::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, content);
+        assert_eq!(back.links.len(), 2);
+    }
+
+    #[test]
+    fn rpb_content_round_trips_empty_links() {
+        let content = RpbContent {
+            value: b"v".to_vec(),
+            ..RpbContent::default()
+        };
+        let bytes = content.encode_to_vec();
+        let back = RpbContent::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, content);
+        assert!(back.links.is_empty());
+    }
+
+    #[test]
+    fn rpb_content_carries_full_field_set() {
+        // Every published field is present so a conforming Riak
+        // client round-trips byte-for-byte.
+        let content = RpbContent {
+            value: b"v".to_vec(),
+            content_type: Some(b"text/plain".to_vec()),
+            charset: Some(b"utf-8".to_vec()),
+            content_encoding: Some(b"gzip".to_vec()),
+            vtag: Some(b"1a2b".to_vec()),
+            links: vec![RpbLink {
+                bucket: Some(b"b".to_vec()),
+                key: Some(b"k".to_vec()),
+                tag: Some(b"t".to_vec()),
+            }],
+            last_mod: Some(1_700_000_000),
+            last_mod_usecs: Some(123),
+            usermeta: vec![RpbPair {
+                key: b"meta".to_vec(),
+                value: Some(b"data".to_vec()),
+            }],
+            indexes: vec![RpbPair {
+                key: b"age_int".to_vec(),
+                value: Some(b"7".to_vec()),
+            }],
+            deleted: Some(false),
+        };
+        let bytes = content.encode_to_vec();
+        let back = RpbContent::decode(bytes.as_slice()).expect("decode");
+        assert_eq!(back, content);
     }
 
     #[test]

@@ -31,9 +31,9 @@ use dyniak::bucket_props::{BucketProps, BucketPropsRegistry};
 use dyniak::datatypes::keyfun::KeyFun;
 use dyniak::error::RiakError;
 use dyniak::proto::pb::{
-    read_frame, write_frame, Frame, MessageCode, RpbBucketProps, RpbGetBucketReq, RpbGetBucketResp,
-    RpbPutReq, RpbPutResp, RpbSetBucketReq, RpbSetBucketResp, CHASH_KEYFUN_BUCKETONLY,
-    REPLICATION_STRATEGY_SUCCESSORS,
+    read_frame, write_frame, Frame, MessageCode, RpbBucketProps, RpbContent, RpbGetBucketReq,
+    RpbGetBucketResp, RpbPutReq, RpbPutResp, RpbSetBucketReq, RpbSetBucketResp,
+    CHASH_KEYFUN_BUCKETONLY, REPLICATION_STRATEGY_SUCCESSORS,
 };
 #[cfg(feature = "wasm")]
 use dyniak::proto::pb::{RpbErrorResp, CHASH_KEYFUN_CUSTOM};
@@ -211,8 +211,10 @@ impl Harness {
             bucket: bucket.to_vec(),
             key: Some(key.to_vec()),
             vclock: None,
-            value: value.to_vec(),
-            indexes: Vec::new(),
+            content: Some(RpbContent {
+                value: value.to_vec(),
+                ..RpbContent::default()
+            }),
             r#type: None,
             ..RpbPutReq::default()
         }

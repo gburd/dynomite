@@ -70,7 +70,7 @@ use dynomite::msg::{Msg, MsgType};
 use crate::aae::status::{AaeStatusProvider, AaeStatusSnapshot, NoopAaeStatusProvider};
 use crate::error::RiakError;
 use crate::mapreduce::{MrError, PhaseBatch};
-use crate::proto::http::object::{HttpIndex, HttpObject};
+use crate::proto::http::object::{HttpIndex, HttpLink, HttpObject};
 use crate::proto::pb::framer::{read_frame, write_frame, Frame};
 use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 use crate::proto::pb::messages::{
@@ -78,11 +78,11 @@ use crate::proto::pb::messages::{
     DynRpbClusterCommitResp, DynRpbClusterJoinReq, DynRpbClusterJoinResp, DynRpbClusterLeaveReq,
     DynRpbClusterLeaveResp, DynRpbClusterPlanReq, DynRpbClusterPlanResp, DynRpbListPeersReq,
     DynRpbListPeersResp, DynRpbPeerInfo, DynRpbStagedChange, MessageCode, RpbBucketProps,
-    RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp, RpbGetReq, RpbGetResp,
-    RpbGetServerInfoResp, RpbIndexReq, RpbIndexResp, RpbListBucketsReq, RpbListBucketsResp,
-    RpbListKeysReq, RpbListKeysResp, RpbPingReq, RpbPingResp, RpbPutReq, RpbPutResp,
-    RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp, DYN_STAGED_CHANGE_ADD,
-    DYN_STAGED_CHANGE_REMOVE, INDEX_QUERY_TYPE_EQ, INDEX_QUERY_TYPE_RANGE,
+    RpbContent, RpbDelReq, RpbErrorResp, RpbGetBucketReq, RpbGetBucketResp, RpbGetReq, RpbGetResp,
+    RpbGetServerInfoResp, RpbIndexReq, RpbIndexResp, RpbLink, RpbListBucketsReq,
+    RpbListBucketsResp, RpbListKeysReq, RpbListKeysResp, RpbPair, RpbPingReq, RpbPingResp,
+    RpbPutReq, RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
+    DYN_STAGED_CHANGE_ADD, DYN_STAGED_CHANGE_REMOVE, INDEX_QUERY_TYPE_EQ, INDEX_QUERY_TYPE_RANGE,
 };
 use crate::router::{PeerOp, RoutingHooks};
 
@@ -595,19 +595,81 @@ fn handle_server_info(body: &[u8]) -> Result<Frame, RiakError> {
     ))
 }
 
-/// Extract the PBC content value from the canonical `HttpObject`
-/// storage form written by both transports.
+/// Build an [`RpbContent`] from the canonical `HttpObject` storage
+/// form written by both transports.
 ///
 /// The HTTP gateway and the PBC put path both persist an
 /// [`HttpObject`] protobuf blob, so a fetched value normally decodes
-/// to an envelope whose `value` field is the object payload. Bytes
-/// that predate the shared storage form (or that some other writer
-/// stored raw) fail to decode as an envelope; those are returned
-/// verbatim so a value never disappears on read.
-fn pbc_content_from_storage(stored: &[u8]) -> Vec<u8> {
+/// to an envelope carrying the object payload, its declared
+/// content-type, its 2i entries, and its links. Bytes that predate
+/// the shared storage form (or that some other writer stored raw)
+/// fail to decode as an envelope; those are returned as a bare
+/// `RpbContent` whose `value` is the raw bytes so a value never
+/// disappears on read.
+fn pbc_content_from_storage(stored: &[u8]) -> RpbContent {
     match HttpObject::from_storage_bytes(stored) {
-        Ok(obj) => obj.value,
-        Err(_) => stored.to_vec(),
+        Ok(obj) => RpbContent {
+            value: obj.value,
+            content_type: obj.content_type.map(String::into_bytes),
+            links: obj.links.iter().map(http_link_to_rpb).collect(),
+            indexes: obj
+                .indexes
+                .iter()
+                .map(|i| RpbPair {
+                    key: i.name.clone().into_bytes(),
+                    value: Some(i.value.clone().into_bytes()),
+                })
+                .collect(),
+            ..RpbContent::default()
+        },
+        Err(_) => RpbContent {
+            value: stored.to_vec(),
+            ..RpbContent::default()
+        },
+    }
+}
+
+/// Map a storage-form [`HttpLink`] (string fields) into the PBC
+/// [`RpbLink`] (optional-bytes fields). Empty components map to
+/// `None`, matching how a Riak client omits absent fields.
+fn http_link_to_rpb(link: &HttpLink) -> RpbLink {
+    let opt = |s: &str| {
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.as_bytes().to_vec())
+        }
+    };
+    RpbLink {
+        bucket: opt(&link.bucket),
+        key: opt(&link.key),
+        tag: opt(&link.tag),
+    }
+}
+
+/// Map a PBC [`RpbLink`] (optional-bytes fields) into a storage-form
+/// [`HttpLink`] (string fields).
+///
+/// `RpbLink` carries each component as `optional bytes`; `HttpLink`
+/// carries each as `String`. A missing component decodes to the
+/// empty string. Non-UTF-8 bytes are decoded lossily
+/// (`String::from_utf8_lossy`), matching the PBC 2i index path and
+/// the HTTP link-header path, both of which already treat link and
+/// index components as text. Lossy decoding can perturb a non-UTF-8
+/// link component on the round-trip; this is documented as a
+/// deliberate deviation in `docs/parity.md` (link components are
+/// expected to be valid UTF-8 in practice -- bucket and key names
+/// and `riaktag` values are text).
+fn rpb_link_to_http(link: &RpbLink) -> HttpLink {
+    let text = |b: &Option<Vec<u8>>| {
+        b.as_deref()
+            .map(|v| String::from_utf8_lossy(v).into_owned())
+            .unwrap_or_default()
+    };
+    HttpLink {
+        bucket: text(&link.bucket),
+        key: text(&link.key),
+        tag: text(&link.tag),
     }
 }
 
@@ -642,10 +704,12 @@ async fn handle_get(
     datastore.dispatch(routing).await?;
     // For datastores that implement the Riak K/V layer (today:
     // `NoxuDatastore`), fetch the object and emit it as a
-    // single-content `RpbGetResp`. Datastores that report
-    // `Unsupported` fall back to the legacy empty response so
-    // the `MemoryDatastore` trampoline continues to behave
-    // identically.
+    // single-content `RpbGetResp`. The `RpbContent` carries the
+    // object value, its content-type, its 2i entries, and its links
+    // (mapped from the stored `HttpObject`), so a PBC client reads
+    // links natively. Datastores that report `Unsupported` fall back
+    // to the empty response so the `MemoryDatastore` trampoline
+    // continues to behave identically.
     let resp = match datastore.riak_get(&req.bucket, &req.key).await {
         Ok(Some(v)) => RpbGetResp {
             content: vec![pbc_content_from_storage(&v)],
@@ -680,6 +744,10 @@ async fn handle_put(
             ));
         }
     };
+    // Riak nests the object payload in `RpbPutReq.content`
+    // (`RpbContent` at tag 4). A request that omits it stores an
+    // empty value, matching Riak's tolerance for a contentless put.
+    let content = req.content.clone().unwrap_or_default();
     if let Some(hooks) = hooks {
         let bucket_type = req.r#type.as_deref().unwrap_or(b"");
         let decision = match hooks.router.try_route(bucket_type, &req.bucket, &key) {
@@ -695,29 +763,31 @@ async fn handle_put(
                         bucket_type: decision.bucket_type.clone(),
                         bucket: req.bucket.clone(),
                         key: key.clone(),
-                        value: req.value.clone(),
+                        value: content.value.clone(),
                     },
                 )
                 .await;
         }
     }
-    let indexes: Vec<(Vec<u8>, Vec<u8>)> = req
+    let indexes: Vec<(Vec<u8>, Vec<u8>)> = content
         .indexes
         .iter()
         .filter_map(|p| p.value.as_ref().map(|v| (p.key.clone(), v.clone())))
         .collect();
     // Persist the PBC value in the same canonical `HttpObject`
     // storage form the HTTP gateway writes, so a put over one
-    // transport is readable over the other and so any links carried
-    // on the object survive. The PBC `RpbPutReq` has no link field,
-    // so a PBC put never adds links; it preserves whatever links a
-    // prior HTTP put attached only if the client re-sends them,
-    // which the flat PBC schema cannot express. Index pairs are
+    // transport is readable over the other. The links carried in
+    // `RpbContent.links` are mapped onto `HttpObject.links`, so a
+    // PBC put attaches links natively and an HTTP read re-emits them
+    // as `Link:` headers. Index pairs and the content-type are
     // mirrored onto the envelope so an HTTP read echoes them, matching
     // the HTTP put path.
     let envelope = HttpObject {
-        value: req.value.clone(),
-        content_type: None,
+        value: content.value.clone(),
+        content_type: content
+            .content_type
+            .as_deref()
+            .map(|c| String::from_utf8_lossy(c).into_owned()),
         indexes: indexes
             .iter()
             .map(|(n, v)| HttpIndex {
@@ -725,7 +795,7 @@ async fn handle_put(
                 value: String::from_utf8_lossy(v).into_owned(),
             })
             .collect(),
-        links: Vec::new(),
+        links: content.links.iter().map(rpb_link_to_http).collect(),
     };
     let storage = envelope.to_storage_bytes();
     match datastore
@@ -1603,7 +1673,10 @@ mod tests {
             RpbPutReq {
                 bucket: b"b".to_vec(),
                 key: Some(b"k".to_vec()),
-                value: b"v".to_vec(),
+                content: Some(RpbContent {
+                    value: b"v".to_vec(),
+                    ..RpbContent::default()
+                }),
                 ..RpbPutReq::default()
             }
             .encode_to_vec(),
