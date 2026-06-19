@@ -2,7 +2,7 @@
 //!
 //! This models the decision logic implemented in
 //! `crates/dynomite/src/msg/response_mgr.rs`
-//! ([`dynomite::msg::ResponseMgr`]) and the consistency fan-out chosen
+//! (`dynomite::msg::ResponseMgr`) and the consistency fan-out chosen
 //! in `crates/dynomite/src/cluster/dispatch.rs` /
 //! `crates/dynomite/src/cluster/pool.rs`. The production quorum size
 //! is `max_responses / 2 + 1` and a request is accepted once at least
@@ -27,7 +27,7 @@
 use stateright::{Model, Property};
 
 /// Consistency level under test. Mirrors the subset of
-/// [`dynomite::msg::ConsistencyLevel`] that drives the accept
+/// `dynomite::msg::ConsistencyLevel` that drives the accept
 /// threshold: `DC_ONE` accepts on one ack; the quorum levels accept on
 /// a majority.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -49,10 +49,10 @@ pub enum Reply {
     Err,
 }
 
-/// Aggregated decision -- mirrors [`dynomite::msg::QuorumOutcome`]
+/// Aggregated decision -- mirrors `dynomite::msg::QuorumOutcome`
 /// collapsed to the accept / reject / pending distinction the client
 /// observes.
-/// Aggregated decision -- mirrors [`dynomite::msg::QuorumOutcome`]
+/// Aggregated decision -- mirrors `dynomite::msg::QuorumOutcome`
 /// collapsed to the accept / reject / pending distinction the client
 /// observes.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]

@@ -2,7 +2,7 @@
 //!
 //! This models the routing implemented in
 //! `crates/dynomite/src/cluster/vnode.rs`
-//! ([`dynomite::cluster::vnode::dispatch`]). A ring is a sorted list
+//! (`dynomite::cluster::vnode::dispatch`). A ring is a sorted list
 //! of `(token, owner)` continuum points. A key hashes to a token; the
 //! primary owner is the smallest continuum point whose token is at
 //! least the key's, wrapping to the first point when the key exceeds
@@ -53,7 +53,7 @@ impl Ring {
     }
 
     /// Primary owner of `key`, mirroring
-    /// [`dynomite::cluster::vnode::dispatch`]: the smallest token
+    /// `dynomite::cluster::vnode::dispatch`: the smallest token
     /// greater than or equal to `key`, wrapping to the first point on
     /// overflow.
     #[must_use]

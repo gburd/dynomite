@@ -2,7 +2,7 @@
 //!
 //! This models the dissemination implemented in
 //! `crates/dynomite/src/cluster/gossip.rs`
-//! ([`dynomite::cluster::gossip::GossipState::add_or_update`]). Each
+//! (`dynomite::cluster::gossip::GossipState::add_or_update`). Each
 //! node holds a view of one peer's state as a `(version, state)` pair;
 //! the merge rule is last-writer-wins on the version (the production
 //! `ts_secs` timestamp): a node adopts an incoming view only when its

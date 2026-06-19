@@ -2,9 +2,9 @@
 //!
 //! This models the protocol implemented in
 //! `crates/dyniak/src/datastore/xa.rs`
-//! ([`dyniak::datastore::xa::XaCoordinator::execute`]) and its
+//! (`dyniak::datastore::xa::XaCoordinator::execute`) and its
 //! cross-node leg in `crates/dyniak/src/datastore/xa_net.rs`
-//! ([`dyniak::datastore::xa_net::CrossNodeCoordinator`]). The abstract
+//! (`dyniak::datastore::xa_net::CrossNodeCoordinator`). The abstract
 //! state machine reproduces the same decision logic the production
 //! coordinator and peer handler run:
 //!
