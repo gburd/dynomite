@@ -7,9 +7,8 @@
 //! field (either a one-byte placeholder or an RSA-wrapped AES key),
 //! and the byte length of the payload that follows after `\r\n`.
 //!
-//! The reference engine implements the parser as a single state
-//! machine driven byte-by-byte. This module ports the same machine
-//! into safe Rust and exposes:
+//! The parser is a single state machine driven byte-by-byte. This
+//! module exposes:
 //!
 //! * [`DynParseState`] - the parser's state alphabet.
 //! * [`DmsgType`] - the full set of message-type discriminators.
@@ -26,13 +25,13 @@
 //! the caller provides the bytes the inline data field should hold
 //! (the RSA-wrapped AES key produced by [`crate::crypto::Crypto`]).
 //! When absent, the encoder writes the single-byte `'d'` placeholder
-//! the reference engine emits after the first handshake message.
+//! used after the first handshake message.
 
 // The parser truncates accumulated decimals into the same fixed
-// bit widths the reference engine uses on the wire (`u8` for the
-// type and flags, `u32` for the data and payload lengths). The
-// allowance keeps the Rust port faithful to the C `(uint8_t)num`
-// and `(uint32_t)num` casts; out-of-range numerals are surfaced as
+// bit widths the wire format uses (`u8` for the type and flags,
+// `u32` for the data and payload lengths). The allowance covers
+// these intentional `as u8` / `as u32` casts; out-of-range numerals
+// are surfaced as
 // parse errors elsewhere in the state machine.
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::needless_continue)]
@@ -47,8 +46,7 @@ use crate::msg::message::MsgParseResult;
 /// Magic literal that opens every DNODE header.
 pub const MAGIC: &[u8] = b"$2014$";
 
-/// Default protocol version emitted by [`dmsg_write`]. Mirrors
-/// `VERSION_10` in the reference engine.
+/// Default protocol version emitted by [`dmsg_write`] (version 10).
 pub const VERSION_10: u8 = 1;
 
 /// CRLF delimiter that separates the DNODE header from its payload.
@@ -84,9 +82,8 @@ pub const MAX_DATA_LEN: u64 = 256 * 1024 * 1024;
 
 /// Parser state transitions.
 ///
-/// Each variant matches a state in the reference engine's
-/// `dyn_parse_state_t`. The numeric values match the C enum's
-/// numeric values to keep external parity tooling honest.
+/// Each variant is one state of the DNODE frame parser. The numeric
+/// values are stable so external parity tooling can compare them.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum DynParseState {
     /// Initial state; consumes leading whitespace until the magic
@@ -127,8 +124,8 @@ pub enum DynParseState {
 
 /// DNODE message type identifier.
 ///
-/// The numeric values match `dmsg_type_t` from the reference engine
-/// because the discriminator travels on the wire as a decimal.
+/// The numeric values are stable wire discriminators
+/// because the type travels on the wire as a decimal.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
 #[repr(u8)]
 pub enum DmsgType {
@@ -288,8 +285,9 @@ pub struct Dmsg {
     pub version: u8,
     /// True when sender and receiver share a datacenter.
     pub same_dc: bool,
-    /// Source address recorded by the recv path. Stage 7 leaves it
-    /// `None`; Stage 9 stamps it from the connection state.
+    /// Source address recorded by the recv path. The parser leaves
+    /// it `None`; a caller with the connection state may stamp it
+    /// after parsing.
     pub source_address: Option<SocketAddr>,
     /// Length (in bytes) of the inline data field.
     pub mlen: u32,
@@ -304,8 +302,7 @@ pub struct Dmsg {
 }
 
 impl Dmsg {
-    /// Construct an empty `Dmsg` defaulted the same way the
-    /// reference engine's `dmsg_get` initialises a fresh slot.
+    /// Construct an empty `Dmsg` with all fields at their defaults.
     ///
     /// # Examples
     ///
@@ -498,9 +495,9 @@ impl DnodeParser {
     ///     other => panic!("unexpected: {other:?}"),
     /// }
     /// ```
-    /// The state machine intentionally stays in one function to
-    /// match the reference engine's single-block parser; splitting
-    /// the per-state arms across helpers would obscure the parity.
+    /// The state machine intentionally stays in one function:
+    /// splitting the per-state arms across helpers would obscure
+    /// the byte-by-byte control flow.
     #[allow(clippy::too_many_lines)]
     pub fn step(&mut self, input: &[u8]) -> ParseStep {
         let mut idx = 0usize;
@@ -508,8 +505,7 @@ impl DnodeParser {
             let ch = input[idx];
             match self.state {
                 DynParseState::Start => {
-                    // Phase 1: skip leading whitespace, identical
-                    // to the C engine's `while (ch == ' ')` arm.
+                    // Phase 1: skip leading whitespace.
                     if self.magic_progress == 0 {
                         if ch == b' ' {
                             idx += 1;
@@ -547,10 +543,8 @@ impl DnodeParser {
                     // space terminates the field but only when the
                     // byte immediately
                     // before it was a digit. Anything else is
-                    // rejected (the C engine resets to DYN_START
-                    // and lets the recovery path retry; the Rust
-                    // streaming parser surfaces an error so the
-                    // caller can drop the buffer).
+                    // rejected: the streaming parser surfaces an
+                    // error so the caller can drop the buffer.
                     if ch.is_ascii_digit() {
                         self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
                         self.prev_was_digit = true;
@@ -783,9 +777,9 @@ pub fn dmsg_write(
 
 /// Encode a gossip-flavored DNODE header.
 ///
-/// Mirrors the reference engine's `dmsg_write_mbuf`, which differs
-/// from [`dmsg_write`] only in the placeholder byte emitted when no
-/// AES key payload accompanies the header (`'a'` instead of `'d'`).
+/// Differs from [`dmsg_write`] only in the placeholder byte emitted
+/// when no AES key payload accompanies the header (`'a'` instead of
+/// `'d'`).
 ///
 /// # Examples
 ///
@@ -883,8 +877,9 @@ fn write_chain(mbuf: &mut Mbuf, payload: &[u8]) -> Result<(), DnodeError> {
 /// returns `MsgParseResult::Again`. On invalid bytes the parser
 /// records `MsgParseResult::Error` and surfaces the same value.
 ///
-/// The async wrapping (per-connection task scheduling, decryption
-/// hand-off when the encryption bit is set) ships in Stage 9.
+/// This is the synchronous header parser. The async wrapping
+/// (per-connection task scheduling, decryption hand-off when the
+/// encryption bit is set) is driven by [`crate::net`].
 ///
 /// # Examples
 ///
@@ -933,10 +928,9 @@ pub fn parse_rsp(msg: &mut Msg) -> MsgParseResult {
 
 fn parse_msg(msg: &mut Msg, _is_response: bool) -> MsgParseResult {
     // Flatten the chain into a single buffer for parsing. The
-    // reference engine walks the chain byte by byte and tolerates
-    // splits at arbitrary boundaries; the Rust port drives the same
-    // state machine over a contiguous slice. Stage 9 will replace
-    // this with a streaming feed when the connection FSM lands.
+    // parser tolerates splits at arbitrary boundaries, but this
+    // entry point drives the state machine over one contiguous
+    // slice rather than streaming chunk by chunk.
     let mut bytes: Vec<u8> = Vec::with_capacity(msg.mbufs().total_len());
     for mbuf in msg.mbufs() {
         bytes.extend_from_slice(mbuf.readable());
@@ -978,13 +972,13 @@ pub enum DmsgDispatch {
     Forward,
 }
 
-/// Stage 7 dispatcher: classify a parsed [`Dmsg`] as
-/// control-plane traffic the cluster layer should consume directly,
-/// or data-plane traffic that should continue through the protocol
-/// stack.
+/// Classify a parsed [`Dmsg`] as control-plane traffic the cluster
+/// layer should consume directly (`Bypass`), or data-plane traffic
+/// that should continue through the protocol stack (`Forward`).
 ///
-/// Stage 10 will extend this with the gossip-message decoders. For
-/// now, only the message-shape side of the dispatch is in place.
+/// This decides the message-shape routing only; decoding the
+/// forwarded gossip variants into cluster events is done by the
+/// cluster layer, not here.
 ///
 /// # Examples
 ///
@@ -1008,10 +1002,10 @@ pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
     // GOSSIP_SYN, and GOSSIP_SYN_REPLY short-circuit; the other
     // gossip variants (ACK, DIGEST_SYN, DIGEST_ACK, DIGEST_ACK2,
     // SHUTDOWN) fall through to the default branch and are
-    // forwarded to the cluster handlers (which Stage 10 will wire
-    // up). HANDOFF_CHUNK frames are control-plane traffic for
-    // the explicit handoff coordinator and bypass the data-plane
-    // stack alongside the crypto / gossip handshake variants.
+    // forwarded to the cluster handlers. HANDOFF_CHUNK frames are
+    // control-plane traffic for the explicit handoff coordinator
+    // and bypass the data-plane stack alongside the crypto / gossip
+    // handshake variants.
     match dmsg.ty {
         DmsgType::CryptoHandshake
         | DmsgType::GossipSyn
@@ -1029,8 +1023,8 @@ pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
 }
 
 /// Drain `chain` into a contiguous `Vec<u8>` recycling each chunk
-/// back to `pool`. Useful for tests and for the Stage 9 path that
-/// needs a flat buffer of decrypted payload bytes.
+/// back to `pool`. Useful for tests and for callers that need a
+/// flat buffer of decrypted payload bytes.
 pub fn flatten_chain(chain: &mut MbufQueue) -> Vec<u8> {
     let mut out = Vec::with_capacity(chain.total_len());
     while let Some(buf) = chain.pop_front() {

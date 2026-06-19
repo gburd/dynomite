@@ -1,19 +1,16 @@
 //! Pseudo-random integer source used by the `random` distribution.
 //!
-//! The C reference seeds glibc `srandom` with `time(NULL)` and dispatches
-//! requests to live servers using `random() % ncontinuum`. We replace
-//! that with a small, deterministic-when-seeded LCG so the engine does
-//! not depend on libc's BSD `random()` family.
+//! Requests to live servers are dispatched using `random_index() %
+//! ncontinuum`, backed by a small, deterministic-when-seeded LCG so
+//! the engine does not depend on libc's BSD `random()` family.
 //!
 //! The default seed is drawn from `SystemTime::now()` (nanoseconds
-//! since the Unix epoch). PLAN.md Stage 3 originally suggested
-//! `clock_gettime(CLOCK_MONOTONIC)` for symmetry with the C `time(0)`
-//! seeding; the chosen `SystemTime` source achieves the same goal
-//! (per-process seed entropy) without requiring the `time` cargo
-//! feature on the `nix` workspace dependency. The choice is documented
-//! as a deviation in `docs/parity.md` and pinned by a regression
-//! test, so any future move to a monotonic source is an intentional
-//! change rather than a drift.
+//! since the Unix epoch), which gives per-process seed entropy
+//! without requiring the `time` cargo feature on the `nix`
+//! workspace dependency. The choice is documented as a deviation in
+//! `docs/parity.md` and pinned by a regression test, so any future
+//! move to a monotonic source is an intentional change rather than a
+//! drift.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

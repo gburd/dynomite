@@ -28,10 +28,9 @@ pub enum ReconcileOutcome {
 
 /// Reconcile a per-replica response set for `rspmgr`.
 ///
-/// `consistency` is the request's configured consistency level
-/// (the reference engine reads `rspmgr->msg->consistency`; the
-/// Rust port takes it explicitly so [`ResponseMgr`] does not need
-/// to carry the field).
+/// `consistency` is the request's configured consistency level,
+/// passed explicitly so [`ResponseMgr`] does not need to carry the
+/// field.
 ///
 /// # Examples
 ///

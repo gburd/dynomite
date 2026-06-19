@@ -6,7 +6,7 @@
 //! default (on Linux, the `/proc/sys/net/ipv6/bindv6only` knob,
 //! usually `0`).
 //!
-//! The Stage 9 Rust wiring uses [`socket2::Socket`] to open the
+//! The listener uses [`socket2::Socket`] to open the
 //! socket explicitly so the engine can:
 //!
 //! * bind to a single address family when the YAML specified a
@@ -47,7 +47,7 @@ pub struct BindOptions {
     /// `SO_REUSEADDR`. Defaults to `true`.
     pub reuseaddr: bool,
     /// TCP listen backlog. Defaults to `1024`. The configured pool
-    /// `backlog` knob (Stage 4) feeds this field at startup.
+    /// `backlog` knob feeds this field at startup.
     pub backlog: i32,
 }
 

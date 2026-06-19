@@ -5,11 +5,9 @@ fn get16(d: &[u8]) -> u32 {
     u32::from(u16::from_le_bytes([d[0], d[1]]))
 }
 
-/// Paul Hsieh's "SuperFastHash". Reproduces the byte-by-byte
-/// implementation that the C source falls back to on every platform
-/// other than 32-bit GCC (the only path that takes the unaligned-read
-/// shortcut). On a little-endian host the two paths produce the same
-/// result.
+/// Paul Hsieh's "SuperFastHash". Implemented as the byte-by-byte
+/// variant; on a little-endian host this produces the same result
+/// as the unaligned-read variant.
 pub(super) fn hash(key: &[u8]) -> DynToken {
     if key.is_empty() {
         return DynToken::from_u32(0);

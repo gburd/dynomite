@@ -1,10 +1,9 @@
 //! Leveled logger built on `tracing` + `tracing-subscriber`.
 //!
-//! The Dynomite C engine uses an integer log level on the `-v` command
-//! line (`LOG_EMERG = 0` ... `LOG_PVERB = 11`). The Rust port preserves
-//! the numeric scale exactly: callers pass the same 0..11 verbosity and
-//! [`tracing_level_for`] maps it onto the underlying `tracing` level
-//! filter.
+//! The `-v` command-line flag selects an integer log level
+//! (`LOG_EMERG = 0` ... `LOG_PVERB = 11`). Callers pass the
+//! numeric 0..11 verbosity and [`tracing_level_for`] maps it onto
+//! the underlying `tracing` level filter.
 //!
 //! On startup, [`log_init`] installs a global [`tracing_subscriber`]
 //! that writes to either standard error or to a configurable log file.

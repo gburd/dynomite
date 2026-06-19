@@ -1,9 +1,9 @@
 //! DNS-backed seeds provider.
 //!
-//! The reference engine issues a `T_TXT` query (or `T_A` when
+//! The provider issues a `T_TXT` query (or `T_A` when
 //! `DYNOMITE_DNS_TYPE=A`) against `_dynomite.<host>` and returns
 //! each TXT record's contents (or one synthesised seed per A
-//! record). The Rust port abstracts the resolver behind the
+//! record). The resolver is abstracted behind the
 //! [`Resolver`] trait so the unit test can drive a deterministic
 //! in-memory resolver. The caller is expected to wire
 //! `tokio::net::lookup_host` (or a similar resolver) when

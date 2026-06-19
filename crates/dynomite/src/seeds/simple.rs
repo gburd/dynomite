@@ -1,7 +1,7 @@
 //! `SimpleSeedsProvider` - the default, in-memory provider.
 //!
-//! Returns the seeds parsed at YAML load time. Mirrors the
-//! reference engine's behaviour when `dyn_seed_provider:` is set
+//! Returns the seeds parsed at YAML load time. This is the
+//! behaviour when `dyn_seed_provider:` is set
 //! to `simple_provider` (or unset): the seeds list comes straight
 //! from `dyn_seeds:`.
 //!

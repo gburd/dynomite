@@ -13,7 +13,7 @@
 //! * the on-the-wire [codec](wire) the engine's DNODE plane
 //!   uses to fan a query out to every primary peer.
 //!
-//! The crate is designed to be wired into a Dynomite
+//! The crate wires into a Dynomite
 //! [`ServerBuilder`] via the
 //! [`CommandExtension`]
 //! hook. The [`install`] helper does this in one call;

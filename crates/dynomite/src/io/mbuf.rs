@@ -1,26 +1,26 @@
 //! Pooled fixed-size byte buffers.
 //!
-//! The C engine uses chained `struct mbuf` chunks for every connection's
-//! read and write paths. Each chunk has a read cursor (`pos`), a write
-//! cursor (`last`), a writable end boundary (`end`), and an extra
-//! trailing region (`end_extra`) that downstream code uses for crypto
-//! padding and overflow guards. Chunks are recycled through a global
-//! free list so steady-state traffic does not call into the allocator.
+//! Connection read and write paths use chained fixed-size byte
+//! chunks. Each chunk has a read cursor (`pos`), a write cursor
+//! (`last`), a writable end boundary (`end`), and an extra trailing
+//! region (`end_extra`) that downstream code uses for crypto padding
+//! and overflow guards. Chunks are recycled through a free list so
+//! steady-state traffic does not call into the allocator.
 //!
-//! This module reproduces the same shape in safe Rust:
+//! The pieces:
 //!
 //! * [`Mbuf`] owns a [`Box<[u8]>`] of `chunk_size` bytes plus the four
 //!   cursors that track readable, writable, and reserved regions.
-//! * [`MbufQueue`] is a tail-queue of chunks. The C list head is
-//!   `struct mhdr`; the Rust container is a [`VecDeque`].
+//! * [`MbufQueue`] is a tail-queue of chunks, backed by a
+//!   [`VecDeque`].
 //! * [`MbufPool`] owns the recycled buffers behind a parking-lot
 //!   mutex and is shared across worker tasks via [`Arc`].
 //!
 //! The default chunk size is [`MBUF_SIZE`] (16 KiB), tunable through
 //! [`MbufPool::new`]. The configurable range is
 //! `[MBUF_MIN_SIZE, MBUF_MAX_SIZE]`. The trailing [`MBUF_ESIZE`] bytes
-//! of every chunk are reserved for the crypto MAC region used by Stage
-//! 13 traffic; normal writes stop at [`Mbuf::capacity`].
+//! of every chunk are reserved for the crypto MAC region; normal
+//! writes stop at [`Mbuf::capacity`].
 //!
 //! # Examples
 //!
@@ -64,11 +64,10 @@ pub const MBUF_ESIZE: usize = 16;
 /// Maximum number of free chunks the pool retains before dropping
 /// returned buffers on the floor.
 ///
-/// The C engine has no hard cap on the free list because the worker
-/// loop bounds the working set implicitly. The Rust port adds an
-/// upper bound so a misbehaving caller cannot drive unbounded memory
-/// growth. The default tracks the connection-budget order-of-magnitude
-/// the reference docs cite (4096 connections * 4 chunks per direction).
+/// An upper bound on the free list keeps a misbehaving caller from
+/// driving unbounded memory growth. The default tracks a
+/// connection-budget order-of-magnitude (4096 connections * 4 chunks
+/// per direction).
 pub const MBUF_POOL_MAX_FREE: usize = 16384;
 
 /// Connection identifier carried by an mbuf to mark the conn that owns
@@ -107,8 +106,7 @@ pub const MBUF_FLAG_JUST_DECRYPTED: u32 = 0x0000_0002;
 impl Mbuf {
     /// Allocate a fresh chunk of the given total size. Used by the
     /// pool to fill its free list and by callers that need a one-off
-    /// non-pooled buffer (the Stage 13 entropy path is a planned
-    /// consumer).
+    /// non-pooled buffer.
     ///
     /// `chunk_size` must be in `[MBUF_MIN_SIZE, MBUF_MAX_SIZE]`.
     ///
@@ -165,9 +163,8 @@ impl Mbuf {
     }
 
     /// Total byte addressable region including the trailing extra
-    /// area, equal to `chunk_size`. Mirrors `mbuf_full_data_size` from
-    /// the Stage 2 plan and the underlying `end_extra` boundary in the
-    /// C struct.
+    /// area, equal to `chunk_size`. This spans past the
+    /// [`Mbuf::capacity`] write boundary up to the `end_extra` edge.
     ///
     /// # Examples
     ///
@@ -456,8 +453,7 @@ impl std::fmt::Debug for Mbuf {
     }
 }
 
-/// Tail-queue of mbufs. Mirrors the C `struct mhdr` head and the
-/// `STAILQ_*` macros that operated on it.
+/// Tail-queue of mbufs.
 ///
 /// The container is a [`VecDeque`]; insertion at either end is O(1).
 ///
@@ -506,9 +502,7 @@ impl MbufQueue {
         self.inner.push_front(mbuf);
     }
 
-    /// Remove and return the head buffer. Mirrors `mbuf_remove`
-    /// applied to the head; the C API allowed removing from any
-    /// position, but every reference call site removed the head.
+    /// Remove and return the head buffer.
     pub fn pop_front(&mut self) -> Option<Mbuf> {
         self.inner.pop_front()
     }
@@ -579,8 +573,7 @@ impl MbufQueue {
 /// to the stash up to [`MBUF_POOL_MAX_FREE`]; chunks beyond that cap
 /// are dropped.
 ///
-/// The pool tracks total live and free counts for diagnostics, mirroring
-/// the C `mbuf_alloc_get_count` / `mbuf_free_queue_size` accessors.
+/// The pool tracks total live and free counts for diagnostics.
 #[derive(Clone)]
 pub struct MbufPool {
     inner: Arc<MbufPoolInner>,
@@ -697,14 +690,13 @@ impl MbufPool {
         }
     }
 
-    /// Number of chunks currently sitting in the free list. Mirrors
-    /// `mbuf_free_queue_size`.
+    /// Number of chunks currently sitting in the free list.
     pub fn free_count(&self) -> usize {
         self.inner.state.lock().free.len()
     }
 
     /// Lifetime count of fresh allocations performed by the pool.
-    /// Mirrors `mbuf_alloc_get_count`. Useful for tests asserting
+    /// Useful for tests asserting
     /// that recycling avoids the allocator path.
     pub fn total_allocated(&self) -> u64 {
         self.inner.state.lock().total_allocated

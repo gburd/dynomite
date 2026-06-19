@@ -136,8 +136,8 @@ impl ServerBuilder {
 
     /// Override the pool name supplied to [`Self::new`].
     ///
-    /// The C reference accepts only one pool per `Config`, so the
-    /// pool name is part of the constructor for ergonomics. This
+    /// A `Config` holds exactly one pool, so the pool name is part
+    /// of the constructor for ergonomics. This
     /// setter exists so callers that build a [`ServerBuilder`]
     /// from a default-named template (`"dyn_o_mite"`) can rename
     /// the pool without rebuilding the chain. Recorded as

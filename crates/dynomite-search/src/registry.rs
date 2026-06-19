@@ -2,7 +2,7 @@
 //!
 //! [`VectorRegistry`] is the per-server map of index name to
 //! [`VectorTable`]. It is the single source of truth that the
-//! FT.* command handlers (Phase C) will consult to dispatch
+//! FT.* command handlers in [`crate::ft`] consult to dispatch
 //! `FT.CREATE` / `FT.SEARCH` / `FT.INFO` / `FT.DROPINDEX`.
 //!
 //! Concurrency model:

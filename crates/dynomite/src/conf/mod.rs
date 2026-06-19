@@ -96,8 +96,8 @@ pub fn is_dyniak_supported() -> bool {
 
 /// Top-level configuration value: a single named [`ConfPool`].
 ///
-/// The YAML document mirrors the C reference: a top-level mapping with
-/// exactly one key, the pool name, whose value is the pool body.
+/// The YAML document is a top-level mapping with exactly one key,
+/// the pool name, whose value is the pool body.
 #[derive(Debug, Clone)]
 pub struct Config {
     pool_name: String,

@@ -6,11 +6,11 @@
 //!
 //! # Field-tag stability
 //!
-//! Tag numbers match Riak's published `riak_dt.proto`. Tags
-//! reserved for nested message types not modelled in this slice
-//! (`MapOp`, `MapEntry`, `MapField`) are left as gaps; `prost`
-//! skips them on decode and the gap preserves the schema's wire
-//! tag invariants.
+//! Tag numbers match Riak's published `riak_dt.proto`. The map
+//! datatype's nested message types (`MapOp`, `MapEntry`,
+//! `MapField`) are modelled here; `prost` skips any tag without a
+//! Rust field on decode, preserving the schema's wire tag
+//! invariants.
 //!
 //! # Datatype enum encoding
 //!
@@ -349,8 +349,8 @@ impl WireValue for GSetOp {
 /// `DtOp` -- one of the per-type operation payloads.
 ///
 /// At most one of the optional fields is present; the field that
-/// is set names the datatype the request targets. Tag 3
-/// (`map_op`) is reserved for the map slice.
+/// is set names the datatype the request targets. Tag 3 carries
+/// the boxed [`MapOp`] for map operations.
 #[derive(Clone, Eq, PartialEq, Message)]
 pub struct DtOp {
     /// Counter operation.
@@ -379,8 +379,8 @@ impl WireValue for DtOp {
 /// `DtValue` -- per-type stored value envelope.
 ///
 /// Exactly one field carries the projection that matches the
-/// enclosing response's `type` field. Tag 3 (`map_value`) is
-/// reserved for the map slice.
+/// enclosing response's `type` field. Tag 3 (`map_value`) carries
+/// the boxed [`MapValue`] for map projections.
 #[derive(Clone, Eq, PartialEq, Message)]
 pub struct DtValue {
     /// Counter projection.

@@ -1,21 +1,15 @@
 //! Node snitch: environment-driven address resolution and rack
 //! proximity helpers.
 //!
-//! The reference engine's snitch module is intentionally small:
-//! it caches the local node's broadcast address, public hostname,
-//! public IPv4, and private IPv4, looked up from environment
-//! variables (`EC2_*` in the AWS environment, plain
-//! `PUBLIC_*`/`LOCAL_IPV4` otherwise) with a fallback to the
-//! first peer's name. The proximity ordering used by the
-//! dispatcher (`pick_target_rack`, `rack_distance`) is not part
-//! of the reference snitch unit at all; the reference engine's
-//! only DC/rack proximity decision lives in the peer-side
-//! `preselect_remote_rack_for_replication` routine. Per AGENTS.md
-//! non-negotiable #6 we honor that source: this module ports the
-//! env-var/hostname helpers and adds a small set of pure
-//! rack-distance utilities used by [`crate::cluster::dispatch`].
-//! The proximity helpers are flagged as a Stage-10 deviation in
-//! `docs/parity.md` because the original brief asked for them.
+//! The snitch is intentionally small: it caches the local node's
+//! broadcast address, public hostname, public IPv4, and private
+//! IPv4, looked up from environment variables (`EC2_*` in the AWS
+//! environment, plain `PUBLIC_*`/`LOCAL_IPV4` otherwise) with a
+//! fallback to the first peer's name. The proximity ordering used
+//! by the dispatcher (`pick_target_rack`, `rack_distance`) is
+//! provided here as a small set of pure rack-distance utilities
+//! used by [`crate::cluster::dispatch`]. The proximity helpers are
+//! recorded as a deviation in `docs/parity.md`.
 //!
 //! # Examples
 //!
@@ -28,8 +22,7 @@
 
 use std::env;
 
-/// Default environment string the reference engine treats as
-/// "non-AWS" (mirrors `CONF_DEFAULT_ENV`).
+/// Default environment string treated as "non-AWS".
 pub const DEFAULT_ENV: &str = "aws";
 
 /// Coarse-grained proximity classification used by the dispatcher
@@ -134,8 +127,8 @@ pub fn is_aws_env(env_label: &str) -> bool {
 }
 
 /// Look up the broadcast address from environment variables, then
-/// fall back to `peer_name_fallback` (the first peer's name in the
-/// reference engine).
+/// fall back to `peer_name_fallback` (typically the first peer's
+/// name).
 ///
 /// Mirrors `get_broadcast_address`.
 ///
@@ -212,9 +205,8 @@ pub fn public_ip4(
     }
 }
 
-/// Look up the private IPv4 address; mirrors `get_private_ip4`.
-/// Returns `None` when neither environment variable is set (the
-/// reference engine returns `NULL` in that case).
+/// Look up the private IPv4 address.
+/// Returns `None` when neither environment variable is set.
 pub fn private_ip4(
     env_label: &str,
     lookup_env: &mut dyn FnMut(&str) -> Option<String>,

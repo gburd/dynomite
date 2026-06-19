@@ -1,23 +1,16 @@
 //! Fixed-size SPSC ring buffer.
 //!
-//! The C engine uses the header-only `dyn_cbuf.h` macro family
-//! (`CBUF_Init`, `CBUF_Push`, `CBUF_Pop`, `CBUF_IsEmpty`,
-//! `CBUF_IsFull`) for the producer-single-consumer rings that connect
-//! the worker, gossip, and entropy threads. The macros require a
-//! power-of-two capacity smaller than the index type and a fixed
-//! element type chosen at compile time.
-//!
-//! The Rust port keeps the same shape with a generic [`CBuf<T>`] that
-//! wraps [`crossbeam_queue::ArrayQueue`]. `ArrayQueue` is a lock-free
-//! MPMC ring; the SPSC use case is the strictest restriction of MPMC,
-//! so the same container serves both. The crate is allocation-free on
-//! the hot path and is implemented entirely with safe Rust at the
+//! [`CBuf<T>`] is a bounded single-producer single-consumer ring used
+//! for the rings that connect the worker, gossip, and entropy
+//! threads. It wraps [`crossbeam_queue::ArrayQueue`], a lock-free
+//! MPMC ring; the SPSC use case is the strictest restriction of
+//! MPMC, so the same container serves both. It is allocation-free on
+//! the hot path and implemented entirely with safe Rust at the
 //! consumer boundary, so the workspace's `forbid(unsafe_code)` lint
 //! stays in effect.
 //!
 //! Capacity does not need to be a power of two; `ArrayQueue` accepts
-//! any non-zero `usize`. Callers porting the C macros should pass the
-//! same constant they used for `cbuf##_SIZE`.
+//! any non-zero `usize`.
 //!
 //! # Examples
 //!
@@ -37,11 +30,10 @@ use crossbeam_queue::ArrayQueue;
 
 /// Bounded SPSC ring queue.
 ///
-/// `CBuf` mirrors the contract of the C `CBUF_*` macro family while
-/// remaining safe to use across multiple producers or consumers (the
-/// underlying `ArrayQueue` is MPMC). A new ring of capacity `N` admits
-/// up to `N` elements before [`push`](Self::push) starts returning
-/// `Err`.
+/// `CBuf` is a bounded ring that remains safe to use across multiple
+/// producers or consumers (the underlying `ArrayQueue` is MPMC). A
+/// new ring of capacity `N` admits up to `N` elements before
+/// [`push`](Self::push) starts returning `Err`.
 pub struct CBuf<T> {
     inner: ArrayQueue<T>,
 }
@@ -73,10 +65,9 @@ impl<T> CBuf<T> {
     }
 
     /// Append an element. Returns `Err(item)` when the ring is full,
-    /// echoing `try_send` on bounded channels. Mirrors `CBUF_Push`
-    /// (the C version overwrites silently on overflow; the Rust
-    /// version reports the failure so callers cannot lose data
-    /// inadvertently).
+    /// echoing `try_send` on bounded channels. On overflow the
+    /// failure is reported rather than silently dropping the item,
+    /// so callers cannot lose data inadvertently.
     ///
     /// # Examples
     ///

@@ -3,7 +3,7 @@ use crate::hashkit::token::DynToken;
 const M: u32 = 0x5bd1_e995;
 const R: u32 = 24;
 
-/// MurmurHash 2 (32-bit), as used by `hash_murmur` in the C source.
+/// MurmurHash 2 (32-bit).
 pub(super) fn hash(key: &[u8]) -> DynToken {
     let length_full = key.len();
     let seed: u32 = 0xdead_beef_u32.wrapping_mul(length_full as u32);

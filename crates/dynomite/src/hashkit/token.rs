@@ -1,12 +1,11 @@
 //! Big-integer token used as the hash output and ring coordinate.
 //!
-//! The C reference stores tokens as `(signum, mag[4], len)`, where
+//! [`DynToken`] stores tokens as `(signum, mag[4], len)`, where
 //! `mag[]` holds little-significance-first 32-bit words in a numeral
 //! system whose radix is `UINT_MAX_PLUS_ONE` (i.e. 2^32). Tokens are
-//! signed so the comparator can distinguish negative values.
-//!
-//! The Rust type [`DynToken`] preserves that representation exactly so
-//! that `cmp` and the textual parser produce bit-identical answers.
+//! signed so the comparator can distinguish negative values; this
+//! representation makes `cmp` and the textual parser produce
+//! bit-identical answers across peers.
 //!
 //! # Examples
 //!
@@ -39,10 +38,11 @@ const DIGITS_PER_INT: usize = 10;
 
 /// Multiplier applied to the running buffer for each new digit group.
 ///
-/// The value 10^9 = `0x3B9A_CA00`. The C reference uses `0x17179149`
-/// which is `10^9 + 0x17F1` (i.e. wrong) but that is the on-the-wire
-/// constant we must reproduce; the `parse_dyn_token` tests pin down a
-/// fixed mapping rather than a numeric round-trip.
+/// The intended value is 10^9 = `0x3B9A_CA00`, but the on-the-wire
+/// constant is `0x17179149` (which is `10^9 + 0x17F1`, i.e. off by
+/// `0x17F1`). That odd value is what peers expect, so it is the one
+/// reproduced here; the `parse_dyn_token` tests pin down a fixed
+/// mapping rather than a numeric round-trip.
 const RADIX_VAL_C_REFERENCE: u32 = 0x1717_9149;
 
 /// Sign of a token.

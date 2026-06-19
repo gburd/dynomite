@@ -1,11 +1,11 @@
 //! Metadata cleanup script after a delete completes.
 //!
-//! Reproduces `redis_clear_repair_md_for_key` from the reference
-//! engine. The cleanup script removes the per-key entries from the
+//! The cleanup script removes the per-key entries from the
 //! add-set / rem-set metadata once a delete has been confirmed by
-//! every replica. This module ports the predicate that decides
-//! whether a cleanup script is needed; emitting the script bytes
-//! lands once Stage 9's dispatcher exercises the workflow.
+//! every replica. This module holds the predicate that decides
+//! whether a cleanup script is needed; emitting the script bytes is
+//! not yet wired, so the function reports
+//! [`RepairOutcome::NoOp`].
 
 use crate::msg::{Msg, MsgType};
 

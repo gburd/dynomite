@@ -1,12 +1,10 @@
 //! Message-id to message lookup.
 //!
-//! The reference engine keeps a per-connection dictionary
-//! (`outstanding_msgs_dict`) keyed on `msgid_t` so that a response
-//! arriving on the wire can be paired with its outstanding request in
-//! constant time. Earlier stages introduced
-//! [`crate::util::dict::MsgIndex`] (an `ahash`-backed
-//! [`std::collections::HashMap`]) keyed on [`MsgId`]; this module
-//! provides the message-flavored alias plus a thin newtype that adds
+//! A per-connection lookup keyed on `MsgId` pairs a response
+//! arriving on the wire with its outstanding request in constant
+//! time. [`crate::util::dict::MsgIndex`] (an `ahash`-backed
+//! [`std::collections::HashMap`]) keyed on [`MsgId`] provides the
+//! message-flavored alias plus a thin newtype that adds
 //! the verbs the message layer actually uses.
 //!
 //! [`MsgId`]: crate::core::types::MsgId
@@ -18,16 +16,15 @@ use super::message::Msg;
 
 /// Owning index of [`Msg`] values keyed on [`MsgId`].
 ///
-/// The C engine stores `struct msg *` pointers; the Rust port owns
-/// the value directly so dropping the index releases every contained
-/// message. Lookups return references; transferring ownership out of
-/// the index requires [`MsgIndex::remove`].
+/// The index owns each [`Msg`] value directly, so dropping the index
+/// releases every contained message. Lookups return references;
+/// transferring ownership out of the index requires
+/// [`MsgIndex::remove`].
 ///
 /// # Thread safety
 ///
-/// `MsgIndex` mirrors the reference engine's `outstanding_msgs_dict`,
-/// which is per-connection and accessed only from the connection's
-/// owning event-loop thread. The Rust port preserves that
+/// `MsgIndex` is per-connection and accessed only from the
+/// connection's owning event-loop thread. It honours that
 /// single-threaded contract: `MsgIndex` is `Send` (it can be moved
 /// to another task or thread, e.g. when a connection migrates) but
 /// is intentionally not exposed through any synchronisation

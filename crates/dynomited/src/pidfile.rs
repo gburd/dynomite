@@ -1,11 +1,11 @@
 //! Pid-file management for `dynomited`.
 //!
-//! The reference engine writes the daemon's PID into the file named
-//! by `--pid-file` and removes it during teardown. We extend the
-//! contract slightly: the file holds an exclusive `flock(2)` for the
-//! lifetime of the [`PidFile`] guard so a second `dynomited` instance
-//! cannot silently overwrite a running daemon's pid file. The
-//! `flock` is released and the file unlinked on drop.
+//! `dynomited` writes the daemon's PID into the file named
+//! by `--pid-file` and removes it during teardown. The file holds
+//! an exclusive `flock(2)` for the lifetime of the [`PidFile`]
+//! guard so a second `dynomited` instance cannot silently overwrite
+//! a running daemon's pid file. The `flock` is released and the file
+//! unlinked on drop.
 //!
 //! Acquiring the flock retries briefly on `EAGAIN` / `EWOULDBLOCK`
 //! to absorb the kernel-level race that occurs when an operator

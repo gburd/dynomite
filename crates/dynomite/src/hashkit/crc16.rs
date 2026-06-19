@@ -25,7 +25,7 @@ const CRC16TAB: [u16; 256] = [
     0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
 ];
 
-/// CRC-16 (CCITT polynomial). Reproduces the C `hash_crc16` exactly.
+/// CRC-16 (CCITT polynomial).
 pub(super) fn hash(key: &[u8]) -> DynToken {
     let mut crc: u32 = 0;
     for &byte in key {

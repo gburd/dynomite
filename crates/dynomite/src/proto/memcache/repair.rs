@@ -1,22 +1,17 @@
 //! Memcached repair surface.
 //!
-//! In the reference engine, every `memcache_*_repair` function and
-//! `memcache_reconcile_responses` either returns `DN_OK` after doing
-//! nothing or, in the reconciliation case, returns the first
-//! response when consistency is `DC_QUORUM` and an error response
-//! otherwise. Memcached responses are not rewritten, so the
-//! "rewrite with metadata" surface is intentionally empty.
-//!
-//! The Rust port reproduces this exactly. Each function below
-//! mirrors the reference shape for parity with the Redis surface
-//! and so the cluster layer can call into either protocol via the
-//! same trait set.
+//! Memcached responses are never rewritten, so every repair function
+//! here returns [`RepairOutcome::NoOp`]. The one exception is
+//! reconciliation, which returns the first response when consistency
+//! is `DC_QUORUM` and an error response otherwise. The functions
+//! exist so the cluster layer can call into either protocol through
+//! the same trait set as the RESP surface.
 
 #[cfg(test)]
 use crate::msg::MsgType;
 use crate::msg::{ConsistencyLevel, DynErrorCode, Msg, ResponseMgr};
 
-/// Repair-surface result type. Matches the Redis repair return
+/// Repair-surface result type. Matches the RESP repair return
 /// shape so the cluster dispatcher can use a single
 /// `Result<RepairOutcome, RepairError>` discriminant.
 #[derive(Debug)]
@@ -28,8 +23,8 @@ pub enum RepairOutcome {
 }
 
 /// Errors the Memcached repair surface can raise. Memcached has no
-/// live failure modes; the variant exists for parity with the
-/// Redis surface.
+/// live failure modes; the variant exists to mirror the RESP
+/// surface.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum RepairError {
@@ -38,9 +33,8 @@ pub enum RepairError {
     Reserved,
 }
 
-/// Memcached query rewrite. The reference engine returns `DN_OK`
-/// without producing a rewritten message. The Rust port returns
-/// [`RepairOutcome::NoOp`] for the same reason.
+/// Memcached query rewrite. Memcached responses are not rewritten,
+/// so this returns [`RepairOutcome::NoOp`].
 ///
 /// # Examples
 ///
@@ -56,8 +50,9 @@ pub fn memcache_rewrite_query(_orig: &mut Msg) -> Result<RepairOutcome, RepairEr
     Ok(RepairOutcome::NoOp)
 }
 
-/// Memcached query rewrite with timestamp metadata. The reference
-/// engine returns `DN_OK` without rewriting; the Rust port matches.
+/// Memcached query rewrite with timestamp metadata. Memcached
+/// responses are not rewritten, so this returns
+/// [`RepairOutcome::NoOp`].
 ///
 /// # Examples
 ///
@@ -74,9 +69,8 @@ pub fn memcache_rewrite_query_with_timestamp_md(
     Ok(RepairOutcome::NoOp)
 }
 
-/// Build a repair query for a Memcached response set. The reference
-/// engine returns `DN_OK` without producing a repair query. The
-/// Rust port returns [`RepairOutcome::NoOp`].
+/// Build a repair query for a Memcached response set. Memcached has
+/// no repair query, so this returns [`RepairOutcome::NoOp`].
 ///
 /// # Examples
 ///
@@ -92,9 +86,8 @@ pub fn memcache_make_repair_query(_rspmgr: &ResponseMgr) -> Result<RepairOutcome
     Ok(RepairOutcome::NoOp)
 }
 
-/// Clear repair metadata for a key. The reference engine returns
-/// `DN_OK` without producing a cleanup message. The Rust port
-/// matches.
+/// Clear repair metadata for a key. Memcached carries no repair
+/// metadata, so this returns [`RepairOutcome::NoOp`].
 ///
 /// # Examples
 ///
@@ -109,9 +102,9 @@ pub fn memcache_clear_repair_md_for_key(_req: &mut Msg) -> Result<RepairOutcome,
     Ok(RepairOutcome::NoOp)
 }
 
-/// Reconcile responses across replicas. The reference engine picks
+/// Reconcile responses across replicas. Picks
 /// the first response under `DC_QUORUM` and otherwise returns an
-/// error response. The Rust port reproduces both arms by reporting
+/// error response, reporting
 /// the chosen index plus an optional fresh error response.
 ///
 /// # Examples
@@ -123,8 +116,8 @@ pub fn memcache_clear_repair_md_for_key(_req: &mut Msg) -> Result<RepairOutcome,
 /// let mut req = Msg::new(0, MsgType::ReqMcGet, true);
 /// req.set_consistency(ConsistencyLevel::DcQuorum);
 /// let mut mgr = ResponseMgr::new(&req, 3, None);
-/// // Submit one response (Stage 9 plumbing supplies the responses
-/// // in real use).
+/// // Submit one response (the connection layer supplies the
+/// // responses in real use).
 /// let outcome = memcache_reconcile_responses(&mgr, ConsistencyLevel::DcQuorum);
 /// matches!(outcome, dynomite::proto::memcache::repair::ReconcileOutcome::PickFirst);
 /// ```

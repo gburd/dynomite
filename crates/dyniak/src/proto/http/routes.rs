@@ -1553,10 +1553,11 @@ fn json_array_chunks(
                                 first_emitted = true;
                             }
                             // JSON-encode the entry as a UTF-8
-                            // string. Non-UTF-8 bytes are encoded
-                            // by serde_json with replacement
-                            // characters; a future slice may switch
-                            // to base64 for binary keys.
+                            // string. Non-UTF-8 bytes are replaced
+                            // with the Unicode replacement
+                            // character by the lossy conversion
+                            // below, so binary keys do not round-trip
+                            // through this listing verbatim.
                             let s = String::from_utf8_lossy(&entry).into_owned();
                             let encoded =
                                 serde_json::to_vec(&s).unwrap_or_else(|_| b"\"\"".to_vec());

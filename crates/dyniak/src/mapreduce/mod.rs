@@ -17,16 +17,15 @@
 //!   keys in the bucket, enumerated by the executor through a
 //!   datastore's `list_keys_stream`).
 //! * [`Phase`] list -- an ordered pipeline of [`Phase::Map`],
-//!   [`Phase::Reduce`], [`Phase::Link`] and the reserved
-//!   [`Phase::WasmModule`] variants.
+//!   [`Phase::Reduce`], [`Phase::Link`] and [`Phase::WasmModule`]
+//!   phases.
 //!
 //! Execution flows through the [`executor::run_job`] entry point.
 //! Each phase is wired between two [`tokio::sync::mpsc`] channels;
 //! the executor keeps one task per phase, the previous phase's
 //! outbound is the next phase's inbound, and the final phase
 //! outbound is collected into the response envelope. The pipe
-//! shape mirrors Riak's "pipe of phases" pattern from
-//! `riak_pipe_*.erl`.
+//! shape follows Riak's "pipe of phases" pattern.
 //!
 //! # Determinism
 //!

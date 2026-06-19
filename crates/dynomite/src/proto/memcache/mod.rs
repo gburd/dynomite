@@ -1,11 +1,12 @@
-//! Memcached text-protocol parser, helpers, and repair stubs.
+//! Memcached text-protocol parser, helpers, and repair surface.
 //!
 //! The Memcached datastore exposes a small ASCII command grammar. The
 //! engine consumes it with a single byte-driven state machine for
 //! requests ([`parser::memcache_parse_req`]) and another for
 //! responses ([`parser::memcache_parse_rsp`]). Surrounding helpers
 //! cover command classification, multi-key fragmentation, response
-//! coalescing, and the placeholder repair surface.
+//! coalescing, and the repair surface (no-op for Memcached, which
+//! has no read-repair semantics).
 //!
 //! # Examples
 //!

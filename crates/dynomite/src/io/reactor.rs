@@ -1,12 +1,10 @@
 //! Async transport abstraction over the connection state machine.
 //!
-//! The C engine's per-platform `src/event/dyn_{epoll,kqueue,evport}.c`
-//! reactor is replaced wholesale by tokio. This module defines a
+//! The reactor is built on tokio. This module defines a
 //! [`Transport`] trait that downstream stages drive through
 //! `tokio::io::{AsyncRead, AsyncWrite}` and a [`ConnRole`] enum that
-//! mirrors the connection-role enumerations carried on the C `struct
-//! conn` (`client`, `server`, `proxy`, plus their dnode peer
-//! variants).
+//! enumerates the connection roles (`client`, `server`, `proxy`,
+//! plus their dnode peer variants).
 //!
 //! The trait is intentionally narrow:
 //!
@@ -17,7 +15,7 @@
 //!   may not always have one.
 //!
 //! `Transport` does not expose any TCP-specific operations; this is
-//! deliberate so the Stage 9 QUIC implementation can wrap a
+//! deliberate so the QUIC implementation can wrap a
 //! `quiche::Connection` in a `QuicTransport` newtype without changing
 //! callers.
 //!
@@ -59,8 +57,7 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 
-/// Role tag for a connection. Mirrors the role enumeration on
-/// `struct conn` in the C engine.
+/// Role tag for a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConnRole {
     /// Client-facing listener that accepted the connection.
@@ -78,9 +75,7 @@ pub enum ConnRole {
 }
 
 impl ConnRole {
-    /// True when the role represents a listening socket. Mirrors the
-    /// `is_listener` predicate used by the C reactor's dispatch
-    /// branches.
+    /// True when the role represents a listening socket.
     ///
     /// # Examples
     ///
@@ -113,7 +108,7 @@ impl ConnRole {
 /// Generic async byte-stream the engine reads and writes through.
 ///
 /// Implementors must be [`Send`] and [`Unpin`] so they fit the tokio
-/// task model. Adding a new transport (Stage 9 QUIC, for example)
+/// task model. Adding a new transport (QUIC, for example)
 /// means newtyping its connection handle and implementing
 /// [`AsyncRead`], [`AsyncWrite`], and `Transport`.
 pub trait Transport: AsyncRead + AsyncWrite + Send + Unpin {

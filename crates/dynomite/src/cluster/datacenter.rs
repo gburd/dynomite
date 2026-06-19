@@ -3,12 +3,9 @@
 //!
 //! A [`Datacenter`] owns a list of [`Rack`]s; a `Rack` owns a vector
 //! of [`Continuum`] points that map a [`DynToken`] to the index of
-//! the [`crate::cluster::peer::Peer`] that owns the token. The shape
-//! mirrors the reference engine's `struct datacenter` /
-//! `struct rack` / `struct continuum` exactly.
+//! the [`crate::cluster::peer::Peer`] that owns the token.
 //!
-//! Token ring lookups use the same upper-bound search as the
-//! reference engine's `vnode_dispatch` (the search lives in
+//! Token ring lookups use an upper-bound search (the search lives in
 //! [`crate::cluster::vnode`]). The data shape stays here so the
 //! lookup can be tested against curated continua without spinning
 //! up a full pool.
@@ -223,11 +220,10 @@ impl Rack {
 
 /// One datacenter.
 ///
-/// Mirrors `struct datacenter`. The
+/// A datacenter and its racks. The
 /// `preselected_rack_for_replication` field is computed by
 /// [`crate::cluster::pool::ServerPool::preselect_remote_racks`]
-/// and reproduces the reference engine's strategy of choosing one
-/// rack per remote DC for cross-DC writes.
+/// and selects one rack per remote DC for cross-DC writes.
 #[derive(Clone, Debug)]
 pub struct Datacenter {
     name: String,

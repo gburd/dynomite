@@ -1,10 +1,10 @@
 //! Command-line front end for the `dynomited` server.
 //!
-//! The flag set mirrors the reference engine's `getopt_long` table in
-//! `_/dynomite/src/dynomite.c`. The help and version banners are
-//! reproduced byte-identical to the C reference (`dn_show_usage` and
-//! the `"This is dynomite-%s"` print) so operators, init-script
-//! authors, and downstream tooling can rely on the same surface.
+//! The flag set, help banner, and version banner present a stable
+//! command-line surface (the `dn_show_usage` text and the
+//! `"This is dynomite-%s"` line) so operators, init-script authors,
+//! and downstream tooling can rely on it staying byte-identical
+//! across releases.
 //!
 //! # Examples
 //!
@@ -22,7 +22,7 @@ use clap::Parser;
 
 /// Default path to the YAML configuration file.
 ///
-/// Mirrors `DN_CONF_PATH` in the reference engine.
+/// The default configuration file path.
 pub const DEFAULT_CONF_PATH: &str = "conf/dynomite.yml";
 
 /// Default verbosity used when `-v` is not passed.
@@ -39,7 +39,7 @@ pub const MAX_VERBOSITY: u8 = 11;
 /// Parsed command-line invocation.
 ///
 /// The struct deliberately disables clap's auto-generated help and
-/// version flags: the reference engine's `dn_show_usage` output is
+/// version flags: the usage output is
 /// reproduced verbatim by [`print_usage`] so we cannot let clap emit
 /// its own help template.
 ///
@@ -166,7 +166,7 @@ pub struct Cli {
     pub riak_aae_enabled: bool,
 }
 
-/// The version banner the reference engine writes via
+/// The version banner, written via
 /// `log_stderr("This is dynomite-%s" CRLF, VERSION)`.
 ///
 /// `CRLF` is `\r\n` and `log_stderr` appends a trailing `\n`, so the
@@ -183,10 +183,10 @@ pub fn format_version_banner(version: &str) -> String {
     format!("This is dynomite-{version}\r\n\n")
 }
 
-/// The usage banner the reference engine writes via three sequential
-/// `log_stderr` calls in `dn_show_usage`. Each call produces one line
+/// The usage banner, written via three sequential
+/// `log_stderr` calls. Each call produces one line
 /// terminated by `\n`; lines internal to each call are separated by
-/// `\r\n`. The defaults shown reflect the reference engine's
+/// `\r\n`. The defaults shown reflect the binary's
 /// compile-time constants.
 ///
 /// A trailing `Dynomite (Rust) extensions:` block is appended after

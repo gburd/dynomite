@@ -118,9 +118,10 @@ impl RepairOutcome {
     /// emitting a `tracing::warn!` event when the outcome is
     /// [`RepairOutcome::Siblings`]. The fallback selection rule
     /// is the lexicographically-largest sibling value, with
-    /// ties broken by the encoded clock bytes; this matches
-    /// the v1 "siblings as deferred follow-up" plan called out
-    /// on the brief.
+    /// ties broken by the encoded clock bytes. Full sibling
+    /// retention (returning every conflicting value) is not
+    /// implemented; this fallback collapses siblings to one
+    /// deterministic value and warns.
     ///
     /// `key` is reported alongside the warning so operators can
     /// correlate sibling events with specific Riak objects.

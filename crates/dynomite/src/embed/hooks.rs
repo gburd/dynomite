@@ -314,9 +314,9 @@ impl Datastore for MemoryDatastore {
     }
 }
 
-/// Default Redis-fronting datastore.
+/// Default RESP-fronting datastore.
 ///
-/// Stage 13 ships this as a thin marker around the supplied
+/// A thin marker around the supplied
 /// connection target; the actual wire protocol bridge lives in
 /// the dispatcher path of [`crate::cluster::dispatch`]. The
 /// default impl satisfies the [`Datastore`] contract for the

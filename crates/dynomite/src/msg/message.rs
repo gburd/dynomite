@@ -7,10 +7,10 @@
 //! by the protocol decoders, and the bookkeeping flags every layer
 //! sets and reads.
 //!
-//! This stage builds the data shape and exposes the field-level
-//! accessors. The connection-coupled lifecycle paths (timeout
-//! tracking, queue threading, parser dispatch) land in Stage 9 once
-//! the connection state machine exists.
+//! This module builds the message data shape and exposes the
+//! field-level accessors. The connection-coupled lifecycle paths
+//! (timeout tracking, queue threading, parser dispatch) live in
+//! [`crate::net`].
 
 use crate::core::types::MsgId;
 
@@ -22,14 +22,13 @@ use crate::proto::dnode::{Dmsg, DynParseState};
 
 /// Stable connection identifier carried by [`Msg::owner`].
 ///
-/// Stage 9 replaces this alias with a typed `Conn` reference. Until
-/// then, the value is just a unique 64-bit tag the connection layer
-/// stamps on every message it produces.
+/// A unique 64-bit tag the connection layer stamps on every message
+/// it produces.
 pub type ConnId = u64;
 
 /// Parser outcome reported by datastore protocol decoders.
 ///
-/// The variants mirror the reference engine's `msg_parse_result_t`
+/// The variants name the possible parse outcomes
 /// so downstream callers can dispatch on the same semantics.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
 pub enum MsgParseResult {
@@ -55,7 +54,7 @@ pub enum MsgParseResult {
 
 /// Routing override applied to a request.
 ///
-/// Mirrors the reference engine's `msg_routing_t`. The default
+/// The message routing mode. The default
 /// (`Normal`) honors the configured key-hash routing; the other
 /// variants short-circuit it for diagnostic and special-purpose
 /// paths.
@@ -779,7 +778,7 @@ impl Msg {
         self.selected_rsp = id;
     }
 
-    /// Owner connection id (placeholder until Stage 9).
+    /// Owner connection id, when the message is bound to one.
     #[must_use]
     pub fn owner(&self) -> Option<ConnId> {
         self.owner

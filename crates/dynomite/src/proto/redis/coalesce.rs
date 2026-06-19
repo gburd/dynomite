@@ -65,10 +65,10 @@ pub fn redis_pre_coalesce(rsp: &mut Msg) {
     }
     match rsp.ty() {
         MsgType::RspRedisInteger | MsgType::RspRedisMultibulk | MsgType::RspRedisStatus => {
-            // The reference engine mutates the response mbuf chain
-            // and the parent's accumulators here. The dispatcher
-            // owns the parent reference and the mbuf-level
-            // mutation; the integer accumulation is exposed as
+            // The mbuf-level mutation of the response chain and the
+            // parent's accumulators is performed by the dispatcher,
+            // which owns the parent reference; the integer
+            // accumulation is exposed as
             // [`accumulate_fragment_integer`] for the dispatcher
             // to call.
         }
@@ -96,9 +96,8 @@ pub fn redis_pre_coalesce(rsp: &mut Msg) {
 }
 
 /// Fold the integer payload of a fragmented `DEL` / `EXISTS`
-/// response into the parent request's running total. Mirrors the
-/// `req->frag_owner->integer += rsp->integer` accumulation in the
-/// reference engine's `redis_pre_coalesce`.
+/// response into the parent request's running total
+/// (`frag_owner.integer += rsp.integer`).
 ///
 /// Callers are responsible for invoking this once per fragment
 /// response after the response parser has stored the integer in
@@ -140,10 +139,11 @@ pub fn accumulate_fragment_integer(parent: &mut Msg, rsp: &Msg) {
 /// Post-coalesce hook for the parent request once every shard
 /// response has arrived.
 ///
-/// In the reference engine this dispatches to one of three helpers
-/// keyed on the request type (`MGET`, `DEL`/`EXISTS` integer
-/// merge, `MSET` status reply). The data-shape side flags the
-/// parent as done; the mbuf-level concatenation lives in Stage 9.
+/// This dispatches on the request type (`MGET`, `DEL`/`EXISTS`
+/// integer merge, `MSET` status reply). It performs the data-shape
+/// side only: it flags the parent request as done. The mbuf-level
+/// concatenation of the reply bytes is performed by the reply
+/// writer, not here.
 ///
 /// # Examples
 ///

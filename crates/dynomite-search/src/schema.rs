@@ -1,10 +1,9 @@
 //! Schema types for the vector subsystem.
 //!
 //! These types model the subset of the RediSearch FT.CREATE
-//! grammar that `dynomite_search` will eventually parse and
-//! act on. Phase B (this commit) lands the data shapes; Phase
-//! C will add the FT.* command parser that builds them and
-//! routes through [`super::registry::VectorRegistry`].
+//! grammar that `dynomite_search` parses and acts on. The FT.*
+//! command parser in [`super::ft`] builds them and routes through
+//! [`super::registry::VectorRegistry`].
 //!
 //! The schema types are intentionally distinct from the engine
 //! types in [`dynvec`]. The engine types are storage-level (a
@@ -21,12 +20,12 @@ use dynvec::encoding::Codec as EngineCodec;
 
 /// RediSearch-flavoured vector field type.
 ///
-/// Today the engine supports `Float32` (mapped to
+/// The engine supports `Float32` (mapped to
 /// [`EngineCodec::Fp16`] on disk; the API is float32-in /
-/// float32-out) and `Float16` (the same Fp16 codec exposed
-/// directly). `Int8` is reserved for the
-/// [`EngineCodec::Int8Quantized`] path. Future codecs (PQ, BQ)
-/// will land as new variants.
+/// float32-out), `Float16` (the same Fp16 codec exposed
+/// directly), and `Int8` (mapped to the
+/// [`EngineCodec::Int8Quantized`] path). Additional codecs (PQ, BQ)
+/// are not implemented.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

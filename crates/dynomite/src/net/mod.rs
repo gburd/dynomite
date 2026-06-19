@@ -19,7 +19,7 @@
 //! drives TCP today and QUIC behind the `quic` cargo feature.
 //!
 //! Cluster routing decisions (request forwarding across racks /
-//! DCs, peer selection, gossip) live in Stage 10's `cluster::*`
+//! DCs, peer selection, gossip) live in the [`crate::cluster`]
 //! module and are dispatched into via the [`Dispatcher`] trait
 //! below.
 //!

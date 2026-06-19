@@ -1,9 +1,8 @@
 //! Static metric descriptors for pool and server stats.
 //!
-//! The C reference uses `STATS_POOL_CODEC` and `STATS_SERVER_CODEC`
-//! X-macros to emit a struct-of-arrays of metric descriptors. We follow
-//! the same shape with a small `macro_rules!` so each metric gains a
-//! typed handle, an iterable list, and constant metadata.
+//! A small `macro_rules!` emits a struct-of-arrays of metric
+//! descriptors so each metric gains a typed handle, an iterable
+//! list, and constant metadata.
 
 /// Kind of metric tracked by the stats subsystem.
 ///

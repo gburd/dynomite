@@ -1,14 +1,11 @@
 //! Byte-slice helpers that complement [`bytes::Bytes`] and [`String`].
 //!
-//! The C `struct string` is a length-tagged byte view (`uint8_t*` plus
-//! `uint32_t`). The Rust port replaces it with [`bytes::Bytes`] for
-//! shared ownership of message payloads and [`String`] for textual
-//! data. This module collects the small handful of helpers downstream
-//! stages reach for: a stripped-down `string_compare` (length-prefixed
-//! byte ordering) and char-finding wrappers that operate on slices.
+//! Message payloads use [`bytes::Bytes`] for shared ownership and
+//! [`String`] for textual data. This module collects a small handful
+//! of helpers callers reach for: a length-prefixed byte-ordering
+//! comparison and char-finding wrappers that operate on slices.
 
-/// Compare two byte slices using the same rule as the C
-/// `string_compare`: shorter slices sort first, otherwise sort
+/// Compare two byte slices: shorter slices sort first, otherwise sort
 /// lexicographically.
 ///
 /// # Examples

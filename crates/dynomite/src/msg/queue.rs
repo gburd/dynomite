@@ -1,10 +1,9 @@
 //! Owning queue of [`Msg`] values.
 //!
-//! The reference engine threads messages through `TAILQ` lists named
-//! `msg_tqh`. The Rust port replaces every such list with a
-//! [`MsgQueue`] backed by a [`VecDeque`]. The owning relationship is
-//! the same: pushing a [`Msg`] into a queue transfers ownership;
-//! popping one transfers it back to the caller.
+//! Messages thread through [`MsgQueue`] lists backed by a
+//! [`VecDeque`]. The owning relationship is
+//! straightforward: pushing a [`Msg`] into a queue transfers
+//! ownership; popping one transfers it back to the caller.
 //!
 //! [`Msg`]: super::message::Msg
 

@@ -6,7 +6,7 @@
 //! queues, recv/send done callbacks, peer forwarding).
 //!
 //! This module owns the data-side helpers; the connection-side
-//! helpers land in Stage 9 once the connection FSM exists.
+//! helpers live in [`crate::net`].
 
 use crate::core::types::MsgId;
 
@@ -46,8 +46,8 @@ pub fn set_error(req: &mut Msg, error_code: i32, dyn_error_code: super::DynError
 /// fragment vectors) the parent fragment has finished aggregating.
 ///
 /// The connection-coupled propagation pass that walks the client
-/// queue and marks every sibling fragment lands in Stage 9; this
-/// helper returns the data-shape answer for a single request.
+/// queue and marks every sibling fragment lives in [`crate::net`];
+/// this helper returns the data-shape answer for a single request.
 ///
 /// # Examples
 ///

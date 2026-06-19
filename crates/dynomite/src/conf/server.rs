@@ -436,7 +436,7 @@ impl<'de> Deserialize<'de> for ConfDynSeed {
 fn split_optional_friendly_name(raw: &str) -> (&str, Option<&str>) {
     if let Some(idx) = raw.rfind(' ') {
         // Anything after the last space is the friendly name when the
-        // head still contains a colon; the C parser is greedy on the
+        // head still contains a colon; the split is greedy on the
         // rightmost space.
         let (head, tail) = raw.split_at(idx);
         let tail = &tail[1..];

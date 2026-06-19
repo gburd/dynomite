@@ -398,8 +398,8 @@ impl Stats {
 
     /// Add `delta` to a pool counter or gauge.
     ///
-    /// Wraps on overflow to mirror the reference engine's `++` / `+=`
-    /// semantics. Counters are 64-bit signed and never reach the wrap
+    /// Wraps on overflow. Counters are 64-bit signed and never reach
+    /// the wrap
     /// boundary under realistic workloads.
     pub fn pool_incr_by(&self, field: PoolField, delta: i64) {
         let mut inner = self.inner.lock();
@@ -481,8 +481,8 @@ impl Stats {
 
     /// Add `delta` to a server counter or gauge.
     ///
-    /// Wraps on overflow to mirror the reference engine's `++` / `+=`
-    /// semantics. Counters are 64-bit signed and never reach the wrap
+    /// Wraps on overflow. Counters are 64-bit signed and never reach
+    /// the wrap
     /// boundary under realistic workloads.
     pub fn server_incr_by(&self, field: ServerField, delta: i64) {
         let mut inner = self.inner.lock();
@@ -525,7 +525,7 @@ impl Stats {
         self.inner.lock().server.metrics[field.index()]
     }
 
-    /// Set the resource usage gauges that the reference engine samples
+    /// Set the resource usage gauges sampled
     /// once per aggregation cycle.
     ///
     /// # Examples
@@ -611,7 +611,7 @@ impl Stats {
         }
     }
 
-    /// Reset every histogram. The reference engine does this every
+    /// Reset every histogram. This runs every
     /// five minutes from inside the aggregation loop.
     ///
     /// # Examples
@@ -649,9 +649,9 @@ impl Stats {
 }
 
 /// Returns the queue p99 from `h`, or `0` when the histogram is
-/// overflowing. The reference implementation suppresses percentile
-/// publishing in the overflow path; mirroring that keeps overflow
-/// values from leaking into the JSON output as `u64::MAX`.
+/// overflowing. Percentile publishing is suppressed in the overflow
+/// path so overflow values do not leak into the JSON output as
+/// `u64::MAX`.
 fn queue_p99(h: &Histogram) -> u64 {
     if h.is_overflowing() {
         0
@@ -695,8 +695,8 @@ pub struct Aggregator {
 impl Aggregator {
     /// Create a new aggregator. The aggregation loop reads from
     /// `stats` and publishes to `sink` once every `interval`.
-    /// Histograms are reset every `histogram_reset` elapsed time, the
-    /// same five-minute cadence the C reference uses by default.
+    /// Histograms are reset every `histogram_reset` elapsed time;
+    /// the default cadence is five minutes.
     ///
     /// # Examples
     ///

@@ -1,12 +1,12 @@
 //! Cross-thread ring queues used between the worker, gossip, and stats
 //! threads.
 //!
-//! The C engine uses two SPSC ring buffers, `C2G_InQ` and `C2G_OutQ`,
-//! sized at 256 slots each. The Rust port replaces them with bounded
-//! [`crossbeam_channel`] pairs of the same capacity. The `RingChannels`
-//! struct owns both directions (core -> gossip and gossip -> core), so
-//! callers receive a single value to wire into their thread spawning
-//! code.
+//! Two SPSC ring queues, `C2G_InQ` and `C2G_OutQ`, sized at 256
+//! slots each, carry messages between the core and gossip threads.
+//! They are implemented as bounded [`crossbeam_channel`] pairs of
+//! that capacity. The `RingChannels` struct owns both directions
+//! (core -> gossip and gossip -> core), so callers receive a single
+//! value to wire into their thread spawning code.
 //!
 //! # Examples
 //!

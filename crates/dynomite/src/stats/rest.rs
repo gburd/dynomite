@@ -1,9 +1,8 @@
 //! Hand-rolled HTTP/1.1 server exposing the stats snapshot as JSON.
 //!
-//! The C reference handles a handful of query commands. This module
-//! implements a minimal subset: a `GET /` (and `GET /info`) request
-//! that returns the latest snapshot. Every other request returns an
-//! empty `200 OK` with body `OK\r\n`, matching the C fallback path.
+//! This module implements a minimal stats query surface: a `GET /`
+//! (and `GET /info`) request that returns the latest snapshot. Every
+//! other request returns an empty `200 OK` with body `OK\r\n`.
 
 #![allow(clippy::needless_continue)]
 
@@ -60,8 +59,7 @@ pub const MAX_REQUEST_BYTES: usize = 8 * 1024;
 pub const MAX_HEADERS: usize = 32;
 
 /// Maximum time the server waits for a single read from a connected
-/// peer before closing the socket. Mirrors the implicit blocking-recv
-/// behavior of the reference engine while protecting tokio tasks from
+/// peer before closing the socket. Protects tokio tasks from
 /// slow-loris clients.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 

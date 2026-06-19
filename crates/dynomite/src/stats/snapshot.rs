@@ -60,8 +60,7 @@ impl HistogramSummary {
     ///
     /// When the histogram is in overflow (a value larger than the
     /// largest bucket offset has been recorded), the summary is
-    /// zeroed: the reference implementation refuses to publish
-    /// percentiles in that state.
+    /// zeroed: percentiles are not published in that state.
     ///
     /// # Examples
     ///
@@ -483,8 +482,8 @@ impl Snapshot {
 }
 
 /// Whether a metric kind appears in the JSON output. Counters, gauges,
-/// and timestamps are all rendered as numbers; the C reference omits
-/// invalid/string metric kinds entirely.
+/// and timestamps are all rendered as numbers; invalid/string metric
+/// kinds are omitted entirely.
 fn is_visible_metric(kind: StatsMetricType) -> bool {
     matches!(
         kind,

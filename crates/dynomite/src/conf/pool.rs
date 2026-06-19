@@ -1,10 +1,9 @@
 //! Pool body schema, default application, and validation.
 //!
-//! The [`ConfPool`] struct mirrors `struct conf_pool` from the C
-//! reference. Every field whose C counterpart starts as
-//! `CONF_UNSET_NUM` / `CONF_UNSET_BOOL` / `CONF_UNSET_HASH` is wrapped
-//! in [`Option`]; [`ConfPool::apply_defaults`] later fills in the
-//! sentinel-driven defaults.
+//! [`ConfPool`] is the parsed body of one server pool. Every field
+//! whose configuration value may be left unset is wrapped in
+//! [`Option`]; [`ConfPool::apply_defaults`] later fills in the
+//! defaults for the fields the operator omitted.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -20,8 +19,8 @@ use super::error::ConfError;
 use super::server::{ConfDynSeed, ConfServer};
 use super::tokens::TokenList;
 
-/// Default configuration constants. Mirrors the `CONF_DEFAULT_*` macros
-/// in the C reference.
+/// Default configuration constants applied when an operator omits
+/// the corresponding key.
 pub mod defaults {
     /// Default request timeout in milliseconds.
     pub const TIMEOUT_MS: i64 = 5_000;
@@ -33,10 +32,9 @@ pub mod defaults {
     pub const DATA_STORE: i64 = 0;
     /// Default `preconnect:` value.
     ///
-    /// The C reference defaults `preconnect` to false: clients
-    /// can connect to dynomited before the local datastore is
-    /// reachable. The lazy connect avoids a hard dependency on
-    /// boot ordering. We match that default here.
+    /// `preconnect` defaults to false: clients can connect to
+    /// dynomited before the local datastore is reachable. The lazy
+    /// connect avoids a hard dependency on boot ordering.
     pub const PRECONNECT: bool = false;
     /// Default `auto_eject_hosts:` value.
     pub const AUTO_EJECT_HOSTS: bool = true;
@@ -446,9 +444,9 @@ pub struct ConfPool {
     pub log_format: Option<String>,
 
     /// `observability:` - opt-in observability knobs (distributed
-    /// tracing OTLP exporter today; the OTLP log appender is
-    /// scoped but not yet wired). Absent / null disables every
-    /// observability surface, preserving today's silent default.
+    /// tracing OTLP exporter and an OTLP log-appender bridge).
+    /// Absent / null disables every observability surface,
+    /// preserving the silent default.
     /// See [`ObservabilityConfig`].
     #[serde(default)]
     pub observability: Option<ObservabilityConfig>,
@@ -1027,9 +1025,9 @@ impl ConfBucketType {
 
 /// Opt-in observability configuration.
 ///
-/// Absent or null disables every observability surface. Covers
-/// distributed-tracing today; an OTLP log-appender bridge using
-/// the same fields is scoped as a follow-up.
+/// Absent or null disables every observability surface. Covers both
+/// distributed tracing and an OTLP log-appender bridge that share
+/// the same configuration fields.
 ///
 /// # Examples
 ///
@@ -1053,9 +1051,9 @@ pub struct ObservabilityConfig {
     pub otlp_traces_endpoint: Option<String>,
     /// OTLP gRPC endpoint for log records. When set the binary
     /// installs an `opentelemetry-appender-tracing` bridge
-    /// alongside the local log writer. The wiring is scoped as
-    /// a follow-up; the field is parsed today so YAML files
-    /// authored against the eventual implementation validate.
+    /// alongside the local log writer, forwarding log records to
+    /// the collector. When `None` the binary keeps the local log
+    /// writer only.
     pub otlp_logs_endpoint: Option<String>,
     /// Service name attached to every emitted span / log record.
     /// Defaults to `"dynomited"` when unset.
@@ -1070,7 +1068,7 @@ impl ConfPool {
     ///
     /// Folds the legacy `ketama` / `modula` / `random` aliases
     /// down to [`Distribution::Vnode`] (the only algorithm those
-    /// names ever resolved to in the Rust port). Emits a
+    /// names resolve to). Emits a
     /// `tracing::warn!` for the legacy aliases the first time
     /// the field is read so the operator notices the
     /// deprecation.
@@ -1129,8 +1127,8 @@ impl ConfPool {
         if self.backlog.is_none() {
             self.backlog = Some(defaults::LISTEN_BACKLOG);
         }
-        // client_connections is unconditionally reset to its default
-        // by the C validator; we mirror that exactly.
+        // client_connections is unconditionally reset to its
+        // default here regardless of any configured value.
         self.client_connections = Some(defaults::CLIENT_CONNECTIONS);
         if self.data_store.is_none() {
             self.data_store = Some(defaults::DATA_STORE);

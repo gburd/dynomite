@@ -2,15 +2,13 @@
 //!
 //! When a `get` / `gets` request fans out across shards, the
 //! per-shard responses need to be stitched back into a single
-//! reply. The reference engine implements this with two helpers:
-//! `memcache_pre_coalesce` adjusts each shard response in place to
-//! drop the `END` marker, and `memcache_post_coalesce` concatenates
-//! the per-shard payloads and appends a single trailing
-//! `END\r\n`.
+//! reply. Two helpers handle this: `memcache_pre_coalesce` adjusts
+//! each shard response in place to drop the `END` marker, and
+//! `memcache_post_coalesce` concatenates the per-shard payloads and
+//! appends a single trailing `END\r\n`.
 //!
-//! This stage builds the data-shape side of those helpers; the
-//! mbuf-level wiring that the reactor needs lives next to the
-//! Stage 9 connection FSM.
+//! These helpers cover the data-shape side; the mbuf-level wiring
+//! the reactor needs lives in the connection FSM in [`crate::net`].
 
 use crate::msg::{Msg, MsgType};
 
@@ -42,10 +40,10 @@ pub fn memcache_pre_coalesce(rsp: &mut Msg) {
     }
     match rsp.ty() {
         MsgType::RspMcValue | MsgType::RspMcEnd => {
-            // Real engine drops the trailing END marker from the
-            // response chain. The Stage 9 conn FSM owns the mbuf
-            // chain mutation; the data-shape side just records the
-            // intent via the existing `end_marker` field.
+            // The trailing END marker is dropped from the
+            // response chain by the connection FSM, which owns the
+            // mbuf chain mutation; the data-shape side just records
+            // the intent via the existing `end_marker` field.
             // No-op here: the parser already populated `end_marker`.
         }
         _ => {
@@ -58,10 +56,11 @@ pub fn memcache_pre_coalesce(rsp: &mut Msg) {
 /// Post-coalesce hook for the parent request once every shard
 /// response has arrived.
 ///
-/// In the reference engine this concatenates each shard's value
+/// This concatenates each shard's value
 /// payload onto the parent response and writes a single trailing
 /// `END\r\n`. The data-shape side is to flag the parent request
-/// as fully done; the mbuf-level concatenation lives in Stage 9.
+/// as fully done; the mbuf-level concatenation is done by the
+/// connection FSM.
 ///
 /// # Examples
 ///
@@ -79,8 +78,8 @@ pub fn memcache_post_coalesce(request: &mut Msg) {
         return;
     }
     if request.flags().is_error || request.flags().is_ferror {
-        // Reference engine marks the owner connection as errored;
-        // the conn-coupled path lands in Stage 9.
+        // The owner connection is marked as errored by the
+        // connection-coupled path in [`crate::net`].
         return;
     }
     request.set_done(true);

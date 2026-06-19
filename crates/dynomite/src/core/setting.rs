@@ -1,9 +1,9 @@
 //! Global runtime settings.
 //!
-//! The C reference exposes a single tunable, `msgs_per_sec`, accessed
-//! through paired `msgs_per_sec()` / `set_msgs_per_sec()` functions.
-//! The Rust port stores it in an [`AtomicU32`] so the getter and setter
-//! are wait-free and lock-free.
+//! A single tunable, `msgs_per_sec`, is exposed through paired
+//! [`msgs_per_sec`] / [`set_msgs_per_sec`] functions. It is stored
+//! in an [`AtomicU32`] so the getter and setter are wait-free and
+//! lock-free.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

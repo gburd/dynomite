@@ -497,17 +497,16 @@ fn spawn_quic_listener(
 /// Spawn the Riak active anti-entropy scheduler task.
 ///
 /// The scheduler ticks at the configured `segment_interval`
-/// cadence; each tick is logged at `debug` level. Real divergence
-/// detection is wired by future slices when the per-peer tree
-/// exchange protocol lands; until then the task exists so the
+/// cadence; each tick is logged at `debug` level. This task does
+/// not yet perform divergence detection: it exists so the
 /// configured cadence is observable and the [`PeerChannelRepairSink`]
 /// is referenced (so the dispatcher's per-peer outbound channels
 /// remain the canonical repair sink wiring).
 ///
 /// `peer_txs` is the same `(peer_idx, pname, sender)` triple
 /// the gossip task and the hint drainer use; the AAE task
-/// holds a reference so the next slice can route real
-/// `RepairTask`s without re-plumbing the supervisor.
+/// holds a reference so real `RepairTask`s can later be routed
+/// without re-plumbing the supervisor.
 pub fn spawn_aae(
     cfg: ConfAae,
     peer_txs: Vec<(u32, String, mpsc::Sender<OutboundRequest>)>,

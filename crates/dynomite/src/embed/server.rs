@@ -632,10 +632,9 @@ impl ServerHandle {
     /// before any state is touched; on failure the running config
     /// is left untouched.
     ///
-    /// This is the in-process equivalent of SIGHUP. The C
-    /// reference's `dynomite_reload_conf` (in
-    /// `_/dynomite/src/dynomite.c`) re-reads the YAML from disk;
-    /// the embedding API takes the `Config` directly.
+    /// This is the in-process equivalent of SIGHUP: instead of
+    /// re-reading the YAML from disk, the embedding API takes the
+    /// replacement `Config` directly.
     pub async fn reload(&self, mut cfg: Config) -> Result<(), EmbedError> {
         cfg.finalize();
         cfg.validate()?;
@@ -821,12 +820,12 @@ async fn bind_listener(
         }
         #[cfg(feature = "quic")]
         crate::conf::Transport::Quic => {
-            // The embedded server's accept loop is a stub today
-            // (see `accept_loop` below): it logs and closes
-            // every accepted client. We still bind the QUIC
+            // The embedded server's accept loop closes every
+            // accepted client (see `accept_loop` below): it logs
+            // and closes. We still bind the QUIC
             // listener up-front so the embedder sees a clean
             // bind error if the cert / key paths are bad,
-            // mirroring the TCP path's eager-bind contract;
+            // matching the TCP path's eager-bind contract;
             // dropping the listener here is fine because
             // production QUIC traffic flows through the
             // `dynomited` binary, not the embedded harness.
@@ -855,7 +854,7 @@ async fn bind_listener(
             let listener = crate::net::QuicListener::bind(parsed, cfg).await?;
             let local = listener.local_addr();
             // The QUIC listener is dropped on this scope exit;
-            // the in-process embedder does not yet drive a
+            // the in-process embedder does not drive a
             // QUIC accept loop. Return `None` for the listener
             // so the existing TCP-flavoured accept_loop is
             // skipped, but report the local address for
@@ -890,11 +889,12 @@ async fn accept_loop(
                     role,
                     local_addr: Some(addr),
                 });
-                // The embedded server is in-process only at this
-                // stage: the kernel-bound socket is reserved so
+                // The embedded server is in-process only:
+                // the kernel-bound socket is reserved so
                 // post-bind reporting works, but the per-role
-                // protocol parser is not wired. Cross-process
-                // clients see open-then-immediate-close. Use
+                // protocol parser is not wired into this accept
+                // loop. Cross-process clients see
+                // open-then-immediate-close. Use
                 // `ServerHandle::inject_request` for in-process
                 // traffic; use the `dynomited` binary for the
                 // wire path.
@@ -903,7 +903,7 @@ async fn accept_loop(
                     peer = %peer,
                     role = ?role,
                     conn_id,
-                    "embedded listen_addr accepted a connection; embedded mode does not yet \
+                    "embedded listen_addr accepted a connection; embedded mode does not \
                      forward to the dispatcher; use ServerHandle::inject_request instead. \
                      Closing connection."
                 );

@@ -23,9 +23,9 @@ use dyn_encoding::{WireTypeId, WireValue};
 ///
 /// The set covered here is the subset this crate implements (error,
 /// ping, server-info, get, put, del, list-buckets, list-keys,
-/// get-bucket, set-bucket, secondary-index). Other codes are reserved
-/// for follow-up slices and will be rejected with
-/// [`crate::error::RiakError::UnknownMessageCode`] until added.
+/// get-bucket, set-bucket, secondary-index). Message codes outside
+/// this set are rejected with
+/// [`crate::error::RiakError::UnknownMessageCode`].
 ///
 /// # Examples
 ///
@@ -820,9 +820,11 @@ pub const CHASH_KEYFUN_STD: u32 = 0;
 /// `chash_keyfun = BUCKETONLY`: hash `<bucket>` only so every
 /// key in the bucket maps to the same partition.
 pub const CHASH_KEYFUN_BUCKETONLY: u32 = 1;
-/// `chash_keyfun = CUSTOM`: reserved for a future user-defined
-/// hash function. Decoded but not yet honoured by the dispatch
-/// path.
+/// `chash_keyfun = CUSTOM`: hash input is produced by an
+/// operator-supplied WASM module named by the bucket's keyfun
+/// module id. Decoded to [`crate::datatypes::keyfun::KeyFun::Custom`]
+/// and routed through the keyfun WASM store by
+/// [`crate::router::BucketRouter`].
 pub const CHASH_KEYFUN_CUSTOM: u32 = 99;
 
 /// `replication_strategy = TOPOLOGY`: Dynomite's per-DC, per-

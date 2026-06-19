@@ -2,7 +2,7 @@
 //! `dynomited` binary.
 //!
 //! The engine exports its own metric families through its
-//! `dynomite::runtime::metrics` module; this module is reserved for
+//! `dynomite::runtime::metrics` module; this module holds the
 //! counters and histograms that only make sense at the binary
 //! layer (currently: backend reconnect attempts emitted from the
 //! supervisor in [`crate::server`]).

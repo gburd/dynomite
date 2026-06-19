@@ -2,11 +2,12 @@
 //!
 //! Today this module hosts one bridge: [`NoxuDatastore`], gated behind
 //! the `noxu` Cargo feature, which wires the Dynomite engine to the
-//! in-process Noxu DB storage engine. The follow-up slice will add a
-//! richer Riak-aware K/V trait that the protocol layer uses end-to-
-//! end; for now the bridge satisfies
-//! [`dynomite::embed::Datastore`] so an embedder can drop a
-//! `NoxuDatastore` into [`dynomite::embed::Server`] today.
+//! in-process Noxu DB storage engine. The bridge satisfies
+//! [`dynomite::embed::Datastore`], so an embedder can drop a
+//! `NoxuDatastore` into [`dynomite::embed::Server`]. A richer
+//! Riak-aware K/V trait spanning the protocol layer end-to-end is
+//! not yet defined; the protocol layer uses the `embed::Datastore`
+//! surface directly.
 
 #[cfg(feature = "noxu")]
 pub mod noxu;

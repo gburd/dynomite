@@ -12,11 +12,10 @@
 //! padding is mandatory: an empty plaintext encrypts to a single
 //! 16-byte block; a 16-byte plaintext encrypts to 32 bytes.
 //!
-//! The public surface still takes a 32-byte key (the C reference's
-//! `aes_key[AES_KEYLEN]` buffer). AES-128-CBC consumes only the
-//! first 16 bytes; the remaining 16 are unused by the cipher and are
-//! kept solely for byte-for-byte compatibility with the C
-//! `aes_key` buffer layout.
+//! The public surface takes a 32-byte key. AES-128-CBC consumes
+//! only the first 16 bytes; the remaining 16 are unused by the
+//! cipher and are kept solely for wire compatibility, where the key
+//! buffer is 32 bytes wide.
 //!
 //! `encrypt_to_chain` and `decrypt_chain_to_chain` provide the same
 //! primitives wrapped in the [`MbufQueue`] flow used by the rest of
@@ -24,15 +23,14 @@
 //!
 //! # Security
 //!
-//! The C reference reuses the AES key as the IV
+//! The AES key is reused as the IV
 //! (`EVP_EncryptInit_ex(ctx, cipher, NULL, key, key)`), which makes
 //! the cipher deterministic for a given (key, plaintext) pair: two
 //! encryptions of the same plaintext produce identical ciphertext.
-//! This is a known weakness. The Rust port faithfully reproduces it
-//! for wire compatibility with C peers; embedders should treat the
-//! resulting channel as transport-layer encryption only, not as an
-//! authenticated channel. A future hardening pass may layer an AEAD
-//! on top.
+//! This is a known weakness, kept for wire compatibility with peers
+//! that do the same; embedders should treat the resulting channel as
+//! transport-layer encryption only, not as an authenticated channel.
+//! No AEAD layer is applied on top.
 
 use aes::Aes128;
 use cbc::cipher::block_padding::Pkcs7;
@@ -119,7 +117,7 @@ pub fn decrypt_to_vec(enc: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>,
 /// The chain is filled chunk-by-chunk; a new chunk is allocated only
 /// when the previous one runs out of writable space. The output
 /// chain holds the raw ciphertext only; there is no separate IV
-/// prefix, matching the C `dyn_aes_encrypt` path.
+/// prefix.
 ///
 /// # Examples
 ///

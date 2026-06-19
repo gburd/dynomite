@@ -1,16 +1,15 @@
 //! Gossip state machine and seed-list bookkeeping.
 //!
-//! The reference engine runs a dedicated pthread that wakes on a
-//! fixed interval, queries the seeds provider, parses returned
-//! `host:port:rack:dc:tokens|...` blobs, and reconciles the
-//! resulting nodes against the per-DC / per-rack tables. Nodes
-//! are added when absent, replaced when their IP changes, and
-//! gossip-updated when only the timestamp / state moves. Once
-//! per round, the engine forwards either a `GOSSIP_SYN` (if
+//! Gossip runs on a fixed interval: it queries the seeds provider,
+//! parses returned `host:port:rack:dc:tokens|...` blobs, and
+//! reconciles the resulting nodes against the per-DC / per-rack
+//! tables. Nodes are added when absent, replaced when their IP
+//! changes, and gossip-updated when only the timestamp / state
+//! moves. Once per round, it forwards either a `GOSSIP_SYN` (if
 //! joining) or the local state digest (if normal) to a randomly
 //! chosen peer.
 //!
-//! This module ports the data shape, the seed-list parser, and a
+//! This module holds the data shape, the seed-list parser, and a
 //! deterministic state machine that the dispatcher / a tokio
 //! periodic task drives. The actual outbound dnode framing of
 //! `GOSSIP_SYN` lives in [`crate::proto::dnode`]; the cluster
@@ -52,8 +51,8 @@ pub struct GossipConfig {
     pub enabled: bool,
     /// Gossip period.
     pub interval: Duration,
-    /// Seeds-check period (the C engine queries the seeds
-    /// provider at most once per `SEEDS_CHECK_INTERVAL`).
+    /// Seeds-check period: the seeds provider is queried at most
+    /// once per this interval.
     pub seeds_check_interval: Duration,
 }
 
@@ -84,7 +83,7 @@ pub struct SeedRecord {
 
 /// In-memory record of a node observed via gossip. Sits next to
 /// [`crate::cluster::peer::Peer`]; the gossip task keeps a
-/// dedicated table because the reference engine separates the two
+/// dedicated table because the two records are kept separate
 /// (`gossip_node` vs `node`).
 #[derive(Clone, Debug)]
 pub struct GossipNode {
@@ -109,9 +108,9 @@ pub struct GossipNode {
 /// Live gossip state.
 ///
 /// A simple `HashMap` keyed on `(dc, rack, primary token bytes)`
-/// reproduces the reference engine's per-rack `dict_token_nodes`
-/// behaviour. A second map keyed on `(dc, rack, host)` reproduces
-/// the per-rack `dict_name_nodes` lookup used to detect IP
+/// provides the per-rack token-to-node lookup. A second map keyed
+/// on `(dc, rack, host)` provides
+/// the per-rack name lookup used to detect IP
 /// replacement.
 #[derive(Clone, Debug, Default)]
 pub struct GossipState {
@@ -157,8 +156,7 @@ impl GossipState {
 
     /// Add or update a [`GossipNode`].
     ///
-    /// Mirrors the reference engine's `gossip_add_node_if_absent`
-    /// state machine:
+    /// The add-if-absent state machine:
     ///
     /// * brand-new (dc, rack, token) -> insert.
     /// * known token but new host -> replace IP and re-index.
@@ -279,7 +277,7 @@ pub enum GossipStep {
 
 /// Parse one `host:port:rack:dc:tokens` seed string.
 ///
-/// Mirrors the reference engine's `parse_seeds` routine. The token
+/// The token
 /// list may be a single big-int or a comma-separated list.
 ///
 /// # Examples
@@ -294,7 +292,7 @@ pub fn parse_seed_node(raw: &str) -> Result<SeedRecord, String> {
     if parts.len() != 5 {
         return Err(format!("malformed seed entry '{raw}'"));
     }
-    // The reference engine splits from the right (strrchr), so
+    // The seed string is split from the right, so
     // tokens get the rightmost field. To preserve that with hosts
     // that may contain colons (rare; typically IPv4), we instead
     // rsplit:

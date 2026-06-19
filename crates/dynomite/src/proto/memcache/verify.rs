@@ -1,10 +1,9 @@
 //! Memcached request verification helper.
 //!
-//! In the reference engine, `memcache_verify_request` always returns
-//! `DN_OK`: there are no Memcached-specific structural checks beyond
-//! what the parser already enforces. The Rust port keeps the same
-//! shape so callers can treat the Redis and Memcached helpers
-//! uniformly.
+//! Request verification always succeeds: there are no
+//! Memcached-specific structural checks beyond what the parser
+//! already enforces. The helper keeps the same shape as the RESP
+//! verifier so callers can treat the two uniformly.
 
 use crate::msg::Msg;
 

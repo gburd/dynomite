@@ -1,9 +1,8 @@
 //! Ordered key/value map with a `lower_bound` operation.
 //!
-//! The C engine uses a hand-rolled red-black tree (`dyn_rbtree`)
-//! exclusively for token-ring lookups: callers want the smallest key
-//! greater than or equal to a probe value. The Rust port wraps
-//! [`std::collections::BTreeMap`] which already supports both ordered
+//! Used for token-ring lookups, where callers want the smallest key
+//! greater than or equal to a probe value. This wraps
+//! [`std::collections::BTreeMap`], which supports both ordered
 //! iteration and `range` queries efficiently.
 
 use std::collections::BTreeMap;

@@ -1,17 +1,15 @@
 //! Repair-message construction.
 //!
-//! Reproduces `redis_make_repair_query` from the reference engine.
 //! The full implementation depends on per-response argument parsing
-//! that the Stage 9 pipeline supplies; the data-shape side
-//! (read-repair toggle, repairable-command catalog) lands here so
-//! the rest of the engine can check eligibility today.
+//! that the dispatcher would supply; the data-shape side
+//! (read-repair toggle, repairable-command catalog) is in place so
+//! the rest of the engine can check eligibility.
 
 use crate::msg::{is_read_repairs_enabled, MsgType, ResponseMgr};
 
 use super::{RepairError, RepairOutcome};
 
-/// True when the reference engine flags the request type as
-/// "repairable" via `proto_cmd_info[ty].is_repairable`.
+/// True when the request type is flagged as "repairable".
 #[must_use]
 pub fn is_repairable(ty: MsgType) -> bool {
     matches!(
@@ -32,10 +30,10 @@ pub fn is_repairable(ty: MsgType) -> bool {
 /// otherwise.
 ///
 /// The "build a repair message" arm depends on each response's
-/// post-parsed argument list, which the Stage 9 dispatcher
-/// populates on every response mbuf. The data-shape side is in
-/// place; the per-response argument parsing lands once Stage 9
-/// exercises the workflow.
+/// post-parsed argument list, which the dispatcher would populate
+/// on every response mbuf. That argument parsing is not yet wired,
+/// so this function reports [`RepairOutcome::NoOp`] for every
+/// repairable command; the eligibility check is in place.
 ///
 /// # Examples
 ///
@@ -59,8 +57,8 @@ pub fn redis_make_repair_query(rspmgr: &ResponseMgr) -> Result<RepairOutcome, Re
     // Reaching here means the cluster layer has at least one
     // response. The actual build-step decodes per-response
     // timestamps and produces a write that updates outdated
-    // replicas; that arm needs the Stage 9 dispatcher's per-
-    // response argument parsing. Until then we report no-op so
+    // replicas; that arm needs per-response argument parsing,
+    // which is not yet wired. Until then we report no-op so
     // the caller falls back to checksum-based repair.
     Ok(RepairOutcome::NoOp)
 }

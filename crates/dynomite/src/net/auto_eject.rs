@@ -11,7 +11,7 @@
 //! counter through [`AutoEject::record_success`]).
 //!
 //! The same shared policy is reused by [`crate::net::pool::ConnPool`]
-//! and by the Stage 10 cluster layer; lifting the policy out of any
+//! and by the [`crate::cluster`] layer; lifting the policy out of any
 //! one caller keeps the implementation single-sourced.
 //!
 //! # Examples

@@ -57,7 +57,7 @@ use crate::aae::exchange::{Divergence, ExchangeError, PeerView};
 use crate::aae::tictac::{KeyEntry, Tree};
 
 /// Default per-state timeout for all four protocol states.
-/// Mirrors the C reference's per-phase ceiling.
+/// Bounds how long the exchange may dwell in any one phase.
 pub const DEFAULT_STATE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// States the AAE exchange FSM can be in.

@@ -1,9 +1,7 @@
 //! Memcached text-protocol parser.
 //!
 //! The parser is a single byte-driven state machine for requests
-//! and another for responses, faithfully reproducing the state set
-//! and transitions of `memcache_parse_req` and `memcache_parse_rsp`
-//! in the reference engine. It mutates a [`Msg`] in place: the
+//! and another for responses. It mutates a [`Msg`] in place: the
 //! command tag, key list, value-length accumulator, and parser
 //! cursor are written back so the streaming caller can resume the
 //! machine on more bytes without re-allocating state.
@@ -12,16 +10,15 @@
 //! reported via [`MsgParseResult::Error`].
 
 // The parser truncates ASCII-decimal accumulators into fixed-width
-// counters that match the reference engine (`uint32_t` for vlen,
-// `usize` for cursor offsets). The allowance keeps the Rust port
-// faithful to the C casts.
+// counters (`u32` for vlen, `usize` for cursor offsets). The
+// allowance covers these intentional `as` casts.
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::match_same_arms)]
 #![allow(clippy::needless_continue)]
-// The state machine deliberately keeps the C `if (token == NULL)`
-// guard pattern; rewriting as `let-else` collapses two branches
-// the reference engine treats independently.
+// The state machine deliberately keeps the `if (token == NULL)`
+// guard pattern; rewriting as `let-else` would collapse two
+// branches that are treated independently.
 #![allow(clippy::manual_let_else)]
 #![allow(clippy::redundant_else)]
 
@@ -46,8 +43,8 @@ pub struct HashTag {
 
 /// State alphabet for [`memcache_parse_req`].
 ///
-/// The numeric values match the reference engine's request state
-/// indices so external parity tooling can compare them directly.
+/// The numeric values are stable request state indices so external
+/// parity tooling can compare them directly.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ReqState {
@@ -244,8 +241,7 @@ fn make_keypos(input: &[u8], start: usize, end: usize, hash_tag: Option<HashTag>
 
 /// Parse a Memcached request from `input` and update `r` in place.
 ///
-/// The function reproduces the reference engine's
-/// `memcache_parse_req` state machine. On success, `r.ty()` is set
+/// On success, `r.ty()` is set
 /// to the recognised command, parsed keys are appended to
 /// [`Msg::keys`], and the parser cursor (`parser_pos`) advances
 /// just past the trailing LF. On truncated input the function
@@ -270,8 +266,8 @@ fn make_keypos(input: &[u8], start: usize, end: usize, hash_tag: Option<HashTag>
 /// assert_eq!(r.vlen(), 3);
 /// ```
 ///
-/// The state machine intentionally lives in a single function to
-/// match the reference engine's parser shape.
+/// The state machine intentionally lives in a single function so
+/// the byte-by-byte control flow stays in one place.
 #[allow(clippy::too_many_lines)]
 pub fn memcache_parse_req(r: &mut Msg, input: &[u8]) -> MsgParseResult {
     memcache_parse_req_tagged(r, input, None)
@@ -346,7 +342,7 @@ pub fn memcache_parse_req_tagged(
                     );
                     if matches!(ty, MsgType::ReqMcQuit) {
                         quit = true;
-                        // The C parser sets state to SW_CRLF and steps p back by one.
+                        // Set state to SW_CRLF and step p back by one.
                         state = ReqState::Crlf;
                         // Do not advance; re-enter on this same byte.
                         continue;
@@ -775,8 +771,8 @@ fn finish_error(
 /// assert_eq!(r.ty(), MsgType::RspMcStored);
 /// ```
 ///
-/// The state machine intentionally lives in a single function to
-/// match the reference engine.
+/// The state machine intentionally lives in a single function so
+/// the byte-by-byte control flow stays in one place.
 #[allow(clippy::too_many_lines)]
 pub fn memcache_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
     if r.is_request() {

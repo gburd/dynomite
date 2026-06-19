@@ -3,7 +3,7 @@
 //! A small number of pure-data helpers - constructing error
 //! responses, pairing a response with its request - live here. The
 //! connection plumbing (response send / done, queue threading)
-//! ships in Stage 9.
+//! lives in [`crate::net`].
 
 use super::message::Msg;
 use super::msg_type::MsgType;

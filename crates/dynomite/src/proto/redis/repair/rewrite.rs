@@ -1,7 +1,6 @@
 //! Command-level rewrite (the `SMEMBERS` / DC_SAFE_QUORUM case).
 //!
-//! Reproduces `redis_rewrite_query` from the reference engine. The
-//! only live rewrite is `SMEMBERS <set>` -> `SORT <set> ALPHA`
+//! The only live rewrite is `SMEMBERS <set>` -> `SORT <set> ALPHA`
 //! when `read_consistency` is `DC_SAFE_QUORUM`. The rewrite avoids
 //! the order-dependent checksum mismatch that would otherwise
 //! cause SAFE_QUORUM to fail on an unordered set type.
@@ -66,11 +65,10 @@ pub fn redis_rewrite_query(orig: &mut Msg, pool: &MbufPool) -> Result<RepairOutc
 /// Rewrite a write request as a Lua script that records timestamps.
 ///
 /// The full per-command timestamp-rewrite logic depends on the
-/// post-parsed argument structure (`post_parse_msg`) which uses
+/// post-parsed argument structure, which uses
 /// `keypos` / `argpos` arrays the parser populates on every key
-/// and bulk argument. The data-shape side is wired here; the
-/// per-command Lua-script generation lands once Stage 9's
-/// connection FSM exercises the full read-repair workflow.
+/// and bulk argument. That per-command Lua-script generation is
+/// not yet wired into the read-repair workflow.
 ///
 /// Returns [`RepairOutcome::NoOp`] when the request is not eligible
 /// for the rewrite. Returns

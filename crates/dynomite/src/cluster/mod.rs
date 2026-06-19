@@ -2,12 +2,11 @@
 //! snitch, vnode dispatch, and the cluster-aware
 //! [`Dispatcher`](crate::net::Dispatcher) implementation.
 //!
-//! This module owns the cluster-wide data structures the C
-//! reference engine threaded through `struct server_pool` and the
-//! peer/dc/rack arrays. It is the seam between the per-connection
-//! state machines from [`crate::net`] (which only know about a
-//! single peer) and the routing logic that decides which peers
-//! receive a given request.
+//! This module owns the cluster-wide data structures (the server
+//! pool plus the peer/dc/rack arrays). It is the seam between the
+//! per-connection state machines from [`crate::net`] (which only
+//! know about a single peer) and the routing logic that decides
+//! which peers receive a given request.
 //!
 //! Public surface:
 //!

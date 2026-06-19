@@ -9,11 +9,10 @@
 //!
 //! These are exactly the codecs the
 //! [`dyn_encoding::CodecRegistry`] baseline ships with. The four
-//! extra codecs called out in the broader plan (flatbuffers, capnp,
-//! bebop, bson) are not yet wired through the registry as of this
-//! slice and are therefore not advertised here. When they land, the
-//! [`SUPPORTED_CONTENT_TYPES`] table is the only place that needs to
-//! grow.
+//! additional codecs `dyn_encoding` provides (flatbuffers, capnp,
+//! bebop, bson) are not wired through this gateway's negotiation
+//! and are therefore not advertised here; [`SUPPORTED_CONTENT_TYPES`]
+//! is the single table that lists what the gateway negotiates.
 //!
 //! # Negotiation rules
 //!

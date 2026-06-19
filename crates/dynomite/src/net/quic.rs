@@ -1,12 +1,12 @@
 //! QUIC transport (feature `quic`).
 //!
 //! Wraps a [`quiche::Connection`] in a tokio-driven event loop so the
-//! Stage 9 connection FSMs can drop the QUIC implementation in beside
+//! connection FSMs can use the QUIC implementation beside
 //! the TCP one. The wire-level shape mirrors a single bidirectional
 //! TCP stream: the engine opens stream id `4` (the lowest
 //! client-initiated bidirectional stream) and reads / writes
-//! application bytes through it. Multi-stream multiplexing is left
-//! to future revisions.
+//! application bytes through it. Multi-stream multiplexing is not
+//! implemented.
 //!
 //! The transport is intentionally thin: most of the role-specific
 //! logic lives in the transport-agnostic [`crate::net::Conn`] FSM, so
@@ -22,7 +22,7 @@
 //!
 //! ```ignore
 //! // QUIC requires the `quic` feature; this example is exercised by
-//! // the Stage 9 integration tests.
+//! // the QUIC integration tests.
 //! use dynomite::net::quic::QuicConfig;
 //! let _cfg = QuicConfig::server_with_cert_paths("server.crt", "server.key");
 //! ```
@@ -63,7 +63,7 @@ pub struct QuicConfig {
     /// Path to the server private key (PEM).
     pub priv_key_path: Option<String>,
     /// Application-layer protocol negotiation labels in wire format.
-    /// The Stage 9 default is `b"\\x05dynom"`.
+    /// The default is `b"\\x05dynom"`.
     pub alpn: Vec<u8>,
     /// Disable certificate verification on the client side. Tests
     /// flip this on; production must leave it `false`.

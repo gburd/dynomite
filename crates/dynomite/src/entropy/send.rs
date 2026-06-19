@@ -221,13 +221,12 @@ pub(crate) fn cipher_capacity(buffer_size: usize) -> usize {
 /// Default snapshot source: pulls a Redis snapshot from a local
 /// Redis instance.
 ///
-/// The reference engine pipes the on-disk AOF file produced by
-/// `BGREWRITEAOF` over the entropy channel. The Rust default
-/// follows that contract: it issues a `BGREWRITEAOF` over the
+/// The default source issues a `BGREWRITEAOF` over the
 /// configured Redis TCP endpoint, waits for the command to be
-/// acknowledged, then reads the AOF file from disk. Embedders
+/// acknowledged, then reads the on-disk AOF file from disk and
+/// pipes it over the entropy channel. Embedders
 /// that need a different snapshot strategy plug in their own
-/// [`SnapshotSource`] through the Stage 13 API.
+/// [`SnapshotSource`] through the embedding API.
 ///
 /// # Examples
 ///
@@ -244,8 +243,7 @@ pub struct RedisLocalSnapshot {
     /// Connect/read timeout.
     pub timeout: Duration,
     /// Number of `BGREWRITEAOF` retries before giving up. The
-    /// reference engine retries once after a 10 second sleep; we
-    /// expose the count and pause as parameters.
+    /// count and the retry pause are exposed as parameters.
     pub bgrewrite_retries: u32,
     /// Pause between `BGREWRITEAOF` retries.
     pub bgrewrite_retry_pause: Duration,

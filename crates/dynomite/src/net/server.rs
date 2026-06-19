@@ -1,15 +1,14 @@
 //! SERVER-role connection driver.
 //!
 //! The SERVER role holds an outbound connection to the backend
-//! datastore (Redis or memcache). The driver pulls requests off
+//! datastore (RESP or memcache). The driver pulls requests off
 //! the connection's in-queue, encodes them onto the wire, and
 //! parses response bytes back into [`Msg`]s that it dispatches to
 //! the originating client.
 //!
-//! Stage 9 ships a minimal, transport-agnostic driver suitable
-//! for the loopback echo integration test. Stage 10 wires the
-//! driver to the cluster's [`Dispatcher`] so client / server
-//! connections form a complete request-response pipeline.
+//! The driver is transport-agnostic and is wired to the cluster's
+//! [`Dispatcher`] so client / server connections form a complete
+//! request-response pipeline.
 //!
 //! [`Dispatcher`]: crate::net::Dispatcher
 //! [`Msg`]: crate::msg::Msg

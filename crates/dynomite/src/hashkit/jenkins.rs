@@ -55,8 +55,8 @@ fn finalize(a: &mut u32, b: &mut u32, c: &mut u32) {
 /// Bob Jenkins' lookup3 (`hashlittle`-shaped).
 ///
 /// The byte-by-byte read path is used so output is platform-independent;
-/// on little-endian targets the C aligned and unaligned paths produce
-/// identical results.
+/// on little-endian targets the aligned and unaligned read variants
+/// produce identical results.
 pub(super) fn hash(key: &[u8]) -> DynToken {
     let mut a: u32;
     let mut b: u32;
@@ -70,8 +70,9 @@ pub(super) fn hash(key: &[u8]) -> DynToken {
     c = init;
 
     if length == 0 {
-        // Match the C early-exit: `final` is not run and the token's
-        // first word is whatever `c` was after initialization.
+        // Early exit on the empty key: the final mix is not run and
+        // the token's first word is whatever `c` was after
+        // initialization.
         return DynToken::from_u32(c);
     }
 

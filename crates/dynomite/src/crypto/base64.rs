@@ -1,11 +1,9 @@
 //! Base64 encoding helpers.
 //!
 //! Wraps the workspace `base64` crate with the standard alphabet.
-//! The reference engine emits padded output (it calls OpenSSL's
-//! `BIO_f_base64()` with `BIO_FLAGS_BASE64_NO_NL`, which suppresses
-//! embedded newlines but keeps the trailing `=` padding); this
-//! module preserves that behavior. Decoding accepts both padded and
-//! unpadded inputs.
+//! Encoding emits padded output with no embedded newlines (the
+//! trailing `=` padding is preserved). Decoding accepts both padded
+//! and unpadded inputs.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::engine::general_purpose::STANDARD_NO_PAD;

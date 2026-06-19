@@ -1,10 +1,9 @@
 //! PEM key file loading.
 //!
 //! Accepts both PKCS#1 framed RSA keys (`-----BEGIN RSA PRIVATE KEY-----`)
-//! and PKCS#8 framed private keys (`-----BEGIN PRIVATE KEY-----`). The
-//! reference engine ships PKCS#1 fixtures by default; PKCS#8 support
-//! lets new deployments use the formats produced by modern OpenSSL
-//! and `ssh-keygen`.
+//! and PKCS#8 framed private keys (`-----BEGIN PRIVATE KEY-----`).
+//! PKCS#8 support lets new deployments use the formats produced by
+//! modern OpenSSL and `ssh-keygen`.
 
 use std::fs;
 use std::path::Path;

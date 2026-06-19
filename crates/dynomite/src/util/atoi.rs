@@ -42,9 +42,8 @@ pub fn dn_atoi(line: &[u8]) -> Option<i32> {
 
 /// Parse a fixed-length ASCII decimal slice as a `u32`.
 ///
-/// The C function returns `0` on empty input or non-digit bytes; the
-/// Rust port surfaces those as [`None`] so callers can tell zero-the-
-/// input from zero-the-error.
+/// Empty input or non-digit bytes yield [`None`] (rather than `0`)
+/// so callers can tell zero-the-input from zero-the-error.
 ///
 /// # Examples
 ///

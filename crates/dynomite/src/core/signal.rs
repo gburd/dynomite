@@ -1,11 +1,10 @@
 //! UNIX signal table and dispatch.
 //!
-//! The Dynomite C engine wires a small static table of signals to a
-//! single `signal_handler` that dispatches on the signal number. The
-//! Rust port encodes the same table as a list of [`SignalEntry`]
-//! values; signal handling itself runs in a tokio task that consumes a
-//! `Signal` stream so the body of every handler stays on the runtime
-//! and never executes in async-signal-unsafe context.
+//! A small static table maps each handled signal to a
+//! [`SignalEntry`]. Signal handling itself runs in a tokio task
+//! that consumes a `Signal` stream so the body of every handler
+//! stays on the runtime and never executes in async-signal-unsafe
+//! context.
 //!
 //! # Examples
 //!

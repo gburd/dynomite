@@ -16,9 +16,8 @@
 //!   `tokio::net::TcpStream` to stay within the locked dependency
 //!   set.
 //!
-//! The trait shape is the seam Stage 13 will expose through the
-//! embedding API; this stage locks the surface so the embed
-//! wrapper only needs to forward.
+//! The trait shape is the seam exposed through the embedding API;
+//! the embed wrapper only needs to forward to it.
 //!
 //! # Examples
 //!
@@ -45,8 +44,7 @@ use crate::conf::ConfDynSeed;
 #[derive(Debug, Error)]
 pub enum SeedsError {
     /// The provider has no fresh data: the gossip task should
-    /// retry on the next interval. Mirrors the reference engine's
-    /// `DN_NOOPS` return.
+    /// retry on the next interval (no fresh data this round).
     #[error("no fresh seeds")]
     NoFreshSeeds,
     /// I/O error.
@@ -74,15 +72,14 @@ pub trait SeedsProvider: Send + Sync {
     ///
     /// Blocking implementations do their work synchronously and
     /// return immediately; async implementations should run on a
-    /// blocking task spawned by the caller. Stage 12 binary
-    /// wiring picks the right runtime path; the trait stays sync
+    /// blocking task spawned by the caller. The binary's runtime
+    /// wiring picks the right path; the trait stays sync
     /// to keep the surface small for embedders.
     fn get_seeds(&self) -> Result<Vec<ConfDynSeed>, SeedsError>;
 }
 
-/// Marker trait used by Stage 13 to register custom seeds
-/// providers through the embedding API. Implementing
-/// [`SeedsProvider`] is sufficient.
+/// Marker trait used to register custom seeds providers through
+/// the embedding API. Implementing [`SeedsProvider`] is sufficient.
 impl<T> SeedsProvider for std::sync::Arc<T>
 where
     T: SeedsProvider + ?Sized,

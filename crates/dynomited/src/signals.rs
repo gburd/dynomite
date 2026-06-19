@@ -1,24 +1,22 @@
 //! Async signal handling for `dynomited`.
 //!
 //! Installs a tokio-driven [`SignalSet`] that maps `SIGINT`,
-//! `SIGTERM`, `SIGHUP`, `SIGTTIN`, `SIGTTOU`, `SIGUSR1`,
-//! `SIGUSR2`, and `SIGSEGV` to a single async stream of
+//! `SIGTERM`, and `SIGHUP` to a single async stream of
 //! [`SignalEvent`] values. The run loop selects on this
 //! stream and dispatches each event to the appropriate
-//! handler (graceful shutdown, log reopen, log-level toggle).
+//! handler (graceful shutdown, log reopen and config reload).
 //!
-//! Stage 12b only consumes the four signals the run loop must
-//! react to:
+//! The signals consumed:
 //!
 //! * `SIGINT` and `SIGTERM` -> graceful shutdown.
-//! * `SIGHUP` -> reopen the log file (delegates to
-//!   [`dynomite::core::log::reopen_on_sighup`]).
+//! * `SIGHUP` -> reopen the log file (via
+//!   [`dynomite::core::log::reopen_on_sighup`]) and, when a config
+//!   path is set, re-parse and apply the reloadable pool knobs.
 //! * `SIGPIPE` is ignored implicitly by tokio (writes return
-//!   `EPIPE`); we do not attach a stream for it.
+//!   `EPIPE`); no stream is attached for it.
 //!
-//! `SIGTTIN` / `SIGTTOU` (log-level up / down) and `SIGUSR1` /
-//! `SIGUSR2` are deferred until the embed API exposes the
-//! corresponding control hooks; they are listed in
+//! Log-level toggling (`SIGTTIN` / `SIGTTOU`) and the user signals
+//! (`SIGUSR1` / `SIGUSR2`) are not handled; they are listed in
 //! `docs/parity.md` as deferred rows.
 
 use std::io;
@@ -28,11 +26,11 @@ use tokio::signal::unix::{signal, Signal as UnixSignal, SignalKind};
 /// One of the signals [`SignalSet`] can deliver.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SignalEvent {
-    /// `SIGINT` (Ctrl-C). The C handler logs and exits.
+    /// `SIGINT` (Ctrl-C). Treated as a graceful-shutdown request.
     Interrupt,
     /// `SIGTERM`. Treated as a graceful-shutdown request.
     Terminate,
-    /// `SIGHUP`. The C handler reopens the log file.
+    /// `SIGHUP`. Reopens the log file and reloads config.
     Hangup,
 }
 

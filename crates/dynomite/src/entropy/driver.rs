@@ -48,8 +48,8 @@ pub const DEFAULT_RECON_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Default TCP port the entropy receiver listens on.
 ///
-/// Mirrors the reference engine's `ENTROPY_PORT` macro
-/// (`8105`). When operators want a different port they can plug
+/// The default port is `8105`. When operators want a different port
+/// they can plug
 /// their own [`EntropyDriver`] together via [`EntropyDriver::with_peer_port`].
 pub const DEFAULT_ENTROPY_PORT: u16 = 8105;
 
@@ -344,10 +344,9 @@ impl EntropyDriver {
 
     /// Drive the periodic loop until `shutdown` is set.
     ///
-    /// The first cycle runs immediately, mirroring how the
-    /// reference engine's entropy thread eagerly synchronises on
-    /// startup; subsequent cycles fire on `cadence`. A shutdown
-    /// observed mid-cycle is honoured at the next per-peer
+    /// The first cycle runs immediately so the receiver synchronises
+    /// eagerly on startup; subsequent cycles fire on `cadence`. A
+    /// shutdown observed mid-cycle is honoured at the next per-peer
     /// boundary so the in-flight peer interaction completes
     /// (the driver does not abort the AES handshake mid-frame).
     pub async fn run_until_shutdown(self, mut shutdown: watch::Receiver<bool>) {

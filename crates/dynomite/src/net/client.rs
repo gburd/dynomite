@@ -1,7 +1,7 @@
 //! CLIENT-role connection driver.
 //!
 //! The CLIENT role is the engine's view of an inbound connection
-//! from a Redis or memcache client. The driver:
+//! from a client (RESP or memcache). The driver:
 //!
 //! 1. Reads bytes from the [`crate::io::reactor::Transport`] into
 //!    the connection's recv mbuf chain.
@@ -18,10 +18,10 @@
 //! pending response bytes first so the loop's read / write
 //! arms never block on a saturated peer.
 //!
-//! The Stage 9 implementation does not yet reach into the cluster
-//! layer (Stage 10) or the entropy reconciliation (Stage 11);
-//! those plug in through the [`Dispatcher`] hook the proxy
-//! installs.
+//! The driver does not reach into the cluster layer or the entropy
+//! reconciliation directly; both plug in through the [`Dispatcher`]
+//! hook the proxy installs, keeping the driver decoupled from
+//! routing and repair.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,9 +37,9 @@ use crate::net::conn::Conn;
 use crate::net::dispatcher::{DispatchOutcome, Dispatcher, OutboundEnvelope};
 use crate::net::NetError;
 
-/// Stage-9 read buffer size for the client driver.
+/// Read buffer size for the client driver.
 ///
-/// Sized to the typical Redis bulk header so inline GET/SET
+/// Sized to the typical RESP bulk header so inline GET/SET
 /// commands fit in a single read; larger payloads are appended
 /// across iterations.
 const CLIENT_READ_CHUNK: usize = 4096;
@@ -299,11 +299,9 @@ async fn drive_parser(
                 let inline_send: Option<OutboundEnvelope> = req_span.in_scope(|| {
                     // Carry the consumed wire bytes inside the
                     // msg so the dispatcher can forward them to a
-                    // backend without having to re-encode. The C
-                    // engine keeps the request bytes in the
-                    // inbound mbuf chain across recv -> filter
-                    // -> forward; the Rust port stores them on
-                    // the msg's own mbuf chain instead.
+                    // backend without having to re-encode. The bytes
+                    // live on the msg's own mbuf chain across
+                    // recv -> filter -> forward.
                     let pool = conn.mbuf_pool().clone();
                     let mut buf = pool.get();
                     buf.recv(&accumulated[..consumed]);
@@ -359,7 +357,7 @@ async fn drive_parser(
                         source_peer_idx: None,
                     };
                     let _ = handler.response_tx.send(env).await;
-                    // Mirror the C engine: close after replying.
+                    // Close the connection after replying.
                     conn.set_eof();
                     return Ok(());
                 }

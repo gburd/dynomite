@@ -130,7 +130,7 @@ pub enum ConfError {
         reason: String,
     },
 
-    /// `hash_tag` must be exactly two characters, per the C parser.
+    /// `hash_tag` must be exactly two characters.
     #[error("conf: directive 'hash_tag' must be a string of exactly 2 characters, got '{0}'")]
     BadHashTag(String),
 

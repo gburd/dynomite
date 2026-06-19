@@ -257,8 +257,8 @@ async fn drive_dnode_parser(
 /// of the 32-byte key buffer. Returns a single opaque
 /// [`NetError::Dnode`] on failure regardless of whether the
 /// underlying error was bad padding, a length mismatch, or a
-/// key/iv mismatch, so peers cannot distinguish the cases (the
-/// padding-oracle surface flagged in the Stage 6 review).
+/// key/iv mismatch, so peers cannot distinguish the cases, which
+/// avoids a padding-oracle surface.
 fn decrypt_dnode_payload(
     key: &[u8; crate::crypto::AES_KEYLEN],
     payload: &[u8],

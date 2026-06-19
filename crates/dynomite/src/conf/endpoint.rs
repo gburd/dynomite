@@ -3,9 +3,8 @@
 //! Endpoints are stringly-typed in YAML; we parse them into a typed
 //! [`ConfListen`] preserving the original `pname` (the raw string) and
 //! the host / port pieces. Both `host:port` and `[ipv6]:port` syntaxes
-//! are accepted, plus bare IPv6 addresses split at the rightmost colon
-//! (matching the C reference's `dn_strrchr(.., ':')` behavior). Unix
-//! socket paths starting with `/` are also accepted.
+//! are accepted, plus bare IPv6 addresses split at the rightmost colon.
+//! Unix socket paths starting with `/` are also accepted.
 
 use std::fmt;
 use std::net::IpAddr;

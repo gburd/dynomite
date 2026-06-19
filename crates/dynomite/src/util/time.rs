@@ -1,8 +1,7 @@
 //! Wall-clock and digit-counting helpers.
 //!
-//! The C reference exposes `dn_msec_now`, `dn_usec_now`,
-//! `current_timestamp_in_millis`, and `count_digits`. This module
-//! gathers them as plain functions over `std::time::SystemTime`.
+//! Millisecond / microsecond timestamps and a decimal digit counter,
+//! gathered as plain functions over `std::time::SystemTime`.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

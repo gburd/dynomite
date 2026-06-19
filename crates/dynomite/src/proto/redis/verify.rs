@@ -1,6 +1,5 @@
 //! Redis request structural verifier.
 //!
-//! Reproduces `redis_verify_request` from the reference engine.
 //! Most commands have nothing to verify here; the only live check
 //! is that an `EVAL` request keeps every key it touches on the
 //! same shard. The verifier consults a caller-supplied dispatcher

@@ -1,6 +1,6 @@
 //! Process daemonization for `dynomited`.
 //!
-//! [`daemonize`] reproduces the reference engine's `dn_daemonize`
+//! [`daemonize`] performs the standard double-fork daemonization
 //! flow: fork once to escape the controlling terminal, `setsid` to
 //! become a session leader, fork a second time so the daemon can
 //! never re-acquire a controlling tty, optionally `chdir("/")`,
@@ -52,11 +52,10 @@ pub enum DaemonizeOutcome {
 
 /// Daemonize the current process.
 ///
-/// `dump_core` mirrors the reference engine's parameter: when
+/// `dump_core` controls the working directory: when
 /// `false`, the process changes its working directory to `/` so
 /// any core dump lands at the root rather than under the user's
-/// `cwd`. Pass `true` to preserve the working directory (matching
-/// the reference engine, which calls `dn_daemonize(1)`).
+/// `cwd`. Pass `true` to preserve the working directory.
 ///
 /// # Errors
 /// Forwarded from any of the underlying syscalls.

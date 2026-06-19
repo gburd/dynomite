@@ -2,11 +2,11 @@
 //! takes inside the engine, plus the queues, indices, and per-DC
 //! response managers that thread them through the dispatcher.
 //!
-//! This module exposes the data layer; the connection-coupled
-//! lifecycle (recv/send, timeout queues, peer forwarding) ships in
-//! Stage 9 once the connection state machine is in place. Helpers
-//! that already have a clean data-only definition (error response
-//! construction, fragment bookkeeping, quorum decisions) live here.
+//! This module exposes the data layer: the message shape, queues,
+//! indices, and per-DC response managers, plus the data-only helpers
+//! (error response construction, fragment bookkeeping, quorum
+//! decisions). The connection-coupled lifecycle (recv/send, timeout
+//! queues, peer forwarding) lives in [`crate::net`].
 //!
 //! # Examples
 //!
@@ -41,7 +41,8 @@ pub use self::response_mgr::{QuorumOutcome, ResponseMgr, MAX_REPLICAS_PER_DC};
 
 /// Cluster consistency level applied to a single message.
 ///
-/// The numeric values match `consistency_t` in the C reference.
+/// The numeric values are stable wire codes for the consistency
+/// level.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
 #[repr(u8)]
 pub enum ConsistencyLevel {
@@ -101,7 +102,7 @@ impl ConsistencyLevel {
 
 /// Dynomite-side error code carried in a message envelope.
 ///
-/// Matches `dyn_error_t` from the C reference verbatim.
+/// The numeric values are stable wire codes for the error.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
 #[repr(u8)]
 pub enum DynErrorCode {
@@ -133,8 +134,7 @@ pub enum DynErrorCode {
 }
 
 impl DynErrorCode {
-    /// Human-readable label used in error responses, mirroring
-    /// `dn_strerror` in the C reference.
+    /// Human-readable label used in error responses.
     ///
     /// # Examples
     ///
@@ -196,8 +196,8 @@ static READ_REPAIRS_ENABLED: OnceLock<bool> = OnceLock::new();
 /// Configure whether read repairs are globally enabled.
 ///
 /// Called once during configuration validation; subsequent calls are
-/// silently ignored to mirror the reference engine's read-only
-/// `g_read_repairs_enabled` global. Returns `true` when the value was
+/// silently ignored, so the cluster-wide read-repair flag is
+/// write-once. Returns `true` when the value was
 /// installed and `false` when an earlier call already pinned it.
 ///
 /// # Examples
@@ -214,8 +214,7 @@ pub fn set_read_repairs_enabled(enabled: bool) -> bool {
 
 /// True when read repairs are enabled cluster-wide.
 ///
-/// Defaults to `false`, matching the reference engine's initial
-/// value of `g_read_repairs_enabled`.
+/// Defaults to `false` until configuration validation enables it.
 ///
 /// # Examples
 ///

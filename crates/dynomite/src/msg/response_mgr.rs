@@ -21,8 +21,7 @@ use crate::core::types::MsgId;
 use super::message::Msg;
 use super::msg_type::MsgType;
 
-/// Maximum replicas per datacenter the engine tracks. Matches
-/// `MAX_REPLICAS_PER_DC` from the C reference.
+/// Maximum replicas per datacenter the engine tracks.
 pub const MAX_REPLICAS_PER_DC: usize = 3;
 
 /// One accepted response together with its payload checksum.
@@ -67,10 +66,9 @@ impl ResponseMgr {
     /// Build a manager bound to `req` that expects at most
     /// `max_responses` replies.
     ///
-    /// `max_responses` must be in the range `1..=MAX_REPLICAS_PER_DC`;
-    /// the reference engine derives it from the rack count of the
-    /// target datacenter and panics on out-of-range values, which the
-    /// Rust port surfaces as a debug assertion.
+    /// `max_responses` must be in the range `1..=MAX_REPLICAS_PER_DC`
+    /// (it is the rack count of the target datacenter); an
+    /// out-of-range value trips a debug assertion.
     ///
     /// # Examples
     ///

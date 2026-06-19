@@ -7,9 +7,9 @@
 //! CRLF.
 //!
 //! Sharding is delegated to a [`FragmentDispatcher`] so the
-//! fragmenter does not depend on the cluster layer (which lands
-//! in Stage 10). Tests pass an in-memory dispatcher; the real
-//! engine supplies one backed by `dnode_peer_idx_for_key_on_rack`.
+//! fragmenter does not depend on the cluster layer. Tests pass an
+//! in-memory dispatcher; the cluster layer supplies one backed by
+//! its per-key, per-rack peer routing.
 
 #![allow(clippy::cast_possible_truncation)]
 

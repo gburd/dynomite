@@ -83,9 +83,9 @@ where
 /// A wire-format codec that turns a structured request or response
 /// value into bytes and back.
 ///
-/// Schema-first codecs (protobuf today, plus the deferred
-/// FlatBuffers / Cap'n Proto / Bebop) and schema-less codecs
-/// (JSON / CBOR / BSON) are both addressable through this trait.
+/// Schema-first codecs (protobuf, FlatBuffers, Cap'n Proto, Bebop)
+/// and schema-less codecs (JSON / CBOR / BSON) are both addressable
+/// through this trait.
 /// Per-type registration happens on the concrete codec; the trait
 /// itself is intentionally narrow so it can be stored as
 /// `Box<dyn WireCodec>` inside the [`crate::CodecRegistry`].

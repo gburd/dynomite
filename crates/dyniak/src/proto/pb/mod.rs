@@ -23,11 +23,11 @@
 //!
 //! # Encoding
 //!
-//! All bodies in this slice are encoded as protobuf via
+//! All PBC bodies are encoded as protobuf via
 //! [`dyn_encoding::ProtobufCodec`]. The codec is built once via
 //! [`codec_registry`] and shared across connections. The
-//! `dyn-encoding` registry is keyed by content-type, so the upcoming
-//! HTTP gateway can register JSON and CBOR codecs alongside this
+//! `dyn-encoding` registry is keyed by content-type, so the HTTP
+//! gateway registers JSON and CBOR codecs alongside this
 //! protobuf codec without touching the PBC path.
 
 pub mod codec;

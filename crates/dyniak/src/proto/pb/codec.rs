@@ -1,13 +1,14 @@
 //! Wire-codec wiring for the Riak PBC operation surface.
 //!
 //! A single [`dyn_encoding::ProtobufCodec`] is built once and stocked
-//! with every message type the v0.0.1 slice exchanges on the wire.
+//! with every message type the PBC surface exchanges on the wire.
 //! The codec is then installed into a [`dyn_encoding::CodecRegistry`]
 //! under the canonical Riak content-type
 //! `"application/x-protobuf"`. Higher layers ask the registry for
-//! `"application/x-protobuf"` to encode and decode bodies, and the
-//! upcoming HTTP gateway will register additional codecs (JSON,
-//! CBOR) under their own content-types into the same registry.
+//! `"application/x-protobuf"` to encode and decode bodies. The HTTP
+//! gateway maintains its own registry
+//! ([`crate::proto::http::object::object_codecs`]) carrying JSON,
+//! CBOR, and protobuf codecs under their respective content-types.
 
 use dyn_encoding::{CodecRegistry, ProtobufCodec};
 

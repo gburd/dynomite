@@ -22,11 +22,8 @@
 //!
 //! # Wire format
 //!
-//! The reference engine's reconciliation protocol consists of two
-//! sub-protocols (a file-stream `snd` path and a per-record `rcv`
-//! path) that are not inverses of each other. The Rust port uses a
-//! single, length-prefixed framing that subsumes the `snd` shape
-//! and is symmetric across sender and receiver. See
+//! The reconciliation protocol uses a single, length-prefixed
+//! framing that is symmetric across sender and receiver. See
 //! [`docs/parity.md`](../../../docs/parity.md) for the precise
 //! divergence list.
 //!
@@ -123,15 +120,14 @@ pub fn boxed_sink<S: SnapshotSink + 'static>(sink: S) -> BoxedSnapshotSink {
 
 /// Magic word that opens every entropy negotiation header.
 ///
-/// Mirrors `MAGIC_NUMBER` (`64640001`) defined inline in the
-/// reference engine's entropy utility.
+/// The magic word (`64640001`) that opens every entropy
+/// negotiation header.
 pub const ENTROPY_MAGIC: u32 = 0x6464_0001;
 
 /// Negotiation command: sender pushes a snapshot to the receiver.
 pub const ENTROPY_COMMAND_SEND: u32 = 1;
 
-/// Default plaintext chunk size, in bytes. Matches the reference
-/// engine's `BUFFER_SIZE` (16 KiB).
+/// Default plaintext chunk size, in bytes (16 KiB).
 pub const DEFAULT_BUFFER_SIZE: usize = 16 * 1024;
 
 /// Default ciphertext chunk capacity, in bytes. The reference
@@ -146,24 +142,18 @@ pub const DEFAULT_HEADER_SIZE: usize = 1024;
 
 /// Hard ceiling on the negotiated `header_size`, in bytes.
 ///
-/// Mirrors the reference engine's `MAX_HEADER_SIZE` validation.
+/// Hard ceiling validated on the negotiation header size.
 pub const MAX_HEADER_SIZE: usize = 1024;
 
 /// Hard ceiling on the negotiated `buffer_size`, in bytes (5 MiB).
-///
-/// Mirrors the reference engine's `MAX_BUFFER_SIZE` validation.
 pub const MAX_BUFFER_SIZE: usize = 5 * 1024 * 1024;
 
 /// Hard ceiling on the negotiated `cipher_size`, in bytes (5 MiB).
-///
-/// Mirrors the reference engine's `MAX_CIPHER_SIZE` validation.
 pub const MAX_CIPHER_SIZE: usize = 5 * 1024 * 1024;
 
 /// Hard ceiling on a single snapshot's plaintext size, in bytes (4 GiB).
 ///
-/// The reference engine does not bound this explicitly because its
-/// receiver consumes per-key chunks and never allocates the whole
-/// snapshot in one call. The Rust port stages every chunk into a
+/// This bound exists because the receiver stages every chunk into a
 /// `Vec<u8>` for replay and so MUST cap the upfront allocation. A
 /// malicious sender that completes the negotiation handshake could
 /// otherwise declare `total_len = u32::MAX` and trigger a 4 GiB
@@ -274,7 +264,7 @@ impl EntropyConfig {
 
 /// Snapshot byte source.
 ///
-/// Implementations are typically pluggable via the Stage 13
+/// Implementations are pluggable via the
 /// embedding API; the engine ships [`RedisLocalSnapshot`] as the
 /// default. Implementations are expected to be cheap to clone
 /// (e.g. shared via [`Arc`]) but each call to [`snapshot`] may
@@ -305,7 +295,7 @@ where
 
 /// Receiver-side hook that consumes the decrypted snapshot.
 ///
-/// Implementations are typically pluggable via the Stage 13
+/// Implementations are pluggable via the
 /// embedding API. The engine ships an in-memory implementation
 /// for tests and the [`receive::RedisReplaySink`] default for
 /// production wiring.

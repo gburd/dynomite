@@ -1,14 +1,13 @@
 //! Memcached multi-key request classification.
 //!
-//! In the reference engine, `memcache_is_multikey_request` always
-//! returns false: response coalescing for `get`/`gets` is driven by
-//! the fragment vector instead of by the multikey flag. The Rust
-//! port reproduces the same predicate.
+//! `memcache_is_multikey_request` always returns false: response
+//! coalescing for `get`/`gets` is driven by the fragment vector
+//! instead of by a multikey flag.
 
 use crate::msg::MsgType;
 
-/// Constant `false`. The reference engine flags no Memcached request
-/// as multikey here; multi-key handling for `get`/`gets` flows
+/// Constant `false`: no Memcached request is flagged as multikey
+/// here; multi-key handling for `get`/`gets` flows
 /// through [`super::fragment::memcache_fragment`] instead.
 ///
 /// # Examples

@@ -1,5 +1,5 @@
-//! Typed enums for configuration values that the C parser stored as
-//! free-form strings or small integer codes.
+//! Typed enums for configuration values that arrive as free-form
+//! strings or small integer codes.
 
 use std::fmt;
 
@@ -128,11 +128,10 @@ impl fmt::Display for Transport {
 /// Distribution algorithm selected by the pool's `distribution:`
 /// directive.
 ///
-/// `Vnode` is the historical default and the only mode the C
-/// reference engine supported in the Rust port until
-/// `RandomSlicing` was added. `Ketama`, `Modula`, and `Random`
-/// are accepted for backward compatibility with the C
-/// configuration vocabulary; they collapse to `Vnode` at
+/// `Vnode` is the historical default and was the only mode
+/// supported until `RandomSlicing` was added. `Ketama`, `Modula`,
+/// and `Random` are accepted for backward compatibility with the
+/// older configuration vocabulary; they collapse to `Vnode` at
 /// runtime and emit a deprecation warning at config-load time.
 ///
 /// # Examples
@@ -150,13 +149,13 @@ pub enum Distribution {
     /// Per-rack continuum keyed by per-peer token lists. The
     /// historical default.
     Vnode,
-    /// Compatibility alias accepted by the C reference; collapsed
+    /// Compatibility alias; collapsed
     /// to [`Self::Vnode`] at runtime with a deprecation warning.
     Ketama,
-    /// Compatibility alias accepted by the C reference; collapsed
+    /// Compatibility alias; collapsed
     /// to [`Self::Vnode`] at runtime with a deprecation warning.
     Modula,
-    /// Compatibility alias accepted by the C reference; collapsed
+    /// Compatibility alias; collapsed
     /// to [`Self::Vnode`] at runtime with a deprecation warning.
     Random,
     /// Random-slicing distribution: a small, gap-free `(name,
@@ -216,8 +215,8 @@ impl Distribution {
         }
     }
 
-    /// True for the modes that survived the C-to-Rust port
-    /// untouched; `Ketama`, `Modula`, and `Random` are accepted
+    /// True for the modes honoured directly; `Ketama`, `Modula`,
+    /// and `Random` are accepted
     /// for backward compatibility but collapse to `Vnode` at
     /// runtime.
     ///
@@ -505,8 +504,9 @@ impl fmt::Display for ConsistencyLevel {
 /// Hash algorithm selected by `hash:`.
 ///
 /// The names mirror the algorithm tags accepted by the YAML parser.
-/// Stage 3 owns the hashing math; this enum models only the configured
-/// choice so the parser can echo it back without depending on the
+/// The [`crate::hashkit`] module owns the hashing math; this enum
+/// models only the configured choice so the parser can echo it back
+/// without depending on the
 /// hashkit module.
 ///
 /// # Examples

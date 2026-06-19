@@ -1,7 +1,6 @@
 //! Per-connection state and the shared event loop.
 //!
-//! [`Conn`] is the Rust counterpart of the C engine's `struct conn`.
-//! It owns:
+//! [`Conn`] holds the per-connection state. It owns:
 //!
 //! * the [`Transport`] the connection reads and writes through,
 //! * the recv mbuf chain ([`MbufQueue`]) the parser drains,
@@ -47,18 +46,15 @@ use super::NetError;
 
 /// Maximum queue depth before back-pressure kicks in.
 ///
-/// Mirrors the reference `MAX_CONN_QUEUE_SIZE` constant in
-/// `dyn_connection.h`. The C engine logs and rejects on overflow;
-/// the Rust port surfaces the same behavior through
-/// [`Conn::enqueue_in`] / [`Conn::enqueue_out`] which return
-/// [`NetError::PoolExhausted`] when the cap is reached.
+/// On overflow the queue logs and rejects: [`Conn::enqueue_in`] /
+/// [`Conn::enqueue_out`] return [`NetError::PoolExhausted`] when the
+/// cap is reached.
 pub const MAX_CONN_QUEUE_SIZE: usize = 20_000;
 
 /// Lightweight rolling counters carried by every [`Conn`].
 ///
-/// Mirrors the per-connection byte counters and event totals that
-/// the C engine carries on `struct conn` (`recv_bytes`, `send_bytes`,
-/// `events`).
+/// Per-connection byte counters and event totals (`recv_bytes`,
+/// `send_bytes`, `events`).
 #[derive(Debug, Default, Clone)]
 pub struct ConnStats {
     /// Bytes successfully read into the recv mbuf chain.
@@ -543,8 +539,8 @@ impl Conn {
 
     /// Idle no-op driver hook.
     ///
-    /// Stage 9 wires the PROXY / CLIENT / SERVER / DNODE_PEER_*
-    /// roles into dedicated drivers in the sibling modules. Calling
+    /// The PROXY / CLIENT / SERVER / DNODE_PEER_* roles are driven by
+    /// dedicated drivers in the sibling modules. Calling
     /// `run` on a [`Conn`] without first installing a driver does
     /// nothing: the connection idles until [`Conn::close`] is
     /// invoked. Real drivers (for example [`super::client::client_loop`])

@@ -22,11 +22,9 @@
 //! number of peers. The two coordinators share this module's
 //! [`XaParticipant`] verbatim for the local branches; the cross-node
 //! coordinator adds the presumed-abort prepare path, the
-//! forward-commit (commit-in-doubt) retry, and a durable in-doubt
-//! log. The one remaining boundary is the automatic cold-restart
-//! recovery scan that re-reads that log on coordinator startup; the
-//! durable record is already written so the scan can be built on top
-//! (see [`crate::datastore::xa_net`] for the precise scoping). The
+//! forward-commit (commit-in-doubt) retry, a durable in-doubt log,
+//! and the automatic cold-restart recovery scan that re-reads that
+//! log on coordinator startup (see [`crate::datastore::xa_net`]). The
 //! design notes are in `docs/journal/2026-06-05-dyniak-xa.md` and
 //! `docs/journal/2026-06-18-xa-cross-node.md`.
 //!

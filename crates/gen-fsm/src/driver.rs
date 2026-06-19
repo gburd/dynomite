@@ -248,11 +248,10 @@ fn apply_transition<H: FsmHandler>(
             Action::Reply(handle, reply) => handle.send(reply),
             Action::Postpone => {
                 // Postpone has no effect outside the mailbox path
-                // for synthetic Enter/Timeout/Internal events; we
-                // simply ignore. A handler that postpones a Call
-                // currently loses the reply handle (see notes on
-                // FsmHandler about deferred-reply being a future
-                // iteration).
+                // for synthetic Enter/Timeout/Internal events; it is
+                // simply ignored. A handler that postpones a Call
+                // loses the reply handle: deferred-reply is not
+                // supported for these synthetic events.
             }
             Action::SetStateTimeout(d) => ds.state_deadline = Some(Instant::now() + d),
             Action::CancelStateTimeout => ds.state_deadline = None,

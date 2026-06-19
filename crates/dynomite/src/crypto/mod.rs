@@ -93,7 +93,7 @@ pub enum CryptoError {
 /// AES session key buffer generated when the bundle is constructed.
 /// The session key is used for symmetric encryption of DNODE
 /// payloads (AES-128-CBC consumes the first 16 bytes; the remaining
-/// 16 bytes match the C `aes_key[AES_KEYLEN]` buffer layout), while
+/// 16 bytes pad the buffer to the 32-byte wire width), while
 /// the RSA pair is used to wrap and unwrap session keys during the
 /// handshake.
 ///
@@ -119,7 +119,7 @@ impl Crypto {
     /// from the system CSPRNG.
     ///
     /// AES-128-CBC consumes only the first 16 bytes of the buffer;
-    /// the trailing 16 bytes match the C `aes_key[AES_KEYLEN]` layout.
+    /// the trailing 16 bytes pad it to the 32-byte wire width.
     ///
     /// # Examples
     ///
@@ -159,8 +159,8 @@ impl Crypto {
     /// CSPRNG.
     ///
     /// The returned slice is 32 random bytes. AES-128-CBC consumes
-    /// only the first 16 bytes; the trailing 16 bytes are kept to
-    /// match the C `aes_key[AES_KEYLEN]` buffer layout.
+    /// only the first 16 bytes; the trailing 16 bytes pad the buffer
+    /// to the 32-byte wire width.
     ///
     /// # Examples
     ///

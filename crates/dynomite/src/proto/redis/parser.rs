@@ -10,10 +10,9 @@
 //! [`Msg`]'s key and argument buffers. It must not panic on any
 //! input.
 
-// The parser truncates ASCII-decimal accumulators into the same
-// fixed-width counters the reference engine uses (`uint32_t` for
-// rlen / rntokens / nkeys, `usize` for cursor positions). The
-// allowance keeps the Rust port faithful to the C casts; the
+// The parser truncates ASCII-decimal accumulators into fixed-width
+// counters (`u32` for rlen / rntokens / nkeys, `usize` for cursor
+// positions). The allowance covers these intentional `as` casts;
 // out-of-range numerals surface as parse errors elsewhere in the
 // state machine.
 #![allow(clippy::cast_possible_truncation)]
@@ -382,7 +381,7 @@ pub fn redis_parse_req_with_args(
                         is_read = true;
                     }
                     if ty == MsgType::ReqRedisPing {
-                        // The C parser short-circuits the inline form here.
+                        // Short-circuit the inline form here.
                         // p was advanced to needed+1 (the LF position).
                         return finish_req_ok(
                             r,

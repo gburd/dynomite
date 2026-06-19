@@ -115,9 +115,9 @@ impl Histogram {
 
     /// Returns `true` when the final (overflow) bucket is non-empty.
     ///
-    /// The reference implementation logs an error and refuses to publish
-    /// quantiles in this case; the Rust port surfaces the same signal
-    /// through this method and through the [`Histogram::OVERFLOW_SENTINEL`]
+    /// When the overflow bucket is non-empty, published quantiles are
+    /// unreliable; that signal is surfaced through this method and
+    /// through the [`Histogram::OVERFLOW_SENTINEL`]
     /// returned from quantile accessors.
     ///
     /// # Examples

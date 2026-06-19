@@ -3,8 +3,8 @@
 //! This module centralises the command lookup the parser uses
 //! after it has read the keyword token, plus the predicate set the
 //! state machine consults to decide how many arguments a command
-//! takes. The classification mirrors the reference engine's
-//! `redis_arg{0,1,2,3,n,x,kvx,upto1,eval,argz,error}` helpers.
+//! takes. The classification covers the fixed-arg, variadic,
+//! key-value, EVAL, and error command shapes.
 //!
 //! All lookups are case-insensitive ASCII.
 

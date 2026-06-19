@@ -30,12 +30,13 @@ pub(crate) fn u64_to_f64(x: u64) -> f64 {
     clippy::cast_sign_loss
 )]
 pub(crate) fn floor_p_times_u64(p: f64, scale: u64) -> u64 {
-    // The cast lints are allowed for this helper because the function's
-    // contract is to reproduce the C reference's `(double)scale * p`
-    // floor exactly. Any alternative arithmetic would diverge from the
-    // reference for inputs whose bit pattern rounds across an integer
-    // boundary (for example p=0.95 with scale=1000 yields 950 in C and
-    // 949 with rational arithmetic). See docs/journal/allowances.md.
+    // The cast lints are allowed for this helper because its
+    // contract is to compute the floor of `(scale as f64) * p`
+    // exactly. Any alternative arithmetic would diverge for inputs
+    // whose bit pattern rounds across an integer boundary (for
+    // example p=0.95 with scale=1000 yields 950 in floating point
+    // and 949 with rational arithmetic). See
+    // docs/journal/allowances.md.
     if p.is_nan() || p < 0.0 {
         return 0;
     }

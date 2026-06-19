@@ -1,11 +1,11 @@
 //! Florida HTTP seeds provider.
 //!
-//! The reference engine opens a TCP socket to
+//! The provider opens a TCP socket to
 //! `127.0.0.1:8080`, writes
 //! `GET /REST/v1/admin/get_seeds HTTP/1.0`, looks for `200 OK`,
 //! drains the response, and treats the body as a
-//! `host:port:rack:dc:tokens|...` blob. The Rust port preserves
-//! the wire shape: a hand-rolled HTTP/1.0 client over
+//! `host:port:rack:dc:tokens|...` blob. It is a hand-rolled
+//! HTTP/1.0 client over
 //! `tokio::net::TcpStream` (the locked dependency set forbids
 //! `hyper`/`reqwest`), with `httparse` parsing the response
 //! header.
@@ -13,8 +13,8 @@
 //! The provider is async-native: [`FloridaSeedsProvider::fetch`]
 //! returns a future the caller awaits. The blocking
 //! [`SeedsProvider::get_seeds`] entry point spins up a private
-//! tokio current-thread runtime, which mirrors the C engine's
-//! synchronous `florida_get_seeds` behaviour.
+//! tokio current-thread runtime so it can be called from
+//! synchronous code.
 //!
 //! # Examples
 //!

@@ -15,39 +15,50 @@
 //! The handler delegates K/V execution to the
 //! [`dynomite::embed::Datastore`] handed in. The trait's
 //! `dispatch(Msg)` surface is the substrate's existing seam for
-//! Redis/Memcached/custom protocols; it does not yet carry Riak-
-//! specific bucket/key semantics. For the v0.0.1 slice the handler
-//! synthesizes a routing [`dynomite::msg::Msg`] per request and
-//! interprets the dispatch result as "the substrate accepted this
-//! request". A follow-up slice introduces a richer Riak K/V trait
-//! that the server uses end-to-end.
+//! the RESP/Memcached/custom protocols; on top of it the trait
+//! exposes Riak-aware `riak_get` / `riak_put` / `riak_delete` /
+//! `riak_index_*` / `list_keys_stream` methods. The handler routes
+//! each request to those methods and trampolines a synthesized
+//! [`dynomite::msg::Msg`] through `dispatch` so the substrate's
+//! per-request accounting still fires. A datastore that does not
+//! implement the Riak K/V layer reports
+//! [`dynomite::embed::hooks::DatastoreError::Unsupported`]; the
+//! handler then falls back to empty responses so the in-memory
+//! `MemoryDatastore` trampoline keeps working.
 //!
 //! In practice this means:
 //!
 //! * `RpbPing` -- never reaches the datastore; replied with
 //!   `RpbPingResp` directly.
-//! * `RpbGetReq` -- routed through [`dynomite::embed::Datastore::dispatch`]
-//!   so the substrate's accounting fires; reply is an empty
-//!   `RpbGetResp` (zero content, no vclock) until the K/V trait
-//!   lands.
-//! * `RpbPutReq` -- same shape; reply is an empty `RpbPutResp`
-//!   (no echoed body, no server-assigned key).
-//! * `RpbDelReq` -- same shape; reply is the body-less
-//!   `RpbDelResp` frame.
+//! * `RpbGetReq` -- routed through
+//!   [`dynomite::embed::Datastore::dispatch`] for accounting, then
+//!   fetched via `riak_get`; a present object becomes a
+//!   single-content `RpbGetResp` carrying value, content-type, 2i
+//!   entries, and links. An absent object or an `Unsupported`
+//!   datastore yields an empty `RpbGetResp`.
+//! * `RpbPutReq` -- persists the `RpbContent` payload in the same
+//!   canonical `HttpObject` storage form the HTTP gateway writes,
+//!   so a put over one transport reads back over the other.
+//!   Server-assigned keys are not implemented: a request without a
+//!   key is rejected.
+//! * `RpbDelReq` -- routed for accounting, then deleted via
+//!   `riak_delete`; replied with the body-less `RpbDelResp`.
 //! * `RpbServerInfoReq` -- replied with the crate name and version
 //!   directly; no datastore interaction.
-//! * `RpbGetBucketReq` -- replied with a default [`RpbBucketProps`]
-//!   carrying conservative defaults (`n_val = 3`, `allow_mult =
-//!   false`). Per-bucket persistence is deferred to the follow-up
-//!   slice that wires bucket-property storage into the substrate.
-//! * `RpbSetBucketReq` -- accepted and acknowledged with an empty
-//!   `RpbSetBucketResp`. The supplied properties are not yet
-//!   persisted; same follow-up as above.
+//! * `RpbGetBucketReq` -- replied with the bucket's resolved
+//!   [`RpbBucketProps`] from the bucket-property registry when
+//!   routing hooks are wired; without hooks it returns conservative
+//!   defaults (`n_val = 3`, `allow_mult = false`).
+//! * `RpbSetBucketReq` -- the supplied properties are persisted
+//!   through the bucket-property registry when routing hooks are
+//!   wired, so they round-trip through later `RpbGetBucketReq`
+//!   frames; without hooks the write is accepted and acknowledged
+//!   with an empty `RpbSetBucketResp`.
 //! * `RpbListBucketsReq`, `RpbListKeysReq`, `RpbIndexReq` --
-//!   replied with [`RpbErrorResp`] carrying a `"not implemented for
-//!   this datastore"` message. The follow-up slice that lands the
-//!   richer K/V trait wires these against the `NoxuDatastore`
-//!   storage engine.
+//!   streamed from the datastore's `list_keys_stream` /
+//!   `riak_index_*` methods; a datastore that does not implement
+//!   them replies with an [`RpbErrorResp`] carrying a
+//!   `"not implemented for this datastore"` message.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -863,8 +874,7 @@ async fn handle_del(
 /// limitation.
 ///
 /// `pagination_sort`, `term_regex`, `continuation`, and
-/// `cover_context` on the request are accepted but not acted on;
-/// supporting them is tracked in the slice's journal entry.
+/// `cover_context` on the request are accepted but not acted on.
 ///
 /// 2i queries do NOT trampoline through [`Datastore::dispatch`]
 /// because the existing list / property paths (the only other

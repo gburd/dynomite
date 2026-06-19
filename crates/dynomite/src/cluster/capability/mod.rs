@@ -66,15 +66,15 @@ pub use self::registry::{
     Capability, CapabilityAd, CapabilityAdEntry, CapabilityCodecError, CapabilityRegistry,
 };
 
-/// Capability name shipped in the v0.0.1 registry.
+/// Capability name for the dnode framing version.
 ///
-/// The first real consumer of this name will be the dnode
-/// framing v2 work; today only v1 is implemented.
+/// The negotiated value is advertised but not yet consumed to
+/// switch the wire framing; only v1 framing is implemented.
 pub const CAP_DNODE_FRAMING_VERSION: &str = "dnode_framing_version";
 
 /// Capability name for the active append-anti-entropy tree
-/// format. Reserved for future format upgrades; today only v1
-/// is implemented.
+/// format. Only v1 is implemented; the name allows advertising
+/// future format upgrades.
 pub const CAP_AAE_TREE_FORMAT: &str = "aae_tree_format";
 
 /// Capability name for the on-the-wire CRDT object format used
@@ -86,9 +86,9 @@ pub const CAP_CRDT_OBJECT_FORMAT: &str = "crdt_object_format";
 pub const CAP_GOSSIP_PHI_NEGOTIABLE: &str = "gossip_phi_threshold_negotiable";
 
 /// Stock capability advertising the supported dnode framing
-/// versions on this build. Today the local set is `[1, 2]`; v1
-/// is the implemented framing and v2 is reserved for the next
-/// stage's wire upgrade.
+/// versions on this build. The local set is `[1, 2]`, but only v1
+/// framing is implemented; v2 is advertised ahead of the wire
+/// upgrade and is not yet honoured by the parser.
 pub struct DnodeFramingVersion;
 
 impl Capability for DnodeFramingVersion {

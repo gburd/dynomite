@@ -2,17 +2,18 @@
 //!
 //! Routing decisions (whether to send a request to the local
 //! datastore, fan it out across racks, or relay it to a remote DC)
-//! land in Stage 10's cluster module. Stage 9 only owns the
-//! per-connection FSMs and exposes a seam, [`Dispatcher`], that
-//! Stage 10 plugs into.
+//! live in the [`crate::cluster`] module. The per-connection FSMs
+//! own the wire path and expose a seam, [`Dispatcher`], that the
+//! cluster layer plugs into.
 //!
-//! [`Dispatcher`] is the seam between the two stages. The Stage 9
+//! [`Dispatcher`] is the seam between the two layers. The
 //! client / dnode-client FSMs hand each fully parsed [`Msg`] to a
 //! `Dispatcher` and inspect [`DispatchOutcome`] to decide whether
 //! the response can be returned synchronously or whether they
-//! should wait for a downstream response. Stage 10 will provide a
-//! cluster-aware implementation; tests in this stage exercise the
-//! seam with [`NoopDispatcher`].
+//! should wait for a downstream response.
+//! [`crate::cluster::dispatch::ClusterDispatcher`] is the
+//! cluster-aware implementation; [`NoopDispatcher`] is the test
+//! double.
 //!
 //! [`Msg`]: crate::msg::Msg
 
@@ -41,7 +42,8 @@ pub enum DispatchOutcome {
     Drop,
 }
 
-/// Cluster-side dispatch hook implemented by Stage 10 and by tests.
+/// Cluster-side dispatch hook implemented by the cluster layer and
+/// by tests.
 ///
 /// The dispatcher is invoked from a tokio task; implementations may
 /// do async work but should avoid blocking. The trait uses

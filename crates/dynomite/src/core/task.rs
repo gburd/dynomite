@@ -1,18 +1,14 @@
 //! Periodic task scheduler built on `tokio::time::interval`.
 //!
-//! The C engine ships a custom red-black-tree-backed task manager
-//! (`schedule_task_1`, `time_to_next_task`, `execute_expired_tasks`)
-//! that fires one-shot timeouts from the main loop. The Rust port
-//! delegates timer wheel maintenance to the tokio runtime: callers
-//! register a periodic callback through [`task_register`] and receive
-//! a [`TaskHandle`] that cancels the underlying tokio task when
-//! dropped or explicitly cancelled.
+//! Timer-wheel maintenance is delegated to the tokio runtime:
+//! callers register a periodic callback through [`task_register`]
+//! and receive a [`TaskHandle`] that cancels the underlying tokio
+//! task when dropped or explicitly cancelled.
 //!
-//! A one-shot variant, [`task_schedule_once`], is provided for parity
-//! with `schedule_task_1`. The runtime drives both APIs, so the
-//! per-iteration `time_to_next_task` and `execute_expired_tasks`
-//! helpers from the C reference have no Rust counterpart; tokio's
-//! reactor performs the equivalent work transparently.
+//! A one-shot variant, [`task_schedule_once`], fires a single
+//! delayed callback. The runtime drives both APIs, so there is no
+//! per-iteration "time to next task" / "execute expired tasks"
+//! bookkeeping; tokio's reactor performs that work transparently.
 //!
 //! # Examples
 //!
@@ -140,8 +136,8 @@ pub fn task_register(period: Duration, callback: Arc<dyn Fn() + Send + Sync>) ->
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(period);
         // Skip the immediate-fire first tick that `tokio::time::interval`
-        // produces by default; the C reference fires after `timeout` ms,
-        // not at registration time.
+        // produces by default so the callback first fires after
+        // `timeout` ms, not at registration time.
         interval.tick().await;
         loop {
             tokio::select! {
@@ -155,8 +151,8 @@ pub fn task_register(period: Duration, callback: Arc<dyn Fn() + Send + Sync>) ->
 
 /// Register a one-shot task that fires once after `delay` elapses.
 ///
-/// Provided for parity with the C `schedule_task_1` shape. The handle
-/// can be cancelled before the deadline to suppress execution.
+/// Schedules a single delayed callback. The handle can be cancelled
+/// before the deadline to suppress execution.
 ///
 /// # Examples
 ///

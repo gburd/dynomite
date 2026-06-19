@@ -1,6 +1,6 @@
 //! `dynomited` - the Dynomite server binary.
 //!
-//! Mirrors the reference engine's `main()` flow: parse options,
+//! The startup flow: parse options,
 //! optionally print version/help/describe-stats, optionally
 //! validate the YAML config (`-t`), otherwise drop into the
 //! [`Server`] run loop. Logging, daemonization, and pid-file

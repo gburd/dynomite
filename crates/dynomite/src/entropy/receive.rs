@@ -61,7 +61,7 @@ impl EntropyReceiver {
     /// loop on a tokio task.
     ///
     /// Each accepted connection is handled in line on the same
-    /// task, mirroring the reference engine's single-threaded
+    /// task, on a single-threaded
     /// entropy loop. The returned handle resolves to `Ok(())` only
     /// after the listener is shut down (e.g. by aborting the task)
     /// or to an error if the bind fails.
@@ -256,13 +256,10 @@ pub fn decrypt_chunk(ciphertext: &[u8], material: &EntropyMaterial) -> EntropyRe
 /// Default sink: pushes the decrypted snapshot to a local Redis
 /// instance over a fresh TCP connection.
 ///
-/// The reference engine's receiver opens a connection to Redis on
-/// `127.0.0.1:22122` and writes each per-key payload as it
-/// arrives. The Rust default is a single-shot equivalent: it
-/// connects to the configured Redis endpoint, writes the entire
-/// decrypted snapshot, and closes. Embedders that want a custom
-/// replay strategy plug in their own [`SnapshotSink`] through the
-/// Stage 13 API.
+/// The default sink connects to the configured Redis endpoint,
+/// writes the entire decrypted snapshot, and closes. Embedders that
+/// want a custom replay strategy plug in their own [`SnapshotSink`]
+/// through the embedding API.
 ///
 /// # Examples
 ///

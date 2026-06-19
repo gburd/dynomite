@@ -1,9 +1,9 @@
 //! Token ring math: building and querying per-rack continuums.
 //!
-//! The reference engine's `vnode_update` walks the pool's peer list,
+//! [`rebuild_continuums`] walks the pool's peer list,
 //! pushes each peer's tokens onto the owning rack's `continuum`
 //! array, then sorts the array per rack. The dispatcher then calls
-//! `vnode_dispatch(continuums, ncontinuum, token)` to find the peer
+//! [`dispatch`] to find the peer
 //! that owns a key. The function uses a left-leaning binary search:
 //!
 //! * if the search token falls outside the ring (less than the first
@@ -36,7 +36,7 @@ use std::cmp::Ordering;
 use crate::cluster::datacenter::Continuum;
 use crate::hashkit::DynToken;
 
-/// Run the reference engine's `vnode_dispatch` over `continuums`.
+/// Find the peer that owns `token` on the continuum.
 ///
 /// Returns the peer index for the continuum point that owns
 /// `token`, or `None` when the slice is empty.
@@ -70,7 +70,7 @@ pub fn dispatch(continuums: &[Continuum], token: &DynToken) -> Option<u32> {
     }
 
     // Binary search for the smallest continuum entry with token >=
-    // search token. Mirrors the reference engine's `vnode_dispatch`.
+    // search token.
     let mut left = 0usize;
     let mut right = n - 1;
     while left < right {
@@ -107,13 +107,11 @@ pub struct PeerTokens<'a> {
 ///
 /// Caller is responsible for invoking
 /// [`crate::cluster::datacenter::Rack::sort_continuums`] on each
-/// touched rack once the rebuild is complete (this matches the
-/// reference engine's `vnode_rack_verify_continuum`).
+/// touched rack once the rebuild is complete.
 ///
 /// Returns the count of peers actually applied (a peer whose
-/// `(dc, rack)` is missing from `dcs` is skipped, which mirrors
-/// the reference engine's behaviour of populating dc / rack tables
-/// before calling `vnode_update`).
+/// `(dc, rack)` is missing from `dcs` is skipped, so dc / rack
+/// tables must be populated before the rebuild runs).
 ///
 /// # Examples
 ///

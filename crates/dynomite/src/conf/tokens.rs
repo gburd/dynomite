@@ -1,11 +1,11 @@
 //! Token list parsing.
 //!
 //! `tokens:` and `dyn_seeds[*].tokens` are comma-separated big-int
-//! strings. The C reference's `derive_tokens` accepts an optional
-//! leading `-` per component and any number of decimal digits; the
-//! actual ring math is in `hashkit::token` (Stage 3). At configuration
-//! time we only need to validate the syntax and remember the original
-//! components so they can be re-emitted.
+//! strings. Each component accepts an optional leading `-` and any
+//! number of decimal digits; the actual ring math is in
+//! `hashkit::token`. At configuration time we only validate the
+//! syntax and remember the original components so they can be
+//! re-emitted.
 
 use std::fmt;
 

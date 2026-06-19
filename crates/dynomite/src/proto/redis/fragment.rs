@@ -51,8 +51,7 @@ fn next_frag_id() -> u64 {
 /// ignored. The `pool` provides mbuf storage for the per-fragment
 /// payload.
 ///
-/// Returns `Ok(None)` for non-multikey requests, mirroring the
-/// reference engine's `DN_OK` no-op return.
+/// Returns `Ok(None)` for non-multikey requests (a no-op).
 ///
 /// # Errors
 ///

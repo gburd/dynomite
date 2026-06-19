@@ -4,10 +4,9 @@
 //! local datastore endpoint, the dnode listener configuration, the
 //! datacenter and rack tables, the per-peer connection pools, the
 //! consistency settings, and the response-manager constructors used
-//! by [`crate::cluster::dispatch::ClusterDispatcher`]. It owns the
-//! data-shape side of `struct server_pool` from the reference engine
-//! and is the entry point that the `dynomited` binary (Stage 12)
-//! and the embedding API (Stage 13) construct from a parsed
+//! by [`crate::cluster::dispatch::ClusterDispatcher`]. It holds the
+//! server-pool data shape and is the entry point that the
+//! `dynomited` binary and the embedding API construct from a parsed
 //! [`crate::conf::Config`].
 
 use std::sync::Arc;
@@ -63,8 +62,8 @@ pub struct BucketType {
 /// Minimal projection of the YAML pool block consumed by the
 /// cluster runtime.
 ///
-/// Mirrors the fields the reference engine copies from
-/// `conf_pool` into `server_pool` during `server_pool_init`.
+/// Carries the fields copied from
+/// `ConfPool` into the runtime pool during initialization.
 #[derive(Clone, Debug)]
 pub struct PoolConfig {
     /// Pool name.
@@ -196,8 +195,7 @@ impl PoolConfig {
 
 impl PoolConfig {
     /// Construct a `PoolConfig` from a [`ConfPool`] block. Fields
-    /// missing from the YAML are filled with the same defaults the
-    /// reference engine applies in `conf_pool_each_transform` (the
+    /// missing from the YAML are filled with defaults (the
     /// caller is expected to have called
     /// [`crate::conf::Config::finalize`] before this point).
     ///

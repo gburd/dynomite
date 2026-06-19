@@ -3,12 +3,10 @@
 //! This module defines the trait [`ClusterAdmin`] that the
 //! `dyniak` PBC server invokes when an operator drives one of
 //! the `cluster-list`, `cluster-join`, `cluster-leave`,
-//! `cluster-plan`, or `cluster-commit` admin commands. The
-//! reference engine pulls these mutations off a dedicated
-//! gossip-state DNODE message family; the Rust port surfaces
-//! them through this trait so the same staging-then-commit
-//! semantics can be exercised from tests and from the CLI
-//! without forcing a real DNODE round-trip.
+//! `cluster-plan`, or `cluster-commit` admin commands. These
+//! mutations are surfaced through this trait so the same
+//! staging-then-commit semantics can be exercised from tests and
+//! from the CLI without forcing a real DNODE round-trip.
 //!
 //! The default in-process implementation is
 //! [`PoolClusterAdmin`]: it owns an `Arc<ServerPool>` and a

@@ -5,7 +5,7 @@
 //! liveness state, and a handle to the outbound connection pool used
 //! when the dispatcher routes a request to it.
 //!
-//! The data shape mirrors the reference engine's per-peer node record
+//! The data shape carries the per-peer node record
 //! (rack, dc, secure flag, same-DC flag, token list, state). Peers are
 //! held by [`crate::cluster::ServerPool`] in an `Arc<RwLock<_>>` so
 //! gossip and dispatch can both observe the table without taking out
@@ -35,7 +35,7 @@ use crate::hashkit::DynToken;
 
 /// Lifecycle state of a peer in the gossip view.
 ///
-/// Numeric values match the reference engine's per-node state
+/// Numeric values are the stable per-node state
 /// constants (`UNKNOWN`, `JOINING`, `NORMAL`, `STANDBY`, `DOWN`,
 /// `RESET`, `LEAVING`).
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Default)]
@@ -81,8 +81,8 @@ impl PeerState {
     }
 
     /// True when the dispatcher should consider this peer for
-    /// routing decisions. `Joining` peers are accepted because the
-    /// reference engine includes them in the continuum until they
+    /// routing decisions. `Joining` peers are accepted because they
+    /// remain in the continuum until they
     /// transition to `Down` or `Leaving`.
     ///
     /// # Examples
@@ -166,12 +166,10 @@ impl Peer {
     /// Build a new peer record.
     ///
     /// `idx` is the peer's index in the pool's peer array (0 is
-    /// always the local node). `is_local` and `is_same_dc` mirror
-    /// the reference engine's flags. The initial state is
+    /// always the local node). The initial state is
     /// [`PeerState::Joining`] for the local node and
-    /// [`PeerState::Down`] for a remote one (the reference engine
-    /// optimistically waits for the first gossip ack before
-    /// promoting a remote peer).
+    /// [`PeerState::Down`] for a remote one (a remote peer is
+    /// promoted only after the first gossip ack).
     ///
     /// # Examples
     ///
@@ -278,8 +276,8 @@ impl Peer {
         self.state
     }
 
-    /// Update the lifecycle state. The supplied `ts_secs` mirrors
-    /// the reference engine's `gossip_node::ts` and is used by the
+    /// Update the lifecycle state. The supplied `ts_secs` is the
+    /// last-observed gossip timestamp, used by the
     /// failure detector to age the peer out.
     ///
     /// # Examples

@@ -2,17 +2,12 @@
 //! channel.
 //!
 //! The reconciliation channel uses AES-128-CBC with a 16-byte key
-//! and 16-byte IV held in two on-disk files. The reference engine
-//! stores them at the conf-configured `recon_key.pem` and
-//! `recon_iv.pem` paths. Despite the `.pem` suffix, the bundled
-//! fixtures under `_/dynomite/conf/` are plain ASCII files
-//! containing the key material followed by a trailing newline; the
-//! reference loader reads them with `fgets` but its assignment to
-//! the live key buffer is commented out, so the file content is
-//! validated and discarded and the cipher always runs against a
-//! hardcoded `0123456789012345` literal.
+//! and 16-byte IV held in two on-disk files at the conf-configured
+//! `recon_key.pem` and `recon_iv.pem` paths. Despite the `.pem`
+//! suffix, the bundled fixtures are plain ASCII files containing the
+//! key material followed by a trailing newline.
 //!
-//! The Rust loader honours the contents of the file. To absorb
+//! The loader honours the contents of the file. To absorb
 //! the off-by-one in the bundled fixture (the file is
 //! `01234567890123456` -- seventeen characters, not sixteen) it
 //! takes the first [`ENTROPY_KEY_LEN`] / [`ENTROPY_IV_LEN`] bytes
@@ -371,8 +366,7 @@ mod tests {
         let iv = load_iv_file(&iv_path).unwrap();
         // The bundled fixtures contain a 17-byte ASCII string
         // ("01234567890123456"); the loader takes the first 16
-        // bytes, which matches the hardcoded literal the C engine
-        // actually feeds into the cipher.
+        // bytes, yielding the 16-byte key the cipher runs against.
         assert_eq!(key.as_bytes(), b"0123456789012345");
         assert_eq!(iv.as_bytes(), b"0123456789012345");
     }

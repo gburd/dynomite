@@ -26,9 +26,10 @@ use serde_json::Value;
 use crate::mapreduce::executor::MrError;
 
 /// Map-phase function. Pure: takes one input plus an optional
-/// argument, returns zero or more outputs. Implementations must
-/// not block; for I/O-bound work, push the work to a future task
-/// in a follow-up slice.
+/// argument, returns zero or more outputs. Implementations run
+/// synchronously on the executor's per-phase task and must not
+/// block; the registry has no facility for async or I/O-bound
+/// map functions.
 pub type MapFn = Arc<dyn Fn(&Value, Option<&Value>) -> Result<Vec<Value>, MrError> + Send + Sync>;
 
 /// Reduce-phase function. Pure: takes every accumulated input plus

@@ -1,12 +1,10 @@
 //! ASCII art startup banner.
 //!
-//! The banner is reproduced from the reference engine's
-//! `dyn_asciilogo.h` after the C compiler folds away unrecognised
-//! escape sequences. The result is plain ASCII so it survives the
-//! workspace's `check_ascii.sh` gate.
+//! The banner is plain ASCII so it survives the workspace's
+//! `check_ascii.sh` gate.
 
-/// Multi-line ASCII art logo printed at startup, identical to the
-/// banner the reference engine emits via `loga("%s", ascii_logo)`.
+/// Multi-line ASCII art logo printed at startup, written to the log
+/// at startup.
 ///
 /// # Examples
 ///

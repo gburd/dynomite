@@ -7,8 +7,7 @@
 //! [`client`] helper that wraps the Riak PBC framer and a minimal
 //! HTTP/1.1 GET.
 //!
-//! See the crate `README.md` for usage examples and the deferred
-//! mutating-subcommands list.
+//! See the crate `README.md` for usage examples.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

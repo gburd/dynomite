@@ -9,10 +9,8 @@
 //!    index 0.
 //! 2. Bind the client-facing [`Proxy`] listener at `pool.listen`.
 //! 3. Bind the peer-facing [`DnodeProxy`] listener at
-//!    `pool.dyn_listen` when configured (the reference engine
-//!    likewise opens the dnode listener whenever `dyn_listen` is
-//!    set or `secure_server_option` requires a TLS-capable peer
-//!    socket).
+//!    `pool.dyn_listen` whenever `dyn_listen` is set or
+//!    `secure_server_option` requires a TLS-capable peer socket.
 //! 4. Bind the [`StatsServer`] when `stats_listen` is set.
 //! 5. Wrap the pool in a [`ClusterDispatcher`] used by both
 //!    listeners.
@@ -22,21 +20,21 @@
 //! [`tokio::sync::watch`] channel; `SIGINT` / `SIGTERM` / a
 //! programmatic [`Server::shutdown`] all converge on the same
 //! cancel future. `SIGHUP` reopens the log file
-//! ([`dynomite::core::log::reopen_on_sighup`]) without otherwise
-//! perturbing the loop.
+//! ([`dynomite::core::log::reopen_on_sighup`]) and, when the server
+//! was built with a config path, re-parses that file and applies the
+//! reloadable ("value, not structure") pool knobs through the
+//! [`crate::reload`] pipeline.
 //!
-//! What this stage deliberately does not wire:
+//! Background tasks the run loop spawns:
 //!
-//! * The gossip task. The reference engine spawns one when
-//!   `enable_gossip: true`; the Rust port still owns gossip as
-//!   data-shape only (see `dynomite::cluster::gossip`). The
-//!   run-time driver lands in a later stage; this module logs a
-//!   warning when gossip is requested so operators are not
-//!   surprised by the silence.
-//! * The entropy receiver / sender. Stage 11 ships
-//!   [`dynomite::entropy::EntropyReceiver`] and
-//!   [`dynomite::entropy::EntropySender`] as standalone tasks;
-//!   the run loop spawns the periodic reconciliation driver
+//! * The gossip task. It runs the periodic `GossipSyn` broadcast
+//!   and the per-peer phi evaluation that toggles `PeerState`
+//!   between `Normal` and `Down`. It always spawns (even when
+//!   `enable_gossip: false`) because no peer would otherwise leave
+//!   the initial `Down` state; `enable_gossip` only controls
+//!   whether a startup info log is emitted.
+//! * The entropy receiver / sender. The run loop spawns the
+//!   periodic reconciliation driver
 //!   ([`dynomite::entropy::driver::EntropyDriver`]) when
 //!   `recon_key_file:` is set in the YAML pool config and the
 //!   on-disk key + IV files load successfully. The cadence
@@ -44,8 +42,6 @@
 //!   `recon_interval_seconds:`). When the directive is unset or
 //!   the files cannot be read, the run loop emits a single
 //!   warning and otherwise stays silent.
-//! * Config reload on `SIGHUP`. The brief defers it to the embed
-//!   API in Stage 13.
 
 use std::fmt;
 use std::io;
@@ -1524,7 +1520,7 @@ async fn supervise(
                     Some(SignalEvent::Hangup) => {
                         // Reopen the log file FIRST so the
                         // reload's INFO line lands in the new
-                        // file (the brief's contract).
+                        // file.
                         if let Err(e) = reopen_on_sighup() {
                             tracing::warn!(error = %e, "log reopen failed");
                         } else {
@@ -2147,8 +2143,8 @@ async fn peer_supervisor(
     // next dial without restarting the supervisor. When the
     // shared profile map carries no entry for `peer_dc` and no
     // default is set, the supervisor falls back to plaintext
-    // for this peer (matching the brief's "if neither is set,
-    // the connection is plaintext" contract).
+    // for this peer (when neither a per-DC profile nor a default
+    // is set, the connection is plaintext).
     let peer_tls_profiles = tls.as_ref().map(|rt| rt.profiles.clone());
     let sni_hostname = dynomite::net::tls::dc_sni_hostname(peer_dc.as_str());
     let mut backoff_ms: u64 = 100;
@@ -2380,8 +2376,8 @@ fn default_gossip_interval_ms_i64() -> i64 {
 ///
 /// Returns `(None, None)` when the directive is unset, points
 /// at an empty string, or the on-disk key / IV files cannot be
-/// loaded. In every skip path a tracing event explains why,
-/// matching the brief's "behavior is unchanged" contract for
+/// loaded. In every skip path a tracing event explains why;
+/// behavior is unchanged for
 /// pools that do not opt into entropy reconciliation.
 fn build_entropy_driver(
     conf_pool: &ConfPool,
@@ -2747,8 +2743,7 @@ fn listen_to_socket_addr(l: &ConfListen, field: &'static str) -> Result<SocketAd
             reason: "unix-domain sockets are not supported by the run loop yet".into(),
         }),
         EndpointKind::Hostname => {
-            // Resolve via the std resolver. The reference engine
-            // also resolves at bind time and aborts on failure.
+            // Resolve via the std resolver, aborting on failure.
             let pname = l.pname();
             pname
                 .to_socket_addrs()
@@ -2833,8 +2828,7 @@ fn seed_to_peer(
 fn token_component_to_dyn(
     component: &dynomite::conf::TokenComponent,
 ) -> Result<DynToken, ServerError> {
-    // The reference engine accepts arbitrary-precision tokens via
-    // its big-int routines; the Rust `DynToken` carries a
+    // `DynToken` carries a
     // four-byte big-endian integer that fits the common case
     // (single-rack ring with sub-`u32::MAX` tokens). Parse the
     // decimal digits into u32 with saturation when oversized so

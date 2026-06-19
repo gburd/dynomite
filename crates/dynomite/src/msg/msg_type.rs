@@ -2,11 +2,9 @@
 //!
 //! Every datastore-bound request and response carries a `MsgType` tag
 //! that identifies which command or reply class the message belongs
-//! to. The variants are paired one-for-one with the entries in the
-//! reference engine's `MSG_TYPE_CODEC` X-macro: order, count, and
-//! string spellings all line up so the integer indices and the names
-//! returned by [`MsgType::name`] remain compatible across the two
-//! implementations.
+//! to. The variants and their integer indices and string spellings
+//! form a stable, ordered codec so the integer indices and the names
+//! returned by [`MsgType::name`] stay compatible across releases.
 //!
 //! The enum is exhaustive: 182 named variants plus the trailing
 //! `EndIdx` sentinel. Helpers are provided to round-trip integer
@@ -251,9 +249,8 @@ impl MsgType {
     /// ```
     pub const COUNT: usize = Self::ALL.len();
 
-    /// Integer index of this variant. Matches the integer value the
-    /// reference engine assigns to the corresponding `MSG_TYPE_CODEC`
-    /// entry.
+    /// Integer index of this variant. This is the stable wire index
+    /// for the message type.
     ///
     /// # Examples
     ///
@@ -283,7 +280,7 @@ impl MsgType {
         Self::ALL.get(index as usize).copied()
     }
 
-    /// Canonical uppercase name as it appears in the C source.
+    /// Canonical uppercase name for this message type.
     ///
     /// # Examples
     ///

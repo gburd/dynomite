@@ -8,8 +8,8 @@
 //! handle on "when is the rebalance done?": the AAE scheduler
 //! sweeps in the background and may take many cycles to converge.
 //!
-//! This module ports the explicit handoff flow modeled on Riak
-//! Core's `riak_core_handoff`: a chunked, throttled, checkpointed
+//! This module implements an explicit handoff flow in the style of
+//! Riak Core's `riak_core_handoff`: a chunked, throttled, checkpointed
 //! stream from the *previous* owner of a token range to the
 //! *new* owner, with explicit start, accept, ack, and finalize
 //! events. The receiver can resume from the last acknowledged

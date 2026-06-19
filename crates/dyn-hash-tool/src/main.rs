@@ -27,11 +27,11 @@
 //! Reads keys one per line from `--input/-i` (default stdin, `-` also
 //! means stdin) and writes one decimal token per line to `--output/-o`
 //! (default stdout, `-` also means stdout). Only `murmur` is supported
-//! in this mode (the C `dyn_hash_tool` only supported murmur); using any
+//! in this compatibility mode; using any
 //! other algorithm with `--c-compat` is rejected with an explicit error.
 //!
 //! When `-k` is also passed, each token line is preceded by a
-//! `KEY:<key>` line, matching the C tool's `-k`/`--outputkey` flag:
+//! `KEY:<key>` line:
 //!
 //! ```text
 //! KEY:hello
@@ -40,9 +40,8 @@
 //! 87654321
 //! ```
 //!
-//! Note: the short flag `-k` is overloaded for parity with the C tool;
-//! to pass an inline key on the command line, use the long flag
-//! `--key`.
+//! Note: the short flag `-k` is overloaded in this mode; to pass an
+//! inline key on the command line, use the long flag `--key`.
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
@@ -77,14 +76,14 @@ struct Cli {
     #[arg(long = "list", default_value_t = false)]
     list: bool,
 
-    /// Emit output in the format produced by the C `dyn_hash_tool`:
+    /// Emit output in the compatibility format:
     /// one decimal token per line, optionally preceded by a
     /// `KEY:<key>` line when `-k` is set. Requires `murmur`.
     #[arg(long = "c-compat", default_value_t = false)]
     c_compat: bool,
 
     /// In `--c-compat` mode, prefix each token line with a `KEY:<key>`
-    /// line (mirrors the C `-k`/`--outputkey` flag).
+    /// line (the `-k`/`--outputkey` behaviour).
     #[arg(short = 'k', default_value_t = false)]
     c_outputkey: bool,
 

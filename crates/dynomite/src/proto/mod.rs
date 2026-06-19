@@ -2,11 +2,11 @@
 //!
 //! This module exposes:
 //!
-//! * [`dnode`] - the DNODE peer-to-peer codec (Stage 7).
+//! * [`dnode`] - the DNODE peer-to-peer codec.
 //! * [`memcache`] - the Memcached text-protocol parser, helpers,
-//!   and repair stubs (Stage 8).
-//! * [`redis`] - the Redis (RESP) parser, helpers, and repair
-//!   plumbing (Stage 8).
+//!   and repair surface.
+//! * [`redis`] - the RESP parser, helpers, and repair
+//!   plumbing.
 
 pub mod dnode;
 pub mod memcache;
