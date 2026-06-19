@@ -329,4 +329,205 @@ mod tests {
             _ => panic!("wrong variant"),
         }
     }
+
+    // ---- from_config: one per kind plus the error branches ----
+
+    fn key_cfg(kind: &str) -> KeyGenConfig {
+        KeyGenConfig {
+            kind: kind.to_string(),
+            max: 1000,
+            shape: 1.5,
+            mean: 500.0,
+            stddev: 50.0,
+            key: "the-key".to_string(),
+            prefix: "k_".to_string(),
+        }
+    }
+
+    #[test]
+    fn from_config_builds_each_kind() {
+        assert!(matches!(
+            KeyGen::from_config(&key_cfg("uniform")).unwrap(),
+            KeyGen::UniformInt { max: 1000, .. }
+        ));
+        assert!(matches!(
+            KeyGen::from_config(&key_cfg("sequential")).unwrap(),
+            KeyGen::SequentialInt {
+                max: 1000,
+                counter: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            KeyGen::from_config(&key_cfg("pareto")).unwrap(),
+            KeyGen::ParetoInt { max: 1000, .. }
+        ));
+        assert!(matches!(
+            KeyGen::from_config(&key_cfg("normal")).unwrap(),
+            KeyGen::NormalInt { max: 1000, .. }
+        ));
+        assert!(matches!(
+            KeyGen::from_config(&key_cfg("fixed")).unwrap(),
+            KeyGen::Fixed { .. }
+        ));
+    }
+
+    #[test]
+    fn from_config_clamps_zero_max_to_one() {
+        let mut cfg = key_cfg("uniform");
+        cfg.max = 0;
+        // A configured max of 0 is clamped to 1 so the range is
+        // non-empty.
+        assert!(matches!(
+            KeyGen::from_config(&cfg).unwrap(),
+            KeyGen::UniformInt { max: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn from_config_rejects_nonpositive_pareto_shape() {
+        let mut cfg = key_cfg("pareto");
+        cfg.shape = 0.0;
+        assert!(KeyGen::from_config(&cfg).is_err());
+        cfg.shape = -1.0;
+        assert!(KeyGen::from_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn from_config_rejects_negative_normal_stddev() {
+        let mut cfg = key_cfg("normal");
+        cfg.stddev = -0.1;
+        assert!(KeyGen::from_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn from_config_rejects_empty_fixed_key() {
+        let mut cfg = key_cfg("fixed");
+        cfg.key = String::new();
+        assert!(KeyGen::from_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn from_config_rejects_unknown_kind() {
+        assert!(KeyGen::from_config(&key_cfg("bogus")).is_err());
+    }
+
+    // ---- parse_cli: remaining arms and error paths ----
+
+    #[test]
+    fn parse_cli_sequential_with_default_prefix() {
+        match KeyGen::parse_cli("sequential:50").unwrap() {
+            KeyGen::SequentialInt {
+                max,
+                counter,
+                prefix,
+            } => {
+                assert_eq!(max, 50);
+                assert_eq!(counter, 0);
+                assert_eq!(prefix, "k_");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_cli_uniform_with_explicit_prefix() {
+        match KeyGen::parse_cli("uniform:50:obj_").unwrap() {
+            KeyGen::UniformInt { max, prefix } => {
+                assert_eq!(max, 50);
+                assert_eq!(prefix, "obj_");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_cli_fixed() {
+        match KeyGen::parse_cli("fixed:hello").unwrap() {
+            KeyGen::Fixed { key } => assert_eq!(key, "hello"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_cli_error_branches() {
+        // Missing max for uniform/sequential.
+        assert!(KeyGen::parse_cli("uniform").is_err());
+        // Non-numeric max.
+        assert!(KeyGen::parse_cli("uniform:abc").is_err());
+        // Missing shape for pareto.
+        assert!(KeyGen::parse_cli("pareto:1000").is_err());
+        // Non-numeric pareto max and shape.
+        assert!(KeyGen::parse_cli("pareto:x:1.5").is_err());
+        assert!(KeyGen::parse_cli("pareto:1000:bad").is_err());
+        // Missing key for fixed.
+        assert!(KeyGen::parse_cli("fixed").is_err());
+        // Unknown kind.
+        assert!(KeyGen::parse_cli("weird:1").is_err());
+    }
+
+    #[test]
+    fn normal_low_stddev_centres_on_mean() {
+        // A near-zero stddev pins almost every sample on the mean,
+        // exercising the NormalInt sampling arm without flakiness.
+        let mut g = KeyGen::NormalInt {
+            max: 1000,
+            mean: 250.0,
+            stddev: 0.001,
+            prefix: "k_".into(),
+        };
+        let mut r = rng();
+        for _ in 0..256 {
+            let s = g.next(&mut r);
+            let n: u64 = s.trim_start_matches("k_").parse().unwrap();
+            assert!((249..=251).contains(&n), "n = {n}");
+        }
+    }
+
+    #[test]
+    fn normal_clamps_below_zero_to_zero() {
+        // A mean far below zero forces the lower-clamp arm (raw < 0).
+        let mut g = KeyGen::NormalInt {
+            max: 1000,
+            mean: -10_000.0,
+            stddev: 0.001,
+            prefix: "k_".into(),
+        };
+        let mut r = rng();
+        for _ in 0..64 {
+            assert_eq!(g.next(&mut r), "k_0");
+        }
+    }
+
+    #[test]
+    fn normal_clamps_above_max() {
+        // A mean far above max forces the upper-clamp arm.
+        let mut g = KeyGen::NormalInt {
+            max: 10,
+            mean: 1_000_000.0,
+            stddev: 0.001,
+            prefix: "k_".into(),
+        };
+        let mut r = rng();
+        for _ in 0..64 {
+            assert_eq!(g.next(&mut r), "k_9");
+        }
+    }
+
+    #[hegel::test(test_cases = 64)]
+    fn uniform_keys_are_deterministic_for_a_fixed_seed(tc: hegel::TestCase) {
+        // Same seed plus same generator definition => identical key
+        // stream. This is the determinism contract the engine relies
+        // on for reproducible runs.
+        let seed = tc.draw(hegel::generators::integers::<u64>());
+        let run = |s: u64| -> Vec<String> {
+            let mut g = KeyGen::UniformInt {
+                max: 4096,
+                prefix: "k_".into(),
+            };
+            let mut r = SmallRng::seed_from_u64(s);
+            (0..64).map(|_| g.next(&mut r)).collect()
+        };
+        assert_eq!(run(seed), run(seed));
+    }
 }

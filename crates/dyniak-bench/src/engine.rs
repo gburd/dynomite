@@ -438,4 +438,24 @@ mod tests {
             "too slow: {elapsed:?}"
         );
     }
+
+    #[test]
+    fn token_bucket_new_interval_math() {
+        // rps <= 0 disables the limiter (interval 0).
+        assert_eq!(TokenBucket::new(0.0).interval_ns, 0);
+        assert_eq!(TokenBucket::new(-5.0).interval_ns, 0);
+        // 1000 rps == 1ms == 1_000_000 ns inter-op interval.
+        assert_eq!(TokenBucket::new(1000.0).interval_ns, 1_000_000);
+        // An absurdly high rps still floors at 1ns rather than 0.
+        assert_eq!(TokenBucket::new(1e12).interval_ns, 1);
+    }
+
+    #[test]
+    fn pick_op_single_weight_always_returns_it() {
+        let weights = vec![("only".to_string(), 7)];
+        let mut rng = SmallRng::seed_from_u64(99);
+        for _ in 0..100 {
+            assert_eq!(pick_op(&weights, 7, &mut rng), "only");
+        }
+    }
 }

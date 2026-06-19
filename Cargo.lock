@@ -1137,6 +1137,7 @@ dependencies = [
  "clap",
  "dynomite-engine",
  "hdrhistogram",
+ "hegeltest",
  "parking_lot",
  "plotters",
  "predicates",

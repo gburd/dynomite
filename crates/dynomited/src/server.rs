@@ -3069,4 +3069,297 @@ mod tests {
         let _ = err; // any error variant is fine; we just want non-Ok
         h.await.unwrap();
     }
+
+    // ---- listen_to_socket_addr: one test per EndpointKind arm ----
+
+    #[test]
+    fn listen_to_socket_addr_parses_v4() {
+        let l = ConfListen::parse("listen", "127.0.0.1:8102").unwrap();
+        let addr = listen_to_socket_addr(&l, "listen").unwrap();
+        assert_eq!(addr, "127.0.0.1:8102".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn listen_to_socket_addr_parses_v6() {
+        let l = ConfListen::parse("listen", "[::1]:8103").unwrap();
+        assert_eq!(l.kind(), EndpointKind::V6);
+        let addr = listen_to_socket_addr(&l, "listen").unwrap();
+        assert!(addr.is_ipv6());
+        assert_eq!(addr.port(), 8103);
+    }
+
+    #[test]
+    fn listen_to_socket_addr_resolves_hostname() {
+        // `localhost` resolves via the std resolver to at least
+        // one loopback address: the Hostname arm.
+        let l = ConfListen::parse("listen", "localhost:8104").unwrap();
+        assert_eq!(l.kind(), EndpointKind::Hostname);
+        let addr = listen_to_socket_addr(&l, "listen").unwrap();
+        assert!(addr.ip().is_loopback());
+        assert_eq!(addr.port(), 8104);
+    }
+
+    #[test]
+    fn listen_to_socket_addr_rejects_unresolvable_hostname() {
+        // RFC 6761 reserves `.invalid` so this never resolves.
+        let l = ConfListen::parse("listen", "nonexistent.invalid:8105").unwrap();
+        assert_eq!(l.kind(), EndpointKind::Hostname);
+        let err = listen_to_socket_addr(&l, "dyn_listen").unwrap_err();
+        match err {
+            ServerError::BadConfig { field, .. } => assert_eq!(field, "dyn_listen"),
+            other => panic!("expected BadConfig, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn listen_to_socket_addr_rejects_unix_path() {
+        // A leading slash classifies as a Unix path, which the run
+        // loop does not yet bind: the UnixPath arm returns BadConfig.
+        let l = ConfListen::parse("listen", "/tmp/dynomited.sock").unwrap();
+        assert_eq!(l.kind(), EndpointKind::UnixPath);
+        let err = listen_to_socket_addr(&l, "listen").unwrap_err();
+        assert!(matches!(
+            err,
+            ServerError::BadConfig {
+                field: "listen",
+                ..
+            }
+        ));
+    }
+
+    // ---- build_local_peer ----
+
+    #[test]
+    fn build_local_peer_uses_dyn_listen_endpoint() {
+        let cfg = Config::parse_str(&yaml(7000, 7001, 7002)).unwrap();
+        let conf_pool = cfg.pool();
+        let pool_config = PoolConfig::default();
+        let dyn_addr: SocketAddr = "127.0.0.1:7001".parse().unwrap();
+        let peer = build_local_peer(conf_pool, &pool_config, Some(dyn_addr)).unwrap();
+        // The local peer is index 0 and carries the dyn_listen port.
+        assert_eq!(peer.idx(), 0);
+        assert_eq!(peer.endpoint().port(), 7001);
+    }
+
+    #[test]
+    fn build_local_peer_falls_back_when_dyn_listen_absent() {
+        let cfg = Config::parse_str(&yaml(7010, 7011, 7012)).unwrap();
+        let conf_pool = cfg.pool();
+        let pool_config = PoolConfig::default();
+        // With no dyn_listen the endpoint defaults to 127.0.0.1:0.
+        let peer = build_local_peer(conf_pool, &pool_config, None).unwrap();
+        assert_eq!(peer.endpoint().port(), 0);
+    }
+
+    #[test]
+    fn build_local_peer_errors_when_tokens_missing() {
+        // A pool YAML without a `tokens:` directive: the
+        // MissingConfig("tokens") arm fires.
+        let yaml =
+            "p:\n  listen: 127.0.0.1:7020\n  servers:\n  - 127.0.0.1:22122:1\n  data_store: 0\n";
+        let cfg = Config::parse_str(yaml).unwrap();
+        let conf_pool = cfg.pool();
+        let pool_config = PoolConfig::default();
+        let err = build_local_peer(conf_pool, &pool_config, None).unwrap_err();
+        assert!(matches!(err, ServerError::MissingConfig("tokens")));
+    }
+
+    // ---- seed_to_peer: same-dc vs cross-dc ----
+
+    #[test]
+    fn seed_to_peer_same_dc_flag() {
+        let seed = dynomite::conf::ConfDynSeed::parse("10.0.0.2:8101:rack-b:localdc:200").unwrap();
+        let pool_config = PoolConfig::default(); // dc == "localdc"
+        let peer = seed_to_peer(3, &seed, &pool_config).unwrap();
+        assert_eq!(peer.idx(), 3);
+        assert!(peer.is_same_dc());
+        assert_eq!(peer.endpoint().port(), 8101);
+    }
+
+    #[test]
+    fn seed_to_peer_cross_dc_flag() {
+        let seed = dynomite::conf::ConfDynSeed::parse("10.0.1.2:8101:rack-c:remotedc:300").unwrap();
+        let pool_config = PoolConfig::default(); // dc == "localdc"
+        let peer = seed_to_peer(4, &seed, &pool_config).unwrap();
+        assert!(!peer.is_same_dc());
+    }
+
+    // ---- BackendAddr Display + connect ----
+
+    #[test]
+    fn backend_addr_tcp_display() {
+        let addr = BackendAddr::Tcp("127.0.0.1:6379".parse().unwrap());
+        assert_eq!(format!("{addr}"), "127.0.0.1:6379");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_addr_unix_display() {
+        let addr = BackendAddr::Unix(PathBuf::from("/run/redis.sock"));
+        assert_eq!(format!("{addr}"), "unix:/run/redis.sock");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn backend_addr_tcp_connect_succeeds() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let h = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+        let backend = BackendAddr::Tcp(addr);
+        let transport = backend.connect().await.expect("connect should succeed");
+        // The transport is tagged Server-role.
+        assert_eq!(transport.role(), ConnRole::Server);
+        drop(transport);
+        h.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn backend_addr_tcp_connect_refused() {
+        // Bind then drop to free a port nothing is listening on.
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+        let backend = BackendAddr::Tcp(addr);
+        assert!(backend.connect().await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn backend_addr_unix_connect_succeeds() {
+        let dir = std::env::temp_dir().join(format!("dynomited-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("be.sock");
+        let _ = std::fs::remove_file(&path);
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let accept_path = path.clone();
+        let h = tokio::spawn(async move {
+            let _ = listener.accept().await;
+            let _ = accept_path; // keep the binding alive for the connect
+        });
+        let backend = BackendAddr::Unix(path.clone());
+        let transport = backend
+            .connect()
+            .await
+            .expect("unix connect should succeed");
+        assert_eq!(transport.role(), ConnRole::Server);
+        drop(transport);
+        h.await.unwrap();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    // ---- backoff schedule helpers ----
+
+    #[test]
+    fn next_backoff_doubles_then_saturates() {
+        assert_eq!(next_backoff_ms(BACKEND_BACKOFF_INIT_MS), 100);
+        assert_eq!(next_backoff_ms(100), 200);
+        // Saturates at the ceiling rather than overflowing.
+        assert_eq!(
+            next_backoff_ms(BACKEND_BACKOFF_MAX_MS),
+            BACKEND_BACKOFF_MAX_MS
+        );
+        assert_eq!(next_backoff_ms(u64::MAX), BACKEND_BACKOFF_MAX_MS);
+    }
+
+    #[test]
+    fn jittered_backoff_stays_in_band_and_never_zero() {
+        // Multiplicative jitter is in [0.5, 1.5]; the floor is 1ms.
+        for _ in 0..256 {
+            let d = jittered_backoff(1000);
+            assert!(d >= Duration::from_millis(500));
+            assert!(d <= Duration::from_millis(1500));
+        }
+        // A zero input still yields the 1ms floor, never a 0-sleep.
+        assert_eq!(jittered_backoff(0), Duration::from_millis(1));
+    }
+
+    #[test]
+    fn classify_reconnect_reason_maps_every_variant() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            classify_reconnect_reason(&NetError::Io(Error::from(ErrorKind::BrokenPipe))),
+            "io"
+        );
+        assert_eq!(classify_reconnect_reason(&NetError::Closed), "closed");
+        assert_eq!(classify_reconnect_reason(&NetError::Ejected), "other");
+        assert_eq!(classify_reconnect_reason(&NetError::PoolExhausted), "other");
+        assert_eq!(classify_reconnect_reason(&NetError::PoolShutdown), "other");
+    }
+
+    #[test]
+    fn should_log_reconnect_first_three_then_every_tenth() {
+        assert!(should_log_reconnect(1));
+        assert!(should_log_reconnect(2));
+        assert!(should_log_reconnect(3));
+        assert!(!should_log_reconnect(4));
+        assert!(!should_log_reconnect(9));
+        assert!(should_log_reconnect(10));
+        assert!(!should_log_reconnect(11));
+        assert!(should_log_reconnect(20));
+    }
+
+    #[test]
+    fn default_gossip_interval_is_positive() {
+        // The constant fits an i64, so the unwrap_or fallback path
+        // is never taken; the returned cadence is positive.
+        assert!(default_gossip_interval_ms_i64() > 0);
+    }
+
+    // ---- cancel_future / wait_for_flag ----
+
+    #[tokio::test]
+    async fn cancel_future_resolves_when_flag_already_set() {
+        let (tx, rx) = watch::channel(true);
+        // Flag is already true: the future returns on the first borrow.
+        cancel_future(rx).await;
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn cancel_future_resolves_on_flag_flip() {
+        let (tx, rx) = watch::channel(false);
+        let fut = cancel_future(rx);
+        let waiter = tokio::spawn(fut);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("cancel_future stuck")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn wait_for_flag_returns_when_sender_dropped() {
+        let (tx, mut rx) = watch::channel(false);
+        // Dropping the sender closes the channel; wait_for_flag
+        // returns on the changed() error rather than hanging.
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(2), wait_for_flag(&mut rx))
+            .await
+            .expect("wait_for_flag stuck");
+    }
+
+    // ---- build_proxy: TCP arm ----
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_proxy_tcp_binds() {
+        let cfg = Config::parse_str(&yaml(free_port(), free_port(), free_port())).unwrap();
+        let conf_pool = cfg.pool().clone();
+        let pool = Arc::new(ServerPool::new(PoolConfig::default(), Vec::new()));
+        let dispatcher = Arc::new(ClusterDispatcher::new(pool));
+        let listen_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let kind = build_proxy(
+            listen_addr,
+            dispatcher,
+            dynomite::conf::DataStore::Valkey,
+            &conf_pool,
+        )
+        .await
+        .expect("TCP proxy should bind");
+        // Default transport is TCP.
+        assert!(matches!(kind, ProxyKind::Tcp(_)));
+    }
 }

@@ -194,4 +194,123 @@ mod tests {
     fn parse_cli_rejects_min_gt_max() {
         assert!(ValGen::parse_cli("uniform:64:8").is_err());
     }
+
+    // ---- from_config: each kind plus error branches ----
+
+    fn val_cfg(kind: &str) -> ValGenConfig {
+        ValGenConfig {
+            kind: kind.to_string(),
+            size: 256,
+            min: 16,
+            max: 1024,
+            mean: 64,
+        }
+    }
+
+    #[test]
+    fn from_config_fixed_clamps_zero_to_one() {
+        let mut cfg = val_cfg("fixed");
+        cfg.size = 0;
+        assert!(matches!(
+            ValGen::from_config(&cfg).unwrap(),
+            ValGen::Fixed { n: 1 }
+        ));
+    }
+
+    #[test]
+    fn from_config_uniform_ok_and_clamps() {
+        let mut cfg = val_cfg("uniform");
+        cfg.min = 0;
+        cfg.max = 0;
+        // Both bounds clamp up to 1.
+        assert!(matches!(
+            ValGen::from_config(&cfg).unwrap(),
+            ValGen::Uniform { min: 1, max: 1 }
+        ));
+    }
+
+    #[test]
+    fn from_config_uniform_rejects_min_gt_max() {
+        let mut cfg = val_cfg("uniform");
+        cfg.min = 100;
+        cfg.max = 10;
+        assert!(ValGen::from_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn from_config_exponential_clamps_zero_mean() {
+        let mut cfg = val_cfg("exponential");
+        cfg.mean = 0;
+        // mean.max(1) keeps the rate finite.
+        match ValGen::from_config(&cfg).unwrap() {
+            ValGen::Exponential { mean } => assert!((mean - 1.0).abs() < 1e-9),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn from_config_rejects_unknown_kind() {
+        assert!(ValGen::from_config(&val_cfg("bogus")).is_err());
+    }
+
+    // ---- parse_cli: exponential and error branches ----
+
+    #[test]
+    fn parse_cli_exponential() {
+        match ValGen::parse_cli("exponential:128").unwrap() {
+            ValGen::Exponential { mean } => assert!((mean - 128.0).abs() < 1e-9),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_cli_error_branches() {
+        // Missing / bad fixed size.
+        assert!(ValGen::parse_cli("fixed").is_err());
+        assert!(ValGen::parse_cli("fixed:notanumber").is_err());
+        // Missing min / max for uniform.
+        assert!(ValGen::parse_cli("uniform").is_err());
+        assert!(ValGen::parse_cli("uniform:8").is_err());
+        assert!(ValGen::parse_cli("uniform:8:bad").is_err());
+        // Missing / non-positive mean for exponential.
+        assert!(ValGen::parse_cli("exponential").is_err());
+        assert!(ValGen::parse_cli("exponential:0").is_err());
+        assert!(ValGen::parse_cli("exponential:bad").is_err());
+        // Unknown kind.
+        assert!(ValGen::parse_cli("weird:1").is_err());
+    }
+
+    #[test]
+    fn exponential_size_capped_at_one_mib() {
+        // A huge mean still clamps to the 1 MiB ceiling, so no
+        // single value blows the heap.
+        let g = ValGen::Exponential { mean: 1e18 };
+        let mut r = rng();
+        for _ in 0..4 {
+            assert!(g.next(&mut r).len() <= 1_048_576);
+        }
+    }
+
+    #[hegel::test(test_cases = 64)]
+    fn uniform_value_size_respects_bounds(tc: hegel::TestCase) {
+        // For any in-order [min, max] pair, every emitted value's
+        // length lands inside the inclusive band.
+        let min = tc.draw(
+            hegel::generators::integers::<usize>()
+                .min_value(1)
+                .max_value(512),
+        );
+        let span = tc.draw(
+            hegel::generators::integers::<usize>()
+                .min_value(0)
+                .max_value(512),
+        );
+        let max = min + span;
+        let g = ValGen::Uniform { min, max };
+        let mut r = rng();
+        for _ in 0..32 {
+            let len = g.next(&mut r).len();
+            assert!(len >= min && len <= max, "len {len} outside [{min}, {max}]");
+        }
+    }
 }

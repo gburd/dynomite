@@ -78,3 +78,4 @@ dynomite = { path = "../dynomite", package = "dynomite-engine", version = "0.1.0
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
+hegeltest = { workspace = true }

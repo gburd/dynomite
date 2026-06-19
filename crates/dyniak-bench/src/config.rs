@@ -602,4 +602,163 @@ size = 16
         assert_eq!(w.len(), 1);
         assert_eq!(w[0].0, "set");
     }
+
+    // ---- RateConfig deserialize: every visit_* arm ----
+
+    fn cfg_with_rate(rate_line: &str) -> Config {
+        let text = format!(
+            "[run]\nduration = \"10s\"\nconcurrent = 1\n{rate_line}\n[driver]\nkind = \"redis\"\n[ops]\nget = 1\n[keygen]\nkind = \"uniform\"\nmax = 100\n[valgen]\nkind = \"fixed\"\nsize = 16\n"
+        );
+        toml::from_str(&text).unwrap()
+    }
+
+    #[test]
+    fn rate_string_max_and_integer_shorthand() {
+        // visit_str -> "max"
+        assert!(matches!(
+            cfg_with_rate("rate = \"max\"").run.rate,
+            RateConfig::Max
+        ));
+        // visit_str -> parseable integer string.
+        match cfg_with_rate("rate = \"2500\"").run.rate {
+            RateConfig::Rps(t) => assert_eq!(t.rps, 2500),
+            RateConfig::Max => panic!("expected Rps"),
+        }
+    }
+
+    #[test]
+    fn rate_default_is_max() {
+        // Omitting the directive exercises default_rate().
+        let cfg = cfg_with_rate("");
+        assert!(matches!(cfg.run.rate, RateConfig::Max));
+    }
+
+    #[test]
+    fn rate_bare_integer_is_rps() {
+        // TOML integer -> visit_i64 (positive).
+        match cfg_with_rate("rate = 5000").run.rate {
+            RateConfig::Rps(t) => assert_eq!(t.rps, 5000),
+            RateConfig::Max => panic!("expected Rps"),
+        }
+    }
+
+    #[test]
+    fn rate_rejects_bad_string_and_negative() {
+        // visit_str with an unparseable non-"max" string errors.
+        let bad = "[run]\nduration = \"10s\"\nconcurrent = 1\nrate = \"fast\"\n[driver]\nkind = \"redis\"\n[ops]\nget = 1\n[keygen]\nkind = \"uniform\"\nmax = 100\n[valgen]\nkind = \"fixed\"\nsize = 16\n";
+        assert!(toml::from_str::<Config>(bad).is_err());
+        // visit_i64 with a negative integer errors.
+        let neg = "[run]\nduration = \"10s\"\nconcurrent = 1\nrate = -1\n[driver]\nkind = \"redis\"\n[ops]\nget = 1\n[keygen]\nkind = \"uniform\"\nmax = 100\n[valgen]\nkind = \"fixed\"\nsize = 16\n";
+        assert!(toml::from_str::<Config>(neg).is_err());
+    }
+
+    #[test]
+    fn rate_table_rejects_unknown_key_and_missing_rps() {
+        // visit_map: unknown key.
+        let unknown = "[run]\nduration = \"10s\"\nconcurrent = 1\nrate = { burst = 5 }\n[driver]\nkind = \"redis\"\n[ops]\nget = 1\n[keygen]\nkind = \"uniform\"\nmax = 100\n[valgen]\nkind = \"fixed\"\nsize = 16\n";
+        assert!(toml::from_str::<Config>(unknown).is_err());
+        // visit_map: empty table is missing `rps`.
+        let missing = "[run]\nduration = \"10s\"\nconcurrent = 1\nrate = {}\n[driver]\nkind = \"redis\"\n[ops]\nget = 1\n[keygen]\nkind = \"uniform\"\nmax = 100\n[valgen]\nkind = \"fixed\"\nsize = 16\n";
+        assert!(toml::from_str::<Config>(missing).is_err());
+    }
+
+    // ---- DriverKind / HttpEncoding label tables ----
+
+    #[test]
+    fn driver_kind_labels() {
+        assert_eq!(DriverKind::Redis.label(), "redis");
+        assert_eq!(DriverKind::RiakPbc.label(), "riak-pbc");
+        assert_eq!(DriverKind::RiakQuic.label(), "riak-quic");
+        assert_eq!(DriverKind::RiakHttp.label(), "riak-http");
+    }
+
+    #[test]
+    fn http_encoding_content_types() {
+        assert_eq!(HttpEncoding::Json.content_type(), "application/json");
+        assert_eq!(HttpEncoding::Cbor.content_type(), "application/cbor");
+        assert_eq!(
+            HttpEncoding::Protobuf.content_type(),
+            "application/x-protobuf"
+        );
+        assert_eq!(HttpEncoding::default(), HttpEncoding::Json);
+    }
+
+    // ---- Config::from_path + resolve_out_dir explicit path ----
+
+    #[test]
+    fn from_path_reads_and_validates() {
+        let dir = std::env::temp_dir().join(format!("dyniak-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bench.toml");
+        std::fs::write(
+            &path,
+            "[run]\nduration = \"5s\"\nconcurrent = 2\n[driver]\nkind = \"redis\"\n[ops]\nget = 1\n[keygen]\nkind = \"uniform\"\nmax = 100\n[valgen]\nkind = \"fixed\"\nsize = 16\n",
+        )
+        .unwrap();
+        let cfg = Config::from_path(&path).unwrap();
+        assert_eq!(cfg.run.concurrent, 2);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn from_path_propagates_validation_error() {
+        let dir = std::env::temp_dir().join(format!("dyniak-cfg-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bad.toml");
+        // concurrent = 0 fails validate().
+        std::fs::write(
+            &path,
+            "[run]\nduration = \"5s\"\nconcurrent = 0\n[driver]\nkind = \"redis\"\n[ops]\nget = 1\n[keygen]\nkind = \"uniform\"\nmax = 100\n[valgen]\nkind = \"fixed\"\nsize = 16\n",
+        )
+        .unwrap();
+        assert!(Config::from_path(&path).is_err());
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn from_path_missing_file_errors() {
+        assert!(Config::from_path(std::path::Path::new("/nonexistent/bench.toml")).is_err());
+    }
+
+    #[test]
+    fn resolve_out_dir_uses_explicit_path_verbatim() {
+        let cfg = cfg_with_rate("out_dir = \"results/run-1\"");
+        assert_eq!(cfg.resolve_out_dir(), PathBuf::from("results/run-1"));
+    }
+
+    #[test]
+    fn validate_rejects_zero_concurrency_and_empty_ops() {
+        let mut cfg = cfg_with_rate("rate = \"max\"");
+        cfg.run.concurrent = 0;
+        assert!(cfg.validate().is_err());
+        cfg.run.concurrent = 1;
+        cfg.ops = OpsConfig::default();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_bad_duration_strings() {
+        let mut cfg = cfg_with_rate("rate = \"max\"");
+        cfg.run.duration = "notaduration".into();
+        assert!(cfg.validate().is_err());
+        cfg.run.duration = "10s".into();
+        cfg.run.report_interval = "nope".into();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn duration_overflow_is_rejected() {
+        // A value large enough to overflow u64 seconds is rejected
+        // rather than silently truncated. No 'e' in the digits so
+        // split_unit keeps the whole number as the value.
+        assert!(parse_duration("99999999999999999999h").is_err());
+    }
+
+    #[test]
+    fn report_interval_accessor() {
+        let cfg = cfg_with_rate("report_interval = \"2s\"");
+        assert_eq!(cfg.report_interval().unwrap(), Duration::from_secs(2));
+    }
 }
