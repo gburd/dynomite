@@ -9,7 +9,10 @@ if [ ! -d crates ]; then
   exit 0
 fi
 
-PATTERN='\b(TODO|FIXME|XXX|unimplemented!|todo!\(|panic!\("TODO)'
+# Word markers (TODO/FIXME/XXX) need a word boundary on both sides so
+# that test payload bytes like b"XXXX" do not trip the gate; the macro
+# markers carry their own punctuation delimiters.
+PATTERN='(\b(TODO|FIXME|XXX)\b|unimplemented!|todo!\(|panic!\("TODO)'
 HITS=$(grep -RInE "$PATTERN" \
   --include='*.rs' \
   --exclude-dir=target \
