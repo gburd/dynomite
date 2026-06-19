@@ -1,0 +1,27 @@
+[package]
+name = "model-tests"
+description = "Stateright explicit-state model checks for the Dynomite Rust port's distributed protocols"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# Stateright is the explicit-state model checker. The models in this
+# crate are abstract: they capture the decision logic of the
+# production protocols (XA 2PC, quorum, ring routing, gossip) without
+# linking the production crates, so the checker's state space stays
+# small and the bounded BFS/DFS runs in a few seconds. Keeping the
+# models self-contained is deliberate -- pulling in dynomite/dyniak
+# would drag tokio and the full storage stack into a pure
+# state-machine search for no modelling benefit.
+[dependencies]
+stateright = "0.31"
