@@ -1,8 +1,13 @@
 # C-to-Rust Parity Matrix
 
-This document maps every C symbol in `_/dynomite/` to its Rust home and is
+This document maps every C symbol in the upstream Netflix Dynomite C
+engine to its Rust home and is
 the source of truth for "is the port complete?". Update this file in
-every PR that adds Rust code or finishes a port.
+every PR that adds Rust code or finishes a port. The C source is no
+longer vendored in this repository (it was removed in commit
+`2561d13`); the `_/dynomite/...` paths in the rows below name the
+file each symbol came from in the upstream tree and are kept as
+provenance, not as live paths.
 
 Format:
 
@@ -2412,7 +2417,10 @@ The Stage 14 differential rig at
 `tests/fixtures/conformance/commands.txt` corpus through one
 Rust dynomited node and one C `dynomite` reference instance
 side-by-side. The C binary is built on demand by
-`scripts/build_cref.sh` from the `_/dynomite` submodule; the
+`scripts/build_cref.sh` from a local checkout of the upstream
+Netflix dynomite repository (pointed at by the `DYNOMITE_C_REF`
+environment variable; the C tree is no longer vendored here);
+the
 rig discovers it via the `CONFORMANCE_C_BINARY` environment
 variable or the `target/cref/path` marker file written by the
 build script.

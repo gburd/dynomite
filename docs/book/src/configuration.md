@@ -90,7 +90,7 @@ dyn_o_mite:
 
 With this stanza:
 
-* `GET sessions/abc123` is planned with `DC_QUORUM`; writes use
+* `GET sessions/abc123` reads with `DC_QUORUM`; writes use
   `DC_EACH_SAFE_QUORUM` and may fan out across DCs.
 * `GET cache/u/9000` uses `DC_ONE` reads and writes.
 * `GET plain-key` (no slash) falls through to

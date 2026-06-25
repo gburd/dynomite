@@ -1,11 +1,12 @@
-//! Rust adaptation of the functional test scenarios from
-//! `_/dynomite/test/func_test.py` and friends. We chose to
+//! Rust adaptation of the functional test scenarios from the
+//! upstream Netflix Dynomite Python test suite
+//! (`test/func_test.py` and friends). We chose to
 //! adapt the scenarios to Rust rather than keep the Python
 //! harness so the suite has one runner (cargo nextest), one
 //! set of cleanup guarantees (the Drop impl on `Cluster`), and
-//! one source of truth for assertions. The Python files in the
-//! C tree remain unchanged in `_/dynomite/test/` for
-//! archaeology.
+//! one source of truth for assertions. The upstream Python
+//! files are not vendored here; the names below record which
+//! scenario each workload was adapted from.
 //!
 //! Mapped scenarios:
 //!

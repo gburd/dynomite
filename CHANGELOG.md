@@ -8,9 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 The Rust port reproduces the algorithms, configuration grammar,
 on-the-wire DNODE protocol, and operator-visible behaviour of
 the original [Netflix Dynomite][netflix-dynomite] C engine
-(BSD-licensed, kept verbatim under `_/dynomite/` for parity
-review). The mention here is the only acknowledgement of the
-upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
+(BSD-licensed). The mention here is the only acknowledgement of
+the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 

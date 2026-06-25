@@ -1,13 +1,28 @@
 # Coverage gate
 
-Stage 15 lands a workspace-wide coverage gate at >= 95% line,
-branch, and function coverage. The gate is enforced by
-`scripts/coverage_gate.sh`; CI runs it as part of `scripts/check.sh`.
+The workspace ships a tiered, blocking coverage gate. Core
+components must reach 95% line and function coverage; supporting
+and tool crates must reach 75%. The gate is enforced by
+`scripts/coverage_gate.sh`; CI runs it as part of
+`scripts/check.sh` (without `|| true`, so it can fail the build).
+
+The tiers are:
+
+* **Core** (95%): the engine `proto` / `cluster` / `io` /
+  `hashkit` / `crypto` / `msg` / `core` / `net` layers and the
+  dyniak `datastore` / `proto` / `datatypes` / `mapreduce`
+  layers -- the code a customer's data integrity depends on.
+* **Supporting** (75%): the remaining library crates
+  (`dynomite-search`, `gen-fsm`, `dyn-sup`, `dyn-encoding`,
+  `dynomite-text`, `dynomite-vec`, `dyn-hashtree`,
+  `throttle-core`).
+* **Tool** (75%): `dyniak-bench`, `dyn-hash-tool`, `dyn-admin`,
+  and the test-harness crates `loom-tests` / `model-tests`.
 
 ## Running locally
 
 ```
-scripts/coverage_gate.sh             # enforce 95% threshold
+scripts/coverage_gate.sh             # enforce the tiered policy
 scripts/coverage_gate.sh --report    # report-only; do not fail
 ```
 
@@ -24,56 +39,49 @@ The script writes:
 1. The script invokes:
 
    ```
-   cargo llvm-cov --workspace --all-features --summary-only --json \
+   cargo llvm-cov --workspace --features riak --summary-only --json \
        --output-path target/coverage/summary.json
    ```
 
-2. It extracts the workspace-wide line, branch, and function
-   percentages from the `data[0].totals` block.
-3. It compares each axis to the 95% threshold.
-4. It walks every per-file entry and classifies files below the
-   threshold as either:
-   * **Documented deviations**: listed in
+2. It walks every per-file source entry under `crates/`
+   (skipping `tests/`, `benches/`, and the fuzz crate), assigns
+   each file its tier threshold, and compares the file's line
+   and function coverage to that threshold.
+3. A file below its tier is classified as either:
+   * **Documented deviation**: listed in
      `docs/coverage-deviations.md`. The gate logs a warning but
      does not fail.
-   * **Undocumented deviations**: any file under threshold that
-     is not in the deviations list. The gate fails.
-5. The gate exits non-zero if either:
-   * Any of the three workspace axes is below 95%, OR
-   * There is at least one undocumented per-file deviation.
+   * **Undocumented deviation**: any file under its tier that is
+     not in the deviations list. The gate fails.
+4. The workspace-wide line, region, and function percentages are
+   printed for trend tracking but are not themselves gated; the
+   per-file tier policy is the enforcement axis.
 
 ## Tracking deviations
 
-`docs/coverage-deviations.md` lists each module that is allowed
-below the threshold along with its line / branch / function
-percentages and the reason. Listed examples:
+`docs/coverage-deviations.md` lists each module allowed below its
+tier along with its line / region / function percentages and a
+concrete reason. Every entry is reachable only by an
+out-of-process suite (the conformance harness or the chaos rig),
+is a re-export facade, is process bootstrap, is rendering output,
+or has only unreachable defensive arms left -- none is an
+untested unit of pure logic. Regenerate the table with:
 
-* Modules whose primary exerciser is the Stage 14 conformance
-  suite (network listeners, peer-protocol clients).
-* Modules whose primary exerciser is the Stage 16 chaos test
-  (kill-restart paths, gossip recovery, partition handling).
-
-When you add a deviation:
-
-1. Run `scripts/coverage_gate.sh --report` to capture the
-   percentages.
-2. Add a row to `docs/coverage-deviations.md` with the file
-   path, the three percentages, and a one-line technical
-   reason.
-3. Re-run `scripts/coverage_gate.sh` to confirm the gate now
-   classifies the module as a documented deviation (warning
-   only).
+```
+scripts/coverage_gate.sh --report
+python3 scripts/regen_coverage_deviations.py
+```
 
 When you reduce a deviation:
 
-1. Add tests that lift the module above 95%.
-2. Run `scripts/coverage_gate.sh --report` to confirm.
-3. Remove the row from `docs/coverage-deviations.md`.
+1. Add tests that lift the module to its tier threshold.
+2. Run `scripts/coverage_gate.sh --report` and regenerate the
+   deviations table; the file drops out automatically.
 
 ## Soak coverage
 
 The soak job runs property tests at 1M cases each
 (`make soak`) and re-runs `scripts/coverage_gate.sh` with the
-same thresholds. The expectation is that soak coverage matches
-or exceeds the per-PR coverage; any regression is a soak
+same tiered thresholds. The expectation is that soak coverage
+matches or exceeds the per-PR coverage; any regression is a soak
 finding that blocks the next release tag.

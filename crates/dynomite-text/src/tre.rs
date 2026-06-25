@@ -110,10 +110,11 @@ impl Default for TreMatchOpts {
 /// Successful approximate-match result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TreMatch {
-    /// Byte offset where the match starts. The current TRE
+    /// Byte offset where the match starts. The TRE
     /// wrapper does not request submatch storage, so this is
-    /// reported as 0 on a successful match. Phase 3.1 will add
-    /// submatch capture and populate the real offset.
+    /// reported as 0 on a successful match; the meaningful
+    /// result is whether a match exists within the cost bound,
+    /// not its position.
     pub start: usize,
     /// Byte offset one past the end of the match. See
     /// [`Self::start`] for the current limitation.

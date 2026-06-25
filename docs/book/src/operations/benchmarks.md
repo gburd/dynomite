@@ -1,6 +1,6 @@
 # Benchmarks
 
-Stage 15 ships two bench harnesses:
+The workspace ships two bench harnesses:
 
 * **Micro** (`crates/dynomite/benches/`): per-component criterion
   benches. Runs unattended on any developer machine.

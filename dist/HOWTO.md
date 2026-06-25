@@ -22,7 +22,7 @@ report for the release tag lives in version control.
 ## systemd unit
 
 The unit file is `dist/systemd/dynomited.service`. It mirrors
-the C reference unit (see `_/dynomite/init/`) and adds a few
+the upstream Netflix Dynomite init unit and adds a few
 sandboxing directives the C engine could not use because it
 required glibc threading primitives the sandbox would block.
 

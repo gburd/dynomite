@@ -9,10 +9,13 @@
 #
 # Behaviour
 # ---------
-# * Initialises the `_/dynomite` git submodule (idempotent).
+# * Locates the upstream Netflix dynomite C source via the
+#   `DYNOMITE_C_REF` environment variable (a local checkout of
+#   the upstream repository). The C tree is no longer vendored
+#   in this repository (it was removed in commit `2561d13`); see
+#   AGENTS.md Section 2.
 # * Mirrors the source tree into `target/cref/build/` so the
-#   submodule itself is never modified (the submodule is
-#   informational only; AGENTS.md forbids in-tree edits).
+#   checkout itself is never modified.
 # * Runs `autoreconf -fvi` and `./configure` inside the mirror,
 #   then a partial `make` that builds the supporting static
 #   archives and finally the `dynomite` binary. The C code
@@ -30,7 +33,7 @@
 #
 # Exit codes
 #   0  success; binary path on stdout.
-#   1  submodule init failed.
+#   1  DYNOMITE_C_REF unset or does not point at a C source tree.
 #   2  configure step failed.
 #   3  make step failed.
 
@@ -39,7 +42,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-SUBMODULE="_/dynomite"
+C_REF="${DYNOMITE_C_REF:-}"
 TARGET_DIR="$ROOT/target/cref"
 BUILD_DIR="$TARGET_DIR/build"
 PATH_FILE="$TARGET_DIR/path"
@@ -48,24 +51,25 @@ LOG_DIR="$TARGET_DIR/logs"
 
 note() { echo "[build_cref] $*" >&2; }
 
-note "ensuring submodule $SUBMODULE is initialised"
-if ! git submodule update --init --recursive "$SUBMODULE" >&2; then
-  echo "build_cref: submodule update failed" >&2
+if [ -z "$C_REF" ]; then
+  echo "build_cref: DYNOMITE_C_REF is unset. The C reference is no longer" >&2
+  echo "  vendored in this repository; point DYNOMITE_C_REF at a local" >&2
+  echo "  checkout of the upstream Netflix dynomite repository." >&2
   exit 1
 fi
-
-if [ ! -f "$SUBMODULE/configure.ac" ]; then
-  echo "build_cref: $SUBMODULE missing configure.ac after submodule init" >&2
+if [ ! -f "$C_REF/configure.ac" ]; then
+  echo "build_cref: $C_REF does not look like a dynomite C source tree" >&2
+  echo "  (no configure.ac). Set DYNOMITE_C_REF to the repository root." >&2
   exit 1
 fi
 
 mkdir -p "$TARGET_DIR" "$LOG_DIR"
 
-# Re-mirror the submodule when:
+# Re-mirror the source when:
 #   * the build dir does not exist, or
-#   * the submodule's HEAD differs from the cached marker, or
+#   * the source HEAD differs from the cached marker, or
 #   * the cached binary is missing.
-SHA="$(git -C "$SUBMODULE" rev-parse HEAD)"
+SHA="$(git -C "$C_REF" rev-parse HEAD 2>/dev/null || echo unknown)"
 MARKER="$TARGET_DIR/source.sha"
 NEED_REMIRROR=0
 if [ ! -d "$BUILD_DIR" ]; then
@@ -77,18 +81,17 @@ elif [ ! -x "$BUILD_DIR/$BIN_REL" ]; then
 fi
 
 if [ "$NEED_REMIRROR" -eq 1 ]; then
-  note "mirroring source into $BUILD_DIR (sha $SHA)"
+  note "mirroring source from $C_REF into $BUILD_DIR (sha $SHA)"
   if [ -d "$BUILD_DIR" ]; then
     chmod -R u+w "$BUILD_DIR" 2>/dev/null || true
     find "$BUILD_DIR" -mindepth 1 -delete
   else
     mkdir -p "$BUILD_DIR"
   fi
-  # Copy the submodule contents (preserve attributes); then
-  # delete the .git pointer file so autotools cannot try to
-  # touch the parent repo.
-  (cd "$SUBMODULE" && tar cf - .) | (cd "$BUILD_DIR" && tar xf -)
-  rm -f "$BUILD_DIR/.git"
+  # Copy the source contents (preserve attributes); then delete
+  # the .git pointer so autotools cannot touch the source repo.
+  (cd "$C_REF" && tar cf - .) | (cd "$BUILD_DIR" && tar xf -)
+  rm -rf "$BUILD_DIR/.git"
 fi
 
 CFLAGS_LAX=(

@@ -1,6 +1,6 @@
 # Chaos test
 
-The Stage 16 chaos test exercises a multi-DC dynomite cluster
+The chaos test exercises a multi-DC dynomite cluster
 under continuous failure injection for one hour and asserts
 that no client request observes a permanent error and that
 every documented invariant holds throughout the run. It is

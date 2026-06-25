@@ -5,7 +5,7 @@
 //! Each `#[tokio::test]` skips with a notice when
 //! `valkey-server` is not on `PATH`. Tests assert response shape
 //! against the known Redis semantics, mirroring the workload of
-//! `_/dynomite/test/func_test.py::run_key_value_tests` and
+//! the upstream `func_test.py::run_key_value_tests` and
 //! `run_hash_tests`.
 //!
 //! Successful execution exercises the proxy listener, the

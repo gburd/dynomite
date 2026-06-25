@@ -1,8 +1,7 @@
 # Dynomite -> Rust Port: Staged Plan
 
 This is the authoritative, end-to-end plan for porting the Netflix Dynomite C
-codebase (kept verbatim under `_/dynomite/` for reference) into a single Rust
-workspace. The result must be:
+codebase into a single Rust workspace. The result must be:
 
 1. A drop-in replacement server (`dynomited`) functionally identical to the C
    `dynomite` daemon, including configuration format, on-the-wire DNODE

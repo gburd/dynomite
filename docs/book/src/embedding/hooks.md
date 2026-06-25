@@ -37,9 +37,10 @@ or Memcache implementation; custom impls are useful when the
 backing store lives in-process (no socket round-trip) or speaks a
 private protocol.
 
-**Default impls.** Stage 13 will ship `dynomite::embed::datastore::RedisDatastore`
-and `dynomite::embed::datastore::MemcacheDatastore`, both
-selected by `data_store:` in the YAML schema.
+**Default impls.** `dynomite::embed::hooks::RedisDatastore` and
+`dynomite::embed::hooks::MemcacheDatastore` ship in-crate (plus
+`MemoryDatastore` for in-process use), each selected by
+`data_store:` in the YAML schema.
 
 **Custom example.** An in-process B-Tree backend
 (`InMemoryBTreeDatastore`) that implements `DatastoreConn::dispatch`
@@ -89,8 +90,7 @@ interval is irrelevant when the watch stream pushes updates, so
 
 ## `Transport`
 
-`Transport` already exists as of Stage 2 in
-`dynomite::io::reactor`. It captures any
+`Transport` lives in `dynomite::io::reactor`. It captures any
 `AsyncRead + AsyncWrite + Send + Unpin` byte stream the engine
 should accept connections on.
 
@@ -117,9 +117,9 @@ pub trait TransportListener: Send + Sync + 'static {
 sockets, mutually authenticated TLS, in-memory pipes for tests, and
 embedded message-bus integrations.
 
-**Default impls.** `TcpTransport` ships today. Stage 9 adds the
-QUIC variant. Stage 13 wires the listener factory equivalents
-(`TcpListenerFactory`, `QuicListenerFactory`).
+**Default impls.** `TcpTransport` and the QUIC variant
+(`QuicTransport` / `QuicListener`) both ship in-crate, with
+their listener equivalents wired into the embedding builder.
 
 **Custom example.** A `UnixDomainTransport` whose `role` is
 `ConnRole::Client` and whose `peer_addr` is `None`. Useful for
@@ -173,7 +173,7 @@ pub trait MetricsSink: Send + Sync + 'static {
 }
 ```
 
-The aggregator (Stage 5) periodically calls `emit` with the latest
+The aggregator periodically calls `emit` with the latest
 snapshot. Implementations are responsible for any wire-format
 conversion.
 
@@ -200,13 +200,13 @@ re-exported at [`dynomite::embed`]. A typical embedder writes
 `use dynomite::embed::SimpleSeedsProvider;` without reaching into
 the internals.
 
-Default implementations shipped in Stage 13:
+Default implementations shipped in-crate:
 
 * `dynomite::embed::MemoryDatastore` - in-process datastore for
   examples and tests.
 * `dynomite::embed::RedisDatastore` / `MemcacheDatastore` -
-  protocol-tagged stubs that the Stage 14 conformance suite will
-  swap out for real protocol bridges.
+  protocol-tagged datastores that carry the backend target; the
+  wire protocol bridge runs in the dispatcher path.
 * `dynomite::embed::SimpleSeedsProvider` /
   `DnsSeedsProvider` / `FloridaSeedsProvider` - wrappers around
   the in-crate providers from `dynomite::seeds`.

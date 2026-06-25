@@ -98,9 +98,10 @@ pub enum IndexAlgorithm {
 /// RediSearch metadata field type.
 ///
 /// FT.CREATE accepts schema fields that decorate the indexed
-/// document with searchable metadata. Phase B (this commit)
-/// records the field set; Phase C will wire the per-field
-/// search semantics into the FT.SEARCH evaluator.
+/// document with searchable metadata. The field set recorded
+/// here drives the per-field search semantics in the FT.SEARCH
+/// filter evaluator (`@<field>:` predicates over numeric, tag,
+/// and text fields).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

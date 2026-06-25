@@ -13,7 +13,8 @@
 //! * `conformance/quic_transport.rs` - QUIC peer transport
 //!   smoke (gated on `feature = "quic"`).
 //! * `conformance/python_harness.rs` - Rust adaptation of the
-//!   functional test scenarios from `_/dynomite/test/`.
+//!   functional test scenarios from the upstream Netflix
+//!   Dynomite Python test suite.
 //!
 //! All scenarios are gated behind `feature = "integration"` and
 //! a runtime check for `valkey-server` on `PATH`. When Redis is

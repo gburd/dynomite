@@ -2,8 +2,10 @@
 
 Three illustrative scenarios that exercise the API shape pinned in
 [Server lifecycle](./server.md) and [Hooks and traits](./hooks.md).
-The code on this page is a sketch; the real, runnable versions land
-under `crates/dynomite/examples/` in Stage 13.
+The code on this page is a sketch; the real, runnable versions
+live under `crates/dynomite/examples/` (`embedded_minimal.rs`,
+`embedded_single_node.rs`, `embedded_cluster3.rs`,
+`embedded_custom_transport_sketch.rs`).
 
 ## 1. Single-node embedded Dynomite in front of an existing Redis
 
