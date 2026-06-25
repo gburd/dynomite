@@ -14,6 +14,79 @@ upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.0.0] - 2026-06-19
+
+First stable release. The public API of the embedding crates is now
+covered by SemVer. Adds first-class Riak-compatible storage,
+cross-node distributed transactions, WebAssembly user-defined
+map/reduce phases and hash keyfuns, durable search indexes and hinted
+handoff, QUIC and Unix-socket transports, and TLA-style model
+checking. Refreshes the dependency tree (noxu 6.4.1, wasmtime 46,
+hegeltest 0.23) and raises the minimum supported Rust to 1.95.
+
+### Changed (BREAKING)
+
+- **Datastore identity renamed Redis -> Valkey.** `data_store:`
+  accepts `valkey` (canonical), `memcache`, and `dyniak`; `redis`
+  remains a back-compatible alias for `valkey`. The bundled programs
+  follow the Valkey project (`valkey-server`, `valkey-cli`,
+  `valkey-benchmark`). The RESP wire protocol, the `proto::redis`
+  module, the `ReqRedis*` / `RspRedis*` message types, and the FT.*
+  surface keep their names (vendor-neutral; predate the fork).
+- **Minimum supported Rust is now 1.95** (was 1.90), required by
+  wasmtime 46.
+- **noxu 4.1.0 -> 6.4.1.** A new `OperationStatus::KeyEmpty` variant
+  is handled as a miss on the point K/V paths; no other dyniak API
+  change was required. The composite-key on-disk format changed
+  upstream in noxu 5.0.0, which affects only environments that
+  persist multi-field primary keys (dyniak does not).
+- **PBC object model is now `RpbContent` / `RpbLink`** on the wire
+  (Riak's published schema): `RpbPutReq.content` at tag 4 replaces
+  the flat `value`, and the temporary top-level index shim is folded
+  into `RpbContent.indexes`. A legacy flat-value put is rejected with
+  a decode error.
+
+### Added
+
+- **dyniak cross-node XA two-phase commit** over the dnode peer
+  plane: presumed-abort, a durable fsync'd in-doubt log, bounded
+  commit retry, idempotent commit/rollback, and a cold-restart
+  recovery scan that re-drives unconfirmed commits.
+- **dyniak object links** persisted end to end (HTTP `Link:` headers
+  and the shared PBC/HTTP storage form) and walked by the MapReduce
+  `Phase::Link` link phase.
+- **WebAssembly MapReduce phases** reachable through `POST /mapred`,
+  and a **custom `chash_keyfun` implemented as a WASM keyfun** so an
+  operator-supplied Rust crate compiled to `wasm32-unknown-unknown`
+  selects the routing input at runtime (memory- and CPU-bounded).
+- **Whole-bucket MapReduce inputs** via `list_keys_stream`.
+- **Durable FT.* search-index persistence** (snapshots survive a
+  restart) and a **durable hinted-handoff segment store** (one
+  CRC-protected append log per peer, torn-tail-safe replay).
+- **QUIC transport** for the dyniak PBC surface and **Unix-socket
+  datastore backends** for the proxy path.
+- **`dyn-admin ring-status`** now shows the full multi-peer ring
+  (tokens, dc, rack, liveness) via a new `/ring` JSON endpoint.
+- **stateright model checks** (`crates/model-tests`) for XA 2PC
+  atomicity and liveness (with a negative control the checker
+  catches), quorum acceptance, ring routing, and gossip convergence.
+
+### Changed
+
+- Coverage gate is tiered (core >= 95%, supporting/tool >= 75%) and
+  blocking; `docs/coverage-deviations.md` carries a concrete reason
+  per below-tier file. `cargo deny` and `cargo audit` are now
+  blocking in `scripts/check.sh`.
+- Rustdoc, man page, README, and the mdBook are resynced with the
+  code; the workspace doc build is clean under `-D warnings`.
+
+### Validation
+
+- 2926 nextest workspace tests pass under `--features riak` on Rust
+  1.95 (up from 2017 at 0.1.0); 16 stateright model checks pass;
+  real-Rust-to-WASM keyfun and map-phase fixtures run against
+  wasmtime 46.
+
 ## [0.1.0] - 2026-06-03
 
 First general-availability release. Engineering Definition-of-Done
