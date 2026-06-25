@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn backoff_state_next_delay_no_jitter_is_base() {
-        let spec = BackoffSpec::fixed(Duration::from_millis(10), Duration::from_secs(60), 2.0);
+        let spec = BackoffSpec::fixed(Duration::from_millis(10), Duration::from_mins(1), 2.0);
         let bs = BackoffState::new(spec, 1);
         // Zero failures: index saturates to 0, base_delay(0) = start.
         assert_eq!(bs.next_delay(), Duration::from_millis(10));

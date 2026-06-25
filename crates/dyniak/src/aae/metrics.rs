@@ -174,8 +174,7 @@ impl AaeMetrics {
     pub fn mark_full_sweep_completed_now(&self, peer_idx: u32) {
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs());
         self.mark_full_sweep_completed(peer_idx, secs);
     }
 

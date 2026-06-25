@@ -751,8 +751,7 @@ fn build_local_peer(pool: &ConfPool, cfg: &PoolConfig) -> Peer {
     );
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     peer.set_state(PeerState::Normal, now_secs);
     peer
 }
@@ -760,8 +759,7 @@ fn build_local_peer(pool: &ConfPool, cfg: &PoolConfig) -> Peer {
 fn peers_from_seeds(cfg: &PoolConfig, seeds: &[ConfDynSeed], start_idx: u32) -> Vec<Peer> {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     seeds
         .iter()
         .enumerate()
@@ -981,8 +979,7 @@ async fn gossip_loop(inner: Arc<ServerInner>, interval: Duration) {
                     let mut peers = inner.pool.peers().write();
                     let now_secs = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
+                        .map_or(0, |d| d.as_secs());
                     let cfg = inner.pool.config().clone();
                     for seed in &seeds {
                         let key = (seed.host().to_string(), seed.port());

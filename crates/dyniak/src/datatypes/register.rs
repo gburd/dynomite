@@ -61,8 +61,7 @@ impl LwwRegister {
     pub fn assign_now(&mut self, actor: &ActorId, value: impl Into<Vec<u8>>) {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_micros()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
+            .map_or(0, |d| u64::try_from(d.as_micros()).unwrap_or(u64::MAX));
         self.assign(actor, ts, value);
     }
 

@@ -89,7 +89,7 @@ pub const NEGOTIATING_STATE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const SENDING_EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// State timeout armed on entry to [`State::Flushing`].
-pub const FLUSHING_STATE_TIMEOUT: Duration = Duration::from_secs(60);
+pub const FLUSHING_STATE_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// State timeout armed on entry to [`State::Finalizing`].
 pub const FINALIZING_STATE_TIMEOUT: Duration = Duration::from_secs(30);

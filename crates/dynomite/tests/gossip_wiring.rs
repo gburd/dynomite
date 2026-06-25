@@ -254,7 +254,7 @@ async fn gossip_silence_flips_peer_to_down_via_evaluate() {
 
     // Jump 60s into the future with no new heartbeats. Phi
     // crosses the threshold; `evaluate` flips the peer to Down.
-    let later = t0 + Duration::from_secs(60);
+    let later = t0 + Duration::from_mins(1);
     let transitions = handler.evaluate(later);
     assert_eq!(transitions, vec![(1, PeerState::Down)]);
     assert_eq!(remote_state(&recv_pool), PeerState::Down);

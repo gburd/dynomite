@@ -415,7 +415,7 @@ impl HintStore {
         // rewrite is acceptable because each segment is bounded
         // by the same cap. Borrow `disk` out before mutating the
         // map's keys to keep the borrow checker happy.
-        if inner.disk.is_some() {
+        if let Some(disk) = inner.disk.as_ref() {
             let wall_now = SystemTime::now();
             let inst_now = Instant::now();
             for k in &touched {
@@ -433,7 +433,6 @@ impl HintStore {
                             .collect()
                     })
                     .unwrap_or_default();
-                let disk = inner.disk.as_ref().expect("invariant: disk is Some");
                 let result = if records.is_empty() {
                     disk.remove_peer(*k)
                 } else {
@@ -625,8 +624,7 @@ fn parse_segment_name(path: &Path) -> Option<u32> {
 fn encode_record(deadline: SystemTime, payload: &[u8]) -> Vec<u8> {
     let millis = deadline
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_millis());
     let millis = u64::try_from(millis).unwrap_or(u64::MAX);
     let body_len = 8 + payload.len();
     let mut body = Vec::with_capacity(body_len);
@@ -708,13 +706,13 @@ mod tests {
     fn enqueue_and_take_round_trip() {
         let store = HintStore::new(1024);
         store
-            .enqueue(3, payload(b'a', 4), Duration::from_secs(60))
+            .enqueue(3, payload(b'a', 4), Duration::from_mins(1))
             .unwrap();
         store
-            .enqueue(3, payload(b'b', 4), Duration::from_secs(60))
+            .enqueue(3, payload(b'b', 4), Duration::from_mins(1))
             .unwrap();
         store
-            .enqueue(7, payload(b'c', 4), Duration::from_secs(60))
+            .enqueue(7, payload(b'c', 4), Duration::from_mins(1))
             .unwrap();
         assert_eq!(store.total_len(), 3);
         let drained = store.take_for(3);
@@ -730,10 +728,10 @@ mod tests {
     fn enqueue_rejects_over_capacity() {
         let store = HintStore::new(8);
         store
-            .enqueue(0, payload(b'x', 6), Duration::from_secs(60))
+            .enqueue(0, payload(b'x', 6), Duration::from_mins(1))
             .unwrap();
         let err = store
-            .enqueue(0, payload(b'y', 4), Duration::from_secs(60))
+            .enqueue(0, payload(b'y', 4), Duration::from_mins(1))
             .unwrap_err();
         assert_eq!(err, HintStoreError::OverCapacity { max_bytes: 8 });
         // Bytes accounting unaffected by the rejected enqueue.
@@ -744,7 +742,7 @@ mod tests {
         assert_eq!(drained.len(), 1);
         // Now the previously-rejected payload fits.
         store
-            .enqueue(0, payload(b'y', 4), Duration::from_secs(60))
+            .enqueue(0, payload(b'y', 4), Duration::from_mins(1))
             .unwrap();
     }
 
@@ -755,7 +753,7 @@ mod tests {
             .enqueue(1, payload(b'a', 3), Duration::from_millis(1))
             .unwrap();
         store
-            .enqueue(1, payload(b'b', 3), Duration::from_secs(60))
+            .enqueue(1, payload(b'b', 3), Duration::from_mins(1))
             .unwrap();
         // Sleep a moment so the first hint expires.
         std::thread::sleep(Duration::from_millis(5));
@@ -778,7 +776,7 @@ mod tests {
             .enqueue(2, payload(b'a', 3), Duration::from_millis(1))
             .unwrap();
         store
-            .enqueue(2, payload(b'b', 3), Duration::from_secs(60))
+            .enqueue(2, payload(b'b', 3), Duration::from_mins(1))
             .unwrap();
         std::thread::sleep(Duration::from_millis(5));
         let drained = store.take_for(2);
@@ -795,7 +793,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, HintStoreError::ZeroTtl);
         let err = store
-            .enqueue(0, Vec::new(), Duration::from_secs(60))
+            .enqueue(0, Vec::new(), Duration::from_mins(1))
             .unwrap_err();
         assert_eq!(err, HintStoreError::EmptyPayload);
         assert_eq!(store.total_len(), 0);
@@ -805,13 +803,13 @@ mod tests {
     fn mixed_peer_queues_are_independent() {
         let store = HintStore::new(0); // unbounded
         store
-            .enqueue(0, payload(b'a', 1), Duration::from_secs(60))
+            .enqueue(0, payload(b'a', 1), Duration::from_mins(1))
             .unwrap();
         store
-            .enqueue(1, payload(b'b', 1), Duration::from_secs(60))
+            .enqueue(1, payload(b'b', 1), Duration::from_mins(1))
             .unwrap();
         store
-            .enqueue(2, payload(b'c', 1), Duration::from_secs(60))
+            .enqueue(2, payload(b'c', 1), Duration::from_mins(1))
             .unwrap();
         assert_eq!(store.total_len(), 3);
         let mut peers = store.peers_with_hints();
@@ -830,7 +828,7 @@ mod tests {
         let store = HintStore::new(0);
         for _ in 0..1024 {
             store
-                .enqueue(0, payload(b'x', 1024), Duration::from_secs(60))
+                .enqueue(0, payload(b'x', 1024), Duration::from_mins(1))
                 .unwrap();
         }
         assert_eq!(store.total_len(), 1024);
@@ -840,7 +838,7 @@ mod tests {
     fn expire_now_no_op_when_nothing_old() {
         let store = HintStore::new(64);
         store
-            .enqueue(0, payload(b'x', 3), Duration::from_secs(60))
+            .enqueue(0, payload(b'x', 3), Duration::from_mins(1))
             .unwrap();
         let dropped = store.expire_now(Instant::now());
         assert_eq!(dropped, 0);
@@ -851,7 +849,7 @@ mod tests {
     fn stats_track_capacity_and_bytes() {
         let store = HintStore::new(1024);
         store
-            .enqueue(0, payload(b'x', 100), Duration::from_secs(60))
+            .enqueue(0, payload(b'x', 100), Duration::from_mins(1))
             .unwrap();
         let s = store.stats();
         assert_eq!(s.hint_count, 1);
@@ -873,7 +871,7 @@ mod tests {
         // when one is handy.
         let store = HintStore::new(1024);
         store
-            .enqueue(0, payload(b'a', 4), Duration::from_secs(60))
+            .enqueue(0, payload(b'a', 4), Duration::from_mins(1))
             .unwrap();
         store.take_for(0);
         store.expire_now(Instant::now());
@@ -887,13 +885,13 @@ mod tests {
         {
             let store = HintStore::open(dir.path(), 1024).unwrap();
             store
-                .enqueue(3, payload(b'a', 4), Duration::from_secs(600))
+                .enqueue(3, payload(b'a', 4), Duration::from_mins(10))
                 .unwrap();
             store
-                .enqueue(3, payload(b'b', 5), Duration::from_secs(600))
+                .enqueue(3, payload(b'b', 5), Duration::from_mins(10))
                 .unwrap();
             store
-                .enqueue(7, payload(b'c', 6), Duration::from_secs(600))
+                .enqueue(7, payload(b'c', 6), Duration::from_mins(10))
                 .unwrap();
         }
         let reopened = HintStore::open(dir.path(), 1024).unwrap();
@@ -916,7 +914,7 @@ mod tests {
         {
             let store = HintStore::open(dir.path(), 1024).unwrap();
             store
-                .enqueue(2, payload(b'a', 8), Duration::from_secs(600))
+                .enqueue(2, payload(b'a', 8), Duration::from_mins(10))
                 .unwrap();
         }
         // Append a truncated partial record after the intact one.
@@ -944,7 +942,7 @@ mod tests {
         {
             let store = HintStore::open(dir.path(), 1024).unwrap();
             store
-                .enqueue(5, payload(b'z', 4), Duration::from_secs(600))
+                .enqueue(5, payload(b'z', 4), Duration::from_mins(10))
                 .unwrap();
         }
         // A full-length record whose body bytes are present but
@@ -970,7 +968,7 @@ mod tests {
         let dir = scratch_dir();
         let store = HintStore::open(dir.path(), 1024).unwrap();
         store
-            .enqueue(4, payload(b'a', 4), Duration::from_secs(600))
+            .enqueue(4, payload(b'a', 4), Duration::from_mins(10))
             .unwrap();
         assert!(dir.path().join("peer-4.hints").exists());
         let drained = store.take_for(4);
@@ -993,7 +991,7 @@ mod tests {
             .enqueue(1, payload(b'a', 3), Duration::from_millis(1))
             .unwrap();
         store
-            .enqueue(1, payload(b'b', 3), Duration::from_secs(600))
+            .enqueue(1, payload(b'b', 3), Duration::from_mins(10))
             .unwrap();
         let seg = dir.path().join("peer-1.hints");
         let big = std::fs::metadata(&seg).unwrap().len();
@@ -1033,7 +1031,7 @@ mod tests {
         {
             let store = HintStore::open(dir.path(), 8).unwrap();
             store
-                .enqueue(0, payload(b'x', 6), Duration::from_secs(600))
+                .enqueue(0, payload(b'x', 6), Duration::from_mins(10))
                 .unwrap();
         }
         // Reopen with the same cap: the replayed 6 bytes count,
@@ -1041,7 +1039,7 @@ mod tests {
         let reopened = HintStore::open(dir.path(), 8).unwrap();
         assert_eq!(reopened.stats().bytes, 6);
         let err = reopened
-            .enqueue(0, payload(b'y', 4), Duration::from_secs(600))
+            .enqueue(0, payload(b'y', 4), Duration::from_mins(10))
             .unwrap_err();
         assert_eq!(err, HintStoreError::OverCapacity { max_bytes: 8 });
     }
@@ -1055,7 +1053,7 @@ mod tests {
                 .enqueue(0, payload(b'a', 4), Duration::from_millis(1))
                 .unwrap();
             store
-                .enqueue(0, payload(b'b', 4), Duration::from_secs(600))
+                .enqueue(0, payload(b'b', 4), Duration::from_mins(10))
                 .unwrap();
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -1121,7 +1119,7 @@ mod tests {
         // file fails inside the disk append.
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
         let err = store
-            .enqueue(5, payload(b'a', 4), Duration::from_secs(600))
+            .enqueue(5, payload(b'a', 4), Duration::from_mins(10))
             .expect_err("append into read-only dir must fail");
         assert!(matches!(err, HintStoreError::Io { .. }), "got {err:?}");
         // Restore so the tempdir can be cleaned up.
@@ -1136,7 +1134,7 @@ mod tests {
         let dir = scratch_dir();
         let store = HintStore::open(dir.path(), 1024).unwrap();
         store
-            .enqueue(8, payload(b'a', 4), Duration::from_secs(600))
+            .enqueue(8, payload(b'a', 4), Duration::from_mins(10))
             .unwrap();
         // Read-only dir: take_for still returns the drained hint,
         // but the durable segment removal fails. The failure is
@@ -1162,7 +1160,7 @@ mod tests {
             .enqueue(6, payload(b'a', 4), Duration::from_millis(1))
             .unwrap();
         store
-            .enqueue(6, payload(b'b', 4), Duration::from_secs(600))
+            .enqueue(6, payload(b'b', 4), Duration::from_mins(10))
             .unwrap();
         std::thread::sleep(Duration::from_millis(5));
         // Read-only dir: the compaction rewrite fails, but expiry
@@ -1210,7 +1208,7 @@ mod tests {
         let dir = scratch_dir();
         let store = HintStore::open(dir.path(), 1024).unwrap();
         store
-            .enqueue(7, payload(b'a', 4), Duration::from_secs(600))
+            .enqueue(7, payload(b'a', 4), Duration::from_mins(10))
             .unwrap();
         assert_eq!(store.take_for(7).len(), 1);
         // Second drain: nothing to return, segment already gone.
@@ -1227,7 +1225,7 @@ mod tests {
         {
             let store = HintStore::open(dir.path(), 1024).unwrap();
             store
-                .enqueue(2, payload(b'a', 4), Duration::from_secs(600))
+                .enqueue(2, payload(b'a', 4), Duration::from_mins(10))
                 .unwrap();
         }
         std::fs::write(dir.path().join("peer-2.hints.tmp"), b"junk").unwrap();

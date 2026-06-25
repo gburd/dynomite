@@ -61,10 +61,7 @@ impl BackoffSpec {
     /// Compute the deterministic (un-jittered) delay for the given
     /// consecutive-failure count, clamped to `max`.
     pub(crate) fn base_delay(&self, failures: u32) -> Duration {
-        let exp = match i32::try_from(failures) {
-            Ok(e) => e,
-            Err(_) => i32::MAX,
-        };
+        let exp = i32::try_from(failures).unwrap_or(i32::MAX);
         let mult = self.factor.powi(exp);
         let secs = self.start.as_secs_f64() * mult;
         let max_secs = self.max.as_secs_f64();
@@ -133,7 +130,7 @@ mod tests {
 
     #[test]
     fn base_delay_doubles_with_factor_two() {
-        let b = BackoffSpec::fixed(Duration::from_millis(10), Duration::from_secs(60), 2.0);
+        let b = BackoffSpec::fixed(Duration::from_millis(10), Duration::from_mins(1), 2.0);
         assert_eq!(b.base_delay(0), Duration::from_millis(10));
         assert_eq!(b.base_delay(1), Duration::from_millis(20));
         assert_eq!(b.base_delay(2), Duration::from_millis(40));
@@ -155,7 +152,7 @@ mod tests {
     fn apply_jitter_stays_within_bounds() {
         let b = BackoffSpec {
             start: Duration::from_millis(100),
-            max: Duration::from_secs(60),
+            max: Duration::from_mins(1),
             factor: 2.0,
             jitter: 0.5,
         };

@@ -1282,8 +1282,7 @@ fn consume_search_trailing_clauses_with_params(
     params: &mut HashMap<Vec<u8>, Vec<u8>>,
     opts: &mut SearchClauseOptions,
 ) -> Result<(), FtError> {
-    loop {
-        let Some(tok) = it.next() else { break };
+    while let Some(tok) = it.next() {
         let up = ascii_upper(tok);
         match up.as_slice() {
             b"PARAMS" => {
@@ -1460,8 +1459,7 @@ fn consume_search_trailing_clauses(
     allow_params: bool,
     opts: &mut SearchClauseOptions,
 ) -> Result<(), FtError> {
-    loop {
-        let Some(tok) = it.next() else { break };
+    while let Some(tok) = it.next() {
         let up = ascii_upper(tok);
         match up.as_slice() {
             b"PARAMS" if allow_params => {
@@ -2460,8 +2458,7 @@ fn parse_dropindex(rest: &[&[u8]]) -> Result<FtCommand, FtError> {
     let mut it = TokenCursor::new(rest);
     let name = it.next_string("FT.DROPINDEX: missing index name")?;
     let mut delete_documents = false;
-    loop {
-        let Some(tok) = it.next() else { break };
+    for tok in it {
         let up = ascii_upper(tok);
         match up.as_slice() {
             b"DD" => delete_documents = true,

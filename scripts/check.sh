@@ -85,14 +85,16 @@ cargo test --doc --workspace
 
 echo "==> deny"
 if command -v cargo-deny >/dev/null 2>&1; then
-  cargo deny check || true
+  cargo deny check
 fi
 
 echo "==> audit"
 if command -v cargo-audit >/dev/null 2>&1; then
   cargo audit --deny warnings \
     --ignore RUSTSEC-2023-0071 \
-    --ignore RUSTSEC-2024-0436 || true
+    --ignore RUSTSEC-2024-0436 \
+    --ignore RUSTSEC-2025-0141 \
+    --ignore RUSTSEC-2025-0134
 fi
 
 echo "==> mdbook"

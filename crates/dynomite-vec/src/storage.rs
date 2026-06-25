@@ -49,17 +49,13 @@ pub type RowKey = Vec<u8>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+#[derive(Default)]
 pub enum IndexAlgorithm {
     /// Hierarchical navigable small world graph (default).
+    #[default]
     Hnsw,
     /// Brute-force linear scan over every stored vector.
     Flat,
-}
-
-impl Default for IndexAlgorithm {
-    fn default() -> Self {
-        Self::Hnsw
-    }
 }
 
 /// Per-table schema.
@@ -628,8 +624,7 @@ fn now_millis() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 #[cfg(test)]

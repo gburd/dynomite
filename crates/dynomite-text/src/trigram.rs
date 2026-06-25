@@ -261,7 +261,7 @@ mod tests {
         let doc_set = extract_trigram_set(b"hello world");
         let q_set = extract_query_trigram_set(b"hello");
         for q in &q_set {
-            assert!(doc_set.contains(q), "query trigram {q:#x} not in doc set",);
+            assert!(doc_set.contains(q), "query trigram {q:#x} not in doc set");
         }
     }
 }

@@ -558,7 +558,7 @@ async fn closed_while_timer_pending() {
         type Stop = ();
         fn initial(&self) -> Self::State {}
         fn on_enter(&mut self, _s: ()) -> Transition<Self> {
-            Transition::Keep(vec![Action::set_state_timeout(Duration::from_secs(60))])
+            Transition::Keep(vec![Action::set_state_timeout(Duration::from_mins(1))])
         }
         fn handle(&mut self, _s: (), _et: EventType, _ev: ()) -> Transition<Self> {
             Transition::Keep(vec![])

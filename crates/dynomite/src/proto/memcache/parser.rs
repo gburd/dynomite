@@ -600,18 +600,14 @@ pub fn memcache_parse_req_tagged(
                 b' ' => {
                     p += 1;
                 }
-                b'n' => {
-                    if memcache_storage(ty)
-                        || memcache_arithmetic(ty)
-                        || memcache_delete(ty)
-                        || memcache_touch(ty)
-                    {
-                        token = Some(p);
-                        state = ReqState::Noreply;
-                        p += 1;
-                    } else {
-                        return finish_error(r, state, p, token, vlen, ty, is_read, quit, ntokens);
-                    }
+                b'n' if (memcache_storage(ty)
+                    || memcache_arithmetic(ty)
+                    || memcache_delete(ty)
+                    || memcache_touch(ty)) =>
+                {
+                    token = Some(p);
+                    state = ReqState::Noreply;
+                    p += 1;
                 }
                 CR => {
                     if memcache_storage(ty) {

@@ -211,7 +211,7 @@ fn pidfile_is_written_and_removed() {
     // the 3-5x instrumentation overhead of `cargo llvm-cov`.
     // On failure, surface dynomited's captured stderr to make
     // the diagnostic obvious.
-    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + Duration::from_mins(1);
     while !pid.exists() && std::time::Instant::now() < deadline {
         // Detect early child exit so we don't sleep until the
         // deadline when the child has already crashed.

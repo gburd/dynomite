@@ -18,20 +18,17 @@ use crate::core::types::{Msec, Usec};
 /// assert!(usec_now() > 0);
 /// ```
 pub fn usec_now() -> Usec {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| {
-            let micros = d.as_micros();
-            if micros > u128::from(Usec::MAX) {
-                Usec::MAX
-            } else {
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    micros as Usec
-                }
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| {
+        let micros = d.as_micros();
+        if micros > u128::from(Usec::MAX) {
+            Usec::MAX
+        } else {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                micros as Usec
             }
-        })
-        .unwrap_or(0)
+        }
+    })
 }
 
 /// Milliseconds since the UNIX epoch.

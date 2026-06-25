@@ -558,7 +558,7 @@ mod tests {
         let plan_len = plan.len();
         sched.install_plan(plan);
         for _ in 0..plan_len {
-            clock.advance(Duration::from_secs(60));
+            clock.advance(Duration::from_mins(1));
             let _ = sched.poll();
         }
         // Cursor should now be back at 0.
@@ -600,7 +600,7 @@ mod tests {
         c.enabled = false;
         c.snapshot_interval_seconds = 1;
         let sched: Scheduler<MockClock> = Scheduler::new(c, clock.clone());
-        clock.advance(Duration::from_secs(3600));
+        clock.advance(Duration::from_hours(1));
         assert!(!sched.snapshot_due());
     }
 

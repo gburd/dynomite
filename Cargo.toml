@@ -32,7 +32,7 @@ exclude = [
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/gburd/dynomite"
 authors = ["Greg Burd <greg@burd.me>"]
@@ -131,7 +131,7 @@ prost = "0.14"
 # in-process runtime, plus WAT support so tests can ship modules
 # as text. Pinned at the 26.x series; bumping requires a journal
 # entry.
-wasmtime = { version = "41.0", default-features = false, features = ["cranelift", "runtime", "wat"] }
+wasmtime = { version = "46.0", default-features = false, features = ["cranelift", "runtime", "wat"] }
 
 # Schema-first wire codecs (dyn-encoding crate). Pinned to track
 # the rest of the workspace; bumping requires a journal entry.
@@ -151,7 +151,7 @@ bson = { version = "3", features = ["serde"] }
 # multi-engine storage substrate. We depend on the `noxu`
 # umbrella crate (published on crates.io), which re-exports the
 # full engine public API behind a single name + version.
-noxu = "4.1.0"
+noxu = "6.4.1"
 
 # Dev / test
 # `hegeltest` (re-exported as `hegel`) is the property-testing crate
@@ -159,7 +159,7 @@ noxu = "4.1.0"
 # https://github.com/hegeldev/hegel-rust. The `native` feature pulls in
 # the in-process backend (rand + num-bigint + num-traits) so tests do
 # not need an external server.
-hegeltest = { version = "0.20" }
+hegeltest = { version = "0.23" }
 # Loom is a model checker for concurrent Rust. It only ships into
 # the build under `--cfg loom`; production code is unaffected. Tests
 # that depend on it live under `crates/<crate>/tests/loom_*.rs`,

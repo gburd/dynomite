@@ -36,12 +36,13 @@ use std::fmt;
 /// use dynomite::core::log::LogFormat;
 /// assert_eq!(LogFormat::default(), LogFormat::Default);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum LogFormat {
     /// Human-readable text via `tracing_subscriber::fmt()`.
     /// This is the historical default and is what `dynomited` emits
     /// when neither the configuration nor the CLI request another
     /// shape.
+    #[default]
     Default,
     /// Modern structured syslog per RFC 5424.
     Rfc5424,
@@ -54,12 +55,6 @@ pub enum LogFormat {
     /// Newline-delimited JSON, one event per line. Selected by either
     /// `json` or `ndjson`.
     Json,
-}
-
-impl Default for LogFormat {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl LogFormat {

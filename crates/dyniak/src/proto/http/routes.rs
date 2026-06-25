@@ -1303,10 +1303,9 @@ fn mapred_boundary() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_nanos() & u128::from(u64::MAX)).unwrap_or(0))
-        .unwrap_or(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| {
+        u64::try_from(d.as_nanos() & u128::from(u64::MAX)).unwrap_or(0)
+    });
     format!("dyniak-mr-{nanos:016x}-{n:016x}")
 }
 

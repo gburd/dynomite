@@ -1245,7 +1245,7 @@ impl Server {
                             tx,
                             dynomite::conf::DataStore::Valkey,
                         )
-                        .with_read_timeout(Some(Duration::from_secs(60)))
+                        .with_read_timeout(Some(Duration::from_mins(1)))
                         .with_gossip(gossip_for_factory.clone())
                     })
                     .await

@@ -199,7 +199,7 @@ fn dispatcher_routes_control_plane_through_bypass() {
         DmsgType::GossipSynReply,
     ] {
         d.ty = ty;
-        assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass, "{ty:?} must bypass",);
+        assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass, "{ty:?} must bypass");
     }
     // The remaining gossip variants and every data-plane variant
     // must forward.

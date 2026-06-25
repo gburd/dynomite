@@ -167,12 +167,7 @@ async fn aggregator_cancels_before_first_tick() {
     let sink = Arc::new(Mutex::new(Snapshot::default()));
     let token = CancellationToken::new();
     token.cancel();
-    let agg = Aggregator::new(
-        stats,
-        sink,
-        Duration::from_secs(60),
-        Duration::from_secs(300),
-    );
+    let agg = Aggregator::new(stats, sink, Duration::from_mins(1), Duration::from_mins(5));
     // Already-cancelled token: run returns promptly.
     agg.run(token).await;
 }

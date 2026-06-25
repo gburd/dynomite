@@ -311,7 +311,7 @@ impl SearchState {
             .map(|t| t.text_field_names())
             .unwrap_or_default();
         let vector = self.registry.get(&Self::vector_index(bucket)).map(|t| {
-            let live_rows = t.engine.stats().map(|s| s.live_rows as u64).unwrap_or(0);
+            let live_rows = t.engine.stats().map_or(0, |s| s.live_rows as u64);
             VectorIndexInfoJson {
                 name: t.name.clone(),
                 field: t.schema.vector_field.clone(),

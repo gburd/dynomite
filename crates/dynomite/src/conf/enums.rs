@@ -56,23 +56,18 @@ string_enum_serde!(Transport);
 /// assert_eq!(Transport::parse("quic").unwrap(), Transport::Quic);
 /// assert_eq!(Transport::default(), Transport::Tcp);
 /// ```
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
 pub enum Transport {
     /// TCP transport. The historical default and the only
     /// option compiled in when the `quic` Cargo feature is
     /// off.
+    #[default]
     Tcp,
     /// QUIC transport. Requires the `quic` Cargo feature on
     /// the engine and a server cert / key pair supplied via
     /// the pool's `quic_cert_file:` and `quic_key_file:`
     /// directives.
     Quic,
-}
-
-impl Default for Transport {
-    fn default() -> Self {
-        Self::Tcp
-    }
 }
 
 impl Transport {
@@ -144,10 +139,11 @@ impl fmt::Display for Transport {
 ///     Distribution::RandomSlicing
 /// );
 /// ```
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
 pub enum Distribution {
     /// Per-rack continuum keyed by per-peer token lists. The
     /// historical default.
+    #[default]
     Vnode,
     /// Compatibility alias; collapsed
     /// to [`Self::Vnode`] at runtime with a deprecation warning.
@@ -162,12 +158,6 @@ pub enum Distribution {
     /// size)` partition table over the 64-bit hash space. See
     /// [`crate::hashkit::random_slicing`].
     RandomSlicing,
-}
-
-impl Default for Distribution {
-    fn default() -> Self {
-        Self::Vnode
-    }
 }
 
 impl Distribution {

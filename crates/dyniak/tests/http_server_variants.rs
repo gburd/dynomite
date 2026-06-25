@@ -61,6 +61,7 @@ fn ds() -> Arc<dyn Datastore> {
 }
 
 /// Drive a plaintext `GET /ping` and assert a 200 response.
+#[cfg(all(feature = "search", feature = "wasm"))]
 async fn assert_plaintext_ping(addr: std::net::SocketAddr) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream

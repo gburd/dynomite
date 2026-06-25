@@ -458,7 +458,7 @@ mod tests {
         assert!(t.try_acquire(5));
         // Advance an hour at 1 token/s == 3600 tokens; should
         // saturate at capacity 5.
-        clock.advance(Duration::from_secs(3600));
+        clock.advance(Duration::from_hours(1));
         assert!(t.try_acquire(0));
         assert_eq!(t.available(), 5);
     }
@@ -468,7 +468,7 @@ mod tests {
         let clock = Arc::new(ManualClock::new());
         let t = Throttle::with_clock(3, 0, Arc::clone(&clock));
         assert!(t.try_acquire(3));
-        clock.advance(Duration::from_secs(60));
+        clock.advance(Duration::from_mins(1));
         assert!(!t.try_acquire(1));
     }
 

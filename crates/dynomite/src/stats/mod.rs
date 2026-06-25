@@ -576,8 +576,7 @@ impl Stats {
         let elapsed = self.started.elapsed();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs());
         Snapshot {
             info: inner.info.clone(),
             uptime: i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX),

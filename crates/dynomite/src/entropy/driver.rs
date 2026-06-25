@@ -44,7 +44,7 @@ use crate::entropy::{
 ///
 /// Mirrors the operator-visible default for the
 /// `recon_interval_seconds:` YAML directive.
-pub const DEFAULT_RECON_INTERVAL: Duration = Duration::from_secs(300);
+pub const DEFAULT_RECON_INTERVAL: Duration = Duration::from_mins(5);
 
 /// Default TCP port the entropy receiver listens on.
 ///
@@ -455,7 +455,7 @@ mod tests {
             false,
         );
         let peers = Arc::new(RwLock::new(vec![local]));
-        let driver = EntropyDriver::new(material(), empty_source(), peers, Duration::from_secs(60));
+        let driver = EntropyDriver::new(material(), empty_source(), peers, Duration::from_mins(1));
         let cycle = driver.run_cycle().await;
         assert_eq!(cycle.peers_attempted, 0);
         assert_eq!(cycle.peers_exchanged, 0);
@@ -464,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn driver_returns_immediately_when_shutdown_already_set() {
         let peers = Arc::new(RwLock::new(Vec::new()));
-        let driver = EntropyDriver::new(material(), empty_source(), peers, Duration::from_secs(60));
+        let driver = EntropyDriver::new(material(), empty_source(), peers, Duration::from_mins(1));
         let (tx, rx) = watch::channel(true);
         // The driver must observe the pre-set flag and return
         // without ticking; if it ticked it would block for the

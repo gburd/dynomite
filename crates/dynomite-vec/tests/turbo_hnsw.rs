@@ -198,7 +198,7 @@ fn turbo_hnsw_2bit_recall_at_10_above_80pct() {
         .collect();
     let hnsw_recall = measure_recall(&hnsw, "t", &corpus, &queries, 10);
     let flat_recall = measure_recall(&flat, "t", &corpus, &queries, 10);
-    eprintln!("recall@10 (turbo 2-bit): hnsw={hnsw_recall:.4}, flat={flat_recall:.4}",);
+    eprintln!("recall@10 (turbo 2-bit): hnsw={hnsw_recall:.4}, flat={flat_recall:.4}");
     let envelope = flat_recall * 0.95;
     assert!(
         hnsw_recall >= envelope,

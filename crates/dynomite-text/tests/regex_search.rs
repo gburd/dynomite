@@ -214,6 +214,6 @@ mod property {
             .map(|(i, _)| ids[i])
             .collect();
 
-        assert_eq!(observed, expected, "pattern={pattern:?} corpus={corpus:?}",);
+        assert_eq!(observed, expected, "pattern={pattern:?} corpus={corpus:?}");
     }
 }

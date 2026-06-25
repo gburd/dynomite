@@ -361,7 +361,7 @@ mod tests {
         }
 
         // After a 1.0s silence past the last heartbeat:
-        let probe = Duration::from_millis(1_000);
+        let probe = Duration::from_secs(1);
         let last_steady = steady.last_heartbeat().unwrap();
         let last_jittery = jittery.last_heartbeat().unwrap();
 

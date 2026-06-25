@@ -353,12 +353,12 @@ impl Config {
 
     /// Return the parsed run duration.
     pub fn duration(&self) -> Result<Duration, BenchError> {
-        parse_duration(&self.run.duration).map_err(|e| BenchError::Config(e.to_string()))
+        parse_duration(&self.run.duration).map_err(|e| BenchError::Config(e.clone()))
     }
 
     /// Return the parsed reporting interval.
     pub fn report_interval(&self) -> Result<Duration, BenchError> {
-        parse_duration(&self.run.report_interval).map_err(|e| BenchError::Config(e.to_string()))
+        parse_duration(&self.run.report_interval).map_err(|e| BenchError::Config(e.clone()))
     }
 
     /// Resolve the output directory: when set to `"auto"`, mint a
@@ -423,8 +423,7 @@ fn split_unit(s: &str) -> (&str, &str) {
 fn utc_stamp() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     let (y, mo, d, h, mi, s) = epoch_to_civil(secs);
     format!("{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z")
 }
@@ -471,8 +470,8 @@ mod tests {
 
     #[test]
     fn parses_minutes_hours() {
-        assert_eq!(parse_duration("2m").unwrap(), Duration::from_secs(120));
-        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
+        assert_eq!(parse_duration("2m").unwrap(), Duration::from_mins(2));
+        assert_eq!(parse_duration("1h").unwrap(), Duration::from_hours(1));
     }
 
     #[test]

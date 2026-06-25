@@ -255,7 +255,7 @@ pub fn render_op_histogram_svg(
         .map(|(i, c)| (i as f64, *c as f64))
         .collect();
     chart
-        .draw_series(LineSeries::new(series.into_iter(), BLUE))
+        .draw_series(LineSeries::new(series, BLUE))
         .map_err(|e| BenchError::Plot(format!("series: {e}")))?
         .label("count")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], BLUE));
