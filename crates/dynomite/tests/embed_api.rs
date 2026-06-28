@@ -230,3 +230,79 @@ async fn custom_datastore_impl_roundtrips_a_set_get() {
 
     handle.shutdown().await.expect("shutdown ok");
 }
+
+#[tokio::test]
+async fn embedded_listen_socket_serves_a_wire_client() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    use dynomite::io::mbuf::MbufPool;
+    use dynomite::msg::response;
+
+    // A datastore that returns a real RESP payload (`+OK\r\n`) so
+    // the full wire round-trip is exercised: the embedded proxy
+    // must parse the request off the socket, route it through the
+    // dispatcher to this datastore, and write the reply bytes
+    // back -- not the old warn-and-close path.
+    #[derive(Debug, Default, Clone)]
+    struct OkDatastore {
+        calls: Arc<Mutex<u64>>,
+    }
+    impl Datastore for OkDatastore {
+        fn protocol(&self) -> Protocol {
+            Protocol::Custom
+        }
+        fn dispatch(&self, req: Msg) -> BoxFuture<'_, Result<Msg, DatastoreError>> {
+            let calls = self.calls.clone();
+            Box::pin(async move {
+                *calls.lock() += 1;
+                let pool = MbufPool::default();
+                Ok(response::make_simple_redis(&req, &pool, b"+OK\r\n"))
+            })
+        }
+    }
+
+    let store = OkDatastore::default();
+    let calls = store.calls.clone();
+
+    let builder = minimal_builder("wire-serve").datastore(Box::new(store));
+    let handle = Server::start_with(builder).await.expect("start");
+
+    let addr = handle
+        .listen_addr()
+        .expect("listen_addr resolved after start");
+
+    // Connect a raw client and send a RESP `SET k v`. The key
+    // routes the request to the local datastore through the
+    // dispatcher; the embedded proxy must parse it and write the
+    // reply back on the same socket.
+    let mut sock = TcpStream::connect(addr)
+        .await
+        .expect("connect to listen addr");
+    sock.set_nodelay(true).ok();
+    sock.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n")
+        .await
+        .expect("write SET");
+    sock.flush().await.expect("flush");
+
+    // Read the reply the proxy writes back.
+    let mut buf = [0u8; 256];
+    let n = tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf))
+        .await
+        .expect("reply within 2s")
+        .expect("read reply");
+    assert!(n > 0, "embedded listen socket closed without a reply");
+    assert_eq!(
+        &buf[..n],
+        b"+OK\r\n",
+        "unexpected wire reply from the embedded proxy"
+    );
+
+    // The request reached the datastore over the wire.
+    assert!(
+        *calls.lock() >= 1,
+        "the wire request did not reach the dispatcher/datastore"
+    );
+
+    handle.shutdown().await.expect("shutdown ok");
+}

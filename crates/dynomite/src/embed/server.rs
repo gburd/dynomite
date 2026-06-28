@@ -19,6 +19,7 @@ use std::sync::{Arc, OnceLock, Weak};
 
 use parking_lot::Mutex;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
@@ -26,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 use crate::cluster::dispatch::{ClusterDispatcher, DispatchPlan};
 use crate::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use crate::cluster::pool::{PoolConfig, ServerPool};
-use crate::conf::{ConfDynSeed, ConfPool, Config};
+use crate::conf::{ConfDynSeed, ConfPool, Config, DataStore};
 use crate::embed::error::EmbedError;
 use crate::embed::events::{CloseReason, ConnRoleTag, EventBus, EventStream, ServerEvent};
 use crate::embed::hooks::{
@@ -35,7 +36,10 @@ use crate::embed::hooks::{
 use crate::embed::snapshots::{DatacenterSnapshot, PeerSnapshot, RingSnapshot};
 use crate::events::EventManager;
 use crate::hashkit::DynToken;
+use crate::io::reactor::{ConnRole, TcpTransport};
 use crate::msg::Msg;
+use crate::net::client::client_loop;
+use crate::net::{ClientHandler, Conn};
 use crate::stats::{
     describe_stats, MetricSpec, PoolField, PoolStats, ServerField, ServerStats, ServiceInfo,
     Snapshot, Stats,
@@ -139,12 +143,13 @@ fn next_conn_id() -> u64 {
 /// Inner state shared by every clone of a [`ServerHandle`].
 pub(crate) struct ServerInner {
     pool: Arc<ServerPool>,
-    dispatcher: ClusterDispatcher,
+    dispatcher: Arc<ClusterDispatcher>,
+    client_proto: DataStore,
     stats: Arc<Stats>,
     snapshot_cache: Arc<Mutex<Snapshot>>,
     bus: EventBus,
     events: Arc<EventManager>,
-    datastore: Box<dyn Datastore>,
+    datastore: Arc<dyn Datastore>,
     seeds: Box<dyn SeedsProvider>,
     metrics: Box<dyn MetricsSink>,
     crypto: Option<Box<dyn CryptoProvider>>,
@@ -251,20 +256,23 @@ impl Server {
     /// `start` is non-blocking. The returned handle is `Clone +
     /// Send + Sync`.
     ///
-    /// # In-process only
+    /// # Client plane and in-process traffic
     ///
-    /// The embedded server in this stage is **in-process only**:
-    /// the `listen:` and `dyn_listen:` sockets bind so that
-    /// configured ports are reservable and post-bind reporting
-    /// works, but cross-process clients connecting to those
-    /// ports see open-then-immediate-close (with a runtime
-    /// warning logged on each accept). The sanctioned way to
-    /// drive an embedded `Server` from in-process code is
-    /// [`ServerHandle::inject_request`]. Cross-process traffic
-    /// is supported by the `dynomited` binary, which wires the
-    /// proxy module directly. Wiring the embedded accept loop
-    /// to the dispatcher is tracked as a follow-up; the contract
-    /// is documented in `docs/parity.md`.
+    /// A client connecting to the bound `listen:` socket is
+    /// served end to end: the request is parsed, routed through
+    /// the cluster dispatcher, and for a request that resolves to
+    /// the local node the configured [`Datastore`] hook produces
+    /// the reply -- the same hook
+    /// [`ServerHandle::inject_request`] uses for in-process
+    /// traffic. `inject_request` remains available for callers
+    /// that prefer to drive the engine without a socket hop.
+    ///
+    /// The `dyn_listen:` (peer-plane) socket binds for address
+    /// reporting; embedded multi-node setups forward between
+    /// in-process nodes through the in-process registry, so a raw
+    /// cross-process peer connection to `dyn_listen:` is accepted
+    /// and closed. Cross-process peer serving is provided by the
+    /// `dynomited` binary.
     ///
     /// # Examples
     ///
@@ -295,19 +303,35 @@ impl Server {
             command_extension,
         } = self;
 
+        let datastore: Arc<dyn Datastore> = hooks
+            .datastore
+            .take()
+            .expect("invariant: builder always populates datastore")
+            .into();
+
         let mut dispatcher = ClusterDispatcher::new(cluster.clone());
         if let Some(ext) = command_extension.as_ref() {
             dispatcher = dispatcher.with_command_extension(ext.clone());
         }
+        // Serve client-plane requests that route to the local node
+        // through the same Datastore hook inject_request uses, so a
+        // connection accepted on the bound listen: socket is fully
+        // served (parse -> route -> reply) rather than closed.
+        dispatcher = dispatcher.with_local_datastore(Arc::clone(&datastore));
+        let dispatcher = Arc::new(dispatcher);
+        // Resolve the wire protocol the client proxy parses. The
+        // pool stores it as the numeric data_store selector;
+        // default to Valkey (RESP) when unset, matching the proxy
+        // default.
+        let client_proto = pool
+            .data_store
+            .and_then(|n| DataStore::from_int(n).ok())
+            .unwrap_or(DataStore::Valkey);
         let bus = EventBus::new(64);
         let events = Arc::new(EventManager::new(64));
         let cancel = CancellationToken::new();
         let snapshot_cache = Arc::new(Mutex::new(Snapshot::default()));
 
-        let datastore = hooks
-            .datastore
-            .take()
-            .expect("invariant: builder always populates datastore");
         let seeds = hooks
             .seeds
             .take()
@@ -326,6 +350,7 @@ impl Server {
         let inner = Arc::new(ServerInner {
             pool: cluster.clone(),
             dispatcher,
+            client_proto,
             stats: stats.clone(),
             snapshot_cache: snapshot_cache.clone(),
             bus: bus.clone(),
@@ -887,35 +912,70 @@ async fn accept_loop(
                     role,
                     local_addr: Some(addr),
                 });
-                // The embedded server is in-process only:
-                // the kernel-bound socket is reserved so
-                // post-bind reporting works, but the per-role
-                // protocol parser is not wired into this accept
-                // loop. Cross-process clients see
-                // open-then-immediate-close. Use
-                // `ServerHandle::inject_request` for in-process
-                // traffic; use the `dynomited` binary for the
-                // wire path.
-                tracing::warn!(
-                    listen = %addr,
-                    peer = %peer,
-                    role = ?role,
-                    conn_id,
-                    "embedded listen_addr accepted a connection; embedded mode does not \
-                     forward to the dispatcher; use ServerHandle::inject_request instead. \
-                     Closing connection."
-                );
-                let bus = inner.bus.clone();
-                let cancel = inner.cancel.clone();
-                tokio::spawn(async move {
-                    let _ = sock; // drop on close
-                    let close_reason = if cancel.is_cancelled() {
-                        CloseReason::LocalClose
-                    } else {
-                        CloseReason::PeerEof
-                    };
-                    bus.send(ServerEvent::ConnectionClosed { conn_id, reason: close_reason });
-                });
+                if matches!(role, ConnRoleTag::Proxy) {
+                    // Client plane: serve the connection through the
+                    // same per-client pipeline the standalone proxy
+                    // uses (parse -> route via the dispatcher ->
+                    // write the reply). This is the wire entry point
+                    // for an embedded node; `inject_request` remains
+                    // available for in-process traffic.
+                    //
+                    // Small Redis/memcache requests should not
+                    // wait on Nagle; a peer that closed before
+                    // the option applies is harmless.
+                    let _ = sock.set_nodelay(true);
+                    let dispatcher: Arc<dyn crate::net::dispatcher::Dispatcher> =
+                        inner.dispatcher.clone();
+                    let client_proto = inner.client_proto;
+                    let bus = inner.bus.clone();
+                    tokio::spawn(async move {
+                        let transport = Box::new(TcpTransport::new(sock, ConnRole::Client));
+                        let conn = Conn::new(transport, ConnRole::Client);
+                        let (tx, rx) = mpsc::channel(64);
+                        let handler = ClientHandler::new(dispatcher, tx, client_proto);
+                        let outcome = client_loop(conn, handler, rx).await;
+                        let close_reason = match outcome {
+                            Ok(()) => CloseReason::PeerEof,
+                            Err(_) => CloseReason::IoError,
+                        };
+                        bus.send(ServerEvent::ConnectionClosed {
+                            conn_id,
+                            reason: close_reason,
+                        });
+                    });
+                } else {
+                    // Peer plane: cross-process dnode serving is
+                    // driven by the `dynomited` binary. Embedded
+                    // multi-node setups forward between in-process
+                    // nodes through the in-process registry (see
+                    // `registry_register`), so the embedded
+                    // dyn_listen socket is bound for address
+                    // reporting and accepts then closes a raw
+                    // cross-process peer connection.
+                    tracing::debug!(
+                        listen = %addr,
+                        peer = %peer,
+                        role = ?role,
+                        conn_id,
+                        "embedded dyn_listen accepted a cross-process peer; embedded \
+                         multi-node forwarding uses the in-process registry. Closing \
+                         connection."
+                    );
+                    let bus = inner.bus.clone();
+                    let cancel = inner.cancel.clone();
+                    tokio::spawn(async move {
+                        let _ = sock; // drop on close
+                        let close_reason = if cancel.is_cancelled() {
+                            CloseReason::LocalClose
+                        } else {
+                            CloseReason::PeerEof
+                        };
+                        bus.send(ServerEvent::ConnectionClosed {
+                            conn_id,
+                            reason: close_reason,
+                        });
+                    });
+                }
             }
         }
     }

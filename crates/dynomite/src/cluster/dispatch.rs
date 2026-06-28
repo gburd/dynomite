@@ -181,7 +181,7 @@ pub enum DispatchPlan {
 }
 
 /// Cluster-aware dispatcher.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClusterDispatcher {
     pool: Arc<ServerPool>,
     /// Outbound channel feeding the local datastore driver. When
@@ -228,6 +228,33 @@ pub struct ClusterDispatcher {
     /// dispatcher's behaviour is unchanged. See
     /// [`crate::embed::CommandExtension`] for the trait shape.
     command_extension: Option<Arc<dyn crate::embed::CommandExtension>>,
+    /// Optional in-process local datastore hook. When set, a
+    /// [`DispatchPlan::LocalDatastore`] request is handed to this
+    /// [`crate::embed::Datastore`] (the parsed request `Msg`,
+    /// asynchronously) instead of being relayed over the
+    /// [`Self::backend`] byte channel. The embedded server wires
+    /// this so a connection accepted on its `listen:` socket is
+    /// served through the same `Datastore` hook that
+    /// `ServerHandle::inject_request` uses. When `None`, the
+    /// backend byte channel is used (the standalone proxy path).
+    local_datastore: Option<Arc<dyn crate::embed::hooks::Datastore>>,
+}
+
+impl std::fmt::Debug for ClusterDispatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `Datastore` is not `Debug` (it is a public embedding
+        // trait and must stay object-safe without a Debug bound),
+        // so the local-datastore hook is reported as a presence
+        // flag rather than its contents.
+        f.debug_struct("ClusterDispatcher")
+            .field("backend", &self.backend.is_some())
+            .field("peer_backends", &self.peer_backends.len())
+            .field("hint_store", &self.hint_store.is_some())
+            .field("failure_metrics", &self.failure_metrics.is_some())
+            .field("command_extension", &self.command_extension)
+            .field("local_datastore", &self.local_datastore.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ClusterDispatcher {
@@ -260,6 +287,7 @@ impl ClusterDispatcher {
             hint_store: None,
             failure_metrics: None,
             command_extension: None,
+            local_datastore: None,
         }
     }
 
@@ -309,6 +337,25 @@ impl ClusterDispatcher {
     #[must_use]
     pub fn with_backend(mut self, backend: mpsc::Sender<OutboundRequest>) -> Self {
         self.backend = Some(backend);
+        self
+    }
+
+    /// Attach an in-process local datastore hook. A
+    /// [`DispatchPlan::LocalDatastore`] request is then handed to
+    /// the supplied [`crate::embed::hooks::Datastore`] (the parsed
+    /// request `Msg`) and its reply is delivered on the
+    /// connection's responder, instead of being relayed over the
+    /// [`Self::with_backend`] byte channel. The embedded server
+    /// wires this so a client accepted on its `listen:` socket is
+    /// served through the same `Datastore` hook that
+    /// `ServerHandle::inject_request` uses. Takes precedence over
+    /// the backend channel for local requests.
+    #[must_use]
+    pub fn with_local_datastore(
+        mut self,
+        datastore: Arc<dyn crate::embed::hooks::Datastore>,
+    ) -> Self {
+        self.local_datastore = Some(datastore);
         self
     }
 
@@ -837,6 +884,31 @@ impl Dispatcher for ClusterDispatcher {
                 DispatchOutcome::Error(rsp)
             }
             DispatchPlan::LocalDatastore => {
+                // In-process datastore hook takes precedence: hand
+                // the parsed request to the embedder's `Datastore`
+                // and deliver its reply on the connection's
+                // responder. The hook is async and `dispatch` is
+                // sync, so spawn the await and return `Pending`
+                // (the same contract the backend-channel and
+                // replica paths use).
+                if let Some(ds) = self.local_datastore.as_ref() {
+                    let ds = Arc::clone(ds);
+                    let req_id = req.id();
+                    let span = req_span.clone();
+                    tokio::spawn(async move {
+                        if let Ok(rsp) = ds.dispatch(req).await {
+                            let _ = responder
+                                .send(OutboundEnvelope {
+                                    req_id,
+                                    rsp,
+                                    span,
+                                    source_peer_idx: None,
+                                })
+                                .await;
+                        }
+                    });
+                    return DispatchOutcome::Pending;
+                }
                 if let Some(tx) = self.backend.as_ref() {
                     // Snapshot the wire bytes from the parsed mbuf
                     // chain. The chain is the original on-the-wire

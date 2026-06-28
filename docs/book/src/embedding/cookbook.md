@@ -202,15 +202,19 @@ What ships today, and where the boundary is:
 * Plugging a *custom listener* (a factory that yields these
   transports as connections arrive) into `ServerBuilder` is
   tracked as a follow-up: the builder does not yet expose a
-  `transport_listener` setter. Until that lands, the embedded
-  engine is in-process only and `ServerHandle::inject_request`
-  is the sanctioned traffic entry point. Cross-process traffic
-  is supported by the `dynomited` binary via its proxy module.
+  `transport_listener` setter. The embedded server serves the
+  client plane over TCP on its bound `listen:` socket today
+  (parse -> dispatcher -> the configured `Datastore` hook), and
+  `ServerHandle::inject_request` drives in-process traffic;
+  custom transports beyond TCP are available by driving
+  `Proxy` / `QuicProxy` directly, as the `dynomited` binary
+  does. Cross-process peer-plane traffic is served by
+  `dynomited`.
 
 In short: write your `Transport` impl today (the shape is
-permanent); wire it through `ServerBuilder` when the
-`transport_listener` setter lands. The embedded sketch
-double-checks the API contract for you.
+permanent); wire a custom listener through `Proxy` / `QuicProxy`
+until a `ServerBuilder` `transport_listener` setter lands. The
+embedded sketch double-checks the API contract for you.
 
 ## Subscribing to cluster events
 
