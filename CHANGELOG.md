@@ -13,6 +13,56 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.1.0] - 2026-06-19
+
+Minor release. Purely additive over 1.0.0; no breaking changes.
+
+### Added
+
+- **The embedded server now serves the client plane over its bound
+  `listen:` socket.** A client connecting to a started embedded
+  node is parsed, routed through the cluster dispatcher, and -- for
+  a request that resolves to the local node -- answered by the
+  configured `Datastore` hook (the same hook
+  `ServerHandle::inject_request` uses). Previously the embedded
+  accept loop bound the socket but closed every connection, so
+  `ServerBuilder::listen()` silently dropped traffic.
+- **`ClusterDispatcher::with_local_datastore`** -- attaches an
+  in-process `Datastore` hook so a `DispatchPlan::LocalDatastore`
+  request is answered by the hook (the parsed request `Msg`,
+  asynchronously) instead of being relayed over the external
+  backend byte channel. Takes precedence over `with_backend` for
+  local requests.
+
+### Changed
+
+- `ClusterDispatcher`'s `Debug` is now a manual implementation (the
+  `Datastore` embedding trait has no `Debug` bound, so the
+  local-datastore hook is reported as a presence flag). No public
+  signature change.
+- The `dyn_listen:` peer plane is unchanged: embedded multi-node
+  setups forward between in-process nodes through the in-process
+  registry, and cross-process peer serving remains the `dynomited`
+  binary's responsibility. A custom `transport_listener` setter on
+  `ServerBuilder` is still future work; custom transports today go
+  through `Proxy` / `QuicProxy` directly.
+- Documentation resynced: removed stale references to the
+  no-longer-vendored Netflix C tree across the living docs (the
+  historical journal entries keep their as-written provenance);
+  corrected the embedding docs that described the old in-process-
+  only accept behaviour and shipped features in future tense; the
+  differential build script now sources the C oracle from a local
+  upstream checkout (`DYNOMITE_C_REF`) rather than a removed
+  submodule.
+
+### Validation
+
+- 2927 nextest workspace tests pass under `--features riak` on Rust
+  1.95 (incl. a new test that connects a real RESP client to the
+  embedded `listen:` socket and round-trips a request through the
+  dispatcher and `Datastore` hook); 16 stateright model checks
+  pass; `cargo deny` and `cargo audit` are clean.
+
 ## [1.0.0] - 2026-06-19
 
 First stable release. The public API of the embedding crates is now
