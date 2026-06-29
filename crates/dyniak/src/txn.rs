@@ -249,15 +249,39 @@ impl HttpTxnRequest {
                     key,
                     value,
                     indexes,
-                } => TxnOp::Put {
-                    bucket: bucket.into_bytes(),
-                    key: key.into_bytes(),
-                    value: value.into_bytes(),
-                    indexes: indexes
-                        .into_iter()
-                        .map(|i| (i.name.into_bytes(), i.value.into_bytes()))
-                        .collect(),
-                },
+                } => {
+                    // Wrap the value in the same `HttpObject` storage
+                    // envelope the non-transactional HTTP and PBC put
+                    // paths write, so a transaction-written object is
+                    // readable through every read path (HTTP GET and
+                    // PBC RpbGet both decode the envelope). The 2i
+                    // pairs are carried both inside the envelope (so
+                    // they round-trip on read) and as the `TxnOp`
+                    // index list (so the storage layer builds the
+                    // forward / reverse 2i records).
+                    let index_pairs: Vec<(Vec<u8>, Vec<u8>)> = indexes
+                        .iter()
+                        .map(|i| (i.name.clone().into_bytes(), i.value.clone().into_bytes()))
+                        .collect();
+                    let obj = crate::proto::http::object::HttpObject {
+                        value: value.into_bytes(),
+                        content_type: None,
+                        indexes: indexes
+                            .into_iter()
+                            .map(|i| crate::proto::http::object::HttpIndex {
+                                name: i.name,
+                                value: i.value,
+                            })
+                            .collect(),
+                        links: Vec::new(),
+                    };
+                    TxnOp::Put {
+                        bucket: bucket.into_bytes(),
+                        key: key.into_bytes(),
+                        value: obj.to_storage_bytes(),
+                        indexes: index_pairs,
+                    }
+                }
                 HttpTxnOp::Delete { bucket, key } => TxnOp::Delete {
                     bucket: bucket.into_bytes(),
                     key: key.into_bytes(),
@@ -307,15 +331,30 @@ mod tests {
         let batch = req.into_batch();
         assert!(!batch.force_abort);
         assert_eq!(batch.ops.len(), 2);
-        assert_eq!(
-            batch.ops[0],
+        // The Put op now carries the value wrapped in the canonical
+        // HttpObject storage envelope (so a transaction-written
+        // object reads back through the HTTP GET and PBC RpbGet
+        // paths), plus the 2i pairs for the storage layer's
+        // forward / reverse index fan-out.
+        match &batch.ops[0] {
             TxnOp::Put {
-                bucket: b"b".to_vec(),
-                key: b"k".to_vec(),
-                value: b"v".to_vec(),
-                indexes: vec![(b"age_int".to_vec(), b"42".to_vec())],
+                bucket,
+                key,
+                value,
+                indexes,
+            } => {
+                assert_eq!(bucket, b"b");
+                assert_eq!(key, b"k");
+                assert_eq!(indexes, &vec![(b"age_int".to_vec(), b"42".to_vec())]);
+                let obj = crate::proto::http::object::HttpObject::from_storage_bytes(value)
+                    .expect("value is an HttpObject envelope");
+                assert_eq!(obj.value, b"v".to_vec());
+                assert_eq!(obj.indexes.len(), 1);
+                assert_eq!(obj.indexes[0].name, "age_int");
+                assert_eq!(obj.indexes[0].value, "42");
             }
-        );
+            TxnOp::Delete { .. } => panic!("expected Put, got Delete"),
+        }
         assert_eq!(
             batch.ops[1],
             TxnOp::Delete {

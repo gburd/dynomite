@@ -78,6 +78,31 @@ fn post(path: &str, body: &str) -> String {
     )
 }
 
+/// Build a `GET` request for `path`. The object GET path returns the
+/// stored `HttpObject` envelope re-encoded under the negotiated codec
+/// (default `application/json`).
+fn get(path: &str) -> String {
+    format!(
+        "GET {path} HTTP/1.1\r\n\
+         Host: localhost\r\n\
+         Accept: application/json\r\n\
+         Connection: close\r\n\
+         \r\n"
+    )
+}
+
+/// Decode the value a transaction stored under `(bucket, key)` from
+/// its `HttpObject` storage envelope -- the canonical form every
+/// dyniak write path uses, so a transaction-written object reads
+/// back through HTTP GET and PBC RpbGet alike. Returns `None` when
+/// the key is absent.
+fn stored_value(ds: &NoxuDatastore, bucket: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+    let raw = ds.get_object(bucket, key).unwrap()?;
+    let obj = dyniak::proto::http::object::HttpObject::from_storage_bytes(&raw)
+        .expect("transaction-written object decodes as an HttpObject envelope");
+    Some(obj.value)
+}
+
 #[tokio::test]
 async fn http_transaction_commit_abort_and_bucket_scope() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -106,21 +131,45 @@ async fn http_transaction_commit_abort_and_bucket_scope() {
     assert_eq!(parsed["operations"], 3);
 
     // All three keys, and the 2i entry, are visible after commit.
+    // Values read back through the canonical HttpObject envelope --
+    // a transaction writes the same storage form the HTTP and PBC
+    // put paths do, so they are interoperable with every reader.
     assert_eq!(
-        ds.get_object(b"users", b"alice").unwrap().as_deref(),
+        stored_value(&ds, b"users", b"alice").as_deref(),
         Some(&b"a"[..])
     );
     assert_eq!(
-        ds.get_object(b"users", b"bob").unwrap().as_deref(),
+        stored_value(&ds, b"users", b"bob").as_deref(),
         Some(&b"b"[..])
     );
     assert_eq!(
-        ds.get_object(b"users", b"carol").unwrap().as_deref(),
+        stored_value(&ds, b"users", b"carol").as_deref(),
         Some(&b"c"[..])
     );
     assert_eq!(
         ds.index_eq(b"users", b"age_int", b"30").unwrap(),
         vec![b"alice".to_vec()]
+    );
+
+    // Regression (docs/journal/2026-06-19-bug-txn-storage-format.md):
+    // a transaction-written object must read back through the HTTP
+    // object GET path. Before the fix this returned 500 ("stored
+    // object is corrupt") because the transaction stored raw value
+    // bytes while GET expected the HttpObject envelope.
+    let get_resp = send_request(addr, &get("/buckets/users/keys/alice")).await;
+    assert_eq!(
+        status_code(&get_resp),
+        200,
+        "txn-write then HTTP GET: {get_resp}"
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_str(body_of(&get_resp)).expect("GET body is a JSON HttpObject");
+    // HttpObject.value is bytes; serde renders it as a JSON array.
+    // The stored value was "a" == [97].
+    assert_eq!(
+        envelope["value"],
+        serde_json::json!([97]),
+        "GET returned the wrong value: {get_resp}"
     );
 
     // --- Abort a batch -------------------------------------------
@@ -135,7 +184,7 @@ async fn http_transaction_commit_abort_and_bucket_scope() {
     assert_eq!(parsed["result"], "aborted");
 
     // Nothing from the aborted batch landed.
-    assert!(ds.get_object(b"users", b"dave").unwrap().is_none());
+    assert!(stored_value(&ds, b"users", b"dave").is_none());
     assert!(ds.index_eq(b"users", b"age_int", b"40").unwrap().is_empty());
 
     // --- Bucket-scoped route rejects a cross-bucket op -----------
@@ -171,7 +220,7 @@ async fn http_transaction_bucket_scoped_commit() {
     assert_eq!(parsed["result"], "committed");
     assert_eq!(parsed["operations"], 2);
     assert_eq!(
-        ds.get_object(b"users", b"erin").unwrap().as_deref(),
+        stored_value(&ds, b"users", b"erin").as_deref(),
         Some(&b"e"[..])
     );
 
