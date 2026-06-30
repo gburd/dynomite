@@ -13,6 +13,55 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.1.1] - 2026-06-30
+
+Patch release. Bug fixes only; no API or behaviour changes for
+correctly-written clients.
+
+### Fixed
+
+- **Transaction-written objects are now readable through the object
+  API.** A value written via `POST /transactions` was stored as raw
+  bytes while the HTTP GET and PBC RpbGet read paths expect the
+  canonical `HttpObject` storage envelope, so reading a
+  transaction-written object back via HTTP GET returned
+  `500 stored object is corrupt`. The transaction write path now
+  wraps values in the same envelope every other write path uses, so
+  all storage methods interoperate. A round-trip regression test was
+  added (the previous test only inspected the datastore handle, never
+  the read path).
+- **Multi-key transactions no longer abort the node process under
+  load** (via noxu 6.4.2). A transaction touching adjacent keys could
+  hit an illegal `RangeInsert -> Write` lock upgrade in the storage
+  engine, which panicked, poisoned the transaction lock, and then
+  escalated to a `process::abort()` from a destructor. noxu 6.4.2
+  fixes the lock-upgrade handling and makes abort-in-`Drop`
+  panic-safe. Both bugs were found by the new consistency-
+  verification harness driving the real transaction endpoint.
+- `anyhow` 1.0.102 -> 1.0.103 clears RUSTSEC-2026-0190
+  (`Error::downcast_mut` unsoundness).
+
+### Changed
+
+- Dependency: noxu 6.4.1 -> 6.4.2 (the transaction crash fix above;
+  no API change).
+
+### Added
+
+- `scripts/consistency/txn_history_workload.py`: a workload that
+  drives the real dyniak transaction endpoint and records an
+  Elle-style list-append history, the foundation of the
+  consistency-verification initiative
+  (`docs/journal/2026-06-19-consistency-verification.md`).
+
+### Validation
+
+- 2927 nextest workspace tests pass under `--features riak`; the
+  consistency workload that deterministically aborted the process on
+  6.4.1 now runs 60s / 6623 transactions at a 100% commit rate with
+  the node alive and zero read anomalies; `cargo deny` and
+  `cargo audit` are clean.
+
 ## [1.1.0] - 2026-06-19
 
 Minor release. Purely additive over 1.0.0; no breaking changes.

@@ -1,7 +1,7 @@
 [package]
 name = "dynomited"
 description = "Dynomite server binary"
-version = "1.1.0"
+version = "1.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -88,8 +88,8 @@ riak = ["dep:dyniak", "dyniak/noxu"]
 wasm = ["riak", "dyniak/wasm"]
 
 [dependencies]
-dynomite = { path = "../dynomite", package = "dynomite-engine", version = "1.1.0" }
-dynomite-search = { path = "../dynomite-search", version = "1.1.0", optional = true }
+dynomite = { path = "../dynomite", package = "dynomite-engine", version = "1.1.1" }
+dynomite-search = { path = "../dynomite-search", version = "1.1.1", optional = true }
 dyniak = { path = "../dyniak", optional = true }
 clap = { workspace = true }
 tokio = { workspace = true }
