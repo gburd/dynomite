@@ -62,30 +62,55 @@ will take node aborts.
 
 ## Layers implicated and fix direction
 
-This spans noxu and dyniak:
+The root cause is precisely located in noxu's lock-upgrade matrix.
+The `RangeInsert` lock is NOT acquired by dyniak's read; it is
+acquired by noxu INTERNALLY as a next-key (phantom-prevention) lock
+on the SUCCESSOR key's LSN whenever a transaction inserts a key
+(`noxu-dbi-6.4.1/src/cursor_impl.rs`: "Acquires a `RangeInsert` lock
+on the successor key's LSN for a new [insert]"). In a multi-key
+batch that touches adjacent keys (the list-append workload writes
+keys 0..5 repeatedly), inserting key `k` range-locks the LSN of its
+successor; a later write in the same batch to that successor key
+then needs a `Write` lock on an LSN this transaction already holds
+as `RangeInsert`.
 
-- noxu A (lock manager): RangeInsert -> Write is treated as an
-  illegal upgrade and `panic!`s. Either the upgrade should be legal
-  (a range-insert lock subsumed by a write lock on the same key is a
-  normal 2PL escalation) or the engine should return an error the
-  caller can handle, NOT panic. This is a noxu fix.
-- noxu B (abort robustness): `Transaction::abort` unwraps a poisoned
-  lock inside `Drop`, turning any prior panic into a process abort.
-  abort-in-drop must be panic-safe (use the poisoned guard's
-  `into_inner`, or guard against poison) so a recoverable engine
-  error never escalates to process death. noxu fix.
-- dyniak C (lock ordering): `put_object_in`'s order
-  (clear_forward_for range-scan THEN primary/2i writes) provokes the
-  illegal upgrade. dyniak can avoid it by acquiring the primary write
-  lock before the reverse-index range scan, or by not range-scanning
-  the reverse index under the same txn lock scope. A dyniak-side
-  ordering fix likely sidesteps the noxu bug without waiting on a
-  noxu release.
+noxu's own matrix is self-contradictory on this case
+(`noxu-txn-6.4.1/src/lock_type.rs`):
+- `get_conflict`: `(RangeInsert, Write) => Allow` -- a RangeInsert
+  holder does NOT conflict with another transaction's Write.
+- `get_upgrade`: `(RangeInsert, Write) => Illegal` -- but the SAME
+  transaction upgrading its own RangeInsert to Write is declared
+  illegal and `panic!`s.
 
-The robust fix is BOTH: noxu must not panic on a lock-upgrade
-conflict and must not abort the process from a destructor; dyniak
-should order its lock acquisition to avoid the upgrade. Either alone
-mitigates; both are correct.
+A RangeInsert lock is weaker than a Write lock on the same key;
+upgrading it should be a normal escalation (`WritePromote`), not
+`Illegal`. This is the noxu fix.
+
+- noxu A (lock-upgrade matrix): `(RangeInsert, Write)` in
+  `LockType::get_upgrade` should be `WritePromote`, not `Illegal`.
+- noxu B (abort robustness): regardless of A, `Transaction::abort`
+  unwraps a poisoned lock inside `Drop`
+  (`noxu-db-6.4.1/src/transaction.rs:599`), turning any prior panic
+  into a process abort. abort-in-drop must be panic-safe so a
+  recoverable engine error never escalates to process death.
+
+### dyniak-side mitigation is NOT viable for this bug
+
+An earlier attempt to reorder `put_object_in` /
+`delete_object_in` (take the primary write lock before the
+reverse-index read) was made and REVERTED: it did not fix the
+crash, because the `RangeInsert` lock is not produced by the
+reverse-index read -- it is produced internally by noxu on
+successor-key LSNs during inserts, which dyniak does not control.
+In any multi-key batch over adjacent keys, some key is both a
+successor-of-one-insert and a target-of-another-write, so no
+dyniak-level operation ordering avoids the upgrade. The fix must be
+in noxu. (The reorder was reverted rather than kept because an
+unproven reordering of safety-critical storage code that does not
+fix the bug is a liability, not a mitigation.)
+
+The correct fix is the noxu release (A + B). This bug doc is the
+reviewer's reference for incorporating that release.
 
 ## Repro
 
