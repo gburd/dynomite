@@ -1,17 +1,37 @@
-# Dynomite (Rust)
+**Dynomite**, inspired by [Dynamo whitepaper](http://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf),
+is a thin, distributed dynamo layer for different storage engines and
+protocols. Currently these include [Valkey](https://github.com/valkey-io/valkey)
+(an open source fork of Redis), [MemcacheD](http://www.memcached.org/), and
+[Noxu](https://codeberg.org/gregburd/noxu) a Rust re-write of [Berkeley DB Java
+Edition](https://github.com/berkeleydb/je) which is used to provide a
+[Riak](https://github.com/basho/riak)-like API/feature set called "Dyniak".
 
-A Rust port of [Netflix Dynomite](https://github.com/Netflix/dynomite),
-the thin distributed replication layer for Valkey and Memcached datastores
-inspired by the [Amazon Dynamo paper](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf).
+Dynomite supports multi-datacenter replication and is designed for high availability.
+When using Dyniak there is support for transactional multi-key updates that depend
+on the distributed transaction (XA) support in Noxu based on 2PC.
 
-This project is a from-scratch Rust implementation that aims to be
-functionally identical to the original C codebase while being usable
-both as:
+The ultimate goal with Dynomite is to be able to implement high availability and
+cross-datacenter replication on storage engines that do not inherently provide that
+functionality. The implementation is efficient, not complex (few moving parts), a
+reliably consistent p99, and highly performant.
+
+Dynomite, in this Rust form, can be deployed as a server fronting another
+engine as is the case with Valkey and MemcacheD or it can be embedded and used
+as the dynamo-style distributed k/v storage orchestration layer for your project.
+
+It can be used both as:
 
 * a standalone server binary (`dynomited`), and
 * a library crate published on crates.io as `dynomite-engine` (its
   library name is `dynomite`) that can be embedded directly in another
   Rust program through a stable, documented API.
+
+# Origin Story
+
+This is a Rust 
+This project is a from-scratch Rust port of
+[Netflix Dynomite](https://github.com/Netflix/dynomite) that aims to be
+functionally identical to the original C codebase.
 
 ## Data stores
 
