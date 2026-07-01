@@ -1,4 +1,6 @@
-**Dynomite**, inspired by [Dynamo whitepaper](http://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf),
+# Dynomite
+
+Inspired by [Dynamo whitepaper](http://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf),
 is a thin, distributed dynamo layer for different storage engines and
 protocols. Currently these include [Valkey](https://github.com/valkey-io/valkey)
 (an open source fork of Redis), [MemcacheD](http://www.memcached.org/), and
@@ -26,7 +28,7 @@ It can be used both as:
   library name is `dynomite`) that can be embedded directly in another
   Rust program through a stable, documented API.
 
-# Origin Story
+## Origin Story
 
 This is a Rust 
 This project is a from-scratch Rust port of
