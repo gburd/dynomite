@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Run stateright explicit-state model checks for the distributed
 # protocols (XA two-phase commit, quorum decision, ring routing,
-# gossip convergence). The models are abstract state machines that
-# reproduce the production decision logic and assert its safety and
-# liveness invariants; see crates/model-tests for the mapping from
-# each model to the source file it abstracts.
+# gossip convergence, SWIM + Lifeguard membership). The models are
+# abstract state machines that reproduce the production decision
+# logic and assert its safety and liveness invariants; see
+# crates/model-tests for the mapping from each model to the source
+# file it abstracts. The SWIM model additionally carries the
+# completeness / accuracy-low-false-positive / dissemination
+# invariants, a comparative assertion against a naive fixed-timeout
+# detector, and a negative control that reproduces a false permanent
+# death when incarnation refutation is disabled.
 #
 # Run via:
 #

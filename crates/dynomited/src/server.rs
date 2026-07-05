@@ -837,6 +837,37 @@ impl Server {
                 .with_interval(Duration::from_millis(gossip_interval_ms))
                 .with_failure_metrics(failure_metrics.clone()),
         );
+        // Membership backend selection. `gossip` (the default) uses
+        // the phi-accrual handler constructed above. `swim` is the
+        // opt-in SWIM + Lifeguard backend: its pure state machine
+        // and I/O shell live in `dynomite::cluster::swim`. The
+        // handler produces the same `(peer_idx, PeerState)`
+        // transition shape as the gossip handler, so downstream
+        // routing is unchanged. Wiring the SWIM probe loop's socket
+        // traffic into the run loop is the documented production
+        // cutover gap (see docs/journal/2026-07-05-swim-prototype.md);
+        // until then the phi-accrual loop remains the live mutator
+        // even when `membership: swim` is selected, and the SWIM
+        // handler is constructed here so the selection is honoured
+        // and observable.
+        match conf_pool.membership.unwrap_or_default() {
+            dynomite::conf::Membership::Gossip => {}
+            dynomite::conf::Membership::Swim => {
+                let peer_count = server_pool.peers().read().len();
+                let _swim_handler = Arc::new(dynomite::cluster::swim::SwimHandler::new(
+                    server_pool.clone(),
+                    0,
+                    peer_count.max(1),
+                    dynomite::cluster::swim::SwimConfig::default(),
+                    Duration::from_millis(gossip_interval_ms),
+                ));
+                tracing::info!(
+                    peers = peer_count,
+                    period_ms = gossip_interval_ms,
+                    "membership backend: SWIM + Lifeguard (prototype; probe loop not yet wired, phi-accrual remains the live detector)"
+                );
+            }
+        }
         let local_pname = dyn_listen_addr.map_or_else(
             || "127.0.0.1:0".to_string(),
             |a| format!("{}:{}", a.ip(), a.port()),

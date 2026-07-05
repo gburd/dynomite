@@ -27,20 +27,16 @@
 //!   `crates/dynomite/src/cluster/gossip.rs`
 //!   (`GossipState::add_or_update`, last-writer-wins on the per-token
 //!   timestamp), asserting eventual convergence and a stable fixpoint.
-//! * [`delta_crdt`] models the delta-state CRDT convergence
-//!   implemented in `crates/dyniak/src/datatypes/delta_set.rs`
-//!   (`DeltaOrSet`) and the delta-shipping AAE hook in
-//!   `crates/dyniak/src/aae/delta_ship.rs`, asserting strong
-//!   eventual consistency over a lossy/reordering/duplicating delta
-//!   channel plus the lattice laws, with a non-join-irreducible
-//!   mutator as the negative control.
-//! * [`aae`] models the divergence-proportional anti-entropy
-//!   reconcile implemented in
-//!   `crates/dyniak/src/aae/mst_reconcile.rs` (`reconcile_pull`) over
-//!   the Merkle Search Tree diff in `crates/dyn-hashtree/src/mst.rs`
-//!   (`Mst::diff`), asserting replica convergence, the
-//!   divergence-proportional diff bound, and a negative control that
 //!   the checker catches.
+//! * [`swim`] models the opt-in SWIM + Lifeguard membership /
+//!   failure detector implemented in
+//!   `crates/dynomite/src/cluster/swim.rs` (`SwimState`), asserting
+//!   completeness (a dead node is confirmed by all), accuracy / low
+//!   false-positive (a slow-but-alive node is never permanently
+//!   confirmed dead, and SWIM beats a naive fixed-timeout detector),
+//!   dissemination (infection-style convergence with refutation), and
+//!   a negative control (disabling refutation reproduces a false
+//!   permanent death).
 //!
 //! # Running
 //!
@@ -62,4 +58,5 @@ pub mod delta_crdt;
 pub mod gossip;
 pub mod quorum;
 pub mod ring;
+pub mod swim;
 pub mod xa;

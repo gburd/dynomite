@@ -45,7 +45,7 @@ mod tokens;
 
 pub use endpoint::{ConfListen, EndpointKind};
 pub use enums::{
-    ConsistencyLevel, DataStore, Distribution, HashType, SecureServerOption, Transport,
+    ConsistencyLevel, DataStore, Distribution, HashType, Membership, SecureServerOption, Transport,
 };
 pub use error::ConfError;
 pub use pool::{

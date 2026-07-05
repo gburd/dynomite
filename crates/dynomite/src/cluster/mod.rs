@@ -51,6 +51,7 @@ pub mod hints;
 pub mod peer;
 pub mod pool;
 pub mod snitch;
+pub mod swim;
 pub mod vnode;
 
 pub use self::admin_rpc::{
@@ -68,4 +69,7 @@ pub use self::hints::{Hint, HintStore, HintStoreError, HintStoreOpenError, HintS
 pub use self::peer::{Peer, PeerEndpoint, PeerState};
 pub use self::pool::{PoolConfig, ServerPool};
 pub use self::snitch::{rack_distance, RackDistance};
+pub use self::swim::{
+    Incarnation, Member, ProbeResult, Status, SwimConfig, SwimHandler, SwimState, Tick, Update,
+};
 pub use self::vnode::{dispatch as vnode_dispatch, rebuild_continuums, PeerTokens};

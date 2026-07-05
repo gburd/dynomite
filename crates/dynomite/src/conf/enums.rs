@@ -41,6 +41,89 @@ string_enum_serde!(SecureServerOption);
 string_enum_serde!(HashType);
 string_enum_serde!(Distribution);
 string_enum_serde!(Transport);
+string_enum_serde!(Membership);
+
+/// Membership / failure-detection backend selected by the pool's
+/// `membership:` directive.
+///
+/// `Gossip` is the historical default: Dynamo-style peer-state
+/// dissemination with a phi-accrual failure detector
+/// ([`crate::cluster::gossip`], [`crate::cluster::failure_detector`]).
+/// `Swim` selects the opt-in SWIM + Lifeguard backend
+/// ([`crate::cluster::swim`]), which trades all-to-all heartbeating
+/// for a randomised probe with indirect (PING-REQ) probes,
+/// incarnation-number refutation, and Lifeguard local health
+/// awareness -- aimed at faster convergence and fewer false peer-down
+/// verdicts as clusters grow and churn. SWIM is opt-in until the
+/// large-scale churn data justifies making it the default.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::conf::Membership;
+/// assert_eq!(Membership::parse("gossip").unwrap(), Membership::Gossip);
+/// assert_eq!(Membership::parse("swim").unwrap(), Membership::Swim);
+/// assert_eq!(Membership::default(), Membership::Gossip);
+/// ```
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Default)]
+pub enum Membership {
+    /// Dynamo-style gossip plus phi-accrual. The historical
+    /// default.
+    #[default]
+    Gossip,
+    /// SWIM + Lifeguard probe-based membership. Opt-in.
+    Swim,
+}
+
+impl Membership {
+    /// Parse a `membership:` value (case-insensitive).
+    ///
+    /// # Errors
+    /// Returns [`ConfError::BadServer`] when the value is not a
+    /// recognised backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Membership;
+    /// assert_eq!(Membership::parse("SWIM").unwrap(), Membership::Swim);
+    /// assert!(Membership::parse("raft").is_err());
+    /// ```
+    pub fn parse(s: &str) -> Result<Self, ConfError> {
+        match s.to_ascii_lowercase().as_str() {
+            "gossip" => Ok(Membership::Gossip),
+            "swim" => Ok(Membership::Swim),
+            other => Err(ConfError::BadServer {
+                field: "membership",
+                value: other.to_string(),
+                reason: "membership must be 'gossip' or 'swim'".to_string(),
+            }),
+        }
+    }
+
+    /// Render back to the canonical YAML name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::Membership;
+    /// assert_eq!(Membership::Gossip.as_str(), "gossip");
+    /// assert_eq!(Membership::Swim.as_str(), "swim");
+    /// ```
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Membership::Gossip => "gossip",
+            Membership::Swim => "swim",
+        }
+    }
+}
+
+impl fmt::Display for Membership {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Transport selected by the pool's `transport:` directive.
 ///
@@ -726,5 +809,28 @@ mod tests {
         let raw = serde_yaml::to_string(&Transport::Quic).unwrap();
         let parsed: Transport = serde_yaml::from_str(&raw).unwrap();
         assert_eq!(parsed, Transport::Quic);
+    }
+
+    #[test]
+    fn membership_round_trip() {
+        for &name in &["gossip", "swim"] {
+            assert_eq!(Membership::parse(name).unwrap().as_str(), name);
+        }
+        // Case-insensitive parse.
+        assert_eq!(Membership::parse("SWIM").unwrap(), Membership::Swim);
+        assert_eq!(Membership::parse("Gossip").unwrap(), Membership::Gossip);
+        assert!(Membership::parse("raft").is_err());
+    }
+
+    #[test]
+    fn membership_default_is_gossip() {
+        assert_eq!(Membership::default(), Membership::Gossip);
+    }
+
+    #[test]
+    fn membership_yaml_round_trip() {
+        let raw = serde_yaml::to_string(&Membership::Swim).unwrap();
+        let parsed: Membership = serde_yaml::from_str(&raw).unwrap();
+        assert_eq!(parsed, Membership::Swim);
     }
 }

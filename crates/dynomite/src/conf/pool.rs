@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::endpoint::ConfListen;
 use super::enums::{
-    ConsistencyLevel, DataStore, Distribution, HashType, SecureServerOption, Transport,
+    ConsistencyLevel, DataStore, Distribution, HashType, Membership, SecureServerOption, Transport,
 };
 use super::error::ConfError;
 use super::server::{ConfDynSeed, ConfServer};
@@ -336,6 +336,13 @@ pub struct ConfPool {
     pub stats_interval: Option<i64>,
     /// `enable_gossip:` - enable / disable gossip thread.
     pub enable_gossip: Option<bool>,
+    /// `membership:` - selects the membership / failure-detection
+    /// backend. `gossip` (the default) is Dynamo-style gossip plus
+    /// the phi-accrual detector; `swim` selects the opt-in
+    /// SWIM + Lifeguard backend. When unset the engine selects
+    /// [`Membership::Gossip`].
+    #[serde(default)]
+    pub membership: Option<Membership>,
     /// `peer_tls_cert:` - PEM certificate path for the dnode
     /// listener and outbound dnode connections. When both this
     /// field and [`Self::peer_tls_key`] are set the peer plane
@@ -1238,6 +1245,9 @@ impl ConfPool {
         }
         if self.transport.is_none() {
             self.transport = Some(Transport::default());
+        }
+        if self.membership.is_none() {
+            self.membership = Some(Membership::default());
         }
     }
 
