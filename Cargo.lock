@@ -215,6 +215,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "assoc"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfdc70193dadb9d7287fa4b633f15f90c876915b31f6af17da307fc59c9859a8"
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -633,10 +639,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
+name = "const-siphasher"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03efed02df0504d71e44bfd51d3329f401b8303a2fd14254acf05c95a0af0153"
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
+name = "corosensei"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6886a0c0f263965933c438626e7179139a62b978a33aa18281cbf0cd5a975f34"
+dependencies = [
+ "autocfg",
+ "cfg-if",
+ "libc",
+ "scopeguard",
+ "windows-sys 0.59.0",
+]
 
 [[package]]
 name = "cpp_demangle"
@@ -2648,9 +2673,9 @@ checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
 
 [[package]]
 name = "noxu"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673e360c2aae103db220629e4aa44c0481427fbd62287dbdaff9adbe56ef0eec"
+checksum = "7adb3f3d6aa2bd1b99dfef628808e9008a2b4f8b30a675ad24a48d243f89ab16"
 dependencies = [
  "noxu-bind",
  "noxu-collections",
@@ -2662,9 +2687,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-bind"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f22f7f9de9d7d454a8e660459e4a3c4a35a26d02ae12edc963ca5eef8fed7b1"
+checksum = "51f3aa563a2ecb2620c830ad53bf21f26f4486659456d7e1e3d0d332a1fba0d0"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2676,9 +2701,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-cleaner"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ba9b7bcb6678799b0333a5611e8ead86cde2c72ebbef7adc9a274e39f80d3e6"
+checksum = "63816c4fb7e42dec3976b6c274124d49e7b942c7c3c008be5201a3391407545e"
 dependencies = [
  "bytes",
  "hashbrown 0.15.5",
@@ -2694,9 +2719,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-collections"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "954410241c28016aecbe608866871781599e105a56e7a2f5e2a5ee16876667eb"
+checksum = "17bf941f06193106ba239b106a8a3ce4935552e37549f207869896891729fe57"
 dependencies = [
  "hashbrown 0.15.5",
  "noxu-bind",
@@ -2706,9 +2731,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-config"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49891562bc7aedec2caebac07b969c01cc3bebe78742fa27f2736e64672709f6"
+checksum = "e3786a0e81878d4fd92888c2ca6e692f3b64b725bedfba6398ba95d8aa1ca402"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -2718,9 +2743,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-db"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0c98c63065b66838f52fdcf6d09bd9ba1fd933e762e2b272d81735de847da99"
+checksum = "1d7f9d4db1dfed563c9156236fcc340a2168014f8f76300936900c8d05990072"
 dependencies = [
  "bytes",
  "hashbrown 0.15.5",
@@ -2739,9 +2764,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-dbi"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1b09fab8d1acfebb3f52ca7f3298bb9500a6a8658c1527b715f8e59db5645e7"
+checksum = "3876273769b6e5be0670f301f7a24cd835ca3c413d4f2671c18cfdea9e5db326"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2758,14 +2783,15 @@ dependencies = [
  "noxu-tree",
  "noxu-txn",
  "noxu-util",
+ "shuttle",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "noxu-engine"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8e6dcc82c79a909f6779ac7d5480bc63ba4739609a768904d5edca70cf25e0c"
+checksum = "527c29208e0ba6ae1ee4fe1e8909de0fd5dca961bd9e90cc67a4142eeb65f87d"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -2781,14 +2807,15 @@ dependencies = [
  "noxu-txn",
  "noxu-util",
  "parking_lot",
+ "shuttle",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "noxu-evictor"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "094f1a591e8486539a27e1fde19f0819d72d380a41c1443c84160879642a443c"
+checksum = "9043989746e8a68b41972aee2f16c96bbb4ba7979abf819d27c7696b5fcea3dd"
 dependencies = [
  "bytes",
  "hashbrown 0.15.5",
@@ -2807,9 +2834,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-latch"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8724f34a5864daec67d05cd867271e2facd90fc8d1465ff1b17cfec7e9fce6ea"
+checksum = "d3e2224f03928a27d17d6973aa64e2553aea04104e33876e054d76df8382e712"
 dependencies = [
  "log",
  "noxu-sync",
@@ -2818,9 +2845,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-log"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0ea7febb2e330b58c8350d72246b760fe29b1395d2f9175b739a8f2576959bc"
+checksum = "752abaf8ec6c3041dc810c8763db5edfc43c16fe3e8448c75d64c74c781b992e"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2834,14 +2861,15 @@ dependencies = [
  "noxu-latch",
  "noxu-sync",
  "noxu-util",
+ "shuttle",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "noxu-persist"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00551c0c0c31ff40eb20b3ac063ce94eb12d9bfcd80ef4619cf1826b6f477970"
+checksum = "135c05d70786b0e6eb47d781f9d73624db32ce89267427a886a4f1334376264a"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -2852,9 +2880,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-persist-derive"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "498e06ca1893774033e1eb3e6632da9d18c4d791f912462f02294598b5bbdf0d"
+checksum = "80ee51d80a706319d7d824333db097d29a9779302b3f50fc76ade29625e0267c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2863,9 +2891,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-recovery"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48899629969e15eeb22ff741a144fe2b8ad06573496d82abfafbfa6f741e7b73"
+checksum = "ad73f135a6650625c868b57474ada2df653d0d6675c5739f8bc7ee34b8a9343a"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2883,9 +2911,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-sync"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9203a99708cf4a07ac9fbfff64a36bb3030748e5e19276900a3acd30c812c32e"
+checksum = "28ea6189b695ab6caf200fb7bde9e44daaaee828423fa7849f3efaa3beddb8a0"
 dependencies = [
  "libc",
  "lock_api",
@@ -2893,9 +2921,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-tree"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2dfbcd105b9090211fd8848b87243c04446d2b6157b699cf284c830b85670bc4"
+checksum = "ed71017709e550aad003b4675338e58f2ccb04db806d22beaacb53a30c28f2e6"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2911,9 +2939,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-txn"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9207b2025636cb6b12b759ea50e75c4414cb4db5222938f5b6683312c076eed9"
+checksum = "6b12f03fd412b6d26829a7ee156d42858b0fe14ee6c7cb55a4cccf568c1ec928"
 dependencies = [
  "byteorder",
  "hashbrown 0.15.5",
@@ -2923,26 +2951,29 @@ dependencies = [
  "noxu-sync",
  "noxu-tree",
  "noxu-util",
+ "shuttle",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "noxu-util"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66082086c9530b5f7677276383eb4e2cf1165d09a92c2ee972ac434931197a3f"
+checksum = "40a84804616ad34bff844fbcf196b0f14562ebcf2a5f1ad6fea6ee418e2c07b9"
 dependencies = [
  "byteorder",
  "hashbrown 0.15.5",
  "log",
+ "noxu-sync",
+ "shuttle",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "noxu-xa"
-version = "6.4.2"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ca1b1d68748b091b47310d60757b41bf3c939854589b2892b57e17b96543460"
+checksum = "9c276b36d7bdec920b87e1444e143c4370c658332e198797897e097f19793eb6"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -3209,6 +3240,12 @@ checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
 dependencies = [
  "num-traits",
 ]
+
+[[package]]
+name = "owo-colors"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1b04fb49957986fdce4d6ee7a65027d55d4b6d2265e5848bbb507b58ccfdb6f"
 
 [[package]]
 name = "page_size"
@@ -3812,6 +3849,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_pcg"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59cad018caf63deb318e5a4586d99a24424a364f40f1e5778c29aca23f4fc73e"
+dependencies = [
+ "rand_core 0.6.4",
+]
+
+[[package]]
 name = "raw-cpuid"
 version = "11.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4311,6 +4357,27 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "shuttle"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba93071c1b720be2505f4c8ce2863502cb9a26a3819e268df1932458a755152c"
+dependencies = [
+ "assoc",
+ "bitvec",
+ "cfg-if",
+ "const-siphasher",
+ "corosensei",
+ "hex",
+ "owo-colors",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
+ "rand_pcg",
+ "scoped-tls",
+ "smallvec",
+ "tracing",
+]
 
 [[package]]
 name = "signal-hook-registry"

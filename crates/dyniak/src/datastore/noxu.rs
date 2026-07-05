@@ -234,23 +234,19 @@ impl NoxuDatastore {
     /// 2i shape.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, NoxuDatastoreError> {
         let mut value = DatabaseEntry::new();
-        let key_entry = DatabaseEntry::from_bytes(key);
         let db = self.lock_db();
-        match db.get(None, &key_entry, &mut value)? {
-            OperationStatus::Success => Ok(Some(value.data().to_vec())),
-            OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => {
-                Ok(None)
-            }
+        if db_get(&db, None, key, &mut value)? {
+            Ok(Some(value.data().to_vec()))
+        } else {
+            Ok(None)
         }
     }
 
     /// Insert or overwrite the value at `key` against the raw
     /// keyspace. See [`Self::get`].
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<(), NoxuDatastoreError> {
-        let key_entry = DatabaseEntry::from_bytes(key);
-        let value_entry = DatabaseEntry::from_bytes(value);
         let db = self.lock_db();
-        db.put(None, &key_entry, &value_entry)?;
+        db_put(&db, None, key, value)?;
         Ok(())
     }
 
@@ -258,14 +254,8 @@ impl NoxuDatastore {
     /// Returns `Ok(false)` if the key was absent, `Ok(true)` if
     /// it was present and is now removed.
     pub fn delete(&self, key: &[u8]) -> Result<bool, NoxuDatastoreError> {
-        let key_entry = DatabaseEntry::from_bytes(key);
         let db = self.lock_db();
-        match db.delete(None, &key_entry)? {
-            OperationStatus::Success => Ok(true),
-            OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => {
-                Ok(false)
-            }
-        }
+        db_delete(&db, None, key)
     }
 
     /// Look up the object stored under `(bucket, key)` against
@@ -795,6 +785,53 @@ impl TransactionalStore for NoxuDatastore {
 // touches the primary record plus its forward / reverse 2i records)
 // is atomic, and so is a whole batch of object writes.
 
+// The noxu 7.x point-operation surface split each operation into an
+// auto-commit form (`get`/`put`/`delete`, no txn argument) and an
+// explicit-transaction form (`get_into`/`put_in`/`delete_in`), and
+// dropped the `&mut out` parameter from the plain read in favour of
+// the bool-returning `get_into`. These three shims restore the
+// `Option<&Transaction>` ergonomics the datastore is written
+// against: `None` dispatches to the auto-commit form, `Some(txn)`
+// to the transactional form, so the call sites stay uniform.
+
+/// Read `key` into `out`; returns `true` when the key existed.
+fn db_get(
+    db: &Database,
+    txn: Option<&Transaction>,
+    key: &[u8],
+    out: &mut DatabaseEntry,
+) -> Result<bool, NoxuDatastoreError> {
+    // `get_into` accepts `Option<&Transaction>` directly and keeps
+    // the caller-owned output buffer.
+    Ok(db.get_into(txn, key, out)?)
+}
+
+/// Insert or overwrite `key` -> `value`.
+fn db_put(
+    db: &Database,
+    txn: Option<&Transaction>,
+    key: &[u8],
+    value: &[u8],
+) -> Result<(), NoxuDatastoreError> {
+    match txn {
+        Some(t) => db.put_in(t, key, value)?,
+        None => db.put(key, value)?,
+    }
+    Ok(())
+}
+
+/// Delete `key`; returns `true` when a record was removed.
+fn db_delete(
+    db: &Database,
+    txn: Option<&Transaction>,
+    key: &[u8],
+) -> Result<bool, NoxuDatastoreError> {
+    Ok(match txn {
+        Some(t) => db.delete_in(t, key)?,
+        None => db.delete(key)?,
+    })
+}
+
 /// Look up `(bucket, key)` against the primary K/V layer.
 pub(crate) fn get_object_in(
     db: &Database,
@@ -805,12 +842,10 @@ pub(crate) fn get_object_in(
     validate_no_separator(bucket, "bucket")?;
     let storage_key = primary_key(bucket, key);
     let mut value = DatabaseEntry::new();
-    let key_entry = DatabaseEntry::from_bytes(&storage_key);
-    match db.get(txn, &key_entry, &mut value)? {
-        OperationStatus::Success => Ok(Some(value.data().to_vec())),
-        OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => {
-            Ok(None)
-        }
+    if db_get(db, txn, &storage_key, &mut value)? {
+        Ok(Some(value.data().to_vec()))
+    } else {
+        Ok(None)
     }
 }
 
@@ -842,32 +877,20 @@ pub(crate) fn put_object_in(
     clear_forward_for(db, txn, bucket, key)?;
     // Primary K/V write.
     let primary = primary_key(bucket, key);
-    db.put(
-        txn,
-        &DatabaseEntry::from_bytes(&primary),
-        &DatabaseEntry::from_bytes(value),
-    )?;
+    db_put(db, txn, &primary, value)?;
     // Forward 2i writes.
     for (name, enc) in &encoded {
         let fk = forward_key(bucket, name, enc, key);
-        db.put(
-            txn,
-            &DatabaseEntry::from_bytes(&fk),
-            &DatabaseEntry::from_bytes(b""),
-        )?;
+        db_put(db, txn, &fk, b"")?;
     }
     // Reverse 2i write (replace).
     let rk = reverse_key(bucket, key);
     if encoded.is_empty() {
         // No indexes -> drop any stale reverse entry.
-        db.delete(txn, &DatabaseEntry::from_bytes(&rk))?;
+        db_delete(db, txn, &rk)?;
     } else {
         let rv = encode_reverse_value(&encoded);
-        db.put(
-            txn,
-            &DatabaseEntry::from_bytes(&rk),
-            &DatabaseEntry::from_bytes(&rv),
-        )?;
+        db_put(db, txn, &rk, &rv)?;
     }
     Ok(())
 }
@@ -882,10 +905,7 @@ pub(crate) fn delete_object_in(
     validate_no_separator(bucket, "bucket")?;
     let removed_2i = clear_forward_for(db, txn, bucket, key)?;
     let primary = primary_key(bucket, key);
-    let removed_pri = match db.delete(txn, &DatabaseEntry::from_bytes(&primary))? {
-        OperationStatus::Success => true,
-        OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => false,
-    };
+    let removed_pri = db_delete(db, txn, &primary)?;
     Ok(removed_pri || removed_2i)
 }
 
@@ -900,25 +920,21 @@ fn clear_forward_for(
 ) -> Result<bool, NoxuDatastoreError> {
     let rk = reverse_key(bucket, key);
     let mut value = DatabaseEntry::new();
-    let key_entry = DatabaseEntry::from_bytes(&rk);
-    match db.get(txn, &key_entry, &mut value)? {
-        OperationStatus::Success => {
-            let pairs = decode_reverse_value(value.data()).ok_or_else(|| {
-                NoxuDatastoreError::CorruptReverse {
-                    bucket: bucket.to_vec(),
-                    key: key.to_vec(),
-                }
-            })?;
-            for (name, encoded) in &pairs {
-                let fk = forward_key(bucket, name, encoded, key);
-                db.delete(txn, &DatabaseEntry::from_bytes(&fk))?;
+    if db_get(db, txn, &rk, &mut value)? {
+        let pairs = decode_reverse_value(value.data()).ok_or_else(|| {
+            NoxuDatastoreError::CorruptReverse {
+                bucket: bucket.to_vec(),
+                key: key.to_vec(),
             }
-            db.delete(txn, &DatabaseEntry::from_bytes(&rk))?;
-            Ok(true)
+        })?;
+        for (name, encoded) in &pairs {
+            let fk = forward_key(bucket, name, encoded, key);
+            db_delete(db, txn, &fk)?;
         }
-        OperationStatus::NotFound | OperationStatus::KeyExists | OperationStatus::KeyEmpty => {
-            Ok(false)
-        }
+        db_delete(db, txn, &rk)?;
+        Ok(true)
+    } else {
+        Ok(false)
     }
 }
 
@@ -1080,21 +1096,34 @@ fn scan_prefix<F>(
 where
     F: FnMut(&[u8], &[u8]) -> Result<(), NoxuDatastoreError>,
 {
-    let mut cursor: Cursor = db.open_cursor(txn, Some(&CursorConfig::new()))?;
-    let mut key = DatabaseEntry::from_bytes(prefix);
-    let mut value = DatabaseEntry::new();
-    let mut status = cursor.get(&mut key, &mut value, Get::SearchGte, None)?;
-    while matches!(status, OperationStatus::Success) {
-        let k = key.data();
-        if !k.starts_with(prefix) {
-            break;
+    // noxu 7.x split cursor opening into `open_cursor(config)` for
+    // auto-commit (lifetime `'static`) and `open_cursor_in(&txn,
+    // config)` for a transactional scan (lifetime `'txn`). The two
+    // return different cursor lifetimes, so the scan body is a
+    // closure invoked against whichever cursor the txn selects.
+    let mut scan = |cursor: &mut Cursor<'_>| -> Result<(), NoxuDatastoreError> {
+        let mut key = DatabaseEntry::from_bytes(prefix);
+        let mut value = DatabaseEntry::new();
+        let mut status = cursor.get(&mut key, &mut value, Get::SearchGte, None)?;
+        while matches!(status, OperationStatus::Success) {
+            let k = key.data();
+            if !k.starts_with(prefix) {
+                break;
+            }
+            f(k, value.data())?;
+            // Advance to the next record.
+            status = cursor.get(&mut key, &mut value, Get::Next, None)?;
         }
-        f(k, value.data())?;
-        // Advance to the next record.
-        status = cursor.get(&mut key, &mut value, Get::Next, None)?;
+        let _ = cursor.close();
+        Ok(())
+    };
+    if let Some(t) = txn {
+        let mut cursor = db.open_cursor_in(t, Some(&CursorConfig::new()))?;
+        scan(&mut cursor)
+    } else {
+        let mut cursor = db.open_cursor(Some(&CursorConfig::new()))?;
+        scan(&mut cursor)
     }
-    let _ = cursor.close();
-    Ok(())
 }
 
 /// Re-export the encoding helper so the integration test can
