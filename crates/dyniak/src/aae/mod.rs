@@ -47,6 +47,7 @@
 //! ```
 
 pub mod config;
+pub mod delta_ship;
 pub mod exchange;
 pub mod exchange_fsm;
 pub mod metrics;
@@ -59,6 +60,7 @@ pub mod status;
 pub mod tictac;
 
 pub use crate::aae::config::ConfAae;
+pub use crate::aae::delta_ship::{apply_shipment, plan_shipment, Shipment};
 pub use crate::aae::exchange::{
     decode_key_sync, decode_root_sync, decode_tree_sync, encode_key_sync, encode_root_sync,
     encode_tree_sync, Divergence, Exchange, ExchangeError, ExchangeFrame, LocalPeerView, PeerView,

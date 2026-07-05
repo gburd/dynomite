@@ -27,6 +27,13 @@
 //!   `crates/dynomite/src/cluster/gossip.rs`
 //!   (`GossipState::add_or_update`, last-writer-wins on the per-token
 //!   timestamp), asserting eventual convergence and a stable fixpoint.
+//! * [`delta_crdt`] models the delta-state CRDT convergence
+//!   implemented in `crates/dyniak/src/datatypes/delta_set.rs`
+//!   (`DeltaOrSet`) and the delta-shipping AAE hook in
+//!   `crates/dyniak/src/aae/delta_ship.rs`, asserting strong
+//!   eventual consistency over a lossy/reordering/duplicating delta
+//!   channel plus the lattice laws, with a non-join-irreducible
+//!   mutator as the negative control.
 //!
 //! # Running
 //!
@@ -43,6 +50,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod delta_crdt;
 pub mod gossip;
 pub mod quorum;
 pub mod ring;

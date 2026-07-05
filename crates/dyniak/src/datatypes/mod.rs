@@ -46,6 +46,7 @@
 //! three on randomly generated states.
 
 pub mod counter;
+pub mod delta_set;
 pub mod flag;
 pub mod itc;
 pub mod register;
@@ -72,6 +73,7 @@ pub mod keyfun_wasm;
 use std::cmp::Ordering;
 
 pub use crate::datatypes::counter::PnCounter;
+pub use crate::datatypes::delta_set::{BufferedDelta, DeltaBuffer, DeltaOrSet, OrSetDelta};
 pub use crate::datatypes::flag::EwFlag;
 pub use crate::datatypes::itc::{Event as ItcEvent, Id as ItcId, Itc};
 pub use crate::datatypes::register::LwwRegister;
