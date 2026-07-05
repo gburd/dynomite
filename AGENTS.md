@@ -387,6 +387,54 @@ add tests just to pad coverage.
 * Weekly soak: each fuzzer runs 1h in CI; corpora get checked into
   `crates/fuzz/corpus/<target>/` after dedup.
 
+### 6.5 Deterministic simulation testing (DST) and consistency checking (Elle) -- REQUIRED MERGE GATE
+
+Any change that touches distributed behaviour -- routing, replication,
+gossip / membership, quorum, anti-entropy / repair, causality clocks,
+cross-node transactions (XA / RAMP), CRDT convergence, or the dnode
+peer plane -- MUST be validated by BOTH of the following before it can
+merge. This is not optional and is not satisfied by unit / property
+/ fuzz coverage alone.
+
+1. **Deterministic simulation testing (DST).** Model the change as a
+   deterministic, side-effect-free state machine (no real sockets, no
+   real disk, no wall clock, seeded RNG) and check its invariants
+   exhaustively (bounded state-space) or over many seeds. The home for
+   these is the `model-tests` crate (stateright models; see
+   `scripts/model.sh`). The model must:
+   * assert the safety invariants the change must never violate
+     (e.g. 2PC atomicity, no-lost-committed-write, read-atomic
+     isolation, CRDT convergence / commutativity, ring-routing
+     determinism, gossip eventual convergence);
+   * assert the relevant liveness property under fair scheduling
+     (e.g. every transaction reaches a terminal state; a fact known
+     to one node eventually reaches all connected nodes);
+   * include a NEGATIVE control -- a deliberately-broken variant the
+     checker is shown to catch -- so the model is proven to have
+     teeth, not vacuously pass.
+   The model must abstract the ACTUAL decision logic the production
+   code runs (extract a pure core both the model and the code drive);
+   a model of a different design does not gate anything.
+
+2. **Elle-style consistency checking.** Drive the REAL code (the
+   built binary / the datastore behind its wire API, not an
+   abstraction) with a history-recording workload, then run the
+   recorded history through the consistency checker in
+   `scripts/consistency/` (list-append / register histories; Elle-
+   style write-write + write-read dependency-cycle detection; the
+   Porcupine-rs linearizability check for single-object registers).
+   The checker must find zero anomalies of the classes it covers, and
+   the run must record which anomaly classes were checked. Any
+   anomaly the checker reports, or any failure not attributable to an
+   induced fault, blocks merge and must be reproduced in a DST model
+   (item 1) before the fix lands -- model the failure first, then fix.
+
+Both gates run in `scripts/check.sh` (the DST models via
+`scripts/model.sh`; the consistency workload + checker via the
+consistency harness) and both must be green. A change that cannot be
+expressed in a DST model or checked with a recorded history is, by
+definition, not ready to merge into the distributed path.
+
 ### When to use what
 
 | Concern | Use |
@@ -397,6 +445,7 @@ add tests just to pad coverage.
 | "For arbitrary bytes, no panic / no UB" | fuzz |
 | Real datastore protocol behavior | regression with `redis-server`/`memcached` from the flake |
 | Concurrent state, races, cancellation | unit + `loom` (in `cfg(loom)`) for the SPSC/cbuf only; otherwise tokio multi-thread integration tests |
+| Any distributed-behaviour change (routing, replication, gossip, quorum, AAE, causality, XA/RAMP, CRDT convergence, dnode plane) | DST model (`model-tests`) AND Elle-style consistency check (`scripts/consistency/`) -- BOTH required to merge (Section 6.5) |
 
 ---
 
@@ -691,6 +740,8 @@ scripts/check_no_todos.sh     # greps for unimplemented!/todo!/TODO/FIXME in src
 scripts/check_no_port_comments.sh  # greps for "ported from", "matches dyn_"
 scripts/check_ascii.sh        # rejects non-ASCII in src/, docs/, tests/
 scripts/check_parity.sh       # validates docs/parity.md against C and Rust
+scripts/model.sh              # DST: stateright models of the distributed protocols (Section 6.5)
+scripts/consistency/check.sh  # Elle-style consistency check of a recorded history (Section 6.5)
 ```
 
 CI runs the same script on every push; merges to `main` are blocked on it.
@@ -871,3 +922,5 @@ write a `BLOCKED:` journal entry and stop. The lead will route it.
   list there is the upper bound.
 * **Missing tool**: add it to `flake.nix` in the same commit that needs
   it; never let `flake.nix` and the code drift.
+
+See .agent-steering-domains.md for domain-specific steering (local).

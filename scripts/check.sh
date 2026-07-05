@@ -143,6 +143,18 @@ echo "==> coverage gate (tiered: core >= 95%, supporting/tool >= 75%)"
 # A new below-tier file that is not documented fails the build.
 "$ROOT/scripts/coverage_gate.sh"
 
+echo "==> DST models (stateright; AGENTS.md 6.5)"
+# Deterministic simulation of the distributed protocols (XA 2PC
+# atomicity + liveness, quorum, ring routing, gossip convergence),
+# each with a negative control proving the checker has teeth. Any
+# distributed-behaviour change must extend these.
+"$ROOT/scripts/model.sh"
+
+echo "==> consistency gate (Elle-style; AGENTS.md 6.5)"
+# Elle-style checker over recorded real-code histories; self-tests
+# its own teeth (clean passes, lost-update + dirty-read caught).
+"$ROOT/scripts/consistency/check.sh"
+
 echo "==> note: slow-tests are in scripts/slow_tests.sh; run weekly via slow-tests.yml workflow"
 
 echo "OK"
