@@ -52,6 +52,8 @@ pub mod exchange;
 pub mod exchange_fsm;
 pub mod metrics;
 #[cfg(feature = "noxu")]
+pub mod mst_reconcile;
+#[cfg(feature = "noxu")]
 pub mod noxu_fold;
 pub mod persist;
 pub mod repair;
@@ -60,6 +62,7 @@ pub mod status;
 pub mod tictac;
 
 pub use crate::aae::config::ConfAae;
+pub use crate::aae::config::ReconcileMode;
 pub use crate::aae::delta_ship::{apply_shipment, plan_shipment, Shipment};
 pub use crate::aae::exchange::{
     decode_key_sync, decode_root_sync, decode_tree_sync, encode_key_sync, encode_root_sync,
@@ -75,6 +78,11 @@ pub use crate::aae::exchange_fsm::{
 pub use crate::aae::metrics::{
     load_snapshot_with_metrics, save_snapshot_with_metrics, AaeMetrics, AaeMetricsSnapshot,
     PeerEntry as AaePeerEntry, SimplePeerEntry as AaeSimplePeerEntry,
+};
+#[cfg(feature = "noxu")]
+pub use crate::aae::mst_reconcile::{
+    build_mst, composite_key, reconcile_pull, split_composite, value_digest, DatastoreSource,
+    MstReconcileError, ObjectSource, ReconcileOutcome,
 };
 #[cfg(feature = "noxu")]
 pub use crate::aae::noxu_fold::NoxuFoldError;

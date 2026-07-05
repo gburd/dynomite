@@ -65,6 +65,7 @@ use std::io::{Read, Write};
 use serde::{Deserialize, Serialize};
 
 mod lazy_hash;
+pub mod mst;
 use lazy_hash::LazyHash;
 
 /// 32-byte BLAKE3 digest. Used both as the per-key value-side

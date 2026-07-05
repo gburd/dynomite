@@ -16,8 +16,33 @@
 //! assert!(cfg.validate().is_ok());
 //! ```
 
+//! Which reconcile algorithm the AAE worker uses.
+//!
+//! The variant lives here (not in the noxu-gated
+//! [`crate::aae::mst_reconcile`] module) so operators can set
+//! the mode on [`ConfAae`] in a build without the `noxu`
+//! feature; only the MST *execution* path needs `noxu`.
+
 use std::path::PathBuf;
 use std::time::Duration;
+
+/// Which reconcile algorithm the AAE worker uses.
+///
+/// Defaults to [`ReconcileMode::Tictac`] so an unconfigured
+/// deployment behaves exactly as before the MST path existed.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
+pub enum ReconcileMode {
+    /// The shipped fixed-grid Tictac merkle exchange
+    /// ([`crate::aae::exchange`]). Reconcile cost grows with the
+    /// dataset size.
+    #[default]
+    Tictac,
+    /// The divergence-proportional Merkle Search Tree reconcile
+    /// ([`crate::aae::mst_reconcile`]). Reconcile cost grows with
+    /// the symmetric difference of the two key sets, not the
+    /// dataset size.
+    Mst,
+}
 
 /// Default cadence for a full sweep over every peer pair (24h).
 pub const DEFAULT_FULL_SWEEP_SECONDS: u64 = 24 * 60 * 60;
@@ -104,6 +129,12 @@ pub struct ConfAae {
     /// Default `false` (per-peer cadence) so existing
     /// deployments are unaffected.
     pub per_token_exchange: bool,
+    /// Which reconcile algorithm the worker runs. Defaults to
+    /// [`ReconcileMode::Tictac`]; set to [`ReconcileMode::Mst`]
+    /// to use the divergence-proportional Merkle Search Tree
+    /// reconcile, whose bandwidth scales with the symmetric
+    /// difference of two replicas rather than the dataset size.
+    pub reconcile_mode: ReconcileMode,
 }
 
 impl Default for ConfAae {
@@ -118,6 +149,7 @@ impl Default for ConfAae {
             snapshot_interval_seconds: DEFAULT_SNAPSHOT_INTERVAL_SECONDS,
             aae_state_dir: PathBuf::from(DEFAULT_AAE_STATE_DIR),
             per_token_exchange: false,
+            reconcile_mode: ReconcileMode::default(),
         }
     }
 }

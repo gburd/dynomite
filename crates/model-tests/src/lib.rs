@@ -34,6 +34,13 @@
 //!   eventual consistency over a lossy/reordering/duplicating delta
 //!   channel plus the lattice laws, with a non-join-irreducible
 //!   mutator as the negative control.
+//! * [`aae`] models the divergence-proportional anti-entropy
+//!   reconcile implemented in
+//!   `crates/dyniak/src/aae/mst_reconcile.rs` (`reconcile_pull`) over
+//!   the Merkle Search Tree diff in `crates/dyn-hashtree/src/mst.rs`
+//!   (`Mst::diff`), asserting replica convergence, the
+//!   divergence-proportional diff bound, and a negative control that
+//!   the checker catches.
 //!
 //! # Running
 //!
@@ -50,6 +57,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aae;
 pub mod delta_crdt;
 pub mod gossip;
 pub mod quorum;
