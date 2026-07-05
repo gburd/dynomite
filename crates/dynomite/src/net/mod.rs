@@ -67,7 +67,7 @@ use std::io;
 use thiserror::Error;
 
 pub use self::auto_eject::{AutoEject, AutoEjectState};
-pub use self::client::{ClientHandler, ClientLoopOutcome};
+pub use self::client::{ClientHandler, ClientLoopOutcome, ReplicaApplySink};
 pub use self::conn::{Conn, ConnHandle, ConnStats};
 pub use self::dispatcher::{
     DispatchOutcome, Dispatcher, NoopDispatcher, OutboundEnvelope, ServerSink,

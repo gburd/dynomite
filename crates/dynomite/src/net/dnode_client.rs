@@ -164,6 +164,20 @@ async fn drive_dnode_parser(
                     continue;
                 }
 
+                // Dyniak cross-node object-replica frames are
+                // applied to the LOCAL datastore via the attached
+                // replica sink and are never re-forwarded, so a
+                // replica write fans out exactly once. Without a
+                // sink wired (a non-dyniak pool), the frame is
+                // dropped: no other node treats RiakReplica as a
+                // data-plane request.
+                if matches!(dmsg.ty, DmsgType::RiakReplica) {
+                    if let Some(sink) = handler.replica_sink() {
+                        sink.apply(&payload).await;
+                    }
+                    continue;
+                }
+
                 // Decrypt if the dnode header indicates the payload
                 // is encrypted and we have an AES key.
                 let decoded = if dmsg.is_encrypted() {

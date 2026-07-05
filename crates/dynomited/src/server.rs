@@ -299,6 +299,15 @@ pub struct Server {
     /// inbound gossip frames; the periodic gossip task is
     /// spawned only when `enable_gossip` is set.
     gossip_handler: Arc<dynomite::cluster::gossip::GossipHandler>,
+    /// Optional replica-apply sink for a `data_store: dyniak`
+    /// pool. `Some` when the pool serves the dyniak surface with
+    /// a local object store; the `dnode_proxy` factory attaches
+    /// it to every inbound peer `ClientHandler` so
+    /// `DmsgType::RiakReplica` frames apply to the local store
+    /// (and are never re-forwarded). `None` for non-dyniak
+    /// pools, where the type is unrecognised on the wire.
+    #[cfg(feature = "riak")]
+    replica_sink: Option<Arc<dyn dynomite::net::ReplicaApplySink>>,
     /// Per-peer gossip TX channel: a clone of each peer's
     /// `peer_supervisor` outbound channel, kept here so
     /// `Server::run` can spawn a single gossip task that
@@ -900,13 +909,46 @@ impl Server {
                     }
                     h
                 });
-                handles
+                // Wire the cross-node replica router for a
+                // `data_store: dyniak` pool. The router builds a
+                // RingView from the live server pool and fans
+                // object writes out over the same per-peer
+                // outbound channels the RESP data plane uses
+                // (`gossip_peer_txs`), so a PBC put replicates
+                // across the ring instead of storing node-local.
+                // Skipped when the pool has no non-local peers
+                // (a single-node pool needs no fan-out).
+                handles.map(|mut h| {
+                    if is_dyniak && !gossip_peer_txs.is_empty() {
+                        h.hooks = Some(crate::riak::build_routing_hooks(
+                            &server_pool,
+                            pool_config.hash,
+                            &gossip_peer_txs,
+                        ));
+                    }
+                    h
+                })
             }
             None => None,
         };
 
         let (entropy_driver, entropy_key_path) =
             build_entropy_driver(&conf_pool, &server_pool, &pool_name);
+
+        // Build the replica-apply sink for a `data_store: dyniak`
+        // pool: inbound `DmsgType::RiakReplica` frames apply to
+        // this node's local object store. Built whenever a local
+        // noxu store exists (even for a single-node pool) so a
+        // node that starts solo and later gains peers already
+        // applies forwarded replicas; a non-dyniak pool leaves it
+        // `None` and the type is unrecognised on the wire.
+        #[cfg(feature = "riak")]
+        let replica_sink: Option<Arc<dyn dynomite::net::ReplicaApplySink>> =
+            noxu_shared.as_ref().map(|noxu| {
+                let ds: Arc<dyn dynomite::embed::Datastore> = noxu.clone();
+                Arc::new(dyniak::ReplicaApplier::new(ds))
+                    as Arc<dyn dynomite::net::ReplicaApplySink>
+            });
 
         let reloadable = ReloadableState::new(ReloadableSnapshot::from_pool(&conf_pool));
         let tls_profiles = peer_tls.as_ref().map(|rt| rt.profiles.clone());
@@ -929,6 +971,8 @@ impl Server {
             #[cfg(feature = "riak")]
             riak_handles,
             gossip_handler,
+            #[cfg(feature = "riak")]
+            replica_sink,
             gossip_peer_txs,
             local_pname,
             hint_store,
@@ -1133,6 +1177,8 @@ impl Server {
             #[cfg(feature = "riak")]
             mut riak_handles,
             gossip_handler,
+            #[cfg(feature = "riak")]
+            replica_sink,
             gossip_peer_txs,
             local_pname,
             hint_store,
@@ -1259,6 +1305,8 @@ impl Server {
             let dispatcher = dispatcher.clone();
             let cancel = cancel_future(shutdown_rx.clone());
             let gossip_for_factory = gossip_handler.clone();
+            #[cfg(feature = "riak")]
+            let replica_sink_for_factory = replica_sink.clone();
             tokio::spawn(async move {
                 dnode
                     .run(cancel, move |tx| {
@@ -1270,14 +1318,23 @@ impl Server {
                         // gossip-class dnode frames feed the
                         // sender peer's failure detector instead
                         // of being routed into the datastore
-                        // parser.
-                        dynomite::net::ClientHandler::new(
+                        // parser. For a dyniak pool a replica-apply
+                        // sink is also attached so inbound
+                        // `RiakReplica` frames apply to the local
+                        // object store (and never re-forward).
+                        let handler = dynomite::net::ClientHandler::new(
                             dispatcher.clone(),
                             tx,
                             dynomite::conf::DataStore::Valkey,
                         )
                         .with_read_timeout(Some(Duration::from_mins(1)))
-                        .with_gossip(gossip_for_factory.clone())
+                        .with_gossip(gossip_for_factory.clone());
+                        #[cfg(feature = "riak")]
+                        let handler = match replica_sink_for_factory.clone() {
+                            Some(sink) => handler.with_replica_sink(sink),
+                            None => handler,
+                        };
+                        handler
                     })
                     .await
             })

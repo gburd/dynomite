@@ -30,11 +30,15 @@ use tokio::task::JoinHandle;
 use dynomite::conf::ConfRiak;
 use dynomite::embed::Datastore;
 use dynomite::net::server::OutboundRequest;
+use dynomite::proto::dnode::DmsgType;
 
 use dyniak::aae::config::{ConfAae, DEFAULT_FULL_SWEEP_SECONDS, DEFAULT_SEGMENT_SECONDS};
 use dyniak::aae::repair::{RepairSink, RepairTask};
 use dyniak::aae::scheduler::{Scheduler, SweepPlan, SystemClock};
-use dyniak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls};
+use dyniak::proto::replica_wire::encode_peer_op;
+use dyniak::replication::{RingPoint, RingView};
+use dyniak::router::{BucketRouter, PeerOp, PeerOutbound, RoutingHooks};
+use dyniak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls, serve_pbc_with_routing};
 #[cfg(feature = "search")]
 use dyniak::{serve_http_tls_with_search, serve_http_with_search};
 #[cfg(all(feature = "search", feature = "wasm"))]
@@ -113,6 +117,18 @@ pub struct RiakHandles {
     /// PBC and HTTP loops so request accounting accumulates in
     /// one place.
     pub datastore: Arc<dyn Datastore>,
+    /// Routing hooks for a `data_store: dyniak` pool. When
+    /// present, the PBC accept loop serves
+    /// [`serve_pbc_with_routing`] so `RpbPutReq` / `RpbDelReq`
+    /// frames fan out to the object's replica peers over the
+    /// dnode plane before the local store call. `None` for a
+    /// single-node pool (no peers) or a non-dyniak backend; the
+    /// PBC loop then serves the plain [`serve_pbc`] path.
+    ///
+    /// HTTP-gateway replica routing is a scoped follow-up; the
+    /// HTTP object/transaction handlers still write node-local
+    /// (see the wire-up journal entry).
+    pub hooks: Option<RoutingHooks>,
     /// Optional vector-index registry shared with the dispatcher's
     /// RediSearch FT.* surface. When present, the HTTP gateway
     /// serves the bucket index-management and search routes against
@@ -228,6 +244,7 @@ pub async fn build_handles(
         #[cfg(feature = "quic")]
         quic_addr,
         datastore,
+        hooks: None,
         #[cfg(feature = "search")]
         search_registry: None,
         aae,
@@ -382,12 +399,24 @@ pub fn spawn_listeners(
         let ds = Arc::clone(&handles.datastore);
         let mut cancel = cancel_rx.clone();
         let tls = handles.tls.clone();
+        let hooks = handles.hooks.clone();
         tokio::spawn(async move {
             let serve = async {
-                if let Some(acc) = tls {
-                    serve_pbc_tls(listener, ds, acc).await
-                } else {
-                    serve_pbc(listener, ds).await
+                match (tls, hooks) {
+                    // Routing hooks and TLS are independent knobs;
+                    // the routing-enabled PBC serve does not have a
+                    // TLS sibling yet, so a dyniak pool with TLS on
+                    // the Riak listener falls back to the plain TLS
+                    // path (replica routing is then scoped to the
+                    // plaintext peer plane). This mirrors how the
+                    // QUIC path also skips routing.
+                    (Some(acc), _) => serve_pbc_tls(listener, ds, acc).await,
+                    (None, Some(hooks)) => {
+                        let admin: Arc<dyn dynomite::cluster::ClusterAdmin> =
+                            Arc::new(dynomite::cluster::NoopClusterAdmin);
+                        serve_pbc_with_routing(listener, ds, admin, hooks).await
+                    }
+                    (None, None) => serve_pbc(listener, ds).await,
                 }
             };
             tokio::select! {
@@ -623,6 +652,119 @@ impl RepairSink for PeerChannelRepairSink {
             Err(_) => Err(task),
         }
     }
+}
+
+/// [`PeerOutbound`] that forwards replica ops onto the dispatcher's
+/// per-peer outbound channels.
+///
+/// This reuses the same `mpsc::Sender<OutboundRequest>` map the
+/// gossip task, the hint drainer, and the RESP data plane use
+/// (`ClusterDispatcher::peer_backends`). Each replica op is encoded
+/// with [`encode_peer_op`] and shipped as an [`OutboundRequest`]
+/// tagged [`DmsgType::RiakReplica`]; the receiving peer's
+/// `dnode_client_loop` recognises that type, applies the op to its
+/// local store via the [`dyniak::ReplicaApplier`] sink, and does
+/// not re-forward it.
+///
+/// The dispatch is fire-and-forget: a missing peer, a closed
+/// channel, or a full channel logs at `debug` and drops the op
+/// rather than blocking or panicking. The write still lands
+/// locally and on every reachable replica; anti-entropy and
+/// read-repair reconcile a peer that missed it, matching Riak's
+/// eventual-consistency model.
+#[derive(Debug)]
+pub struct PeerChannelOutbound {
+    by_peer: std::collections::HashMap<u32, mpsc::Sender<OutboundRequest>>,
+}
+
+impl PeerChannelOutbound {
+    /// Wrap the dispatcher's per-peer outbound channel map.
+    #[must_use]
+    pub fn new(peer_txs: &[(u32, String, mpsc::Sender<OutboundRequest>)]) -> Self {
+        let mut by_peer = std::collections::HashMap::new();
+        for (idx, _, tx) in peer_txs {
+            by_peer.insert(*idx, tx.clone());
+        }
+        Self { by_peer }
+    }
+
+    /// Ship one encoded replica op to `peer_idx`, dropping it on
+    /// any delivery failure.
+    fn deliver(&self, peer_idx: u32, op: &PeerOp) {
+        let Some(tx) = self.by_peer.get(&peer_idx) else {
+            tracing::debug!(peer_idx, "riak replica: no outbound channel; dropped");
+            return;
+        };
+        // A replica op is fire-and-forget: the responder is never
+        // signalled (RiakReplica is not a data-plane request type),
+        // so drain any stray reply on a throwaway task.
+        let (rsp_tx, mut rsp_rx) =
+            tokio::sync::mpsc::channel::<dynomite::net::dispatcher::OutboundEnvelope>(1);
+        tokio::spawn(async move { while rsp_rx.recv().await.is_some() {} });
+        let req = OutboundRequest {
+            bytes: encode_peer_op(op),
+            req_id: 0,
+            responder: rsp_tx,
+            span: tracing::Span::none(),
+            ty: DmsgType::RiakReplica,
+            target_peer_idx: Some(peer_idx),
+        };
+        if tx.try_send(req).is_err() {
+            tracing::debug!(
+                peer_idx,
+                "riak replica: peer channel full or closed; dropped"
+            );
+        }
+    }
+}
+
+impl PeerOutbound for PeerChannelOutbound {
+    fn dispatch(&self, peer_idx: u32, op: PeerOp) -> dynomite::embed::hooks::BoxFuture<'_, ()> {
+        // Deliver synchronously (a bounded `try_send`) and return a
+        // ready future so the request handler never awaits a peer.
+        self.deliver(peer_idx, &op);
+        Box::pin(async {})
+    }
+}
+
+/// Build the [`RoutingHooks`] for a `data_store: dyniak` pool.
+///
+/// Constructs a [`RingView`] with one [`RingPoint`] per
+/// `(peer, token)` in the pool (skipping the local peer -- a write
+/// always lands locally, so the local node is never a forwarding
+/// target), a Riak-defaults [`dyniak::BucketPropsRegistry`], and a
+/// [`BucketRouter`] over the pool's [`HashType`]. The router's
+/// replica plan then drives a fan-out through a
+/// [`PeerChannelOutbound`] over `peer_txs`.
+///
+/// Ring tokens are the engine's 32-bit continuum: each
+/// [`dynomite::hashkit::DynToken`] is projected to `u64` via
+/// `get_int()`, matching the reaper's `ring_token_to_dyntoken`
+/// convention so routing and reaping agree on partition bounds.
+#[must_use]
+pub fn build_routing_hooks(
+    pool: &Arc<dynomite::cluster::ServerPool>,
+    hash: dynomite::conf::HashType,
+    peer_txs: &[(u32, String, mpsc::Sender<OutboundRequest>)],
+) -> RoutingHooks {
+    let mut points: Vec<RingPoint> = Vec::new();
+    for peer in pool.peers().read().iter() {
+        let idx = peer.idx();
+        let dc = peer.dc();
+        let rack = peer.rack();
+        for token in peer.tokens() {
+            points.push(RingPoint::new(u64::from(token.get_int()), idx, dc, rack));
+        }
+    }
+    let ring = Arc::new(RingView::new(points));
+    let registry = Arc::new(dyniak::BucketPropsRegistry::new_riak_defaults());
+    let router = Arc::new(BucketRouter::new(
+        registry,
+        ring,
+        dynomite::cluster::map_hash(hash),
+    ));
+    let outbound = Arc::new(PeerChannelOutbound::new(peer_txs));
+    RoutingHooks { router, outbound }
 }
 
 async fn bind(field: &'static str, addr: &str) -> Result<(SocketAddr, TcpListener), RiakWireError> {

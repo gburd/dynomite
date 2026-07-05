@@ -6,3 +6,4 @@
 
 pub mod http;
 pub mod pb;
+pub mod replica_wire;

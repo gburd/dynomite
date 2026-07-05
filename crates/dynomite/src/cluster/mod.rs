@@ -61,7 +61,7 @@ pub use self::admin_rpc::{
 pub use self::apl::{get_apl_ann, AnnotatedPeer, NodeRole};
 
 pub use self::datacenter::{Continuum, Datacenter, Rack};
-pub use self::dispatch::{ClusterDispatcher, DispatchPlan, ReplicaTarget};
+pub use self::dispatch::{map_hash, ClusterDispatcher, DispatchPlan, ReplicaTarget};
 pub use self::gossip::{
     parse_seed_node, GossipConfig, GossipHandler, GossipNode, GossipState, GossipStep, SeedRecord,
 };

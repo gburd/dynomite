@@ -125,10 +125,12 @@ pub mod mapreduce;
 // Re-exported below the prior block so parallel branches do
 // not conflict.
 pub mod bucket_props;
+pub mod replica_apply;
 pub mod replication;
 pub mod router;
 
 pub use crate::bucket_props::{BucketProps, BucketPropsRegistry};
+pub use crate::replica_apply::ReplicaApplier;
 pub use crate::replication::{
     plan_replicas, ReplicationPlan, ReplicationStrategy, ReplicationStrategyError, RingPoint,
     RingView,

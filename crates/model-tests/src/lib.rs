@@ -62,6 +62,14 @@
 //!   send/receive happens-before edges, and bounded drift within the
 //!   max inter-node physical skew, with a broken receive rule (no
 //!   counter advance) as the negative control.
+//! * [`replication`] models the dyniak cross-node replica fan-out
+//!   wired into `dynomited` by `crates/dyniak/src/router.rs`
+//!   (`RoutingHooks`) and `crates/dyniak/src/replica_apply.rs`
+//!   (`ReplicaApplier`), asserting bounded fan-out (a replica write
+//!   applies at most once per preference-list peer because an applied
+//!   op is terminal and never re-forwarded) and convergence under
+//!   reliable delivery, with a re-forwarding applier as the negative
+//!   control.
 //!
 //! # Running
 //!
@@ -84,6 +92,7 @@ pub mod gossip;
 pub mod hlc;
 pub mod quorum;
 pub mod ramp;
+pub mod replication;
 pub mod ring;
 pub mod swim;
 pub mod xa;

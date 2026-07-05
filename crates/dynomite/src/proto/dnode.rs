@@ -207,16 +207,29 @@ pub enum DmsgType {
     /// Cross-node XA acknowledgement for a [`Self::XaCommit`] or
     /// [`Self::XaRollback`].
     XaAck = 21,
+    /// Dyniak cross-node object-replica op.
+    ///
+    /// Carries one fire-and-forget replica write (`Put` / `Del`)
+    /// or read-repair read (`Get`) forwarded from the node that
+    /// received the client request to a peer on the object's
+    /// replica list. The payload is the compact `PeerOp` encoding
+    /// owned by the `dyniak` routing layer
+    /// (`dyniak::proto::replica_wire`). The receiver applies the
+    /// op to its LOCAL object store and does NOT re-forward it, so
+    /// a replica write fans out exactly once. Bypassed by
+    /// [`dmsg_process`] alongside the XA variants so the receive
+    /// path routes it to the dyniak replica sink rather than the
+    /// data-plane stack.
+    RiakReplica = 22,
     /// Cross-node RAMP-Fast prepare / commit / read leg.
     ///
     /// Carries one RAMP transaction's per-peer work (a versioned
     /// invisible write in PREPARE, a visible-pointer advance in
     /// COMMIT, or a versioned read round) to the peer that owns the
     /// key. The payload layout is owned by the `dyniak` RAMP layer
-    /// (`dyniak::ramp_store`). Value 22 is reserved for the
-    /// concurrently-developed RiakReplica type, so RAMP takes 23.
-    /// This variant is the wire hook for the cross-node fan-out;
-    /// the single-node coordinator does not yet emit it.
+    /// (`dyniak::ramp_store`). This variant is the wire hook for the
+    /// cross-node fan-out; the single-node coordinator does not yet
+    /// emit it.
     RampPrepare = 23,
 }
 
@@ -256,6 +269,7 @@ impl DmsgType {
             20 => DmsgType::XaRollback,
             21 => DmsgType::XaAck,
             23 => DmsgType::RampPrepare,
+            22 => DmsgType::RiakReplica,
             _ => return None,
         })
     }
@@ -1030,7 +1044,8 @@ pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
         | DmsgType::XaCommit
         | DmsgType::XaRollback
         | DmsgType::XaAck
-        | DmsgType::RampPrepare => DmsgDispatch::Bypass,
+        | DmsgType::RampPrepare
+        | DmsgType::RiakReplica => DmsgDispatch::Bypass,
         _ => DmsgDispatch::Forward,
     }
 }
@@ -1392,6 +1407,11 @@ mod tests {
         // Cross-node RAMP frames route to the dyniak RAMP handler
         // and bypass the data plane the same way.
         d.ty = DmsgType::RampPrepare;
+        assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
+        // Dyniak cross-node object-replica ops are routed to the
+        // dyniak replica sink and bypass the data plane the same
+        // way, so a replica apply fans out exactly once.
+        d.ty = DmsgType::RiakReplica;
         assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
     }
 }

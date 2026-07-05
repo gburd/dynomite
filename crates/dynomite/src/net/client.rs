@@ -53,6 +53,32 @@ pub enum ClientLoopOutcome {
     Cancelled,
 }
 
+/// Sink that applies an inbound cross-node object-replica op to
+/// the local datastore.
+///
+/// The dnode peer-receive loop calls [`Self::apply`] once per
+/// [`DmsgType::RiakReplica`](crate::proto::dnode::DmsgType::RiakReplica)
+/// frame with the frame's opaque payload bytes (the `dyniak`
+/// routing layer owns the payload encoding). The engine does not
+/// interpret the payload; it hands it to the sink, which decodes
+/// it and applies the write to its LOCAL object store.
+///
+/// Applying a replica op is terminal: the sink must NOT re-forward
+/// it to other peers, so a replica write fans out exactly once.
+/// The call is fire-and-forget from the wire's perspective (no
+/// reply frame is produced), matching Riak's eventual-consistency
+/// model where anti-entropy and read-repair reconcile any peer
+/// that missed a write.
+pub trait ReplicaApplySink: Send + Sync {
+    /// Apply the replica op carried by `payload` to the local
+    /// datastore. Errors are logged by the implementor and
+    /// swallowed; the receive loop never blocks on the result.
+    fn apply<'a>(&'a self, payload: &'a [u8]) -> BoxFuture<'a, ()>;
+}
+
+/// Boxed future returned by [`ReplicaApplySink::apply`].
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
 /// Client-side request handler bundle.
 ///
 /// Built by [`crate::net::proxy::Proxy`] and passed into
@@ -64,6 +90,7 @@ pub struct ClientHandler {
     next_msg_id: u64,
     read_timeout: Option<Duration>,
     gossip: Option<Arc<crate::cluster::gossip::GossipHandler>>,
+    replica_sink: Option<Arc<dyn ReplicaApplySink>>,
 }
 
 impl ClientHandler {
@@ -92,6 +119,7 @@ impl ClientHandler {
             next_msg_id: 1,
             read_timeout: None,
             gossip: None,
+            replica_sink: None,
         }
     }
 
@@ -110,6 +138,24 @@ impl ClientHandler {
     pub fn with_gossip(mut self, gossip: Arc<crate::cluster::gossip::GossipHandler>) -> Self {
         self.gossip = Some(gossip);
         self
+    }
+
+    /// Attach a [`ReplicaApplySink`]. Inbound peer connections
+    /// served through this handler apply
+    /// [`DmsgType::RiakReplica`](crate::proto::dnode::DmsgType::RiakReplica)
+    /// frames to the local datastore via the sink instead of
+    /// routing them through the datastore parser, and never
+    /// re-forward them.
+    #[must_use]
+    pub fn with_replica_sink(mut self, sink: Arc<dyn ReplicaApplySink>) -> Self {
+        self.replica_sink = Some(sink);
+        self
+    }
+
+    /// Borrow the attached replica-apply sink, if any.
+    #[must_use]
+    pub fn replica_sink(&self) -> Option<&Arc<dyn ReplicaApplySink>> {
+        self.replica_sink.as_ref()
     }
 
     /// Borrow the attached gossip handler, if any.

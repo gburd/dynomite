@@ -119,7 +119,14 @@ fn enter_plan_span(
     (req_span, span)
 }
 
-fn map_hash(h: ConfHashType) -> HashType {
+/// Map a configuration-layer [`ConfHashType`] to the runtime
+/// [`HashType`] used by the ring hash. The two enums are distinct
+/// (one is parsed from YAML, the other drives
+/// [`crate::hashkit::hash64`]); this is the single conversion seam
+/// so the dispatcher, the reaper, and the dyniak replica router all
+/// agree on which hash a pool uses.
+#[must_use]
+pub fn map_hash(h: ConfHashType) -> HashType {
     match h {
         ConfHashType::OneAtATime => HashType::OneAtATime,
         ConfHashType::Md5 => HashType::Md5,
