@@ -1965,6 +1965,50 @@ mod tests {
     }
 
     #[test]
+    fn dc_one_partitions_the_ring_within_a_shared_rack() {
+        // The deployment topology that makes DC_ONE route by key: all
+        // same-DC nodes share ONE rack (rA) and their tokens partition
+        // the ring. A key whose token falls in a REMOTE node's range
+        // must route to that node, not collapse to the local node.
+        // This is the multi-region EC2 model (per-DC token partition
+        // in a shared rack); one-node-per-rack instead makes every
+        // rack own the whole ring and every DC_ONE read stay local.
+        let p = pool(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            vec![
+                peer(0, "dc1", "rA", 0, true, true),
+                peer(1, "dc1", "rA", 1_431_655_765, false, true),
+                peer(2, "dc1", "rA", 2_863_311_530, false, true),
+            ],
+        );
+        let disp = ClusterDispatcher::new(p);
+        // Probe many keys; at least one must route to a REMOTE peer
+        // (not LocalDatastore), proving the ring is partitioned across
+        // the shared-rack nodes rather than always-local.
+        let mut saw_remote = false;
+        let mut saw_local = false;
+        for i in 0..200u32 {
+            let key = format!("key-{i}");
+            let req = Msg::new(1, MsgType::ReqRedisGet, true);
+            match disp.plan(&req, key.as_bytes()) {
+                DispatchPlan::LocalDatastore => saw_local = true,
+                DispatchPlan::Replicas { targets, .. } => {
+                    assert_eq!(targets.len(), 1, "DC_ONE picks one owner");
+                    assert_eq!(targets[0].dc, "dc1");
+                    saw_remote = true;
+                }
+                other => panic!("unexpected plan {other:?}"),
+            }
+        }
+        assert!(
+            saw_remote,
+            "keys owned by a remote same-rack node must route to it, not stay local"
+        );
+        assert!(saw_local, "keys owned by the local node stay local");
+    }
+
+    #[test]
     fn dc_quorum_fans_out_local_dc() {
         let p = pool(
             ConsistencyLevel::DcQuorum,

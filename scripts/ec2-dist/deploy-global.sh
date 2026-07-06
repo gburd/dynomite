@@ -40,6 +40,24 @@ REGIONS=(us-east-1 us-west-2 eu-central-1 ap-northeast-1 sa-east-1)
 # (loopback only, not in the SG).
 PORTS=(22 8102 8101 22222 8087 8098)
 
+# Authorize one /32 on the consolidated dynomite port set for a given
+# security group: ssh (22), the service range 8087-8102 (covers riak
+# pbc 8087, riak http 8098, dnode 8101, client 8102 in ONE rule), and
+# stats (22222). Three rules per IP instead of six keeps a 16-node
+# cluster (15 nodes + controller = 48 rules) under the default 60
+# rules-per-security-group quota. Per-node-per-port rules overflow the
+# quota, silently dropping late-provisioned nodes from the allowlist so
+# their dnode peers never connect.
+authorize_ip() {
+  local region=$1 sg=$2 ip=$3
+  aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
+    --protocol tcp --port 22 --cidr "${ip}/32" >/dev/null 2>&1 || true
+  aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
+    --protocol tcp --port 8087-8102 --cidr "${ip}/32" >/dev/null 2>&1 || true
+  aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
+    --protocol tcp --port 22222 --cidr "${ip}/32" >/dev/null 2>&1 || true
+}
+
 aws() { command aws --profile "$PROFILE" "$@"; }
 log() { echo "[global $(date -u +%H:%M:%S)] $*" >&2; }
 
@@ -61,10 +79,7 @@ ensure_region_infra() {
       --description "dynomite global $RUN_ID" --vpc-id "$vpc" \
       --tag-specifications "ResourceType=security-group,Tags=[{Key=$TAG,Value=$RUN_ID}]" \
       --query 'GroupId' --output text)
-    for p in "${PORTS[@]}"; do
-      aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
-        --protocol tcp --port "$p" --cidr "${MY_IP}/32" >/dev/null 2>&1 || true
-    done
+    authorize_ip "$region" "$sg" "$MY_IP"
   fi
   echo "$sg"
 }
@@ -77,10 +92,7 @@ allowlist_ip_everywhere() {
     local sg; sg=$(aws ec2 describe-security-groups --region "$region" \
       --filters "Name=tag:$TAG,Values=$RUN_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
     [ -z "$sg" ] || [ "$sg" = "None" ] && continue
-    for p in 8102 8101 22222 8087 8098; do
-      aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
-        --protocol tcp --port "$p" --cidr "${ip}/32" >/dev/null 2>&1 || true
-    done
+    authorize_ip "$region" "$sg" "$ip"
   done
 }
 

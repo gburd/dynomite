@@ -55,10 +55,19 @@ for i in "${!NODES[@]}"; do
 done
 
 # Global seed list "pub:DNODE:rack:dc:token".
+#
+# All nodes in a datacenter share ONE rack (`${dc}-r1`) so their
+# tokens partition the token ring WITHIN that rack -- this is the
+# Dynomite model, where a rack holds a full copy of the keyspace and
+# its nodes split the ring. Putting each node in its own rack (one
+# node per rack) would make every rack own the whole ring, so a
+# DC_ONE read/write would always resolve to the rack-local node and
+# never route by key. The physical AZ is preserved only for the
+# instance placement, not the ring rack.
 SEEDS_ALL=()
 for i in "${!NODES[@]}"; do
   read -r region az dc n iid pub priv <<< "${NODES[$i]}"
-  SEEDS_ALL+=("${pub}:${DNODE}:${az}:${dc}:${TOK[$i]}")
+  SEEDS_ALL+=("${pub}:${DNODE}:${dc}-r1:${dc}:${TOK[$i]}")
 done
 
 backend_install() {
@@ -110,7 +119,7 @@ dyn_o_mite:
 ${servers_line}
   tokens: '${tok}'
   datacenter: ${dc}
-  rack: ${az}
+  rack: ${dc}-r1
   read_consistency: DC_ONE
   write_consistency: DC_ONE
   enable_gossip: true
