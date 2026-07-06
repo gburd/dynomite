@@ -436,13 +436,26 @@ impl Server {
             Some(l) => Some(listen_to_socket_addr(l, "dyn_listen")?),
             None => None,
         };
+        // Advertised peer address. A node binds `dyn_listen` (often a
+        // wildcard like `0.0.0.0:8101` so it accepts connections on
+        // every interface, which is required behind NAT / in the
+        // cloud), but its gossip identity and the endpoint peers match
+        // it by must be a *routable* address, not the wildcard. When
+        // the bind IP is unspecified (`0.0.0.0` / `[::]`), the
+        // advertised address is taken from `DYN_ADVERTISE_ADDR`
+        // (`host` or `host:port`); the port defaults to the
+        // `dyn_listen` port. Without the override a wildcard bind
+        // would advertise `0.0.0.0:PORT`, which matches no peer's seed
+        // entry, so no peer ever leaves `Down` and routing collapses
+        // to the local node.
+        let advertise_addr = resolve_advertise_addr(dyn_listen_addr);
         let stats_listen_addr = match conf_pool.stats_listen.as_ref() {
             Some(l) => Some(listen_to_socket_addr(l, "stats_listen")?),
             None => None,
         };
 
         let pool_config = PoolConfig::from_conf(&pool_name, &conf_pool);
-        let local_peer = build_local_peer(&conf_pool, &pool_config, dyn_listen_addr)?;
+        let local_peer = build_local_peer(&conf_pool, &pool_config, advertise_addr)?;
         let mut peers: Vec<Peer> = vec![local_peer];
         if let Some(seeds) = conf_pool.dyn_seeds.as_ref() {
             for (i, seed) in seeds.iter().enumerate() {
@@ -877,7 +890,7 @@ impl Server {
                 );
             }
         }
-        let local_pname = dyn_listen_addr.map_or_else(
+        let local_pname = advertise_addr.map_or_else(
             || "127.0.0.1:0".to_string(),
             |a| format!("{}:{}", a.ip(), a.port()),
         );
@@ -2848,6 +2861,69 @@ fn listen_to_socket_addr(l: &ConfListen, field: &'static str) -> Result<SocketAd
     }
 }
 
+/// Resolve the address this node advertises to peers (its gossip
+/// identity and the endpoint peers match it by), given the bind
+/// address it derived from `dyn_listen`.
+///
+/// When the bind IP is a wildcard (`0.0.0.0` or `[::]`) the node
+/// accepts connections on every interface but must not advertise the
+/// wildcard: peers store it in their seed list by a routable address,
+/// and gossip matches by that pname. The routable address is read
+/// from the `DYN_ADVERTISE_ADDR` environment variable, which may be
+/// either a bare host (`203.0.113.7`) -- the `dyn_listen` port is kept
+/// -- or a full `host:port`. When the bind IP is already concrete the
+/// bind address is advertised unchanged. A wildcard bind with no
+/// `DYN_ADVERTISE_ADDR` is left as-is and logged, because the node
+/// cannot discover its own routable address unaided.
+fn resolve_advertise_addr(dyn_listen: Option<SocketAddr>) -> Option<SocketAddr> {
+    let env = std::env::var("DYN_ADVERTISE_ADDR").ok();
+    resolve_advertise_addr_with(dyn_listen, env.as_deref())
+}
+
+/// Core of [`resolve_advertise_addr`] with the `DYN_ADVERTISE_ADDR`
+/// value injected, so it is testable without mutating process env.
+fn resolve_advertise_addr_with(
+    dyn_listen: Option<SocketAddr>,
+    advertise_env: Option<&str>,
+) -> Option<SocketAddr> {
+    let bind = dyn_listen?;
+    if !bind.ip().is_unspecified() {
+        return Some(bind);
+    }
+    let Some(val) = advertise_env else {
+        tracing::warn!(
+            bind = %bind,
+            "dyn_listen binds a wildcard address and DYN_ADVERTISE_ADDR is unset; peers will not be able to match this node's gossip identity and will keep it Down"
+        );
+        return Some(bind);
+    };
+    let trimmed = val.trim();
+    // Accept `host:port` or bare `host` (keep the bind port).
+    let candidate = if trimmed.parse::<SocketAddr>().is_ok() {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}:{}", bind.port())
+    };
+    match candidate.parse::<SocketAddr>() {
+        Ok(addr) => {
+            tracing::info!(
+                bind = %bind,
+                advertise = %addr,
+                "advertising routable dnode address (bind is wildcard)"
+            );
+            Some(addr)
+        }
+        Err(e) => {
+            tracing::warn!(
+                value = %val,
+                error = %e,
+                "DYN_ADVERTISE_ADDR is not a valid address; advertising the wildcard bind address, which peers cannot match"
+            );
+            Some(bind)
+        }
+    }
+}
+
 fn build_local_peer(
     conf_pool: &ConfPool,
     pool_config: &PoolConfig,
@@ -3214,6 +3290,65 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // ---- resolve_advertise_addr ----
+
+    #[test]
+    fn advertise_concrete_bind_is_unchanged() {
+        let bind: SocketAddr = "10.0.0.5:8101".parse().unwrap();
+        assert_eq!(
+            resolve_advertise_addr_with(Some(bind), Some("203.0.113.9")),
+            Some(bind),
+            "a concrete bind IP is advertised as-is, ignoring the env"
+        );
+    }
+
+    #[test]
+    fn advertise_wildcard_with_bare_host_keeps_bind_port() {
+        let bind: SocketAddr = "0.0.0.0:8101".parse().unwrap();
+        assert_eq!(
+            resolve_advertise_addr_with(Some(bind), Some("203.0.113.9")),
+            Some("203.0.113.9:8101".parse().unwrap()),
+            "a wildcard bind advertises the env host with the bind port"
+        );
+    }
+
+    #[test]
+    fn advertise_wildcard_with_host_port_uses_both() {
+        let bind: SocketAddr = "0.0.0.0:8101".parse().unwrap();
+        assert_eq!(
+            resolve_advertise_addr_with(Some(bind), Some("203.0.113.9:9999")),
+            Some("203.0.113.9:9999".parse().unwrap()),
+        );
+    }
+
+    #[test]
+    fn advertise_wildcard_without_env_falls_back_to_bind() {
+        let bind: SocketAddr = "0.0.0.0:8101".parse().unwrap();
+        assert_eq!(
+            resolve_advertise_addr_with(Some(bind), None),
+            Some(bind),
+            "no override leaves the wildcard bind (logged); the operator must set DYN_ADVERTISE_ADDR"
+        );
+    }
+
+    #[test]
+    fn advertise_ipv6_wildcard_with_bare_host() {
+        let bind: SocketAddr = "[::]:8101".parse().unwrap();
+        assert_eq!(
+            resolve_advertise_addr_with(Some(bind), Some("203.0.113.9")),
+            Some("203.0.113.9:8101".parse().unwrap()),
+        );
+    }
+
+    #[test]
+    fn advertise_invalid_env_falls_back_to_bind() {
+        let bind: SocketAddr = "0.0.0.0:8101".parse().unwrap();
+        assert_eq!(
+            resolve_advertise_addr_with(Some(bind), Some("not an address")),
+            Some(bind),
+        );
     }
 
     // ---- build_local_peer ----

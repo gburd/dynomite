@@ -182,6 +182,49 @@ async fn gossip_syn_promotes_remote_to_normal() {
     assert_eq!(remote_state(&recv_pool), PeerState::Normal);
 }
 
+/// Regression: a node that binds `0.0.0.0` must advertise a
+/// routable pname, not its bind address. When the sender's gossip
+/// payload is the wildcard bind pname (`0.0.0.0:PORT`) while the
+/// receiver has the sender registered under its routable pname, the
+/// pname match fails, no heartbeat is recorded, and the peer stays
+/// `Down` -- so no key ever routes to it and the cluster degrades
+/// into independent single-node proxies. This reproduces the bug
+/// observed on the multi-region EC2 cluster where every node
+/// advertised `0.0.0.0:8101`.
+#[tokio::test(flavor = "multi_thread")]
+async fn gossip_syn_with_wildcard_bind_pname_leaves_peer_down() {
+    // Receiver knows the sender as its routable address.
+    let recv_pool = pool("127.0.0.1:48102", "10.0.0.5:48101");
+    let handler = Arc::new(GossipHandler::new(recv_pool.clone()));
+
+    assert_eq!(remote_state(&recv_pool), PeerState::Down);
+
+    // Sender advertises its wildcard bind pname (the bug): it binds
+    // 0.0.0.0 and, lacking an advertised address, sends that.
+    let (mut tx, rx) = tokio::io::duplex(8192);
+    let frame = build_gossip_frame(DmsgType::GossipSyn, 1, b"0.0.0.0:48101");
+    let writer = tokio::spawn(async move {
+        tx.write_all(&frame).await.unwrap();
+        tx.flush().await.unwrap();
+    });
+    let handler_clone = handler.clone();
+    let reader = tokio::spawn(async move {
+        drive_inbound(rx, 1, |ty, payload| {
+            assert_eq!(ty, DmsgType::GossipSyn);
+            let pname = std::str::from_utf8(payload).unwrap();
+            handler_clone.record_heartbeat_pname(pname, Instant::now());
+        })
+        .await;
+    });
+    writer.await.unwrap();
+    reader.await.unwrap();
+
+    // The mismatched pname records no heartbeat: the peer is stuck
+    // Down. The fix is for the sender to advertise its routable
+    // pname (matching what the receiver has), not the bind address.
+    assert_eq!(remote_state(&recv_pool), PeerState::Down);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn gossip_shutdown_marks_sender_down() {
     let recv_pool = pool("127.0.0.1:28102", "127.0.0.1:28101");
