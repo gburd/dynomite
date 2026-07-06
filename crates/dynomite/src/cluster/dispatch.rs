@@ -631,8 +631,15 @@ impl ClusterDispatcher {
         let (local, remote): (Vec<_>, Vec<_>) = routable
             .into_iter()
             .partition(|(dc_idx, _, _)| dcs[*dc_idx].name() == cfg.dc);
-        let plan =
-            plan_with_consistency(cfg, &dcs, &peers, consistency, req.routing(), local, remote);
+        let plan = plan_with_consistency(
+            cfg,
+            &dcs,
+            &peers,
+            consistency,
+            req.routing(),
+            is_read,
+            RoutablePartition { local, remote },
+        );
         let plan = cap_replicas(plan, n_val_cap);
         if matches!(plan, DispatchPlan::NoTargets) {
             self.record_no_targets_metric(cfg, consistency);
@@ -768,15 +775,23 @@ fn build_target(
     }
 }
 
+/// The routable replica set for a key, partitioned into local-DC and
+/// remote-DC candidates by [`ClusterDispatcher::plan`].
+struct RoutablePartition {
+    local: Vec<(usize, usize, u32)>,
+    remote: Vec<(usize, usize, u32)>,
+}
+
 fn plan_with_consistency(
     cfg: &crate::cluster::pool::PoolConfig,
     dcs: &[crate::cluster::Datacenter],
     peers: &[crate::cluster::peer::Peer],
     consistency: ConsistencyLevel,
     routing: MsgRouting,
-    local: Vec<(usize, usize, u32)>,
-    remote: Vec<(usize, usize, u32)>,
+    is_read: bool,
+    partition: RoutablePartition,
 ) -> DispatchPlan {
+    let RoutablePartition { local, remote } = partition;
     let want_per_dc_fanout = matches!(consistency, ConsistencyLevel::DcEachSafeQuorum)
         || matches!(routing, MsgRouting::AllNodesAllRacksAllDcs);
     let mut targets: Vec<ReplicaTarget> = Vec::new();
@@ -785,26 +800,40 @@ fn plan_with_consistency(
             if local.is_empty() {
                 return DispatchPlan::NoTargets;
             }
-            let mut best: Option<(RackDistance, (usize, usize, u32))> = None;
-            for (dc_idx, rack_idx, peer_idx) in local {
-                let rack_name = dcs[dc_idx].racks()[rack_idx].name();
-                let d = rack_distance(&cfg.dc, &cfg.rack, &cfg.dc, rack_name);
-                let take = match best {
-                    None => true,
-                    Some((bd, _)) => d.cost() < bd.cost(),
-                };
-                if take {
-                    best = Some((d, (dc_idx, rack_idx, peer_idx)));
+            if is_read {
+                // DC_ONE READ: pick the single rack-closest local-DC
+                // replica (lowest latency); the coalescer returns on
+                // its first reply.
+                let mut best: Option<(RackDistance, (usize, usize, u32))> = None;
+                for (dc_idx, rack_idx, peer_idx) in local {
+                    let rack_name = dcs[dc_idx].racks()[rack_idx].name();
+                    let d = rack_distance(&cfg.dc, &cfg.rack, &cfg.dc, rack_name);
+                    let take = match best {
+                        None => true,
+                        Some((bd, _)) => d.cost() < bd.cost(),
+                    };
+                    if take {
+                        best = Some((d, (dc_idx, rack_idx, peer_idx)));
+                    }
                 }
-            }
-            if let Some((_, (dc_idx, rack_idx, peer_idx))) = best {
-                let is_local_node = peers
-                    .get(peer_idx as usize)
-                    .is_some_and(crate::cluster::peer::Peer::is_local);
-                if is_local_node {
-                    return DispatchPlan::LocalDatastore;
+                if let Some((_, (dc_idx, rack_idx, peer_idx))) = best {
+                    let is_local_node = peers
+                        .get(peer_idx as usize)
+                        .is_some_and(crate::cluster::peer::Peer::is_local);
+                    if is_local_node {
+                        return DispatchPlan::LocalDatastore;
+                    }
+                    targets.push(build_target(dcs, peers, dc_idx, rack_idx, peer_idx));
                 }
-                targets.push(build_target(dcs, peers, dc_idx, rack_idx, peer_idx));
+            } else {
+                // DC_ONE WRITE: fan out to EVERY local-DC replica for
+                // durability (each rack is a replica). The coalescer
+                // acks on the first successful reply, but the write is
+                // delivered to all replicas. This matches C Dynomite,
+                // where a DC_ONE write replicates within the local DC.
+                for (dc_idx, rack_idx, peer_idx) in local {
+                    targets.push(build_target(dcs, peers, dc_idx, rack_idx, peer_idx));
+                }
             }
         }
         ConsistencyLevel::DcQuorum | ConsistencyLevel::DcSafeQuorum => {
@@ -1979,6 +2008,68 @@ mod tests {
         // Any key resolves to peer 0 in rack rA (single-token continuum).
         let plan = ClusterDispatcher::new(p).plan(&req, b"hello");
         assert!(matches!(plan, DispatchPlan::LocalDatastore));
+    }
+
+    /// Regression: a DC_ONE WRITE must fan out to every local-DC
+    /// replica (each rack is a replica), not just the rack-local node.
+    /// C Dynomite replicates a DC_ONE write within the local DC; the
+    /// Rust port previously picked one target for both reads and
+    /// writes, so a write landed on a single backend and never
+    /// replicated -- reads from other replicas then missed it (found
+    /// by the EC2 differential vs C).
+    #[test]
+    fn dc_one_write_fans_out_to_all_local_replicas() {
+        // Three local-DC replicas, one per rack (full-replica layout,
+        // n_val = 3). Every node owns the whole ring (token 0), so a
+        // write must reach all three.
+        let p = pool(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            vec![
+                peer(0, "dc1", "rA", 0, true, true),
+                peer(1, "dc1", "rB", 0, false, true),
+                peer(2, "dc1", "rC", 0, false, true),
+            ],
+        );
+        // A write (is_read = false): ReqRedisSet.
+        let mut req = Msg::new(1, MsgType::ReqRedisSet, false);
+        req.flags_mut().is_read = false;
+        req.push_key(crate::msg::keypos::KeyPos::without_tag(b"k".to_vec()));
+        match ClusterDispatcher::new(p).plan(&req, b"k") {
+            DispatchPlan::Replicas { targets, .. } => {
+                assert_eq!(
+                    targets.len(),
+                    3,
+                    "DC_ONE write fans out to all 3 local-DC replicas"
+                );
+                for t in &targets {
+                    assert_eq!(t.dc, "dc1");
+                }
+            }
+            other => panic!("expected a 3-replica fan-out for a DC_ONE write, got {other:?}"),
+        }
+    }
+
+    /// A DC_ONE READ still picks the single rack-local replica
+    /// (LocalDatastore here since the local node is a replica).
+    #[test]
+    fn dc_one_read_picks_one_replica() {
+        let p = pool(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            vec![
+                peer(0, "dc1", "rA", 0, true, true),
+                peer(1, "dc1", "rB", 0, false, true),
+                peer(2, "dc1", "rC", 0, false, true),
+            ],
+        );
+        let mut req = Msg::new(1, MsgType::ReqRedisGet, true);
+        req.push_key(crate::msg::keypos::KeyPos::without_tag(b"k".to_vec()));
+        // Local node is a replica -> served locally, not fanned out.
+        assert!(matches!(
+            ClusterDispatcher::new(p).plan(&req, b"k"),
+            DispatchPlan::LocalDatastore
+        ));
     }
 
     #[test]
