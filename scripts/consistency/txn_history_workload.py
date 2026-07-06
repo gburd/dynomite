@@ -128,6 +128,40 @@ class TxnClient:
             body = json.loads(resp.read().decode("utf-8", "replace"))
         return body.get("result") == "committed"
 
+    def ramp_read(self, keys: list[str]) -> dict[str, list[int]]:
+        """RAMP-Fast atomic read of `keys` via `POST /ramp/read`.
+
+        Returns a fracture-free `key -> list` snapshot (keys with no
+        committed RAMP write are absent). Read-atomic isolation
+        guarantees the snapshot never mixes one RAMP transaction's
+        writes with a stale sibling.
+        """
+        payload = json.dumps({"keys": keys}).encode("utf-8")
+        url = f"{self.base}/ramp/read"
+        req = urllib.request.Request(
+            url, data=payload, method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8", "replace"))
+        snap = body.get("snapshot", {})
+        return {k: _parse_list(v) for k, v in snap.items()}
+
+    def ramp_commit(self, puts: dict[str, list[int]]) -> bool:
+        """Atomically RAMP-write every (key -> list) via
+        `POST /ramp/transactions`. Returns True on commit.
+        """
+        writes = [{"key": k, "value": _format_list(vs)} for k, vs in puts.items()]
+        payload = json.dumps({"writes": writes}).encode("utf-8")
+        url = f"{self.base}/ramp/transactions"
+        req = urllib.request.Request(
+            url, data=payload, method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8", "replace"))
+        return body.get("result") == "committed"
+
 
 def _parse_list(s: str) -> list[int]:
     s = s.strip()
@@ -240,6 +274,65 @@ def run_transaction(
         history.info(process, micro)
 
 
+def run_ramp_transaction(
+    client: TxnClient,
+    history: History,
+    process: int,
+    keys: list[str],
+    next_value,
+    rng: random.Random,
+) -> None:
+    """Generate, execute, and record one RAMP list-append transaction.
+
+    Uses the RAMP endpoints (`POST /ramp/read`, `POST /ramp/transactions`)
+    instead of the XA-style `POST /transactions`. The recorded history
+    has the identical shape, so the same Elle-style checker validates
+    it -- except RAMP guarantees read-atomic isolation, so the reads
+    used to compute each append see a fracture-free snapshot.
+    """
+    n = rng.randint(1, min(4, len(keys)))
+    chosen = rng.sample(keys, n)
+    micro: list[list] = []
+    appends: dict[str, int] = {}
+    reads: list[str] = []
+    for k in chosen:
+        if rng.random() < 0.6:
+            v = next_value()
+            appends[k] = v
+            micro.append(["append", int(k), v])
+        else:
+            reads.append(k)
+            micro.append(["r", int(k), None])
+
+    history.invoke(process, micro)
+    try:
+        touched = sorted(set(list(appends.keys()) + reads))
+        # One RAMP read gives an atomic snapshot of every touched key.
+        observed = client.ramp_read(touched) if touched else {}
+        for k in touched:
+            observed.setdefault(k, [])
+
+        if appends:
+            puts = {k: observed[k] + [v] for k, v in appends.items()}
+            committed = client.ramp_commit(puts)
+        else:
+            committed = True
+
+        if not committed:
+            history.fail(process, micro)
+            return
+
+        ok_micro: list[list] = []
+        for f, k, v in micro:
+            if f == "append":
+                ok_micro.append(["append", k, v])
+            else:
+                ok_micro.append(["r", k, list(observed.get(str(k), []))])
+        history.ok(process, ok_micro)
+    except (urllib.error.URLError, socket.timeout, ConnectionError, OSError):
+        history.info(process, micro)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", default="127.0.0.1")
@@ -253,6 +346,8 @@ def main() -> int:
     ap.add_argument("--duration-secs", type=float, default=30.0)
     ap.add_argument("--out", required=True, help="history output path")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--ramp", action="store_true",
+                    help="drive the RAMP endpoints instead of XA transactions")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
@@ -269,9 +364,10 @@ def main() -> int:
         return args.process * 10_000_000 + counter["n"]
 
     end = time.monotonic() + args.duration_secs
+    runner = run_ramp_transaction if args.ramp else run_transaction
     try:
         while time.monotonic() < end:
-            run_transaction(client, history, args.process, keys, next_value, rng)
+            runner(client, history, args.process, keys, next_value, rng)
     finally:
         history.close()
     return 0

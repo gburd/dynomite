@@ -15,6 +15,11 @@
 //!   `crates/dyniak/src/datastore/xa_net.rs` (presumed abort,
 //!   forward-commit recovery, durable in-doubt log, idempotent
 //!   commit/rollback, cold-restart recovery scan).
+//! * [`ramp`] models RAMP-Fast read-atomic multi-partition
+//!   transactions implemented in `crates/dyniak/src/ramp.rs`
+//!   (`select`, the read-atomic decision core) and
+//!   `crates/dyniak/src/ramp_store.rs` (`RampCoordinator` write/read
+//!   rounds), asserting no fractured read and non-blocking reads.
 //! * [`quorum`] models the per-DC quorum decision implemented in
 //!   `crates/dynomite/src/msg/response_mgr.rs` and the consistency
 //!   fan-out in `crates/dynomite/src/cluster/dispatch.rs` /
@@ -57,6 +62,7 @@ pub mod aae;
 pub mod delta_crdt;
 pub mod gossip;
 pub mod quorum;
+pub mod ramp;
 pub mod ring;
 pub mod swim;
 pub mod xa;

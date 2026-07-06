@@ -68,6 +68,9 @@
 pub mod datastore;
 pub mod error;
 pub mod proto;
+pub mod ramp;
+#[cfg(feature = "noxu")]
+pub mod ramp_store;
 pub mod server;
 pub mod txn;
 
@@ -139,3 +142,10 @@ pub use crate::router::{BucketRouter, PeerOp, PeerOutbound, RouteDecision, Routi
 // needed. The PBC `DynRpbTxn*` extension is a tracked follow-up (see
 // `docs/journal/2026-06-05-dyniak-xa.md`).
 pub use crate::txn::{TransactionalStore, TxnBatch, TxnOp, TxnOutcome, TxnStoreError};
+
+pub use crate::ramp::{select, RampClock, RampItem, Timestamp};
+#[cfg(feature = "noxu")]
+pub use crate::ramp_store::{
+    ramp_read, ramp_write, HttpRampReadRequest, HttpRampReadResponse, HttpRampWrite,
+    HttpRampWriteRequest, HttpRampWriteResponse, RampCoordinator, RampError, RampStore, RampWrite,
+};

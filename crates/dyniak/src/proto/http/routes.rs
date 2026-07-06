@@ -236,6 +236,12 @@ enum Route<'a> {
     /// submit a multi-key atomic transaction batch. A dyniak
     /// extension beyond Riak's per-key eventual consistency.
     Transaction { bucket: Option<&'a str> },
+    /// `POST /ramp/transactions` -- submit a RAMP-Fast multi-key
+    /// write transaction (read-atomic isolation, non-blocking).
+    RampWrite,
+    /// `POST /ramp/read` -- run a RAMP-Fast multi-key read that
+    /// returns a fracture-free snapshot.
+    RampRead,
     /// `PUT /buckets/{bucket}/index/text/{field}` -- declare a text
     /// index on a logical document field. Search extension.
     #[cfg(feature = "search")]
@@ -289,6 +295,8 @@ impl<'a> Route<'a> {
             ("POST", ["mapred"]) => Some(Self::MapRed),
             ("POST", ["transactions"]) => Some(Self::Transaction { bucket: None }),
             ("POST", ["buckets", b, "transactions"]) => Some(Self::Transaction { bucket: Some(b) }),
+            ("POST", ["ramp", "transactions"]) => Some(Self::RampWrite),
+            ("POST", ["ramp", "read"]) => Some(Self::RampRead),
             #[cfg(feature = "search")]
             ("PUT", ["buckets", b, "index", "text", f]) => Some(Self::DeclareTextIndex {
                 bucket: b,
@@ -380,6 +388,8 @@ async fn handle_route(
         Route::Transaction { bucket } => {
             transaction_response(bucket, headers, &body, ctx.datastore.as_ref())
         }
+        Route::RampWrite => ramp_write_response(headers, &body, ctx.datastore.as_ref()),
+        Route::RampRead => ramp_read_response(headers, &body, ctx.datastore.as_ref()),
         #[cfg(feature = "search")]
         Route::DeclareTextIndex { bucket, field } => {
             super::search::declare_text_index(ctx.search.as_deref(), bucket, field, headers)
@@ -748,8 +758,150 @@ fn txn_store(datastore: &dyn Datastore) -> Option<&dyn TransactionalStore> {
 }
 
 // ------------------------------------------------------------------
-// Object K/V store wiring (GET / PUT / DELETE against a real store).
+// RAMP-Fast transaction route handlers.
 // ------------------------------------------------------------------
+
+/// Handle `POST /ramp/transactions`: a RAMP-Fast multi-key write.
+///
+/// The body is a JSON [`crate::ramp_store::HttpRampWriteRequest`].
+/// Every key is written under one RAMP timestamp with the sibling set
+/// as metadata (non-blocking two-phase visibility), so a concurrent
+/// RAMP read observes all of the batch's writes or none. A committed
+/// write replies `200 OK` with the transaction timestamp. When the
+/// datastore is not RAMP-capable the handler replies `501`.
+fn ramp_write_response(
+    headers: &HeaderMap,
+    body: &Bytes,
+    datastore: &dyn Datastore,
+) -> Response<ResponseBody> {
+    if let Some(resp) = require_json_body(headers, body, "ramp writes") {
+        return resp;
+    }
+    #[cfg(feature = "noxu")]
+    {
+        use crate::ramp_store::{ramp_write, HttpRampWriteRequest, HttpRampWriteResponse};
+        let request: HttpRampWriteRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => {
+                return text_response(StatusCode::BAD_REQUEST, &format!("ramp write decode: {e}"));
+            }
+        };
+        let writes = request.into_writes();
+        let Some(store) = object_store(datastore) else {
+            return text_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "the configured datastore does not support RAMP transactions",
+            );
+        };
+        // Coordinator id 0 for the single-node HTTP path; the shared
+        // process-wide counter keeps timestamps unique + monotonic.
+        match ramp_write(store, 0, &writes) {
+            Ok(ts) => {
+                let payload = HttpRampWriteResponse {
+                    result: "committed".to_string(),
+                    ts,
+                    keys: writes.len(),
+                };
+                let out = serde_json::to_vec(&payload).unwrap_or_else(|_| b"{}".to_vec());
+                json_response(StatusCode::OK, out)
+            }
+            Err(crate::ramp_store::RampError::EmptyWrite) => {
+                text_response(StatusCode::BAD_REQUEST, "empty RAMP write set")
+            }
+            Err(e) => text_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    }
+    #[cfg(not(feature = "noxu"))]
+    {
+        let _ = datastore;
+        text_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "the configured datastore does not support RAMP transactions",
+        )
+    }
+}
+
+/// Handle `POST /ramp/read`: a RAMP-Fast multi-key read.
+///
+/// The body is a JSON [`crate::ramp_store::HttpRampReadRequest`]. The
+/// handler runs round 1 plus the conditional second round and replies
+/// `200 OK` with the fracture-free `key -> value` snapshot and the
+/// number of rounds used (1 or 2).
+fn ramp_read_response(
+    headers: &HeaderMap,
+    body: &Bytes,
+    datastore: &dyn Datastore,
+) -> Response<ResponseBody> {
+    if let Some(resp) = require_json_body(headers, body, "ramp reads") {
+        return resp;
+    }
+    #[cfg(feature = "noxu")]
+    {
+        use crate::ramp_store::{ramp_read, HttpRampReadRequest, HttpRampReadResponse};
+        let request: HttpRampReadRequest = match serde_json::from_slice(body) {
+            Ok(r) => r,
+            Err(e) => {
+                return text_response(StatusCode::BAD_REQUEST, &format!("ramp read decode: {e}"));
+            }
+        };
+        let keys = request.into_keys();
+        let Some(store) = object_store(datastore) else {
+            return text_response(
+                StatusCode::NOT_IMPLEMENTED,
+                "the configured datastore does not support RAMP transactions",
+            );
+        };
+        match ramp_read(store, &keys) {
+            Ok((snapshot, rounds)) => {
+                let snapshot = snapshot
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            String::from_utf8_lossy(&k).into_owned(),
+                            String::from_utf8_lossy(&v).into_owned(),
+                        )
+                    })
+                    .collect();
+                let payload = HttpRampReadResponse { snapshot, rounds };
+                let out = serde_json::to_vec(&payload).unwrap_or_else(|_| b"{}".to_vec());
+                json_response(StatusCode::OK, out)
+            }
+            Err(e) => text_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
+    }
+    #[cfg(not(feature = "noxu"))]
+    {
+        let _ = datastore;
+        text_response(
+            StatusCode::NOT_IMPLEMENTED,
+            "the configured datastore does not support RAMP transactions",
+        )
+    }
+}
+
+/// Reject a non-JSON or empty body for the RAMP endpoints. Returns
+/// `Some(response)` when the request should be rejected, `None` when
+/// the body is an acceptable non-empty JSON payload.
+fn require_json_body(
+    headers: &HeaderMap,
+    body: &Bytes,
+    what: &str,
+) -> Option<Response<ResponseBody>> {
+    let ct = header_str_opt(headers, CONTENT_TYPE).unwrap_or("application/json");
+    if super::content_type::canonicalize(ct) != Some("application/json") {
+        return Some(text_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            &format!("{what} require Content-Type: application/json"),
+        ));
+    }
+    if body.is_empty() {
+        return Some(text_response(
+            StatusCode::BAD_REQUEST,
+            &format!("{what} body must not be empty"),
+        ));
+    }
+    None
+}
 
 /// Probe `datastore` for the concrete object-capable backend.
 ///
@@ -2806,6 +2958,20 @@ mod tests {
         assert!(Route::parse(&Method::GET, "/transactions", None).is_none());
     }
 
+    #[test]
+    fn route_parses_ramp() {
+        assert_eq!(
+            Route::parse(&Method::POST, "/ramp/transactions", None).expect("ramp write"),
+            Route::RampWrite
+        );
+        assert_eq!(
+            Route::parse(&Method::POST, "/ramp/read", None).expect("ramp read"),
+            Route::RampRead
+        );
+        // RAMP endpoints are POST-only.
+        assert!(Route::parse(&Method::GET, "/ramp/read", None).is_none());
+    }
+
     #[tokio::test]
     async fn transaction_on_non_transactional_backend_returns_501() {
         let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
@@ -2929,5 +3095,61 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(feature = "noxu")]
+    #[tokio::test]
+    async fn ramp_write_then_read_is_atomic_over_http() {
+        use crate::datastore::NoxuDatastore;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("tempdir");
+        let ds: Arc<dyn Datastore> = Arc::new(NoxuDatastore::open(dir.path()).expect("open"));
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+
+        // RAMP write of two keys in one transaction.
+        let body = br#"{"writes":[{"key":"a","value":"1"},{"key":"b","value":"2"}]}"#;
+        let resp = handle_route(
+            Route::RampWrite,
+            &Method::POST,
+            &headers,
+            Bytes::copy_from_slice(body),
+            Arc::clone(&ds),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(parsed["result"], "committed");
+        assert_eq!(parsed["keys"], 2);
+
+        // RAMP read returns a fracture-free snapshot of both keys.
+        let body = br#"{"keys":["a","b"]}"#;
+        let resp = handle_route(
+            Route::RampRead,
+            &Method::POST,
+            &headers,
+            Bytes::copy_from_slice(body),
+            ds,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(parsed["snapshot"]["a"], "1");
+        assert_eq!(parsed["snapshot"]["b"], "2");
+        // Contention-free read completes in one round.
+        assert_eq!(parsed["rounds"], 1);
     }
 }

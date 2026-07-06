@@ -207,6 +207,17 @@ pub enum DmsgType {
     /// Cross-node XA acknowledgement for a [`Self::XaCommit`] or
     /// [`Self::XaRollback`].
     XaAck = 21,
+    /// Cross-node RAMP-Fast prepare / commit / read leg.
+    ///
+    /// Carries one RAMP transaction's per-peer work (a versioned
+    /// invisible write in PREPARE, a visible-pointer advance in
+    /// COMMIT, or a versioned read round) to the peer that owns the
+    /// key. The payload layout is owned by the `dyniak` RAMP layer
+    /// (`dyniak::ramp_store`). Value 22 is reserved for the
+    /// concurrently-developed RiakReplica type, so RAMP takes 23.
+    /// This variant is the wire hook for the cross-node fan-out;
+    /// the single-node coordinator does not yet emit it.
+    RampPrepare = 23,
 }
 
 impl DmsgType {
@@ -244,6 +255,7 @@ impl DmsgType {
             19 => DmsgType::XaCommit,
             20 => DmsgType::XaRollback,
             21 => DmsgType::XaAck,
+            23 => DmsgType::RampPrepare,
             _ => return None,
         })
     }
@@ -1017,7 +1029,8 @@ pub fn dmsg_process(dmsg: &Dmsg) -> DmsgDispatch {
         | DmsgType::XaVote
         | DmsgType::XaCommit
         | DmsgType::XaRollback
-        | DmsgType::XaAck => DmsgDispatch::Bypass,
+        | DmsgType::XaAck
+        | DmsgType::RampPrepare => DmsgDispatch::Bypass,
         _ => DmsgDispatch::Forward,
     }
 }
@@ -1376,5 +1389,9 @@ mod tests {
             d.ty = ty;
             assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
         }
+        // Cross-node RAMP frames route to the dyniak RAMP handler
+        // and bypass the data plane the same way.
+        d.ty = DmsgType::RampPrepare;
+        assert_eq!(dmsg_process(&d), DmsgDispatch::Bypass);
     }
 }
