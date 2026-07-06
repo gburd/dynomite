@@ -48,14 +48,23 @@ PORTS=(22 8102 8101 22222 8087 8098)
 # rules-per-security-group quota. Per-node-per-port rules overflow the
 # quota, silently dropping late-provisioned nodes from the allowlist so
 # their dnode peers never connect.
+# Authorize one /32 on the consolidated dynomite port set for a given
+# security group: ssh (22), the service range 8087-9102 (covers riak
+# pbc 8087, riak http 8098, dnode 8101, client 8102, AND the
+# differential Rust plane dnode 9101 / client 9102 in ONE rule), and
+# stats (22222-22223). Three rules per IP instead of one-per-port
+# keeps a 16-node cluster (15 nodes + controller = 48 rules) under the
+# default 60 rules-per-security-group quota. Per-node-per-port rules
+# overflow the quota, silently dropping late-provisioned nodes from the
+# allowlist so their dnode peers never connect.
 authorize_ip() {
   local region=$1 sg=$2 ip=$3
   aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
     --protocol tcp --port 22 --cidr "${ip}/32" >/dev/null 2>&1 || true
   aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
-    --protocol tcp --port 8087-8102 --cidr "${ip}/32" >/dev/null 2>&1 || true
+    --protocol tcp --port 8087-9102 --cidr "${ip}/32" >/dev/null 2>&1 || true
   aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
-    --protocol tcp --port 22222 --cidr "${ip}/32" >/dev/null 2>&1 || true
+    --protocol tcp --port 22222-22223 --cidr "${ip}/32" >/dev/null 2>&1 || true
 }
 
 aws() { command aws --profile "$PROFILE" "$@"; }
