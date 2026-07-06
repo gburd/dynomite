@@ -35,7 +35,12 @@ fn is_data_plane_ty(ty: DmsgType) -> bool {
 pub struct DnodeServerConn {
     conn: Conn,
     requests: mpsc::Receiver<OutboundRequest>,
-    pending: std::collections::VecDeque<(MsgId, tracing::Span, Option<u32>)>,
+    pending: std::collections::VecDeque<(
+        MsgId,
+        tracing::Span,
+        Option<u32>,
+        mpsc::Sender<OutboundEnvelope>,
+    )>,
 }
 
 impl DnodeServerConn {
@@ -89,7 +94,6 @@ impl DnodeServerConn {
         let mut read_buf = vec![0u8; 4096];
         let mut accumulated = Vec::<u8>::new();
         let mut parser = DnodeParser::new();
-        let mut pending_responder: Option<mpsc::Sender<OutboundEnvelope>> = None;
 
         loop {
             if self.conn.is_eof() && self.pending.is_empty() {
@@ -132,9 +136,19 @@ impl DnodeServerConn {
                     write_res?;
                     self.conn.record_send(header_len + req_bytes.len());
                     if is_data_plane_ty(req_ty) {
-                        self.pending
-                            .push_back((req_id, req_span, req.target_peer_idx));
-                        pending_responder = Some(req.responder);
+                        // Pair the responder WITH its req_id in the
+                        // pending queue. A single shared responder slot
+                        // would deliver a reply to whichever request
+                        // was enqueued LAST, so under fan-out (several
+                        // concurrent requests multiplexed on one peer
+                        // connection) replies cross wires. FIFO order
+                        // matches the dnode reply order.
+                        self.pending.push_back((
+                            req_id,
+                            req_span,
+                            req.target_peer_idx,
+                            req.responder,
+                        ));
                     } else {
                         // Gossip / control-plane frames are
                         // fire-and-forget; the responder is
@@ -157,7 +171,7 @@ impl DnodeServerConn {
                     }
                     self.conn.record_recv(n);
                     accumulated.extend_from_slice(&read_buf[..n]);
-                    self.drive_response(&mut accumulated, &mut parser, &mut pending_responder).await?;
+                    self.drive_response(&mut accumulated, &mut parser).await?;
                 }
             }
         }
@@ -167,7 +181,6 @@ impl DnodeServerConn {
         &mut self,
         accumulated: &mut Vec<u8>,
         parser: &mut DnodeParser,
-        responder: &mut Option<mpsc::Sender<OutboundEnvelope>>,
     ) -> Result<(), NetError> {
         loop {
             if accumulated.is_empty() {
@@ -194,10 +207,15 @@ impl DnodeServerConn {
                     parser.reset();
 
                     // Build the response Msg from the payload bytes.
-                    let (req_id, req_span, source_peer_idx) = self
-                        .pending
-                        .pop_front()
-                        .unwrap_or_else(|| (dmsg.id, tracing::Span::current(), None));
+                    // Pop the pending entry whose req_id this reply
+                    // answers (dnode replies arrive in request order),
+                    // recovering its paired responder so the reply
+                    // goes back to the request that issued it.
+                    let (req_id, req_span, source_peer_idx, reply_to) =
+                        match self.pending.pop_front() {
+                            Some(entry) => (entry.0, entry.1, entry.2, Some(entry.3)),
+                            None => (dmsg.id, tracing::Span::current(), None, None),
+                        };
                     let parse_span = tracing::info_span!(
                         parent: &req_span,
                         "peer.parse",
@@ -222,7 +240,7 @@ impl DnodeServerConn {
                             source_peer_idx,
                         }
                     });
-                    if let Some(sender) = responder.as_ref() {
+                    if let Some(sender) = reply_to.as_ref() {
                         let _ = sender.send(env).await;
                     }
                 }
@@ -252,5 +270,114 @@ mod tests {
         );
         let (_tx, rx) = mpsc::channel(1);
         let _server = DnodeServerConn::new(conn, rx);
+    }
+
+    /// Regression: two requests multiplexed on one peer connection must
+    /// have their replies delivered to their OWN responders. A single
+    /// shared responder slot delivered every reply to the last-enqueued
+    /// request, crossing wires under fan-out. The peer here echoes two
+    /// dnode-framed replies in request order; responder A must receive
+    /// req_id 1's reply and responder B req_id 2's.
+    #[tokio::test]
+    async fn concurrent_requests_route_replies_to_their_own_responders() {
+        use crate::proto::dnode::{dmsg_write, DmsgType, DnodeParser, ParseStep};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // Mock peer: read two dnode request frames, then reply to each
+        // with a distinct payload in the SAME order, echoing the
+        // request's id in the reply header.
+        let peer = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut acc = Vec::new();
+            let mut parser = DnodeParser::new();
+            let mut ids = Vec::new();
+            let mut buf = [0u8; 4096];
+            while ids.len() < 2 {
+                let n = s.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                acc.extend_from_slice(&buf[..n]);
+                while let ParseStep::HeaderDone { consumed } = parser.step(&acc) {
+                    let dmsg = parser.take_dmsg();
+                    let total = consumed + dmsg.plen as usize;
+                    if acc.len() < total {
+                        parser.reset();
+                        break;
+                    }
+                    ids.push(dmsg.id);
+                    acc.drain(0..total);
+                    parser.reset();
+                }
+            }
+            // Reply in request order: id[0] -> "+A\r\n", id[1] -> "+B\r\n".
+            let pool = crate::io::mbuf::MbufPool::default();
+            for (i, id) in ids.iter().enumerate() {
+                let payload: &[u8] = if i == 0 { b"+A\r\n" } else { b"+B\r\n" };
+                let mut hb = pool.get();
+                let plen = u32::try_from(payload.len()).unwrap_or(0);
+                dmsg_write(&mut hb, *id, DmsgType::Res, 0, false, None, plen).unwrap();
+                s.write_all(hb.readable()).await.unwrap();
+                s.write_all(payload).await.unwrap();
+            }
+            s.flush().await.unwrap();
+            // Keep the socket open briefly so replies flush.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        });
+
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let conn = Conn::new(
+            Box::new(TcpTransport::new(stream, ConnRole::DnodePeerServer)),
+            ConnRole::DnodePeerServer,
+        );
+        let (req_tx, req_rx) = mpsc::channel::<OutboundRequest>(4);
+        let (resp_a_tx, mut resp_a_rx) = mpsc::channel::<OutboundEnvelope>(1);
+        let (resp_b_tx, mut resp_b_rx) = mpsc::channel::<OutboundEnvelope>(1);
+        // Enqueue two requests with DISTINCT responders BEFORE the
+        // driver runs, so both are pending when replies arrive.
+        req_tx
+            .send(OutboundRequest {
+                bytes: b"*1\r\n$4\r\nPING\r\n".to_vec(),
+                req_id: 1,
+                responder: resp_a_tx,
+                span: tracing::Span::current(),
+                ty: DmsgType::Req,
+                target_peer_idx: None,
+            })
+            .await
+            .unwrap();
+        req_tx
+            .send(OutboundRequest {
+                bytes: b"*1\r\n$4\r\nPING\r\n".to_vec(),
+                req_id: 2,
+                responder: resp_b_tx,
+                span: tracing::Span::current(),
+                ty: DmsgType::Req,
+                target_peer_idx: None,
+            })
+            .await
+            .unwrap();
+        drop(req_tx);
+
+        let server = DnodeServerConn::new(conn, req_rx);
+        let driver = tokio::spawn(async move {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), server.run()).await;
+        });
+
+        let a = tokio::time::timeout(std::time::Duration::from_secs(2), resp_a_rx.recv())
+            .await
+            .expect("responder A timed out")
+            .expect("responder A closed");
+        let b = tokio::time::timeout(std::time::Duration::from_secs(2), resp_b_rx.recv())
+            .await
+            .expect("responder B timed out")
+            .expect("responder B closed");
+        // Responder A must receive req_id 1's reply, B req_id 2's.
+        assert_eq!(a.req_id, 1, "responder A got the wrong request's reply");
+        assert_eq!(b.req_id, 2, "responder B got the wrong request's reply");
+        peer.abort();
+        driver.abort();
     }
 }
