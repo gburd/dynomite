@@ -37,37 +37,35 @@ scp_to() { local ip=$1 region=$2 src=$3 dst=$4; SSH_AUTH_SOCK="" scp -i "/tmp/${
 mapfile -t NODES < "$IPS"
 N=${#NODES[@]}
 declare -a TOK
-# Dynomite token model: each datacenter independently covers the ENTIRE
-# u32 ring, so every DC holds a full copy of the keyspace. A node's token
-# is its index WITHIN its DC times (2^32 / nodes-in-that-DC), not its
-# global index. This mirrors real Dynomite, where DC_ONE writes fan out
-# to the local-DC owner of a key's token and replicate to peer DCs.
-declare -A DC_COUNT DC_SEEN
+declare -a RACK
+# Dynomite replication model: replication factor within a DC = the
+# number of RACKS, and each rack holds a FULL copy of the ring. With
+# one node per rack, that node owns the entire ring (token 0), so a
+# key replicates to the token owner in every rack = every node. For
+# `nodes-per-DC` nodes each in its own rack, n_val = nodes-per-DC and
+# all same-DC nodes are replicas of every key.
+#
+#   * DC_ONE read  -> served by the rack-closest replica (often local)
+#   * DC_QUORUM    -> fan out to all same-DC rack owners, wait majority
+#   * write        -> fan out to every rack owner (all replicas)
+#
+# To PARTITION the ring across more nodes (so each node holds ~1/k of
+# the keyspace) you provision n_val * k nodes per DC: k nodes per rack
+# splitting the ring, n_val racks mirroring it. This harness uses the
+# simple one-node-per-rack full-replica layout (n_val = nodes-per-DC).
 for i in "${!NODES[@]}"; do
   read -r _r _az d _n _i _p _pv <<< "${NODES[$i]}"
-  DC_COUNT[$d]=$(( ${DC_COUNT[$d]:-0} + 1 ))
-done
-for i in "${!NODES[@]}"; do
-  read -r _r _az d _n _i _p _pv <<< "${NODES[$i]}"
-  idx=${DC_SEEN[$d]:-0}
-  TOK[$i]=$(( idx * 4294967296 / ${DC_COUNT[$d]} ))
-  DC_SEEN[$d]=$(( idx + 1 ))
+  TOK[$i]=0
+  RACK[$i]="${d}-r$(( ${DC_SEEN[$d]:-0} + 1 ))"
+  DC_SEEN[$d]=$(( ${DC_SEEN[$d]:-0} + 1 ))
 done
 
-# Global seed list "pub:DNODE:rack:dc:token".
-#
-# All nodes in a datacenter share ONE rack (`${dc}-r1`) so their
-# tokens partition the token ring WITHIN that rack -- this is the
-# Dynomite model, where a rack holds a full copy of the keyspace and
-# its nodes split the ring. Putting each node in its own rack (one
-# node per rack) would make every rack own the whole ring, so a
-# DC_ONE read/write would always resolve to the rack-local node and
-# never route by key. The physical AZ is preserved only for the
-# instance placement, not the ring rack.
+# Global seed list "pub:DNODE:rack:dc:token". Each node is in its own
+# rack (a full replica) so the same-DC nodes replicate every key.
 SEEDS_ALL=()
 for i in "${!NODES[@]}"; do
   read -r region az dc n iid pub priv <<< "${NODES[$i]}"
-  SEEDS_ALL+=("${pub}:${DNODE}:${dc}-r1:${dc}:${TOK[$i]}")
+  SEEDS_ALL+=("${pub}:${DNODE}:${RACK[$i]}:${dc}:${TOK[$i]}")
 done
 
 backend_install() {
@@ -86,6 +84,7 @@ backend_install() {
 for i in "${!NODES[@]}"; do
   read -r region az dc n iid pub priv <<< "${NODES[$i]}"
   tok=${TOK[$i]}
+  rack=${RACK[$i]}
   seed_lines=""
   for j in "${!NODES[@]}"; do
     [ "$j" -eq "$i" ] && continue
@@ -119,7 +118,7 @@ dyn_o_mite:
 ${servers_line}
   tokens: '${tok}'
   datacenter: ${dc}
-  rack: ${dc}-r1
+  rack: ${rack}
   read_consistency: DC_ONE
   write_consistency: DC_ONE
   enable_gossip: true
