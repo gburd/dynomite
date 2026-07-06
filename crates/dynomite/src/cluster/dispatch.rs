@@ -1178,12 +1178,22 @@ impl ClusterDispatcher {
         bytes: &[u8],
         intermediate_tx: &mpsc::Sender<OutboundEnvelope>,
     ) -> bool {
+        // A request forwarded to a REMOTE peer is tagged
+        // `ReqForward` so the receiver hands it straight to its
+        // local datastore instead of re-routing it (which would
+        // re-hash, re-plan, and in the worst case bounce the
+        // request back). The local-backend path keeps `Req`.
+        let ty = if target.is_local {
+            crate::proto::dnode::DmsgType::Req
+        } else {
+            crate::proto::dnode::DmsgType::ReqForward
+        };
         let env = OutboundRequest {
             bytes: bytes.to_vec(),
             req_id: req.id(),
             responder: intermediate_tx.clone(),
             span: req_span.clone(),
-            ty: crate::proto::dnode::DmsgType::Req,
+            ty,
             target_peer_idx: Some(target.peer_idx),
         };
         let send_result = if target.is_local {
@@ -1317,7 +1327,14 @@ impl ClusterDispatcher {
             req_id: req.id(),
             responder: responder.clone(),
             span: req_span.clone(),
-            ty: crate::proto::dnode::DmsgType::Req,
+            // A forward to a remote peer is `ReqForward` so the
+            // receiver serves it locally rather than re-routing it;
+            // the local-backend path uses `Req`.
+            ty: if target.is_local {
+                crate::proto::dnode::DmsgType::Req
+            } else {
+                crate::proto::dnode::DmsgType::ReqForward
+            },
             target_peer_idx: Some(target.peer_idx),
         };
         let send_result = if target.is_local {
@@ -2006,6 +2023,52 @@ mod tests {
             "keys owned by a remote same-rack node must route to it, not stay local"
         );
         assert!(saw_local, "keys owned by the local node stay local");
+    }
+
+    /// Regression: a request forwarded to a REMOTE peer must be
+    /// tagged `DmsgType::ReqForward`, not `Req`. The receiver only
+    /// hands a `ReqForward` straight to its local datastore; a plain
+    /// `Req` makes it re-route (re-hash / re-plan), so a write owned
+    /// by a remote node never lands in that node's backend and is
+    /// lost. Found on the EC2 cluster: the token owner received zero
+    /// forwarded writes.
+    #[tokio::test]
+    async fn remote_forward_is_tagged_req_forward() {
+        // Two same-rack peers with u32-spread tokens; peer 0 is
+        // local. Find a key that routes to the remote peer 1 and
+        // assert the captured OutboundRequest carries ReqForward.
+        let p = pool(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            vec![
+                peer(0, "dc1", "rA", 0, true, true),
+                peer(1, "dc1", "rA", 2_147_483_648, false, true),
+            ],
+        );
+        let (tx, mut rx) = mpsc::channel::<crate::net::server::OutboundRequest>(64);
+        let disp = ClusterDispatcher::new(p).with_peer_backend(1, tx);
+        // Drive keys until one routes to the remote peer.
+        let pool_buf = crate::io::mbuf::MbufPool::default();
+        let mut forwarded_ty = None;
+        for i in 0..500u32 {
+            let key = format!("k{i}");
+            let mut req = Msg::new(1, MsgType::ReqRedisSet, false);
+            req.push_key(crate::msg::keypos::KeyPos::without_tag(key.into_bytes()));
+            let mut buf = pool_buf.get();
+            buf.copy_from_slice(b"*3\r\n$3\r\nSET\r\n$1\r\nx\r\n$1\r\ny\r\n");
+            req.mbufs_mut().push_back(buf);
+            let (resp_tx, _resp_rx) = mpsc::channel(1);
+            let _ = disp.dispatch(req, resp_tx);
+            if let Ok(env) = rx.try_recv() {
+                forwarded_ty = Some(env.ty);
+                break;
+            }
+        }
+        assert_eq!(
+            forwarded_ty,
+            Some(crate::proto::dnode::DmsgType::ReqForward),
+            "a forward to a remote peer must be ReqForward so the target serves it locally"
+        );
     }
 
     #[test]
