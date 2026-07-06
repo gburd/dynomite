@@ -13,6 +13,60 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.2.0] - 2026-07-06
+
+Minor release. Distributed-path correctness fixes and new
+cross-node capability, qualified at scale against the Netflix
+Dynomite C reference (side-by-side differential on a multi-region
+EC2 cluster). Backward compatible for correctly-written clients.
+
+### Added
+
+- `dyniak`: HTTP object `PUT` / `DELETE` now fan out to the key's
+  replica set over the dnode plane, matching the PBC routing path.
+  Cross-node replication for the Riak-compatible surface is
+  reachable over both transports.
+- `dynomited`: `DYN_ADVERTISE_ADDR` selects the routable address a
+  node advertises to peers when `dyn_listen` binds a wildcard
+  (`0.0.0.0` / `[::]`), the standard requirement behind NAT or in
+  the cloud where the routable address is not on a local interface.
+
+### Fixed
+
+- `cluster::dispatch`: a `DC_ONE` **write** now fans out to every
+  local-DC replica for durability (the ack still returns on the
+  first reply); it previously picked a single replica like a read,
+  so a write never replicated and a read routed to another replica
+  missed it. Matches the C engine's `DC_ONE` write semantics.
+- `cluster::dispatch`: a request forwarded to a remote peer is
+  tagged `ReqForward` (not `Req`), so the owning node serves it
+  from its local datastore instead of re-routing it. Previously a
+  write whose token owner was a remote node was dropped.
+- `net::dnode`: replies on a peer connection are delivered to the
+  responder of the request they answer. The connection multiplexes
+  several in-flight requests; a single shared responder slot
+  crossed replies under fan-out (a `SET` could receive a `DEL`
+  reply and vice versa).
+- `dynomited`: a node advertising a wildcard bind address as its
+  gossip identity never matched any peer's seed entry, so peers
+  stayed `Down` and the dispatcher routed every key to the local
+  datastore. Resolved by the advertised-address change above.
+- Dependency: `crossbeam-epoch` 0.9.18 -> 0.9.20 (RUSTSEC-2026-0204,
+  invalid pointer dereference in a `fmt::Pointer` impl).
+
+### Qualification
+
+- A C-vs-Rust differential harness (`scripts/ec2-dist/
+  setup-differential.sh`, `differential-driver.py`,
+  `differential-matrix.py`) runs Netflix Dynomite (C) and the Rust
+  `dynomited` side by side on the same nodes with topology-identical
+  rings and separate backends, comparing every reply. `SET` / `GET`
+  / `DEL` agree byte-for-byte across every entry node under `DC_ONE`
+  and `DC_QUORUM`; the only observed differences were transient
+  read-after-write timing windows inherent to the eventual-
+  consistency model, which resolve on retry and appear on both
+  engines.
+
 ## [1.1.1] - 2026-06-30
 
 Patch release. Bug fixes only; no API or behaviour changes for
