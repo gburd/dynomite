@@ -42,6 +42,26 @@
 //!   dissemination (infection-style convergence with refutation), and
 //!   a negative control (disabling refutation reproduces a false
 //!   permanent death).
+//! * [`delta_crdt`] models the delta-state CRDT convergence
+//!   implemented in `crates/dyniak/src/datatypes/delta_set.rs`
+//!   (the `DeltaOrSet` type) and the delta-shipping AAE hook in
+//!   `crates/dyniak/src/aae/delta_ship.rs`, asserting strong
+//!   eventual consistency over a lossy/reordering/duplicating delta
+//!   channel plus the lattice laws, with a non-join-irreducible
+//!   mutator as the negative control.
+//! * [`aae`] models the divergence-proportional anti-entropy
+//!   reconcile implemented in
+//!   `crates/dyniak/src/aae/mst_reconcile.rs` (`reconcile_pull`) over
+//!   the Merkle Search Tree diff in `crates/dyn-hashtree/src/mst.rs`
+//!   (the `Mst` diff walk), asserting replica convergence, the
+//!   divergence-proportional diff bound, and a negative control that
+//!   the checker catches.
+//! * [`hlc`] models the Hybrid Logical Clock implemented in
+//!   `crates/dyniak/src/datatypes/hlc.rs` (the `Hlc` type),
+//!   asserting monotonicity, causality capture over program-order and
+//!   send/receive happens-before edges, and bounded drift within the
+//!   max inter-node physical skew, with a broken receive rule (no
+//!   counter advance) as the negative control.
 //!
 //! # Running
 //!
@@ -61,6 +81,7 @@
 pub mod aae;
 pub mod delta_crdt;
 pub mod gossip;
+pub mod hlc;
 pub mod quorum;
 pub mod ramp;
 pub mod ring;

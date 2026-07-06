@@ -18,7 +18,7 @@
 //!    state. Here [`OrSetDelta`] is literally a partial
 //!    [`DeltaOrSet`] state (a subset of the element tag maps), so
 //!    "join a delta" and "join a full state" are the identical
-//!    operation ([`DeltaOrSet::join`]). No separate lattice, no
+//!    operation ([`OrSetDelta::join`]). No separate lattice, no
 //!    separate merge rule to keep in sync.
 //! 2. A delta-mutator returns a *join-irreducible* fragment: the
 //!    smallest state whose join with the pre-state yields the
@@ -169,7 +169,7 @@ fn tag_wire_len() -> usize {
 /// Delta-state observed-remove set.
 ///
 /// The visible value and the state-based [`Crdt::merge`] behave
-/// exactly like [`OrSet`]; the addition is [`DeltaOrSet::add`] /
+/// exactly like [`OrSet`](crate::datatypes::OrSet); the addition is [`DeltaOrSet::add`] /
 /// [`DeltaOrSet::remove`] returning deltas and
 /// [`DeltaOrSet::merge_delta`] joining them.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

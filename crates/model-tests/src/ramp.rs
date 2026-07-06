@@ -16,7 +16,7 @@
 //!
 //! * **Read (round 1 + conditional round 2).** Round 1 snapshots each
 //!   key's latest-visible version and its sibling metadata. The pure
-//!   core [`select_missing`] (the model's copy of
+//!   core `select_missing` (the model's copy of
 //!   `dyniak::ramp::select`) decides which siblings the reader is
 //!   behind on; round 2 fetches exactly those versions by timestamp,
 //!   which PREPARE guarantees are present. The repaired snapshot is

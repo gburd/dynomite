@@ -48,6 +48,11 @@
 pub mod counter;
 pub mod delta_set;
 pub mod flag;
+// Hybrid Logical Clock: scalar, monotonic, physically-close
+// timestamp for snapshot/version selection. Complementary to
+// `itc` (which tracks the causal partial order); added as a
+// sibling primitive. See the module for the (l, c) update rules.
+pub mod hlc;
 pub mod itc;
 pub mod register;
 pub mod set;
@@ -75,6 +80,7 @@ use std::cmp::Ordering;
 pub use crate::datatypes::counter::PnCounter;
 pub use crate::datatypes::delta_set::{BufferedDelta, DeltaBuffer, DeltaOrSet, OrSetDelta};
 pub use crate::datatypes::flag::EwFlag;
+pub use crate::datatypes::hlc::{hlc_cmp, Hlc, HlcError};
 pub use crate::datatypes::itc::{Event as ItcEvent, Id as ItcId, Itc};
 pub use crate::datatypes::register::LwwRegister;
 pub use crate::datatypes::set::OrSet;

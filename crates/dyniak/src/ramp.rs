@@ -34,7 +34,7 @@
 //! which siblings it must re-fetch in round 2, and how the repaired
 //! snapshot is assembled -- lives in [`select`] as a pure,
 //! side-effect-free core. The production coordinator
-//! ([`RampCoordinator`]) and the deterministic simulation model
+//! ([`RampCoordinator`](crate::RampCoordinator)) and the deterministic simulation model
 //! (`crates/model-tests/src/ramp.rs`) both drive that same core, so the
 //! model gates the real decision logic and not a re-imagining of it.
 //!
