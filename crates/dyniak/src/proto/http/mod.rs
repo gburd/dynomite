@@ -106,6 +106,43 @@ pub async fn serve_http(
     serve_http_ctx(listener, routes::RouteCtx::new(datastore)).await
 }
 
+/// Run the HTTP accept loop with cross-node replica routing wired
+/// in. An object `PUT` / `DELETE` fans a
+/// [`crate::router::PeerOp`] out to every replica on the key's
+/// preference list (fire-and-forget) before persisting locally,
+/// mirroring [`crate::serve_pbc_with_routing`]. Object reads /
+/// lists / transactions behave exactly like [`serve_http`].
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+pub async fn serve_http_with_routing(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    hooks: crate::router::RoutingHooks,
+) -> Result<(), RiakError> {
+    serve_http_ctx(listener, routes::RouteCtx::new(datastore).set_hooks(hooks)).await
+}
+
+/// TLS-terminating variant of [`serve_http_with_routing`].
+///
+/// # Errors
+///
+/// Returns the first `accept` error the listener surfaces.
+pub async fn serve_http_tls_with_routing(
+    listener: TcpListener,
+    datastore: Arc<dyn Datastore>,
+    hooks: crate::router::RoutingHooks,
+    acceptor: tokio_rustls::TlsAcceptor,
+) -> Result<(), RiakError> {
+    serve_http_tls_ctx(
+        listener,
+        routes::RouteCtx::new(datastore).set_hooks(hooks),
+        acceptor,
+    )
+    .await
+}
+
 /// Run the HTTP accept loop on `listener`, wiring the search
 /// registry into the gateway alongside the datastore so the index
 /// and search routes are served. Behaves exactly like

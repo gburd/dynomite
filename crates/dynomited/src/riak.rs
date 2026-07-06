@@ -39,6 +39,7 @@ use dyniak::proto::replica_wire::encode_peer_op;
 use dyniak::replication::{RingPoint, RingView};
 use dyniak::router::{BucketRouter, PeerOp, PeerOutbound, RoutingHooks};
 use dyniak::{serve_http, serve_http_tls, serve_pbc, serve_pbc_tls, serve_pbc_with_routing};
+use dyniak::{serve_http_tls_with_routing, serve_http_with_routing};
 #[cfg(feature = "search")]
 use dyniak::{serve_http_tls_with_search, serve_http_with_search};
 #[cfg(all(feature = "search", feature = "wasm"))]
@@ -433,12 +434,27 @@ pub fn spawn_listeners(
         let ds = Arc::clone(&handles.datastore);
         let mut cancel = cancel_rx.clone();
         let tls = handles.tls.clone();
+        let http_hooks = handles.hooks.clone();
         #[cfg(feature = "search")]
         let registry = handles.search_registry.clone();
         #[cfg(feature = "wasm")]
         let wasm = handles.wasm.clone();
         tokio::spawn(async move {
             let serve = async {
+                // Cross-node replica routing takes priority: when the
+                // pool is a distributed `data_store: dyniak` pool the
+                // HTTP object PUT / DELETE must fan out to the key's
+                // replicas, mirroring the PBC routing path. The
+                // routing entry does not layer search / wasm; those
+                // are orthogonal read-side surfaces served by the
+                // non-routing variants below when no hooks are set.
+                if let Some(hooks) = http_hooks {
+                    return if let Some(acc) = tls {
+                        serve_http_tls_with_routing(listener, ds, hooks, acc).await
+                    } else {
+                        serve_http_with_routing(listener, ds, hooks).await
+                    };
+                }
                 #[cfg(all(feature = "search", feature = "wasm"))]
                 if let (Some(registry), Some(wasm)) = (registry.clone(), wasm.clone()) {
                     return if let Some(acc) = tls {

@@ -76,6 +76,7 @@ pub mod txn;
 
 pub use crate::error::RiakError;
 pub use crate::proto::http::{serve_http, serve_http_tls};
+pub use crate::proto::http::{serve_http_tls_with_routing, serve_http_with_routing};
 #[cfg(feature = "search")]
 pub use crate::proto::http::{serve_http_tls_with_search, serve_http_with_search, SearchState};
 #[cfg(all(feature = "search", feature = "wasm"))]

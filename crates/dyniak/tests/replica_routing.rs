@@ -50,6 +50,25 @@ use dyniak::replication::{
 use dyniak::router::{BucketRouter, PeerOp};
 use dyniak::ReplicaApplier;
 
+use dyniak::router::{PeerOutbound, RoutingHooks};
+use dynomite::net::client::BoxFuture;
+use std::sync::Mutex as StdMutex;
+
+/// Test double: records every `(peer_idx, PeerOp)` dispatched, so a
+/// test can assert the HTTP put / delete path fanned out to the
+/// key's replicas.
+#[derive(Debug, Default)]
+struct CapturingOutbound {
+    ops: StdMutex<Vec<(u32, PeerOp)>>,
+}
+
+impl PeerOutbound for CapturingOutbound {
+    fn dispatch(&self, peer_idx: u32, op: PeerOp) -> BoxFuture<'_, ()> {
+        self.ops.lock().expect("lock").push((peer_idx, op));
+        Box::pin(async {})
+    }
+}
+
 /// Scratch root per AGENTS.md: /scratch, not /tmp.
 fn scratch_dir() -> TempDir {
     let base = Path::new("/scratch");
@@ -236,4 +255,92 @@ async fn outbound_receive_pairing_delivers_write_to_node_b() {
         .expect("replica landed on node B");
     let obj = HttpObject::from_storage_bytes(&stored).expect("decode envelope");
     assert_eq!(obj.value, b"two-items");
+}
+
+/// The HTTP object `PUT` path fans out to the key's replicas via the
+/// routing hooks, mirroring the PBC put path. Drives the real
+/// `serve_http_with_routing` accept loop over a loopback listener,
+/// sends one PUT, and asserts the capturing outbound recorded a
+/// `PeerOp::Put` per replica on the key's preference list. This is
+/// the regression for the wireup gap found on the EC2 cluster, where
+/// HTTP writes were local-only (no fan-out) because routing was
+/// wired to PBC alone.
+#[tokio::test]
+async fn http_put_fans_out_to_replicas() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let dir = scratch_dir();
+    let noxu = NoxuDatastore::open_transactional(dir.path()).expect("open noxu");
+    let ds: Arc<dyn Datastore> = Arc::new(noxu);
+
+    let ring = five_peer_ring();
+    let registry = Arc::new(BucketPropsRegistry::new_riak_defaults());
+    registry.set(
+        b"default",
+        b"users",
+        BucketProps {
+            keyfun: Some(KeyFun::Std),
+            strategy: Some(ReplicationStrategy::Successors),
+            n_val: Some(3),
+            ..BucketProps::default()
+        },
+    );
+    let router = Arc::new(BucketRouter::new(registry, ring, HashType::Murmur));
+    let outbound = Arc::new(CapturingOutbound::default());
+    let hooks = RoutingHooks {
+        router,
+        outbound: outbound.clone(),
+    };
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let serve = tokio::spawn(dyniak::serve_http_with_routing(listener, ds, hooks));
+
+    // Send one HTTP/1.1 PUT of an HttpObject envelope for users/alice.
+    let body = br#"{"value":[104,105],"content_type":"text/plain","indexes":[],"links":[]}"#;
+    let req = format!(
+        "PUT /buckets/users/keys/alice HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let mut sock = tokio::net::TcpStream::connect(addr).await.expect("connect");
+    sock.write_all(req.as_bytes()).await.expect("write head");
+    sock.write_all(body).await.expect("write body");
+    sock.flush().await.expect("flush");
+    let mut resp = Vec::new();
+    let _ = sock.read_to_end(&mut resp).await;
+    let resp = String::from_utf8_lossy(&resp);
+    assert!(
+        resp.contains("204"),
+        "PUT should be 204 No Content, got: {resp}"
+    );
+
+    serve.abort();
+
+    // The put fanned out one PeerOp::Put per replica (n_val=3).
+    let ops = outbound.ops.lock().expect("lock");
+    assert_eq!(
+        ops.len(),
+        3,
+        "n_val=3 yields 3 replica dispatches, got {}",
+        ops.len()
+    );
+    for (_peer, op) in ops.iter() {
+        match op {
+            PeerOp::Put {
+                bucket, key, value, ..
+            } => {
+                assert_eq!(bucket, b"users");
+                assert_eq!(key, b"alice");
+                assert_eq!(value, &vec![104u8, 105u8]);
+            }
+            other => panic!("expected PeerOp::Put, got {other:?}"),
+        }
+    }
+    // Replicas are distinct peers.
+    let mut peers: Vec<u32> = ops.iter().map(|(p, _)| *p).collect();
+    peers.sort_unstable();
+    peers.dedup();
+    assert_eq!(peers.len(), 3, "replicas are distinct peers");
 }

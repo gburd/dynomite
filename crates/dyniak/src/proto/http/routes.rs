@@ -123,6 +123,13 @@ pub(crate) struct RouteCtx {
     /// [`crate::mapreduce::MrError::WasmNotImplemented`] error.
     #[cfg(feature = "wasm")]
     pub(crate) wasm: Option<Arc<crate::mapreduce::wasm::WasmModuleStore>>,
+    /// Optional cross-node replica routing hooks. When `Some`, an
+    /// object `PUT` / `DELETE` fans a [`crate::router::PeerOp`] out to
+    /// every replica on the key's preference list (fire-and-forget)
+    /// before persisting locally, mirroring the PBC routing path.
+    /// When `None` the write is local-only (single-node / test
+    /// configurations).
+    pub(crate) hooks: Option<crate::router::RoutingHooks>,
 }
 
 impl RouteCtx {
@@ -135,6 +142,7 @@ impl RouteCtx {
             search: None,
             #[cfg(feature = "wasm")]
             wasm: None,
+            hooks: None,
         }
     }
 
@@ -149,6 +157,7 @@ impl RouteCtx {
             search: Some(search),
             #[cfg(feature = "wasm")]
             wasm: None,
+            hooks: None,
         }
     }
 
@@ -163,7 +172,16 @@ impl RouteCtx {
             #[cfg(feature = "search")]
             search: None,
             wasm: Some(wasm),
+            hooks: None,
         }
+    }
+
+    /// Attach cross-node replica routing hooks to an existing
+    /// context, returning the updated context. Used by the
+    /// routing-enabled serve paths.
+    pub(crate) fn set_hooks(mut self, hooks: crate::router::RoutingHooks) -> Self {
+        self.hooks = Some(hooks);
+        self
     }
 
     /// Attach a Wasm module store to an existing context, returning
@@ -377,9 +395,7 @@ async fn handle_route(
         Route::PutObject { bucket, key } | Route::PostObject { bucket, key } => {
             handle_put(bucket, key, headers, body, &ctx).await
         }
-        Route::DeleteObject { bucket, key } => {
-            handle_delete(bucket, key, ctx.datastore.as_ref()).await
-        }
+        Route::DeleteObject { bucket, key } => handle_delete(bucket, key, &ctx).await,
         Route::ListBuckets => list_buckets_response(headers, &ctx.datastore),
         Route::ListKeys { bucket } => list_keys_response(bucket, headers, &ctx.datastore),
         Route::GetProps { bucket } => get_props_response(bucket, headers),
@@ -547,7 +563,7 @@ async fn handle_put(
     #[cfg(feature = "noxu")]
     {
         if let Some(store) = object_store(datastore) {
-            return put_object_into_store(store, bucket, key, headers, &body, req_ct, ctx);
+            return put_object_into_store(store, bucket, key, headers, &body, req_ct, ctx).await;
         }
     }
     #[cfg(not(feature = "noxu"))]
@@ -561,11 +577,8 @@ async fn handle_put(
         .expect("invariant: put response builder is well-formed")
 }
 
-async fn handle_delete(
-    bucket: &str,
-    key: &str,
-    datastore: &dyn Datastore,
-) -> Response<ResponseBody> {
+async fn handle_delete(bucket: &str, key: &str, ctx: &RouteCtx) -> Response<ResponseBody> {
+    let datastore = ctx.datastore.as_ref();
     // Accounting trampoline, matching the PBC and GET/PUT paths.
     let routing = Msg::new(0, MsgType::Unknown, true);
     if let Err(e) = datastore.dispatch(routing).await {
@@ -573,6 +586,31 @@ async fn handle_delete(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("datastore error: {e}"),
         );
+    }
+
+    // Cross-node replica fan-out (fire-and-forget), mirroring the PBC
+    // del path: dispatch a PeerOp::Del to each replica on the key's
+    // preference list before deleting locally. Without hooks the
+    // delete is local-only.
+    if let Some(hooks) = ctx.hooks.as_ref() {
+        if let Ok(decision) = hooks
+            .router
+            .try_route(b"", bucket.as_bytes(), key.as_bytes())
+        {
+            for replica in decision.replica_list() {
+                hooks
+                    .outbound
+                    .dispatch(
+                        replica.peer_idx,
+                        crate::router::PeerOp::Del {
+                            bucket_type: decision.bucket_type.clone(),
+                            bucket: bucket.as_bytes().to_vec(),
+                            key: key.as_bytes().to_vec(),
+                        },
+                    )
+                    .await;
+            }
+        }
     }
 
     // Object-capable backends remove the object and its 2i entries.
@@ -993,7 +1031,7 @@ fn get_object_from_store(
 /// A body that does not decode under its declared codec is a
 /// `400 Bad Request`. A successful store is `204 No Content`.
 #[cfg(feature = "noxu")]
-fn put_object_into_store(
+async fn put_object_into_store(
     store: &crate::datastore::NoxuDatastore,
     bucket: &str,
     key: &str,
@@ -1030,6 +1068,34 @@ fn put_object_into_store(
     let mut obj = obj.clone();
     obj.indexes.extend(collect_index_headers(headers));
     obj.links.extend(collect_link_headers(headers));
+
+    // Cross-node replica fan-out (fire-and-forget), mirroring the PBC
+    // put path: route the key to its preference list and dispatch a
+    // PeerOp::Put to each replica before persisting locally. Applied
+    // replica ops are terminal on the receiver (no re-forward), so a
+    // write fans out exactly once. Without hooks the write is
+    // local-only.
+    if let Some(hooks) = ctx.hooks.as_ref() {
+        if let Ok(decision) = hooks
+            .router
+            .try_route(b"", bucket.as_bytes(), key.as_bytes())
+        {
+            for replica in decision.replica_list() {
+                hooks
+                    .outbound
+                    .dispatch(
+                        replica.peer_idx,
+                        crate::router::PeerOp::Put {
+                            bucket_type: decision.bucket_type.clone(),
+                            bucket: bucket.as_bytes().to_vec(),
+                            key: key.as_bytes().to_vec(),
+                            value: obj.value.clone(),
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
 
     let indexes = obj.index_pairs();
     let storage = obj.to_storage_bytes();
