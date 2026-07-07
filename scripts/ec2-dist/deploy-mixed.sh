@@ -48,8 +48,6 @@ declare -A AMI_ARM=(
 )
 # Extra region for the load-driven migration target (3rd Graviton
 # region). AMIs resolved at add time when absent from the tables.
-DC[eu-west-1]=dc-euw1
-AZS[eu-west-1]="eu-west-1a eu-west-1b eu-west-1c"
 declare -A AZS=(
   [us-east-1]="us-east-1a us-east-1b us-east-1c"
   [us-west-2]="us-west-2a us-west-2b us-west-2c"
@@ -58,6 +56,12 @@ declare -A AZS=(
   [sa-east-1]="sa-east-1a sa-east-1b sa-east-1c"
 )
 REGIONS=(us-east-1 us-west-2 eu-central-1 ap-northeast-1 sa-east-1)
+# Extra region for the load-driven migration target (3rd Graviton
+# region), added after the base tables are declared so `set -u` does not
+# trip on an assignment to an undeclared associative-array element.
+# The AMI is resolved on demand in add_region.
+DC[eu-west-1]=dc-euw1
+AZS[eu-west-1]="eu-west-1a eu-west-1b eu-west-1c"
 # Ports: client 8102, dnode 8101, stats 22222, riak pbc 8087, http 8098,
 # plus the differential Rust plane 9101/9102 and stats 22223.
 MY_IP="$(curl -s -m 10 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]')"
