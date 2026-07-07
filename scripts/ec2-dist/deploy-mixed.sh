@@ -46,6 +46,10 @@ declare -A AMI_ARM=(
   [eu-central-1]=ami-07317784e1ea161a7 [ap-northeast-1]=ami-0f8f565aff0af885b
   [sa-east-1]=ami-08b4ccede7c8e90aa
 )
+# Extra region for the load-driven migration target (3rd Graviton
+# region). AMIs resolved at add time when absent from the tables.
+DC[eu-west-1]=dc-euw1
+AZS[eu-west-1]="eu-west-1a eu-west-1b eu-west-1c"
 declare -A AZS=(
   [us-east-1]="us-east-1a us-east-1b us-east-1c"
   [us-west-2]="us-west-2a us-west-2b us-west-2c"
@@ -185,9 +189,46 @@ down() {
   log "teardown complete"
 }
 
+# Provision one additional region (used by the migration to grow to a
+# 3rd Graviton region). Resolves the AMI on demand, provisions 9 nodes
+# (3 racks x 3), allowlists them everywhere, and APPENDS to $STATE.
+add_region() {
+  local region=$1 arch=$2
+  [ -z "$region" ] || [ -z "$arch" ] && { echo "usage: add-region <region> <x86|arm>" >&2; return 1; }
+  ARCH[$region]=$arch
+  [ -z "${DC[$region]:-}" ] && DC[$region]="dc-${region//-/}"
+  if [ -z "${AZS[$region]:-}" ]; then
+    AZS[$region]=$(aws ec2 describe-availability-zones --region "$region" \
+      --query 'AvailabilityZones[?State==`available`].ZoneName' --output text 2>/dev/null | tr '\t' ' ')
+  fi
+  # resolve AMI for the arch if not tabled
+  if [ "$arch" = arm ] && [ -z "${AMI_ARM[$region]:-}" ]; then
+    AMI_ARM[$region]=$(aws ec2 describe-images --region "$region" --owners amazon \
+      --filters "Name=name,Values=al2023-ami-2023.*-arm64" "Name=state,Values=available" \
+      --query 'reverse(sort_by(Images,&CreationDate))[0].ImageId' --output text 2>/dev/null)
+  elif [ "$arch" = x86 ] && [ -z "${AMI_X86[$region]:-}" ]; then
+    AMI_X86[$region]=$(aws ec2 describe-images --region "$region" --owners amazon \
+      --filters "Name=name,Values=al2023-ami-2023.*-x86_64" "Name=state,Values=available" \
+      --query 'reverse(sort_by(Images,&CreationDate))[0].ImageId' --output text 2>/dev/null)
+  fi
+  # add this region to REGIONS so allowlist_ip_everywhere covers it
+  REGIONS+=("$region")
+  local azs=(${AZS[$region]}) r n
+  for r in $(seq 1 $RACKS); do
+    local az=${azs[$(( (r-1) % ${#azs[@]} ))]}
+    for n in $(seq 1 $NODES_PER_RACK); do
+      local row; row=$(launch_one "$region" "$az" "${DC[$region]}" "r${r}" "n${n}")
+      echo "$row" >> "$STATE"
+      log "add: $row"
+    done
+  done
+  log "add-region $region ($arch) complete: 9 nodes appended to $STATE"
+}
+
 case "${1:-}" in
   up) up ;;
   down) down ;;
   status) status ;;
-  *) echo "usage: $0 {up|down|status}" >&2; exit 1 ;;
+  add-region) add_region "$2" "$3" ;;
+  *) echo "usage: $0 {up|down|status|add-region <region> <x86|arm>}" >&2; exit 1 ;;
 esac
