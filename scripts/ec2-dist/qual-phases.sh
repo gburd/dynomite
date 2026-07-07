@@ -208,10 +208,11 @@ YML
       nsh "$region" "$pub" "
         sudo pkill -9 -x dynomite 2>/dev/null; sudo pkill -9 -x dynomited 2>/dev/null
         sudo fuser -k ${C_DNODE}/tcp ${C_CLIENT}/tcp ${C_STATS}/tcp ${R_DNODE}/tcp ${R_CLIENT}/tcp ${R_STATS}/tcp 2>/dev/null
-        sleep 3
-        # wait until every proxy port is released before rebinding, so a
-        # relaunch between consistency levels does not hit EADDRINUSE.
-        for _i in \$(seq 1 20); do ss -tln | grep -qE ':${C_DNODE}|:${C_CLIENT}|:${R_DNODE}|:${R_CLIENT}' || break; sleep 1; done
+        # wait for BOTH proxy processes to actually die, then for the
+        # ports to release, before rebinding -- pkill -9 is async and a
+        # relaunch that races the socket release hits EADDRINUSE.
+        for _i in \$(seq 1 20); do pgrep -x dynomite >/dev/null || pgrep -x dynomited >/dev/null || break; sudo pkill -9 -x dynomite 2>/dev/null; sudo pkill -9 -x dynomited 2>/dev/null; sleep 1; done
+        for _i in \$(seq 1 20); do ss -tln | grep -qE ':${C_DNODE}|:${C_CLIENT}|:${R_DNODE}|:${R_CLIENT}|:${C_STATS}|:${R_STATS}' || break; sleep 1; done
         VS=\$(command -v valkey-server || command -v redis-server)
         [ -z \"\$VS\" ] && { sudo dnf install -y -q valkey 2>/dev/null || sudo dnf install -y -q redis6 2>/dev/null; VS=\$(command -v valkey-server || command -v redis6-server || command -v redis-server); }
         \$VS --daemonize yes --bind 127.0.0.1 --port 6379 2>/dev/null
