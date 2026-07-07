@@ -111,6 +111,62 @@ allowlist_ip_everywhere() {
   done
 }
 
+# Launch an entire rack (NODES_PER_RACK instances) in ONE run-instances
+# --count call, then tag each and emit one state row per node. Batching
+# cuts the run-instances API-call volume by NODES_PER_RACK, which avoids
+# the RequestLimitExceeded throttling that per-node launches hit. Emits
+# rows on stdout; returns nonzero only if the batch call itself never
+# succeeds.
+launch_rack() {
+  local region=$1 az=$2 dc=$3 rack=$4
+  local sg; sg=$(ensure_region_infra "$region")
+  local subnet; subnet=$(aws ec2 describe-subnets --region "$region" \
+    --filters "Name=availability-zone,Values=$az" "Name=default-for-az,Values=true" \
+    --query 'Subnets[0].SubnetId' --output text)
+  local arch=${ARCH[$region]}
+  local itype=${ITYPE[$arch]}
+  local ami; [ "$arch" = x86 ] && ami=${AMI_X86[$region]} || ami=${AMI_ARM[$region]}
+  local ids="" attempt
+  for attempt in 1 2 3 4 5 6; do
+    ids=$(aws ec2 run-instances --region "$region" \
+      --image-id "$ami" --instance-type "$itype" --count "$NODES_PER_RACK" \
+      --key-name "${RUN_ID}-key" --security-group-ids "$sg" --subnet-id "$subnet" \
+      --associate-public-ip-address \
+      --tag-specifications "ResourceType=instance,Tags=[{Key=$TAG,Value=$RUN_ID},{Key=arch,Value=${arch}},{Key=Name,Value=${dc}-${rack}}]" \
+      --query 'Instances[].InstanceId' --output text 2>/dev/null)
+    [ -n "$ids" ] && break
+    log "run-instances $dc-$rack (count $NODES_PER_RACK) attempt $attempt empty (throttle?); backing off"
+    sleep $((attempt * 8))
+  done
+  [ -z "$ids" ] && { log "FAILED to launch rack $dc-$rack after retries"; return 1; }
+  # name each instance n1..nK and wait for it running + IPs
+  local idx=0 iid
+  for iid in $ids; do
+    idx=$((idx+1))
+    aws ec2 create-tags --region "$region" --resources "$iid" \
+      --tags "Key=Name,Value=${dc}-${rack}-n${idx}" >/dev/null 2>&1
+  done
+  aws ec2 wait instance-running --region "$region" --instance-ids $ids 2>/dev/null
+  idx=0
+  for iid in $ids; do
+    idx=$((idx+1))
+    local pub="" priv="" a
+    for a in 1 2 3 4 5 6; do
+      pub=$(aws ec2 describe-instances --region "$region" --instance-ids "$iid" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null)
+      priv=$(aws ec2 describe-instances --region "$region" --instance-ids "$iid" --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2>/dev/null)
+      [ -n "$pub" ] && [ "$pub" != None ] && [ -n "$priv" ] && [ "$priv" != None ] && break
+      sleep 5
+    done
+    if [ -z "$pub" ] || [ "$pub" = None ]; then
+      log "no public IP for $iid ($dc-$rack-n${idx}); terminating"
+      aws ec2 terminate-instances --region "$region" --instance-ids "$iid" >/dev/null 2>&1
+      continue
+    fi
+    allowlist_ip_everywhere "$pub"
+    echo "$region $az $dc $rack n${idx} $arch $itype $iid $pub $priv"
+  done
+}
+
 launch_one() {
   local region=$1 az=$2 dc=$3 rack=$4 node=$5
   local sg; sg=$(ensure_region_infra "$region")
@@ -164,25 +220,22 @@ launch_one() {
 up() {
   : > "$STATE"
   local region
-  log "RUN_ID=$RUN_ID provisioning ${#REGIONS[@]} regions x $((RACKS*NODES_PER_RACK)) nodes (3 racks x 3)"
+  log "RUN_ID=$RUN_ID provisioning ${#REGIONS[@]} regions x $((RACKS*NODES_PER_RACK)) nodes (3 racks x 3, batched per rack)"
   for region in "${REGIONS[@]}"; do
     local azs=(${AZS[$region]})
     local r
     for r in $(seq 1 $RACKS); do
       local az=${azs[$(( (r-1) % ${#azs[@]} ))]}
-      local n
-      for n in $(seq 1 $NODES_PER_RACK); do
-        local row
-        if row=$(launch_one "$region" "$az" "${DC[$region]}" "r${r}" "n${n}"); then
-          echo "$row" >> "$STATE"
-          log "up: $row"
-        else
-          log "up: SKIP $region r${r} n${n} (launch failed)"
-        fi
-      done
+      local rows
+      if rows=$(launch_rack "$region" "$az" "${DC[$region]}" "r${r}"); then
+        echo "$rows" >> "$STATE"
+        log "up: rack ${DC[$region]}-r${r} ($(echo "$rows" | grep -c .) nodes)"
+      else
+        log "up: SKIP rack $region r${r} (launch failed)"
+      fi
     done
   done
-  log "up complete; $(wc -l < "$STATE") nodes; state in $STATE"
+  log "up complete; $(grep -c . "$STATE") nodes; state in $STATE"
 }
 
 status() {
@@ -246,18 +299,16 @@ add_region() {
   fi
   # add this region to REGIONS so allowlist_ip_everywhere covers it
   REGIONS+=("$region")
-  local azs=(${AZS[$region]}) r n
+  local azs=(${AZS[$region]}) r
   for r in $(seq 1 $RACKS); do
     local az=${azs[$(( (r-1) % ${#azs[@]} ))]}
-    for n in $(seq 1 $NODES_PER_RACK); do
-      local row
-      if row=$(launch_one "$region" "$az" "${DC[$region]}" "r${r}" "n${n}"); then
-        echo "$row" >> "$STATE"
-        log "add: $row"
-      else
-        log "add: SKIP $region r${r} n${n} (launch failed)"
-      fi
-    done
+    local rows
+    if rows=$(launch_rack "$region" "$az" "${DC[$region]}" "r${r}"); then
+      echo "$rows" >> "$STATE"
+      log "add: rack ${DC[$region]}-r${r} ($(echo "$rows" | grep -c .) nodes)"
+    else
+      log "add: SKIP rack $region r${r} (launch failed)"
+    fi
   done
   log "add-region $region ($arch) complete: 9 nodes appended to $STATE"
 }
