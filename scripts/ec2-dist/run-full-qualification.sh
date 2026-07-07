@@ -71,11 +71,14 @@ aws() { command aws --profile "$PROFILE" "$@"; }
 node_key() { echo "/tmp/${RUN_ID}-${1}.pem"; }
 nsh() { # nsh <region> <pub> <cmd...>
   local region=$1 pub=$2; shift 2
-  SSH_AUTH_SOCK="" ssh -i "$(node_key "$region")" $SSH_OPTS "ec2-user@$pub" "$@"
+  # `-n` (stdin from /dev/null) is essential: without it ssh reads from
+  # the enclosing `while read ... < $STATE` loop's stdin and drains the
+  # state file, so the loop terminates after the first batch.
+  SSH_AUTH_SOCK="" ssh -n -i "$(node_key "$region")" $SSH_OPTS "ec2-user@$pub" "$@"
 }
 nscp() { # nscp <region> <src> <pub> <dst>
   local region=$1 src=$2 pub=$3 dst=$4
-  SSH_AUTH_SOCK="" scp -i "$(node_key "$region")" $SSH_OPTS "$src" "ec2-user@$pub:$dst" >/dev/null 2>&1
+  SSH_AUTH_SOCK="" scp -i "$(node_key "$region")" $SSH_OPTS "$src" "ec2-user@$pub:$dst" >/dev/null 2>&1 < /dev/null
 }
 
 # ----- topology -----
