@@ -151,7 +151,7 @@ bson = { version = "3", features = ["serde"] }
 # multi-engine storage substrate. We depend on the `noxu`
 # umbrella crate (published on crates.io), which re-exports the
 # full engine public API behind a single name + version.
-noxu = "7.3.0"
+noxu = "7.4.0"
 
 # Dev / test
 # `hegeltest` (re-exported as `hegel`) is the property-testing crate
