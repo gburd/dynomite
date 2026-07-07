@@ -218,6 +218,12 @@ YML
         \$VS --daemonize yes --bind 127.0.0.1 --port 6379 2>/dev/null
         \$VS --daemonize yes --bind 127.0.0.1 --port 6380 2>/dev/null
         sleep 1
+        # Flush both backends so a new consistency-level run starts from
+        # a clean store -- otherwise leftover writes from the previous
+        # level (which routed under different rules) look like
+        # divergences to the differential driver.
+        CLI=\$(command -v valkey-cli || command -v redis-cli)
+        [ -n \"\$CLI\" ] && { \$CLI -p 6379 FLUSHALL >/dev/null 2>&1; \$CLI -p 6380 FLUSHALL >/dev/null 2>&1; }
         nohup ~/dynomite-c -c ~/dynomite-c.yml >~/dynomite-c.log 2>&1 </dev/null &
         DYN_ADVERTISE_ADDR=${pub} nohup ~/dynomited -c ~/dynomite-r.yml >~/dynomite-r.log 2>&1 </dev/null &
         sleep 2
