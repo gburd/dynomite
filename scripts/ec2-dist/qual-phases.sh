@@ -208,7 +208,10 @@ YML
       nsh "$region" "$pub" "
         sudo pkill -9 -x dynomite 2>/dev/null; sudo pkill -9 -x dynomited 2>/dev/null
         sudo fuser -k ${C_DNODE}/tcp ${C_CLIENT}/tcp ${C_STATS}/tcp ${R_DNODE}/tcp ${R_CLIENT}/tcp ${R_STATS}/tcp 2>/dev/null
-        sleep 5
+        sleep 3
+        # wait until every proxy port is released before rebinding, so a
+        # relaunch between consistency levels does not hit EADDRINUSE.
+        for _i in \$(seq 1 20); do ss -tln | grep -qE ':${C_DNODE}|:${C_CLIENT}|:${R_DNODE}|:${R_CLIENT}' || break; sleep 1; done
         VS=\$(command -v valkey-server || command -v redis-server)
         [ -z \"\$VS\" ] && { sudo dnf install -y -q valkey 2>/dev/null || sudo dnf install -y -q redis6 2>/dev/null; VS=\$(command -v valkey-server || command -v redis6-server || command -v redis-server); }
         \$VS --daemonize yes --bind 127.0.0.1 --port 6379 2>/dev/null
@@ -343,7 +346,8 @@ YML
     (
       nscp "$region" "$STATE_DIR/ro-${dc}-${rack}-${node}.yml" "$pub" '~/dynomite-r.yml'
       nsh "$region" "$pub" "
-        sudo pkill -9 -x dynomited 2>/dev/null; sudo fuser -k ${R_DNODE}/tcp ${R_CLIENT}/tcp ${R_STATS}/tcp 2>/dev/null; sleep 4
+        sudo pkill -9 -x dynomited 2>/dev/null; sudo fuser -k ${R_DNODE}/tcp ${R_CLIENT}/tcp ${R_STATS}/tcp 2>/dev/null; sleep 3
+        for _i in \$(seq 1 20); do ss -tln | grep -qE ':${R_DNODE}|:${R_CLIENT}' || break; sleep 1; done
         VS=\$(command -v valkey-server || command -v redis-server); \$VS --daemonize yes --bind 127.0.0.1 --port 6380 2>/dev/null; sleep 1
         DYN_ADVERTISE_ADDR=${pub} nohup ~/dynomited -c ~/dynomite-r.yml >~/dynomite-r.log 2>&1 </dev/null & sleep 1; echo up" >/dev/null 2>&1
     ) &
