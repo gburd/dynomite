@@ -120,17 +120,42 @@ launch_one() {
   local arch=${ARCH[$region]}
   local itype=${ITYPE[$arch]}
   local ami; [ "$arch" = x86 ] && ami=${AMI_X86[$region]} || ami=${AMI_ARM[$region]}
-  local iid; iid=$(aws ec2 run-instances --region "$region" \
-    --image-id "$ami" --instance-type "$itype" \
-    --key-name "${RUN_ID}-key" --security-group-ids "$sg" --subnet-id "$subnet" \
-    --associate-public-ip-address \
-    --tag-specifications "ResourceType=instance,Tags=[{Key=$TAG,Value=$RUN_ID},{Key=Name,Value=${dc}-${rack}-${node}},{Key=arch,Value=${arch}}]" \
-    --query 'Instances[0].InstanceId' --output text)
-  aws ec2 wait instance-running --region "$region" --instance-ids "$iid"
-  local pub; pub=$(aws ec2 describe-instances --region "$region" --instance-ids "$iid" \
-    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
-  local priv; priv=$(aws ec2 describe-instances --region "$region" --instance-ids "$iid" \
-    --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+  # run-instances with retry: AWS throttles rapid sequential launches
+  # (RequestLimitExceeded), returning an empty InstanceId. Retry with
+  # backoff so we never write a phantom (blank-IP) state row.
+  local iid="" attempt
+  for attempt in 1 2 3 4 5; do
+    iid=$(aws ec2 run-instances --region "$region" \
+      --image-id "$ami" --instance-type "$itype" \
+      --key-name "${RUN_ID}-key" --security-group-ids "$sg" --subnet-id "$subnet" \
+      --associate-public-ip-address \
+      --tag-specifications "ResourceType=instance,Tags=[{Key=$TAG,Value=$RUN_ID},{Key=Name,Value=${dc}-${rack}-${node}},{Key=arch,Value=${arch}}]" \
+      --query 'Instances[0].InstanceId' --output text 2>/dev/null)
+    [ -n "$iid" ] && [ "$iid" != "None" ] && break
+    log "run-instances $dc-$rack-$node attempt $attempt returned empty (throttle?); backing off"
+    sleep $((attempt * 5))
+  done
+  if [ -z "$iid" ] || [ "$iid" = "None" ]; then
+    log "FAILED to launch $dc-$rack-$node after retries; skipping (no state row)"
+    return 1
+  fi
+  aws ec2 wait instance-running --region "$region" --instance-ids "$iid" 2>/dev/null
+  # pub/priv can lag instance-running by a beat (eventual consistency);
+  # retry until both resolve.
+  local pub="" priv=""
+  for attempt in 1 2 3 4 5 6; do
+    pub=$(aws ec2 describe-instances --region "$region" --instance-ids "$iid" \
+      --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null)
+    priv=$(aws ec2 describe-instances --region "$region" --instance-ids "$iid" \
+      --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2>/dev/null)
+    [ -n "$pub" ] && [ "$pub" != "None" ] && [ -n "$priv" ] && [ "$priv" != "None" ] && break
+    sleep 5
+  done
+  if [ -z "$pub" ] || [ "$pub" = "None" ]; then
+    log "FAILED to get public IP for $iid ($dc-$rack-$node); terminating + skipping"
+    aws ec2 terminate-instances --region "$region" --instance-ids "$iid" >/dev/null 2>&1
+    return 1
+  fi
   allowlist_ip_everywhere "$pub"
   # State row: region az dc rack node arch itype iid pub priv
   echo "$region $az $dc $rack $node $arch $itype $iid $pub $priv"
@@ -147,9 +172,13 @@ up() {
       local az=${azs[$(( (r-1) % ${#azs[@]} ))]}
       local n
       for n in $(seq 1 $NODES_PER_RACK); do
-        local row; row=$(launch_one "$region" "$az" "${DC[$region]}" "r${r}" "n${n}")
-        echo "$row" >> "$STATE"
-        log "up: $row"
+        local row
+        if row=$(launch_one "$region" "$az" "${DC[$region]}" "r${r}" "n${n}"); then
+          echo "$row" >> "$STATE"
+          log "up: $row"
+        else
+          log "up: SKIP $region r${r} n${n} (launch failed)"
+        fi
       done
     done
   done
@@ -221,9 +250,13 @@ add_region() {
   for r in $(seq 1 $RACKS); do
     local az=${azs[$(( (r-1) % ${#azs[@]} ))]}
     for n in $(seq 1 $NODES_PER_RACK); do
-      local row; row=$(launch_one "$region" "$az" "${DC[$region]}" "r${r}" "n${n}")
-      echo "$row" >> "$STATE"
-      log "add: $row"
+      local row
+      if row=$(launch_one "$region" "$az" "${DC[$region]}" "r${r}" "n${n}"); then
+        echo "$row" >> "$STATE"
+        log "add: $row"
+      else
+        log "add: SKIP $region r${r} n${n} (launch failed)"
+      fi
     done
   done
   log "add-region $region ($arch) complete: 9 nodes appended to $STATE"
