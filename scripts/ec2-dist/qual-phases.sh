@@ -223,9 +223,23 @@ YML
         sleep 2
         echo \"c=\$(ss -tln|grep -c :${C_CLIENT}) r=\$(ss -tln|grep -c :${R_CLIENT})\"" >> "$STATE_DIR/launch.result" 2>/dev/null
     ) &
-    i=$((i+1)); [ $((i % 8)) -eq 0 ] && wait
+    i=$((i+1)); [ $((i % 4)) -eq 0 ] && wait
   done < "$STATE"
   wait
+  # The proxy launch can race the socket release on a few nodes even
+  # with the kill-wait; retry any ENTRY node (r1-n1 per region -- the
+  # nodes the differential driver runs on) whose Rust proxy is not up,
+  # so a transient launch miss does not fail the whole phase.
+  local rrow rreg rpub rc
+  while read -r rrow; do
+    rreg=$(echo "$rrow" | awk '{print $1}'); rpub=$(echo "$rrow" | awk '{print $9}')
+    for rc in 1 2 3; do
+      local up; up=$(nsh "$rreg" "$rpub" 'ss -tln | grep -c :'"$R_CLIENT" 2>/dev/null)
+      [ "${up:-0}" -ge 1 ] && break
+      log "retry Rust launch on entry node $rreg/$rpub (attempt $rc)"
+      nsh "$rreg" "$rpub" "sudo pkill -9 -x dynomited 2>/dev/null; for _i in \$(seq 1 15); do pgrep -x dynomited >/dev/null || break; sudo pkill -9 -x dynomited; sleep 1; done; for _i in \$(seq 1 15); do ss -tln|grep -qE ':${R_DNODE}|:${R_CLIENT}' || break; sleep 1; done; DYN_ADVERTISE_ADDR=${rpub} nohup ~/dynomited -c ~/dynomite-r.yml >~/dynomite-r.log 2>&1 </dev/null & sleep 3" >/dev/null 2>&1
+    done
+  done < <(awk '$4=="r1" && $5=="n1"' "$STATE")
   log "differential ($CONS) launched; converging 90s"
   sleep 90
 }
@@ -352,7 +366,7 @@ YML
         VS=\$(command -v valkey-server || command -v redis-server); \$VS --daemonize yes --bind 127.0.0.1 --port 6380 2>/dev/null; sleep 1
         DYN_ADVERTISE_ADDR=${pub} nohup ~/dynomited -c ~/dynomite-r.yml >~/dynomite-r.log 2>&1 </dev/null & sleep 1; echo up" >/dev/null 2>&1
     ) &
-    i=$((i+1)); [ $((i % 8)) -eq 0 ] && wait
+    i=$((i+1)); [ $((i % 4)) -eq 0 ] && wait
   done < "$STATE"
   wait
 }
