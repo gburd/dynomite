@@ -127,7 +127,6 @@ async fn rest_endpoint_serves_snapshot_json() {
     let sink = Arc::new(Mutex::new(snap));
     let addr: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid loopback addr");
     let server = StatsServer::bind(addr, Arc::clone(&sink))
-        .await
         .expect("bind ephemeral port");
     let local = server.local_addr().expect("local address");
     let server = Arc::new(server);
@@ -180,7 +179,6 @@ async fn metrics_endpoint_returns_prometheus_text() {
     let sink = Arc::new(Mutex::new(snap));
     let addr: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid loopback addr");
     let server = StatsServer::bind(addr, Arc::clone(&sink))
-        .await
         .expect("bind ephemeral port");
     let local = server.local_addr().expect("local address");
     let handle = tokio::spawn(async move { server.accept_one().await });
@@ -299,7 +297,6 @@ async fn ring_endpoint_serves_multi_peer_json() {
     let sink = Arc::new(Mutex::new(Snapshot::default()));
     let addr: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid loopback addr");
     let server = StatsServer::bind(addr, Arc::clone(&sink))
-        .await
         .expect("bind ephemeral port")
         .with_ring_provider(provider);
     let local_addr = server.local_addr().expect("local address");
@@ -347,7 +344,6 @@ async fn ring_endpoint_returns_503_when_provider_unwired() {
     let sink = Arc::new(Mutex::new(Snapshot::default()));
     let addr: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid loopback addr");
     let server = StatsServer::bind(addr, Arc::clone(&sink))
-        .await
         .expect("bind ephemeral port");
     let local_addr = server.local_addr().expect("local address");
     let handle = tokio::spawn(async move { server.accept_one().await });
@@ -382,7 +378,6 @@ async fn stats_endpoint_unchanged() {
     let sink = Arc::new(Mutex::new(snap));
     let addr: std::net::SocketAddr = "127.0.0.1:0".parse().expect("valid loopback addr");
     let server = StatsServer::bind(addr, Arc::clone(&sink))
-        .await
         .expect("bind ephemeral port");
     let local = server.local_addr().expect("local address");
     let handle = tokio::spawn(async move { server.accept_one().await });

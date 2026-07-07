@@ -833,7 +833,6 @@ impl Server {
                 });
                 Some(
                     StatsServer::bind(addr, stats_sink.clone())
-                        .await
                         .map_err(ServerError::Io)?
                         .with_ring_provider(ring_provider),
                 )

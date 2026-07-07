@@ -78,7 +78,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// # async fn _example() -> std::io::Result<()> {
 /// let sink = Arc::new(Mutex::new(Snapshot::default()));
-/// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+/// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)?;
 /// let _addr = server.local_addr()?;
 /// # Ok(())
 /// # }
@@ -103,12 +103,21 @@ impl StatsServer {
     ///
     /// # async fn _example() -> std::io::Result<()> {
     /// let sink = Arc::new(Mutex::new(Snapshot::default()));
-    /// let _server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+    /// let _server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn bind(addr: SocketAddr, source: Arc<Mutex<Snapshot>>) -> io::Result<Self> {
-        let listener = TcpListener::bind(addr).await?;
+    pub fn bind(addr: SocketAddr, source: Arc<Mutex<Snapshot>>) -> io::Result<Self> {
+        // Bind via the shared helper so the stats listener sets
+        // SO_REUSEADDR like the client and dnode listeners. Without it,
+        // a fast restart (kill + relaunch) fails with EADDRINUSE while
+        // the previous socket lingers in TIME_WAIT, and because the
+        // server builds all listeners as a unit that failure aborts the
+        // whole process.
+        let listener = crate::net::listener::bind_dual_stack(
+            addr,
+            crate::net::listener::BindOptions::default(),
+        )?;
         Ok(Self {
             listener,
             source,
@@ -132,8 +141,7 @@ impl StatsServer {
     ///
     /// # async fn _example() -> std::io::Result<()> {
     /// let sink = Arc::new(Mutex::new(Snapshot::default()));
-    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)
-    ///     .await?
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)?
     ///     .with_cluster_info_provider(Arc::new(ClusterInfoSnapshot::synthetic));
     /// drop(server);
     /// # Ok(())
@@ -161,8 +169,7 @@ impl StatsServer {
     ///
     /// # async fn _example() -> std::io::Result<()> {
     /// let sink = Arc::new(Mutex::new(Snapshot::default()));
-    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)
-    ///     .await?
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)?
     ///     .with_ring_provider(Arc::new(RingSnapshot::default));
     /// drop(server);
     /// # Ok(())
@@ -185,7 +192,7 @@ impl StatsServer {
     ///
     /// # async fn _example() -> std::io::Result<()> {
     /// let sink = Arc::new(Mutex::new(Snapshot::default()));
-    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)?;
     /// let addr = server.local_addr()?;
     /// assert!(addr.port() != 0);
     /// # Ok(())
@@ -207,7 +214,7 @@ impl StatsServer {
     ///
     /// # async fn _example() -> std::io::Result<()> {
     /// let sink = Arc::new(Mutex::new(Snapshot::default()));
-    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)?;
     /// server.accept_one().await?;
     /// # Ok(())
     /// # }
@@ -232,7 +239,7 @@ impl StatsServer {
     ///
     /// # async fn _example() -> std::io::Result<()> {
     /// let sink = Arc::new(Mutex::new(Snapshot::default()));
-    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).await?;
+    /// let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)?;
     /// let _ = tokio::spawn(async move { server.run().await });
     /// # Ok(())
     /// # }
@@ -395,4 +402,32 @@ async fn write_metrics_response(sock: &mut TcpStream, body: &[u8]) -> io::Result
     sock.write_all(body).await?;
     sock.shutdown().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: the stats listener must set SO_REUSEADDR so a fast
+    /// restart (kill + immediate rebind, as the qualification harness
+    /// does between consistency-level runs) does not fail with
+    /// EADDRINUSE while the previous socket lingers. Bind, capture the
+    /// concrete address, drop the server, and rebind the same address
+    /// immediately -- this succeeds with SO_REUSEADDR and would fail a
+    /// plain TcpListener::bind under TIME_WAIT.
+    #[tokio::test]
+    async fn stats_bind_is_reusable_after_drop() {
+        let sink = Arc::new(Mutex::new(Snapshot::default()));
+        let first =
+            StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink.clone()).expect("first bind");
+        let addr = first.local_addr().expect("addr");
+        drop(first);
+        // Immediate rebind of the same concrete address must succeed.
+        let second = StatsServer::bind(addr, sink);
+        assert!(
+            second.is_ok(),
+            "rebind of {addr} failed (SO_REUSEADDR not set?): {:?}",
+            second.err()
+        );
+    }
 }
