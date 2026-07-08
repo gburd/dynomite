@@ -24,3 +24,8 @@ dump.rdb
 # dyniak-bench output directories (per-run; reference results
 # go under crates/dyniak-bench/tests/smoke only)
 /tests/bench-*
+
+# local agent/dev tooling
+.claude/
+.envrc
+.mcp.json

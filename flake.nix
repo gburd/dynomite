@@ -39,6 +39,10 @@
 
             # Docs
             mdbook
+            mdbook-mermaid
+            mdbook-admonish
+            mdbook-linkcheck
+            lychee
 
             # Build deps for native crates (quiche bundles its own BoringSSL)
             clang_18

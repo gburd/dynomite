@@ -1,0 +1,62 @@
+name: docs
+
+# Builds the mdBook reference manual, runs the documentation link
+# checker (mdbook-linkcheck for internal links + lychee for external
+# URLs and man-page references), and deploys the result to GitHub
+# Pages. The Codeberg mirror runs the parallel `.forgejo/workflows/
+# docs.yml` which publishes to Codeberg Pages from the `pages` branch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  MDBOOK_VERSION: "0.4.52"
+  MDBOOK_MERMAID_VERSION: "0.16.2"
+  MDBOOK_ADMONISH_VERSION: "1.20.0"
+  MDBOOK_LINKCHECK_VERSION: "0.7.7"
+
+jobs:
+  build:
+    name: build book + check links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install mdbook toolchain
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-mermaid@${{ env.MDBOOK_MERMAID_VERSION }},mdbook-admonish@${{ env.MDBOOK_ADMONISH_VERSION }},mdbook-linkcheck@${{ env.MDBOOK_LINKCHECK_VERSION }},lychee
+      - name: build book (internal links checked by mdbook-linkcheck)
+        run: mdbook build docs/book
+      - name: external link + man-page check (lychee)
+        run: |
+          lychee --config docs/book/lychee.toml \
+            'docs/book/src/**/*.md' 'README.md' 'crates/**/README.md'
+      - name: upload pages artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/book/html
+
+  deploy:
+    name: deploy to GitHub Pages
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,56 @@
+name: docs
+
+# Codeberg Forgejo mirror of `.github/workflows/docs.yml`. Builds the
+# mdBook reference manual, runs the documentation link checker, and
+# publishes the rendered HTML to the `pages` branch, which Codeberg
+# Pages serves at https://gregburd.codeberg.page/dynomite/ (and the
+# custom domain if configured). Both forges build from the same
+# `docs/book` sources so the two sites never diverge.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  MDBOOK_VERSION: "0.4.52"
+  MDBOOK_MERMAID_VERSION: "0.16.2"
+  MDBOOK_ADMONISH_VERSION: "1.20.0"
+  MDBOOK_LINKCHECK_VERSION: "0.7.7"
+
+jobs:
+  build:
+    name: build book + check links
+    runs-on: docker
+    container:
+      image: node:20-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - name: install mdbook toolchain
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+          curl -fsSL https://github.com/badboy/mdbook-mermaid/releases/download/v${MDBOOK_MERMAID_VERSION}/mdbook-mermaid-v${MDBOOK_MERMAID_VERSION}-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+          curl -fsSL https://github.com/tommilligan/mdbook-admonish/releases/download/v${MDBOOK_ADMONISH_VERSION}/mdbook-admonish-v${MDBOOK_ADMONISH_VERSION}-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+          curl -fsSL https://github.com/Michael-F-Bryan/mdbook-linkcheck/releases/download/v${MDBOOK_LINKCHECK_VERSION}/mdbook-linkcheck.x86_64-unknown-linux-gnu.zip -o /tmp/lc.zip
+          unzip -o /tmp/lc.zip -d /usr/local/bin && chmod +x /usr/local/bin/mdbook-linkcheck
+          curl -fsSL https://github.com/lycheeverse/lychee/releases/latest/download/lychee-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin lychee
+      - name: build book (internal links checked by mdbook-linkcheck)
+        run: mdbook build docs/book
+      - name: external link + man-page check (lychee)
+        run: |
+          lychee --config docs/book/lychee.toml \
+            'docs/book/src/**/*.md' 'README.md' 'crates/**/README.md'
+      - name: publish to Codeberg Pages
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          cd target/book/html
+          git init -q
+          git config user.name "Greg Burd"
+          git config user.email "greg@burd.me"
+          git add -A
+          git commit -q -m "docs: publish rendered book"
+          git branch -M pages
+          git remote add origin "https://x-access-token:${{ secrets.PAGES_TOKEN }}@codeberg.org/gregburd/dynomite.git"
+          git push -f origin pages

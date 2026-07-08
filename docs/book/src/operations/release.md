@@ -101,8 +101,8 @@ git push forgejo v0.1.0
 
 Verify both runners pass on the tag SHA:
 
-* https://github.com/<owner>/dynomite/actions
-* https://codeberg.org/<owner>/dynomite/actions
+* `https://github.com/gburd/dynomite/actions`
+* `https://codeberg.org/gregburd/dynomite/actions`
 
 ## Container image
 

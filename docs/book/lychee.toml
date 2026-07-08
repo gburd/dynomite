@@ -1,0 +1,41 @@
+# lychee configuration for the documentation link checker.
+#
+# lychee handles EXTERNAL links (http/https URLs), man-page references,
+# and cross-repository links. INTERNAL book links (relative .md and
+# rustdoc anchors) are checked by mdbook-linkcheck during `mdbook
+# build`, so this run focuses on the wider web.
+
+# Accept these as success in addition to 200.
+accept = [200, 206, 429]
+
+# Retry transient failures.
+max_retries = 2
+retry_wait_time = 2
+timeout = 20
+
+# Be a good citizen.
+max_concurrency = 8
+user_agent = "lychee/dynomite-docs"
+
+# Do not descend into rendered output or vendored trees.
+exclude_path = [
+  "target",
+  "docs/book/theme",
+]
+
+# URLs we deliberately do not resolve at CI time:
+#  - localhost / example hosts used in code samples
+#  - the Pages sites themselves (may not exist yet on a fresh fork)
+#  - crates.io/docs.rs pages that rate-limit bots
+exclude = [
+  '^https?://(127\.0\.0\.1|localhost|0\.0\.0\.0)',
+  '^https?://dynomite\.local',
+  '^https?://example\.(com|org)',
+  '^https?://gregburd\.codeberg\.page',
+  '^https?://gburd\.github\.io',
+  '^https?://docs\.rs/',
+  '^https?://crates\.io/',
+]
+
+# Treat man-page URIs (man:foo(1)) as informational, not fetched.
+exclude_mail = true

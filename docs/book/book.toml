@@ -1,13 +1,49 @@
 [book]
 title = "Dynomite (Rust) Reference Manual"
-authors = ["The Dynomite Rust Port Authors"]
+authors = ["Greg Burd"]
 language = "en"
 src = "src"
+description = "Reference manual and getting-started guide for the Rust implementation of Dynomite and the Dyniak Riak-compatible layer."
 
 [build]
 build-dir = "../../target/book"
+create-missing = false
 
 [output.html]
 default-theme = "navy"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/gburd/dynomite"
+git-repository-url = "https://codeberg.org/gregburd/dynomite"
+git-repository-icon = "fa-git-alt"
+edit-url-template = "https://codeberg.org/gregburd/dynomite/_edit/main/docs/book/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+additional-css = ["./mdbook-admonish.css", "./theme/dynomite.css"]
+no-section-label = false
+mathjax-support = false
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.playground]
+editable = false
+copyable = true
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 2
+heading-split-level = 3
+
+[output.linkcheck]
+follow-web-links = false
+warning-policy = "warn"
+exclude = ['dynomite\.local', 'example\.com']
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[preprocessor.admonish]
+command = "mdbook-admonish"
+assets_version = "3.1.0" # do not edit: managed by `mdbook-admonish install`

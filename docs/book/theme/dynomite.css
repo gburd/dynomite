@@ -1,0 +1,91 @@
+/* Dynomite reference manual custom theme.
+   Carries a consistent visual identity across every page: the accent
+   colour, callout hero panel, command/output framing, and diagram
+   captions used on the landing page are reused throughout. */
+
+:root {
+  --dyn-accent: #c1440e;      /* dynamo ember */
+  --dyn-accent-soft: #e8663a;
+  --dyn-rule: #3b4252;
+  --dyn-panel-bg: #2b303b;
+  --dyn-panel-border: #434c5e;
+}
+
+/* Hero panel used at the top of chapter landing pages.
+   Usage:  <div class="dyn-hero"> ... </div>  */
+.dyn-hero {
+  border: 1px solid var(--dyn-panel-border);
+  border-left: 4px solid var(--dyn-accent);
+  border-radius: 6px;
+  background: var(--dyn-panel-bg);
+  padding: 1rem 1.25rem;
+  margin: 1rem 0 1.5rem 0;
+}
+.dyn-hero h1,
+.dyn-hero h2 {
+  margin-top: 0;
+  border-bottom: none;
+}
+.dyn-hero .dyn-tagline {
+  font-size: 1.05rem;
+  color: var(--dyn-accent-soft);
+}
+
+/* "At a glance" fact box, right-aligned like a reference sidebar. */
+.dyn-facts {
+  border: 1px solid var(--dyn-panel-border);
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  margin: 1rem 0;
+  font-size: 0.92rem;
+}
+.dyn-facts dt {
+  font-weight: 600;
+  color: var(--dyn-accent-soft);
+}
+.dyn-facts dd {
+  margin: 0 0 0.5rem 0;
+}
+
+/* Roads-not-taken block: an explicit "we did NOT choose X" callout.
+   Rendered via  ```admonish note title="Road not taken" ...  as well,
+   but this class styles inline HTML variants. */
+.dyn-alt {
+  border-left: 4px solid #5e81ac;
+  background: rgba(94, 129, 172, 0.08);
+  padding: 0.5rem 1rem;
+  margin: 1rem 0;
+  border-radius: 0 4px 4px 0;
+}
+
+/* Diagram caption under a mermaid block. */
+.dyn-caption {
+  text-align: center;
+  font-size: 0.88rem;
+  font-style: italic;
+  color: #9aa4b8;
+  margin: -0.5rem 0 1.25rem 0;
+}
+
+/* Section links back to source / man pages. */
+.dyn-srclink {
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+.dyn-srclink code {
+  color: var(--dyn-accent-soft);
+}
+
+/* Make mermaid diagrams sit centred with breathing room. */
+.mermaid {
+  display: flex;
+  justify-content: center;
+  margin: 1.25rem 0;
+}
+
+/* Tighten the accent on inline code in headings. */
+.content h1 code,
+.content h2 code,
+.content h3 code {
+  color: var(--dyn-accent-soft);
+}

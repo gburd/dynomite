@@ -1,5 +1,16 @@
 # Dynomite
 
+[![Codeberg CI](https://ci.codeberg.org/api/badges/gregburd/dynomite/status.svg)](https://codeberg.org/gregburd/dynomite/actions)
+[![GitHub CI](https://github.com/gburd/dynomite/actions/workflows/ci.yml/badge.svg)](https://github.com/gburd/dynomite/actions/workflows/ci.yml)
+[![Docs](https://github.com/gburd/dynomite/actions/workflows/docs.yml/badge.svg)](https://gburd.github.io/dynomite/)
+[![crates.io](https://img.shields.io/crates/v/dynomite-engine.svg)](https://crates.io/crates/dynomite-engine)
+[![docs.rs](https://img.shields.io/docsrs/dynomite-engine.svg)](https://docs.rs/dynomite-engine)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+
+**Reference manual and getting-started guide:**
+[gburd.github.io/dynomite](https://gburd.github.io/dynomite/)
+(mirror: [gregburd.codeberg.page/dynomite](https://gregburd.codeberg.page/dynomite/)).
+
 Inspired by [Dynamo whitepaper](http://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf),
 is a thin, distributed dynamo layer for different storage engines and
 protocols. Currently these include [Valkey](https://github.com/valkey-io/valkey)
@@ -30,7 +41,6 @@ It can be used both as:
 
 ## Origin Story
 
-This is a Rust 
 This project is a from-scratch Rust port of
 [Netflix Dynomite](https://github.com/Netflix/dynomite) that aims to be
 functionally identical to the original C codebase.
