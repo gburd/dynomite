@@ -159,7 +159,7 @@ noxu = "7.4.0"
 # https://github.com/hegeldev/hegel-rust. The `native` feature pulls in
 # the in-process backend (rand + num-bigint + num-traits) so tests do
 # not need an external server.
-hegeltest = { version = "0.23" }
+hegeltest = { version = "0.25" }
 # Loom is a model checker for concurrent Rust. It only ships into
 # the build under `--cfg loom`; production code is unaffected. Tests
 # that depend on it live under `crates/<crate>/tests/loom_*.rs`,
