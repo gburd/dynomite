@@ -91,7 +91,6 @@ fn ring_status_renders_one_row_per_peer() {
         let provider: RingProvider = Arc::new(move || gather_ring_from_pool(&ring_pool));
         let sink = Arc::new(Mutex::new(Snapshot::default()));
         let stats = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)
-            .await
             .expect("bind stats")
             .with_ring_provider(provider);
         let stats_addr = stats.local_addr().expect("stats addr");

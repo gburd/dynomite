@@ -31,7 +31,6 @@ fn cluster_info_round_trip_against_stats_server() {
     let (addr, server_task) = runtime.block_on(async {
         let sink = Arc::new(Mutex::new(Snapshot::default()));
         let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)
-            .await
             .expect("bind")
             .with_cluster_info_provider(Arc::new(ClusterInfoSnapshot::synthetic));
         let addr = server.local_addr().expect("local_addr");
@@ -76,7 +75,6 @@ fn cluster_info_writes_to_output_path() {
     let (addr, server_task) = runtime.block_on(async {
         let sink = Arc::new(Mutex::new(Snapshot::default()));
         let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)
-            .await
             .expect("bind")
             .with_cluster_info_provider(Arc::new(ClusterInfoSnapshot::synthetic));
         let addr = server.local_addr().expect("local_addr");
@@ -119,7 +117,6 @@ fn cluster_info_returns_503_when_provider_unwired() {
         // must return 503 in that mode and the CLI must surface
         // the failure.
         let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)
-            .await
             .expect("bind");
         let addr = server.local_addr().expect("local_addr");
         let task = tokio::spawn(async move {
