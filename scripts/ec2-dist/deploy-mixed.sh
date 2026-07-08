@@ -79,6 +79,59 @@ authorize_ip() {
     --protocol tcp --port 22222-22223 --cidr "${ip}/32" >/dev/null 2>&1 || true
 }
 
+# A managed prefix list holds many /32 entries but is referenced by a
+# single SG rule per port-group. With 45 mesh nodes, per-IP /32 rules
+# (45 x 3 = 135) blow past the 60-rule SG quota and later nodes are
+# silently dropped, breaking the cross-region dnode mesh. The prefix
+# list keeps the SG at 3 mesh rules regardless of node count.
+ensure_prefix_list() { # ensure_prefix_list <region> -> plId on stdout
+  local region=$1 pl
+  pl=$(aws ec2 describe-managed-prefix-lists --region "$region" \
+    --filters "Name=tag:$TAG,Values=$RUN_ID" \
+    --query 'PrefixLists[0].PrefixListId' --output text 2>/dev/null)
+  if [ -z "$pl" ] || [ "$pl" = "None" ]; then
+    pl=$(aws ec2 create-managed-prefix-list --region "$region" \
+      --prefix-list-name "${RUN_ID}-mesh" --address-family IPv4 \
+      --max-entries 100 \
+      --tag-specifications "ResourceType=prefix-list,Tags=[{Key=$TAG,Value=$RUN_ID}]" \
+      --query 'PrefixList.PrefixListId' --output text 2>/dev/null)
+  fi
+  echo "$pl"
+}
+
+# Authorize an SG against its region's mesh prefix list (idempotent).
+authorize_prefix_list() { # authorize_prefix_list <region> <sg> <plId>
+  local region=$1 sg=$2 pl=$3 pg
+  for pg in "22" "8087-9102" "22222-22223"; do
+    local fp=${pg%%-*} tp=${pg##*-}
+    aws ec2 authorize-security-group-ingress --region "$region" --group-id "$sg" \
+      --ip-permissions "IpProtocol=tcp,FromPort=${fp},ToPort=${tp},PrefixListIds=[{PrefixListId=${pl}}]" \
+      >/dev/null 2>&1 || true
+  done
+}
+
+# Add an IP as a /32 to every region's mesh prefix list. The prefix
+# list must be modified with its current version; retry on the version
+# conflict that concurrent adds can cause.
+add_ip_to_prefix_lists() { # add_ip_to_prefix_lists <ip>
+  local ip=$1 region pl ver
+  for region in "${REGIONS[@]}"; do
+    pl=$(ensure_prefix_list "$region")
+    [ -z "$pl" ] || [ "$pl" = "None" ] && continue
+    local attempt
+    for attempt in 1 2 3 4 5; do
+      ver=$(aws ec2 describe-managed-prefix-lists --region "$region" \
+        --prefix-list-ids "$pl" --query 'PrefixLists[0].Version' --output text 2>/dev/null)
+      if aws ec2 modify-managed-prefix-list --region "$region" \
+        --prefix-list-id "$pl" --current-version "$ver" \
+        --add-entries "Cidr=${ip}/32,Description=mesh" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 2
+    done
+  done
+}
+
 ensure_region_infra() {
   local region=$1
   local keyname="${RUN_ID}-key" keyfile="/tmp/${RUN_ID}-${region}.pem"
@@ -98,17 +151,21 @@ ensure_region_infra() {
       --query 'GroupId' --output text)
     authorize_ip "$region" "$sg" "$MY_IP"
   fi
+  # Wire the SG to the region's mesh prefix list (idempotent) so every
+  # mesh node is reachable via 3 rules instead of one /32 rule each.
+  local pl; pl=$(ensure_prefix_list "$region")
+  [ -n "$pl" ] && [ "$pl" != "None" ] && authorize_prefix_list "$region" "$sg" "$pl"
   echo "$sg"
 }
 
 allowlist_ip_everywhere() {
-  local ip=$1 region sg
-  for region in "${REGIONS[@]}"; do
-    sg=$(aws ec2 describe-security-groups --region "$region" \
-      --filters "Name=tag:$TAG,Values=$RUN_ID" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
-    [ -z "$sg" ] || [ "$sg" = "None" ] && continue
-    authorize_ip "$region" "$sg" "$ip"
-  done
+  local ip=$1
+  # Mesh reachability comes entirely from the per-region prefix list
+  # (one entry per node, referenced by 3 SG rules). Do NOT add node IPs
+  # as individual SG /32 rules -- 45 nodes x 3 port-groups = 135 rules
+  # blows the 60-rule SG quota and later nodes get silently dropped,
+  # which is exactly the bug that broke the DC_ONE mesh.
+  add_ip_to_prefix_lists "$ip"
 }
 
 # Launch an entire rack (NODES_PER_RACK instances) in ONE run-instances
@@ -264,6 +321,12 @@ down() {
     for sg in $(aws ec2 describe-security-groups --region "$region" \
         --filters "Name=tag:$TAG,Values=$RUN_ID" --query 'SecurityGroups[].GroupId' --output text 2>/dev/null); do
       aws ec2 delete-security-group --region "$region" --group-id "$sg" >/dev/null 2>&1 || true
+    done
+    # Prefix lists must be deleted AFTER the SGs that reference them.
+    local pl
+    for pl in $(aws ec2 describe-managed-prefix-lists --region "$region" \
+        --filters "Name=tag:$TAG,Values=$RUN_ID" --query 'PrefixLists[].PrefixListId' --output text 2>/dev/null); do
+      aws ec2 delete-managed-prefix-list --region "$region" --prefix-list-id "$pl" >/dev/null 2>&1 || true
     done
     local kp
     for kp in $(aws ec2 describe-key-pairs --region "$region" \
