@@ -834,6 +834,17 @@ fn plan_with_consistency(
                 for (dc_idx, rack_idx, peer_idx) in local {
                     targets.push(build_target(dcs, peers, dc_idx, rack_idx, peer_idx));
                 }
+                // A lone local replica (single-node pool, or any key
+                // whose only local-DC replica is this node) is served
+                // through the local datastore directly. Fanning it out
+                // as a one-element `Replicas` plan would require a wired
+                // backend channel; the `LocalDatastore` path is the one
+                // both the wire proxy and `inject_request` already
+                // serve via the local-datastore hook. Multi-replica
+                // fan-out (more than one local target) is unaffected.
+                if targets.len() == 1 && targets[0].is_local {
+                    return DispatchPlan::LocalDatastore;
+                }
             }
         }
         ConsistencyLevel::DcQuorum | ConsistencyLevel::DcSafeQuorum => {
@@ -2048,6 +2059,36 @@ mod tests {
             }
             other => panic!("expected a 3-replica fan-out for a DC_ONE write, got {other:?}"),
         }
+    }
+
+    /// Regression: a DC_ONE write on a single-node pool (the only
+    /// local-DC replica is this node) must resolve to `LocalDatastore`,
+    /// not a one-element `Replicas` fan-out. The fan-out form requires a
+    /// wired backend channel; the embedded wire server serves local
+    /// traffic through the local-datastore hook via `LocalDatastore`, so
+    /// a lone-replica write that planned as `Replicas` returned a
+    /// no-quorum error over the wire. The multi-replica fan-out above is
+    /// unaffected. See commit 45ba694 (the DC_ONE write-fan-out change
+    /// that introduced the regression) and the embed_api wire test
+    /// `embedded_listen_socket_serves_a_wire_client`.
+    #[test]
+    fn dc_one_write_on_lone_replica_serves_local() {
+        let p = pool(
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcOne,
+            vec![peer(0, "dc1", "rA", 0, true, true)],
+        );
+        let mut req = Msg::new(1, MsgType::ReqRedisSet, false);
+        req.flags_mut().is_read = false;
+        req.push_key(crate::msg::keypos::KeyPos::without_tag(b"k".to_vec()));
+        assert!(
+            matches!(
+                ClusterDispatcher::new(p).plan(&req, b"k"),
+                DispatchPlan::LocalDatastore
+            ),
+            "a DC_ONE write whose only local replica is this node must \
+             serve LocalDatastore, not fan out as a 1-element Replicas plan"
+        );
     }
 
     /// A DC_ONE READ still picks the single rack-local replica
