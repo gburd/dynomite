@@ -458,16 +458,16 @@ fn cbor_head(base: u8, val: u64, out: &mut Vec<u8>) {
     if val < 24 {
         out.push(base | (val as u8));
     } else if val < 0x100 {
-        out.push(base | 24);
+        out.push(base | 0x18);
         out.push(val as u8);
     } else if val < 0x1_0000 {
-        out.push(base | 25);
+        out.push(base | 0x19);
         out.extend_from_slice(&(val as u16).to_be_bytes());
     } else if val < 0x1_0000_0000 {
-        out.push(base | 26);
+        out.push(base | 0x1a);
         out.extend_from_slice(&(val as u32).to_be_bytes());
     } else {
-        out.push(base | 27);
+        out.push(base | 0x1b);
         out.extend_from_slice(&val.to_be_bytes());
     }
 }

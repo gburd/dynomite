@@ -376,7 +376,7 @@ impl DynomitedNode {
         // stale exclusive lock.
         let _ = std::fs::remove_file(&self.pid_file);
         let bin = which_in_path("dynomited")
-            .map_or_else(|| assert_cmd::cargo::cargo_bin("dynomited"), |p| p);
+            .unwrap_or_else(|| assert_cmd::cargo::cargo_bin("dynomited"));
         // Retry the spawn-and-bind dance: the previous instance
         // may still be holding the listen port (kernel cleanup
         // can lag behind a SIGKILL by several seconds).
@@ -441,7 +441,7 @@ impl Cluster {
     /// to bind within the readiness window.
     pub fn launch(mut specs: Vec<NodeSpec>, pool_name: &str) -> io::Result<Self> {
         let bin = which_in_path("dynomited")
-            .map_or_else(|| assert_cmd::cargo::cargo_bin("dynomited"), |p| p);
+            .unwrap_or_else(|| assert_cmd::cargo::cargo_bin("dynomited"));
         let dir = tempfile::tempdir()?;
         let mut backends = Vec::with_capacity(specs.len());
         for s in &mut specs {
@@ -823,7 +823,7 @@ mod tests {
         // client side stays open instead of seeing RST.
         let server = tokio::spawn(async move {
             let (_sock, _) = listener.accept().await.unwrap();
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            tokio::time::sleep(Duration::from_mins(1)).await;
         });
         let mut c = RespClient::connect("127.0.0.1", port).await.unwrap();
         c.set_timeout(Duration::from_millis(100));

@@ -310,7 +310,7 @@ async fn redis_auth_wrong_password_supervisor_fails() {
     // reconnect. The first sleep advertises to the chaos-style
     // bounded backoff (50ms initial), so 2s is comfortably
     // enough for >= 1 attempt across CI noise.
-    tokio::time::sleep(Duration::from_millis(2_000)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Probe: drive a SET and confirm we do NOT get a reply
     // within a short window. The dispatcher hands the request

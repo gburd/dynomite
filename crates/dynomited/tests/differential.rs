@@ -341,7 +341,7 @@ async fn corpus_loads_cleanly() {
     // Every command must start with a RESP prefix or a memcached
     // ASCII verb.
     for (id, bytes) in &cmds {
-        assert!(!bytes.is_empty(), "corpus line {id} decoded to zero bytes",);
+        assert!(!bytes.is_empty(), "corpus line {id} decoded to zero bytes");
     }
 }
 
