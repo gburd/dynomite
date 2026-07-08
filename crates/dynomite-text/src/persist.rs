@@ -390,7 +390,7 @@ impl NoxuPersister {
     /// the on-disk layout from the outside.
     pub fn env_path(&self) -> PathBuf {
         let env = self.lock_env();
-        env.get_home().to_path_buf()
+        env.home().to_path_buf()
     }
 
     fn lock_env(&self) -> MutexGuard<'_, Environment> {
@@ -497,11 +497,7 @@ fn put_doc(
     text: &[u8],
 ) -> Result<(), PersistError> {
     let key = doc_key(doc_id);
-    docs_db.put(
-        Some(txn),
-        &DatabaseEntry::from_bytes(&key),
-        &DatabaseEntry::from_bytes(text),
-    )?;
+    docs_db.put_in(txn, key, text)?;
     Ok(())
 }
 
@@ -514,11 +510,7 @@ fn put_bloom(
 ) -> Result<(), PersistError> {
     let key = doc_key(doc_id);
     let value = bincode::serialize(&doc.bloom)?;
-    bloom_db.put(
-        Some(txn),
-        &DatabaseEntry::from_bytes(&key),
-        &DatabaseEntry::from_bytes(&value),
-    )?;
+    bloom_db.put_in(txn, key, &value)?;
     Ok(())
 }
 
@@ -532,11 +524,7 @@ fn put_postings(
     let key = trigram_key(trigram);
     let mut buf: Vec<u8> = Vec::with_capacity(bitmap.serialized_size());
     bitmap.serialize_into(&mut buf)?;
-    postings_db.put(
-        Some(txn),
-        &DatabaseEntry::from_bytes(&key),
-        &DatabaseEntry::from_bytes(&buf),
-    )?;
+    postings_db.put_in(txn, key, &buf)?;
     Ok(())
 }
 
@@ -548,7 +536,7 @@ fn for_each_record<F>(db: &Database, mut f: F) -> Result<(), PersistError>
 where
     F: FnMut(&[u8], &[u8]) -> Result<(), PersistError>,
 {
-    let mut cursor = db.open_cursor(None, None)?;
+    let mut cursor = db.open_cursor(None)?;
     let mut key = DatabaseEntry::new();
     let mut value = DatabaseEntry::new();
     let mut status = cursor.get(&mut key, &mut value, Get::First, None)?;
@@ -570,7 +558,10 @@ fn clear_database(db: &Database, txn: Option<&Transaction>) -> Result<(), Persis
     // single linear pass.
     let mut keys: Vec<Vec<u8>> = Vec::new();
     {
-        let mut cursor = db.open_cursor(txn, None)?;
+        let mut cursor = match txn {
+            Some(t) => db.open_cursor_in(t, None)?,
+            None => db.open_cursor(None)?,
+        };
         let mut key = DatabaseEntry::new();
         let mut value = DatabaseEntry::new();
         let mut status = cursor.get(&mut key, &mut value, Get::First, None)?;
@@ -581,7 +572,14 @@ fn clear_database(db: &Database, txn: Option<&Transaction>) -> Result<(), Persis
         let _ = cursor.close();
     }
     for k in keys {
-        db.delete(txn, &DatabaseEntry::from_bytes(&k))?;
+        match txn {
+            Some(t) => {
+                db.delete_in(t, &k)?;
+            }
+            None => {
+                db.delete(&k)?;
+            }
+        }
     }
     Ok(())
 }
