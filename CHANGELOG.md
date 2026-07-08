@@ -13,6 +13,68 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.3.0] - 2026-07-08
+
+Minor release. A comprehensive reference-manual and getting-started
+guide, a documentation build-and-publish pipeline with a link checker,
+and distributed-path and dependency-API correctness fixes surfaced by
+the full release gate. Backward compatible.
+
+### Added
+
+- Documentation: the mdBook reference manual is rewritten and greatly
+  expanded as a combined getting-started guide and reference in the
+  style of an O'Reilly guide crossed with the BerkeleyDB manual. New
+  parts: Getting Started (Why Dynomite, Concepts in Ten Minutes, Your
+  First Cluster, Your First Embedded Engine); Architecture deep-dives
+  (the ring, replication and consistency, gossip, failure handling);
+  a nine-chapter Dyniak getting-started and reference arc; an Examples
+  part documenting each example program's design and trade-offs; and a
+  Reference part (Design Decisions / Roads Not Taken, Glossary, Manual
+  Pages, Contributing). Many teaching snippets, diagrams, cross-links,
+  and links into the man pages and source.
+- Documentation CI: `.github/workflows/docs.yml` and
+  `.forgejo/workflows/docs.yml` build the book, run the documentation
+  link checker (mdbook-linkcheck for internal links, lychee for
+  external URLs and man-page references), and publish to GitHub Pages
+  and Codeberg Pages. `flake.nix` pins the mdbook, mermaid, admonish,
+  linkcheck, and lychee tools.
+- README: CI / docs / crates.io / docs.rs / license badges and a link
+  to the reference manual.
+
+### Fixed
+
+- `cluster::dispatch`: a `DC_ONE` write whose only local-DC replica is
+  this node now resolves to the local datastore instead of a
+  one-element replica fan-out. The 1.2.0 write-fan-out change
+  (correct for multi-rack replication) regressed the single-node
+  embedded wire path, where a `SET` returned a no-quorum error
+  because the embedded server serves local traffic through the
+  local-datastore hook, not a wired backend channel. Multi-replica
+  fan-out is unchanged.
+- `stats`: the stats listener now sets `SO_REUSEADDR` like the client
+  and dnode listeners, so a fast restart (kill and relaunch) does not
+  fail to rebind the stats port and abort the whole server build.
+- `dynomite-text`: the `persist` module (behind the non-default
+  `noxu` feature) is updated to the noxu 7.4.0 database API; it had
+  been missed by the 7.3.0 -> 7.4.0 bump and failed to compile under
+  `--all-features`.
+- `dyn-admin`: two integration tests dropped a stale `.await` on the
+  now-synchronous `StatsServer::bind`.
+- Lints: satisfied clippy 1.95.0 pedantic lints
+  (`unnecessary_option_map_or_else`, `duration_suboptimal_units`,
+  `decimal_bitwise_operands`) surfaced by the full
+  `--all-features --all-targets` gate.
+
+### Infrastructure
+
+- `scripts/ec2-dist/deploy-mixed.sh`: the cross-region qualification
+  mesh is authorized via a per-region managed prefix list rather than
+  per-IP security-group rules, so a 45-node full mesh stays under the
+  security-group rule quota. Several qualification-harness reliability
+  fixes (backend flush between consistency levels, bind-wait on
+  relaunch).
+
 ## [1.2.0] - 2026-07-06
 
 Minor release. Distributed-path correctness fixes and new
@@ -631,5 +693,5 @@ for the v0.1.0 release:
   release tag; smoke 60 s variant available under
   `--features chaos` for development cycles.
 
-[Unreleased]: https://github.com/gburd/dynomite/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gburd/dynomite/compare/v1.3.0...HEAD
 [0.1.0]: https://github.com/gburd/dynomite/releases/tag/v0.1.0
