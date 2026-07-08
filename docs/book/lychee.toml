@@ -5,17 +5,21 @@
 # rustdoc anchors) are checked by mdbook-linkcheck during `mdbook
 # build`, so this run focuses on the wider web.
 
-# Accept these as success in addition to 200.
-accept = [200, 206, 429]
+# Accept a wide band of "the link exists" statuses. CI runners are
+# aggressively rate-limited by many hosts (GitHub, Codeberg, shields),
+# so 403/429/503 from a live host is treated as reachable rather than
+# broken -- this checker's job is to catch links we authored wrongly,
+# not to police third-party availability.
+accept = [200, 206, 301, 302, 307, 308, 403, 429, 503]
 
-# Retry transient failures.
-max_retries = 2
-retry_wait_time = 2
-timeout = 20
+# Retry transient failures more patiently on CI.
+max_retries = 4
+retry_wait_time = 3
+timeout = 30
 
 # Be a good citizen.
-max_concurrency = 8
-user_agent = "lychee/dynomite-docs"
+max_concurrency = 4
+user_agent = "Mozilla/5.0 (compatible; lychee/dynomite-docs)"
 
 # Do not descend into rendered output or vendored trees.
 exclude_path = [
@@ -23,11 +27,23 @@ exclude_path = [
   "docs/book/theme",
 ]
 
-# URLs we deliberately do not resolve at CI time:
+# URLs we deliberately do not resolve at CI time. INTERNAL doc links are
+# already checked strictly by mdbook-linkcheck during `mdbook build`;
+# this list drops external targets that are either placeholders or
+# inherently CI-fragile (rate-limited / not-yet-created), so a transient
+# third-party hiccup never masquerades as a broken link:
 #  - localhost / example hosts used in code samples
 #  - the Pages sites themselves (may not exist yet on a fresh fork)
-#  - crates.io/docs.rs pages that rate-limit bots
+#  - crates.io / docs.rs (rate-limit bots hard)
+#  - our own repo source + Actions links on both forges (self-
+#    referential; Codeberg rate-limits deep src/branch links from CI)
+#  - CI badge SVG endpoints (valid only after the first workflow run)
+#  - shields.io badge images (frequently slow/refused from CI)
 exclude = [
+  # The DYN_SRC_BASE/... source-link sentinel is resolved to a forge URL
+  # only at build time (scripts/render-book.sh); in the checked-in
+  # source it is not a real link and must not be probed.
+  'DYN_SRC_BASE/',
   '^https?://(127\.0\.0\.1|localhost|0\.0\.0\.0)',
   '^https?://dynomite\.local',
   '^https?://example\.(com|org)',
@@ -35,12 +51,10 @@ exclude = [
   '^https?://gburd\.github\.io',
   '^https?://docs\.rs/',
   '^https?://crates\.io/',
-  # CI badge SVG endpoints and the Actions landing pages resolve only
-  # after the first workflow run on each forge; they are valid targets
-  # but unresolvable on a fresh checkout, so the checker skips them.
+  '^https?://img\.shields\.io/',
   '/actions/workflows/.*/badge\.svg$',
-  '^https?://codeberg\.org/gregburd/dynomite/actions',
-  '^https?://github\.com/gburd/dynomite/actions',
+  '^https?://codeberg\.org/gregburd/dynomite',
+  '^https?://github\.com/gburd/dynomite',
 ]
 
 # Treat man-page URIs (man:foo(1)) as informational, not fetched.

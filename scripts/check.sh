@@ -99,7 +99,10 @@ fi
 
 echo "==> mdbook"
 if [ -d docs/book ] && command -v mdbook >/dev/null 2>&1; then
-  mdbook build docs/book
+  # Render through the forge substitution (default codeberg) so the
+  # DYN_SRC_BASE source-link sentinel resolves; a bare `mdbook build`
+  # would emit the literal sentinel. See scripts/render-book.sh.
+  "$ROOT/scripts/render-book.sh" codeberg
 fi
 
 echo "==> repo hygiene"

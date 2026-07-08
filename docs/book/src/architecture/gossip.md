@@ -41,7 +41,7 @@ A brand-new node knows nothing about the cluster except its **seeds**: a
 list of `host:port:rack:dc:tokens` entries supplied through the seeds
 provider (the static `dyn_seeds` list, or a dynamic provider). Parsing is
 done by
-[`parse_seed_node` / `parse_seed_blob`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/gossip.rs):
+[`parse_seed_node` / `parse_seed_blob`](DYN_SRC_BASE/crates/dynomite/src/cluster/gossip.rs):
 entries are separated by `|`, and each entry's fields are split from the
 right so a host containing colons parses correctly. The token field may be
 a single big-integer or a comma-separated list (for a vnode node).
@@ -183,7 +183,7 @@ routable host:port, because that is the key every peer matches on.</p>
 ## From gossip to peer state
 
 Once gossip is wired, the gossip handler
-([`GossipHandler`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/gossip.rs))
+([`GossipHandler`](DYN_SRC_BASE/crates/dynomite/src/cluster/gossip.rs))
 is the single owner of peer-state transitions. It does two things with
 each inbound heartbeat and each periodic tick:
 

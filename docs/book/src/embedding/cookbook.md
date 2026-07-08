@@ -50,7 +50,7 @@ It binds two ephemeral ports (the `:0` syntax asks the kernel for
 a free port), spawns the engine, prints the post-bind addresses,
 and shuts down. The cookbook references this exact body as the
 "five-line embedded server"; the runnable form lives in
-[`embedded_minimal.rs`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/examples/embedded_minimal.rs).
+[`embedded_minimal.rs`](DYN_SRC_BASE/crates/dynomite/examples/embedded_minimal.rs).
 
 ```rust,no_run
 use dynomite::embed::{Server, ServerBuilder};
@@ -109,7 +109,7 @@ slots in. Common targets:
   RESP / Memcache wire format.
 * HTTP-fronted KV stores - call out via `reqwest` or `hyper`.
 * The Riak K/V protocol - the workspace ships
-  [`crates/dyniak`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dyniak)
+  [`crates/dyniak`](DYN_SRC_BASE/crates/dyniak)
   on top of the same trait.
 
 The trait surface (verbatim from
@@ -402,7 +402,7 @@ across all four supported backends:
 * peer-plane TLS variants of each.
 
 The committed reports under
-[`dist/chaos-reports/v0.1.0/`](https://codeberg.org/gregburd/dynomite/src/branch/main/dist/chaos-reports/v0.1.0)
+[`dist/chaos-reports/v0.1.0/`](DYN_SRC_BASE/dist/chaos-reports/v0.1.0)
 record seven independent multi-host chaos passes against four
 EC2 hosts at a time, exercising:
 
@@ -419,7 +419,7 @@ and the report itself is the production sign-off for the
 matching backend / transport pair. Embedders that ship a
 distinct backend should run the same harness against their own
 deployment shape; the shape lives in
-[`crates/dynomite/tests/stage_16_chaos.rs`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/tests/stage_16_chaos.rs)
+[`crates/dynomite/tests/stage_16_chaos.rs`](DYN_SRC_BASE/crates/dynomite/tests/stage_16_chaos.rs)
 and is documented in
 [Operations / Chaos test](../operations/chaos.md).
 

@@ -38,11 +38,11 @@ function -- no I/O, no coordination.</p>
 
 The hash function is selected per pool from the configured
 [`hash`](../configuration.md) knob. The runtime enum
-[`HashType`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/hashkit)
+[`HashType`](DYN_SRC_BASE/crates/dynomite/src/hashkit)
 covers the full upstream set (Murmur, Murmur3, the FNV family, CRC16/32,
 Jenkins, MD5, and the default one-at-a-time). The configuration-layer enum
 is mapped onto the runtime enum by `map_hash` in
-[`cluster/dispatch.rs`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/dispatch.rs);
+[`cluster/dispatch.rs`](DYN_SRC_BASE/crates/dynomite/src/cluster/dispatch.rs);
 that mapping is the single seam so the dispatcher, the reaper, and the
 Dyniak replica router all agree on which hash a pool uses.
 
@@ -58,7 +58,7 @@ to the local datastore.
 ### The token as a signed big integer
 
 Tokens are not `u64`s. They are stored as a signed-magnitude big integer,
-[`DynToken`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/hashkit/token.rs),
+[`DynToken`](DYN_SRC_BASE/crates/dynomite/src/hashkit/token.rs),
 holding up to four little-significance-first 32-bit words plus a sign
 (`Negative`, `Zero`, `Positive`). This representation exists for one
 reason: to compare and parse tokens *bit-identically* across peers.
@@ -88,7 +88,7 @@ dispatch function, not in `DynToken::cmp`. See the wraparound rule below.
 Each rack stores its slice of the ring as a **continuum**: a vector of
 `(token, peer_idx)` points sorted ascending by token. Building the
 continuum is a rebuild pass over the pool's peer list;
-[`rebuild_continuums`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/vnode.rs)
+[`rebuild_continuums`](DYN_SRC_BASE/crates/dynomite/src/cluster/vnode.rs)
 clears every rack's continuum, appends each peer's tokens onto the owning
 rack, then sorts each touched rack once.
 
@@ -238,7 +238,7 @@ replicated in every datacenter that has racks. When a write must be
 replicated into a *remote* DC, Dynomite does not fan out to every rack in
 that DC; it preselects one rack per remote DC to receive the cross-DC
 copy. The preselection
-([`ServerPool::preselect_remote_racks`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/pool.rs))
+([`ServerPool::preselect_remote_racks`](DYN_SRC_BASE/crates/dynomite/src/cluster/pool.rs))
 sorts each DC's racks by name and, for each remote DC, chooses the rack at
 `local_rack_index % remote_rack_count`. This spreads cross-DC replication
 traffic evenly across the remote racks instead of hammering one.
@@ -269,7 +269,7 @@ peer plane. The client never learns which; it always speaks to one node
 and gets one answer.</p>
 
 A peer is a routing candidate only when its
-[`PeerState`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/peer.rs)
+[`PeerState`](DYN_SRC_BASE/crates/dynomite/src/cluster/peer.rs)
 is routable -- `Normal` or `Joining`. A `Joining` peer stays in the
 continuum until it transitions to `Down` or `Leaving`, so it keeps
 receiving traffic while it bootstraps. A `Down` peer is filtered out of

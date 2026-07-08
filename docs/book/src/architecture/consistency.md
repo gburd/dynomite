@@ -59,12 +59,12 @@ provide them; see the note at the end of this chapter and
 ## The four consistency levels
 
 Consistency is expressed by the
-[`ConsistencyLevel`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/msg)
+[`ConsistencyLevel`](DYN_SRC_BASE/crates/dynomite/src/msg)
 enum, resolved per request from the pool's `read_consistency` /
 `write_consistency` (or a bucket-type override) in
-[`cluster/dispatch.rs`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/dispatch.rs).
+[`cluster/dispatch.rs`](DYN_SRC_BASE/crates/dynomite/src/cluster/dispatch.rs).
 The per-reply coalescing rules live in
-[`proto/redis/coalesce.rs`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/proto/redis/coalesce.rs).
+[`proto/redis/coalesce.rs`](DYN_SRC_BASE/crates/dynomite/src/proto/redis/coalesce.rs).
 
 <dl class="dyn-facts">
 <dt>DC_ONE</dt>
@@ -94,7 +94,7 @@ quorum count uses the local replica count, and racks are the replicas, so
 The weakest and fastest level.
 
 * **Read.** The coordinator picks the single rack-closest local-DC replica
-  -- lowest [`RackDistance`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/snitch.rs)
+  -- lowest [`RackDistance`](DYN_SRC_BASE/crates/dynomite/src/cluster/snitch.rs)
   cost, so same-rack beats same-DC beats remote -- and returns its first
   reply. No divergence is reported; read repair is a quorum-or-stronger
   feature.
@@ -174,7 +174,7 @@ though it arrives, does not produce a second answer -- the coalescer is
 one-shot.</p>
 
 The one-shot property matters: the per-request coalescer
-([`CoalesceTracker`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/proto/redis/coalesce.rs))
+([`CoalesceTracker`](DYN_SRC_BASE/crates/dynomite/src/proto/redis/coalesce.rs))
 pins its decision the moment quorum is reached and reports every later
 reply as pending, so a straggler can be drained (and inspected for repair)
 without ever emitting a duplicate answer to the client.
@@ -248,7 +248,7 @@ without a separate scan. When the coalescer reports divergent targets, the
 dispatcher schedules a repair write of the winning value to each stale
 replica through the same per-peer channels it used for the fan-out. The
 repair plumbing lives in
-[`proto/redis/repair/`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/proto/redis/repair):
+[`proto/redis/repair/`](DYN_SRC_BASE/crates/dynomite/src/proto/redis/repair):
 
 * `reconcile` picks a single response from the per-replica set and,
   where supported, produces the read-repair side effect;

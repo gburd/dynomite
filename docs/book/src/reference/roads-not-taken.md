@@ -159,4 +159,4 @@ Memory safety without a garbage collector, a strong type system for the
 protocol and state machines, and a modern async runtime were judged worth
 the cost of a full rewrite and the discipline of maintaining parity with
 the C reference. Parity is tracked symbol by symbol in
-[`docs/parity.md`](https://codeberg.org/gregburd/dynomite/src/branch/main/docs/parity.md).
+[`docs/parity.md`](DYN_SRC_BASE/docs/parity.md).

@@ -1,6 +1,6 @@
 # Reading the Examples
 
-The programs under [`crates/*/examples/`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates)
+The programs under [`crates/*/examples/`](DYN_SRC_BASE/crates)
 are complete, compilable, runnable code -- not the illustrative snippets
 scattered through the rest of this manual. Each one is a focused study of
 one facet of the engine, and each has a page here that explains what it

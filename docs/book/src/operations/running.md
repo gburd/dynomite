@@ -33,7 +33,7 @@ dynomited --conf-file my.yml
 ```admonish tip title="Sample configs live in the test fixtures"
 Working configs for single-node, two-node, multi-datacenter, memcache,
 and secure setups are in
-[`crates/dynomite/tests/fixtures/conf/`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/tests/fixtures/conf).
+[`crates/dynomite/tests/fixtures/conf/`](DYN_SRC_BASE/crates/dynomite/tests/fixtures/conf).
 They are exercised by the test suite, so they are guaranteed to parse.
 ```
 

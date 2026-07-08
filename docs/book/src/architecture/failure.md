@@ -21,7 +21,7 @@ partition.
 A naive detector flips a peer between "alive" and "dead" on a
 missed-heartbeat count. That is brittle: a network hiccup trips it, and a
 genuinely slow link never does. Dynomite uses a **phi-accrual** detector
-([`PhiAccrual`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/failure_detector.rs)),
+([`PhiAccrual`](DYN_SRC_BASE/crates/dynomite/src/cluster/failure_detector.rs)),
 the same family Cassandra, Akka, and Riak deploy, which produces a
 continuous suspicion level `phi(t)` instead of a boolean.
 
@@ -65,7 +65,7 @@ phi-accrual into backend supervision.
 ## The peer state machine
 
 Each peer carries a
-[`PeerState`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/peer.rs).
+[`PeerState`](DYN_SRC_BASE/crates/dynomite/src/cluster/peer.rs).
 Only `Normal` and `Joining` are routable; `Down` and `Leaving` are not.
 A remote peer starts `Down` and is promoted only after its first
 below-threshold heartbeat; the local node starts `Joining`.
@@ -173,7 +173,7 @@ target is simply skipped.
 ### Durability of hints
 
 The hint store
-([`HintStore`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomite/src/cluster/hints.rs))
+([`HintStore`](DYN_SRC_BASE/crates/dynomite/src/cluster/hints.rs))
 has two modes:
 
 <dl class="dyn-facts">

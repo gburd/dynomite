@@ -3,10 +3,10 @@
 This manual is for users of Dynomite. Contributors -- human or automated
 -- have two additional documents that govern how the project is built:
 
-* [`AGENTS.md`](https://codeberg.org/gregburd/dynomite/src/branch/main/AGENTS.md)
+* [`AGENTS.md`](DYN_SRC_BASE/AGENTS.md)
   -- the operating manual: coding standards, the testing strategy, the
   git workflow, and the review discipline.
-* [`PLAN.md`](https://codeberg.org/gregburd/dynomite/src/branch/main/PLAN.md)
+* [`PLAN.md`](DYN_SRC_BASE/PLAN.md)
   -- the staged roadmap.
 
 This page summarizes the two ideas a user-turned-contributor most needs
@@ -17,7 +17,7 @@ to understand.
 Dynomite (Rust) aims to be functionally identical to
 [Netflix Dynomite](https://github.com/Netflix/dynomite) (C). That aim is
 not aspirational prose -- it is tracked, symbol by symbol, in
-[`docs/parity.md`](https://codeberg.org/gregburd/dynomite/src/branch/main/docs/parity.md),
+[`docs/parity.md`](DYN_SRC_BASE/docs/parity.md),
 which maps each C function to its Rust home and records every deliberate
 divergence as a **deviation** with a rationale.
 
@@ -64,7 +64,7 @@ several real defects in this port passed the entire unit suite. See
 ## The everyday gate
 
 Every commit must pass
-[`scripts/check.sh`](https://codeberg.org/gregburd/dynomite/src/branch/main/scripts/check.sh),
+[`scripts/check.sh`](DYN_SRC_BASE/scripts/check.sh),
 which is what CI runs on both GitHub Actions and Codeberg Forgejo Actions.
 It covers formatting, clippy (pedantic, warnings denied), the full test
 matrix, doctests, the documentation link checker, dependency audits, the

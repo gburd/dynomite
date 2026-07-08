@@ -113,7 +113,7 @@ This is a from-scratch Rust implementation of
 [Netflix Dynomite](https://github.com/Netflix/dynomite), which itself
 extended Twitter's `twemproxy`. It aims to be functionally identical to
 the C original; the live symbol-level mapping is in
-[`docs/parity.md`](https://codeberg.org/gregburd/dynomite/src/branch/main/docs/parity.md).
+[`docs/parity.md`](DYN_SRC_BASE/docs/parity.md).
 Where the Rust port deliberately diverges, that divergence is recorded
 as a parity deviation and explained in this manual.
 ```

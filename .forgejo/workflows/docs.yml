@@ -36,8 +36,16 @@ jobs:
           unzip -o /tmp/lc.zip -d /usr/local/bin && chmod +x /usr/local/bin/mdbook-linkcheck
           curl -fsSL https://github.com/lycheeverse/lychee/releases/latest/download/lychee-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin lychee
       - name: build book (internal links checked by mdbook-linkcheck)
-        run: mdbook build docs/book
+        # Renders with Codeberg source-link URLs so readers on Codeberg
+        # Pages follow repo links to codeberg.org (the GitHub build uses
+        # github.com). See scripts/render-book.sh.
+        run: scripts/render-book.sh codeberg
       - name: external link + man-page check (lychee)
+        # Internal links are already gated by mdbook-linkcheck above;
+        # this external check is informational and must not block
+        # publishing internally-correct docs when a third-party host is
+        # rate-limiting or down on the CI runner.
+        continue-on-error: true
         run: |
           lychee --config docs/book/lychee.toml \
             'docs/book/src/**/*.md' 'README.md' 'crates/**/README.md'

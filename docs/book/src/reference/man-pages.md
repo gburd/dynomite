@@ -3,12 +3,12 @@
 Dynomite ships Unix manual pages for its executables. They are the
 authoritative reference for command-line flags and are installed
 alongside the binaries by the packaging in
-[`dist/`](https://codeberg.org/gregburd/dynomite/src/branch/main/dist).
+[`dist/`](DYN_SRC_BASE/dist).
 
 ## `dynomited(8)`
 
 The server daemon. Source:
-[`crates/dynomited/man/dynomited.8`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomited/man/dynomited.8).
+[`crates/dynomited/man/dynomited.8`](DYN_SRC_BASE/crates/dynomited/man/dynomited.8).
 
 View it locally from a checkout:
 
@@ -57,7 +57,7 @@ dyn-hash-tool --help
 
 The `dynomited.8` page is generated, not hand-maintained. The generator
 lives at
-[`crates/dynomited/src/bin/gen-man.rs`](https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomited/src/bin/gen-man.rs)
+[`crates/dynomited/src/bin/gen-man.rs`](DYN_SRC_BASE/crates/dynomited/src/bin/gen-man.rs)
 and writes to `crates/dynomited/man/dynomited.8`:
 
 ```sh
