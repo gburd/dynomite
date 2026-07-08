@@ -212,7 +212,7 @@ YML
         # ports to release, before rebinding -- pkill -9 is async and a
         # relaunch that races the socket release hits EADDRINUSE.
         for _i in \$(seq 1 20); do pgrep -x dynomite >/dev/null || pgrep -x dynomited >/dev/null || break; sudo pkill -9 -x dynomite 2>/dev/null; sudo pkill -9 -x dynomited 2>/dev/null; sleep 1; done
-        for _i in \$(seq 1 20); do ss -tln | grep -qE ':${C_DNODE}|:${C_CLIENT}|:${R_DNODE}|:${R_CLIENT}|:${C_STATS}|:${R_STATS}' || break; sleep 1; done
+        for _i in \$(seq 1 20); do sudo ss -tln | grep -qE ':${C_DNODE}|:${C_CLIENT}|:${R_DNODE}|:${R_CLIENT}|:${C_STATS}|:${R_STATS}' || break; sleep 1; done
         VS=\$(command -v valkey-server || command -v redis-server)
         [ -z \"\$VS\" ] && { sudo dnf install -y -q valkey 2>/dev/null || sudo dnf install -y -q redis6 2>/dev/null; VS=\$(command -v valkey-server || command -v redis6-server || command -v redis-server); }
         \$VS --daemonize yes --bind 127.0.0.1 --port 6379 2>/dev/null
@@ -226,7 +226,10 @@ YML
         [ -n \"\$CLI\" ] && { \$CLI -p 6379 FLUSHALL >/dev/null 2>&1; \$CLI -p 6380 FLUSHALL >/dev/null 2>&1; }
         nohup ~/dynomite-c -c ~/dynomite-c.yml >~/dynomite-c.log 2>&1 </dev/null &
         DYN_ADVERTISE_ADDR=${pub} nohup ~/dynomited -c ~/dynomite-r.yml >~/dynomite-r.log 2>&1 </dev/null &
-        sleep 2
+        # Wait for the Rust proxy to actually bind (it spawns 44 peer
+        # supervisors before binding its listeners) instead of a fixed
+        # sleep that can report it down while it is still starting.
+        for _i in \$(seq 1 15); do ss -tln|grep -q :${R_CLIENT} && break; sleep 1; done
         echo \"c=\$(ss -tln|grep -c :${C_CLIENT}) r=\$(ss -tln|grep -c :${R_CLIENT})\"" >> "$STATE_DIR/launch.result" 2>/dev/null
     ) &
     i=$((i+1)); [ $((i % 4)) -eq 0 ] && wait
@@ -239,11 +242,17 @@ YML
   local rrow rreg rpub rc
   while read -r rrow; do
     rreg=$(echo "$rrow" | awk '{print $1}'); rpub=$(echo "$rrow" | awk '{print $9}')
-    for rc in 1 2 3; do
+    for rc in 1 2 3 4 5; do
       local up; up=$(nsh "$rreg" "$rpub" 'ss -tln | grep -c :'"$R_CLIENT" 2>/dev/null)
       [ "${up:-0}" -ge 1 ] && break
       log "retry Rust launch on entry node $rreg/$rpub (attempt $rc)"
-      nsh "$rreg" "$rpub" "sudo pkill -9 -x dynomited 2>/dev/null; for _i in \$(seq 1 15); do pgrep -x dynomited >/dev/null || break; sudo pkill -9 -x dynomited; sleep 1; done; for _i in \$(seq 1 15); do ss -tln|grep -qE ':${R_DNODE}|:${R_CLIENT}' || break; sleep 1; done; DYN_ADVERTISE_ADDR=${rpub} nohup ~/dynomited -c ~/dynomite-r.yml >~/dynomite-r.log 2>&1 </dev/null & sleep 3" >/dev/null 2>&1
+      # Kill, poll until the process is truly GONE and the ports are
+      # truly FREE (pkill -9 is async; a relaunch that races a live
+      # process or a not-yet-released socket hits EADDRINUSE and the
+      # whole server build aborts), launch once, then give it time to
+      # spawn its 44 peer supervisors and bind before the next check --
+      # do NOT re-kill a process that is still mid-startup.
+      nsh "$rreg" "$rpub" "sudo pkill -9 -x dynomited 2>/dev/null; for _i in \$(seq 1 20); do pgrep -x dynomited >/dev/null || break; sudo pkill -9 -x dynomited; sleep 1; done; for _i in \$(seq 1 20); do sudo ss -tln|grep -qE ':${R_DNODE}|:${R_CLIENT}|:${R_STATS}' || break; sleep 1; done; DYN_ADVERTISE_ADDR=${rpub} nohup ~/dynomited -c ~/dynomite-r.yml >~/dynomite-r.log 2>&1 </dev/null & for _i in \$(seq 1 15); do ss -tln|grep -q :${R_CLIENT} && break; sleep 1; done" >/dev/null 2>&1
     done
   done < <(awk '$4=="r1" && $5=="n1"' "$STATE")
   log "differential ($CONS) launched; converging 90s"
@@ -367,10 +376,11 @@ YML
     (
       nscp "$region" "$STATE_DIR/ro-${dc}-${rack}-${node}.yml" "$pub" '~/dynomite-r.yml'
       nsh "$region" "$pub" "
-        sudo pkill -9 -x dynomited 2>/dev/null; sudo fuser -k ${R_DNODE}/tcp ${R_CLIENT}/tcp ${R_STATS}/tcp 2>/dev/null; sleep 3
-        for _i in \$(seq 1 20); do ss -tln | grep -qE ':${R_DNODE}|:${R_CLIENT}' || break; sleep 1; done
+        sudo pkill -9 -x dynomited 2>/dev/null; sudo fuser -k ${R_DNODE}/tcp ${R_CLIENT}/tcp ${R_STATS}/tcp 2>/dev/null
+        for _i in \$(seq 1 20); do pgrep -x dynomited >/dev/null || break; sudo pkill -9 -x dynomited; sleep 1; done
+        for _i in \$(seq 1 20); do sudo ss -tln | grep -qE ':${R_DNODE}|:${R_CLIENT}|:${R_STATS}' || break; sleep 1; done
         VS=\$(command -v valkey-server || command -v redis-server); \$VS --daemonize yes --bind 127.0.0.1 --port 6380 2>/dev/null; sleep 1
-        DYN_ADVERTISE_ADDR=${pub} nohup ~/dynomited -c ~/dynomite-r.yml >~/dynomite-r.log 2>&1 </dev/null & sleep 1; echo up" >/dev/null 2>&1
+        DYN_ADVERTISE_ADDR=${pub} nohup ~/dynomited -c ~/dynomite-r.yml >~/dynomite-r.log 2>&1 </dev/null & for _i in \$(seq 1 15); do ss -tln|grep -q :${R_CLIENT} && break; sleep 1; done; echo up" >/dev/null 2>&1
     ) &
     i=$((i+1)); [ $((i % 4)) -eq 0 ] && wait
   done < "$STATE"
