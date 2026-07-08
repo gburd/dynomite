@@ -238,12 +238,37 @@ impl AsyncWrite for QuicTransport {
 }
 
 /// QUIC server listener.
+///
+/// A single UDP socket carries every client's datagrams. QUIC requires
+/// one demultiplexer to own the socket read side and route each
+/// datagram to the right connection by peer address; multiple
+/// competing `recv_from` callers (an accept loop plus each connection
+/// driver) would steal each other's packets and stall a connection
+/// after its first exchange. The listener therefore spawns one demux
+/// task on `bind` that reads the socket, routes datagrams to per-
+/// connection inbound channels, creates a connection on a fresh
+/// Initial packet, and hands the accepted [`QuicTransport`] to
+/// [`accept`](Self::accept) over a channel.
 pub struct QuicListener {
-    socket: Arc<UdpSocket>,
     local_addr: SocketAddr,
-    config: QuicConfig,
-    seed: [u8; 16],
+    accept_rx: tokio::sync::Mutex<mpsc::Receiver<QuicTransport>>,
+    _demux: Arc<DemuxHandle>,
 }
+
+struct DemuxHandle {
+    join: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Drop for DemuxHandle {
+    fn drop(&mut self) {
+        if let Some(h) = self.join.lock().take() {
+            h.abort();
+        }
+    }
+}
+
+/// A datagram routed by the demux task to a connection driver.
+type Datagram = Vec<u8>;
 
 impl QuicListener {
     /// Bind a QUIC listener.
@@ -261,11 +286,21 @@ impl QuicListener {
             .unwrap_or_default()
             .as_nanos();
         seed[..16].copy_from_slice(&now.to_le_bytes());
-        Ok(Self {
-            socket: Arc::new(sock),
+        let socket = Arc::new(sock);
+        let (accept_tx, accept_rx) = mpsc::channel::<QuicTransport>(16);
+        let demux = tokio::spawn(demux_loop(
+            Arc::clone(&socket),
             local_addr,
             config,
             seed,
+            accept_tx,
+        ));
+        Ok(Self {
+            local_addr,
+            accept_rx: tokio::sync::Mutex::new(accept_rx),
+            _demux: Arc::new(DemuxHandle {
+                join: Mutex::new(Some(demux)),
+            }),
         })
     }
 
@@ -278,31 +313,71 @@ impl QuicListener {
     /// Accept the next QUIC connection.
     ///
     /// # Errors
-    /// Forwarded I/O errors.
+    /// Returns an I/O error if the demux task has stopped (the socket
+    /// closed or errored).
     pub async fn accept(&self) -> io::Result<QuicTransport> {
-        let mut config = self.config.build(true)?;
-        // Loop reading datagrams until we observe an Initial packet.
-        let mut buf = vec![0u8; 65535];
-        loop {
-            let (n, peer) = self.socket.recv_from(&mut buf).await?;
-            let pkt = &mut buf[..n];
-            let Ok(hdr) = quiche::Header::from_slice(pkt, quiche::MAX_CONN_ID_LEN) else {
-                continue;
-            };
-            if hdr.ty != quiche::Type::Initial {
+        let mut rx = self.accept_rx.lock().await;
+        rx.recv()
+            .await
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "quic demux task stopped"))
+    }
+}
+
+/// Owns the listener socket, reads every datagram, and routes it to
+/// the connection registered for its peer address. A datagram whose
+/// peer is unknown and that carries an Initial packet starts a new
+/// connection: the demux creates its per-connection inbound channel,
+/// spawns its driver, and publishes the [`QuicTransport`] on
+/// `accept_tx`. Non-Initial datagrams from unknown peers are dropped.
+async fn demux_loop(
+    socket: Arc<UdpSocket>,
+    local_addr: SocketAddr,
+    config: QuicConfig,
+    seed: [u8; 16],
+    accept_tx: mpsc::Sender<QuicTransport>,
+) {
+    let mut routes: std::collections::HashMap<SocketAddr, mpsc::Sender<Datagram>> =
+        std::collections::HashMap::new();
+    let mut buf = vec![0u8; 65535];
+    loop {
+        let Ok((n, peer)) = socket.recv_from(&mut buf).await else {
+            return;
+        };
+        // Route to an existing connection if we have one; prune it if
+        // its driver has gone away.
+        if let Some(tx) = routes.get(&peer) {
+            if tx.send(buf[..n].to_vec()).await.is_ok() {
                 continue;
             }
-            let scid = quiche::ConnectionId::from_ref(&self.seed);
-            let conn = quiche::accept(&scid, None, self.local_addr, peer, &mut config)
-                .map_err(|e| io::Error::other(format!("quiche::accept: {e:?}")))?;
-            let transport = spawn_driver(
-                Arc::clone(&self.socket),
-                conn,
-                peer,
-                ConnRole::Server,
-                Some(pkt.to_vec()),
-            );
-            return Ok(transport);
+            routes.remove(&peer);
+        }
+        // No live route: only an Initial packet may open a new
+        // connection.
+        let Ok(hdr) = quiche::Header::from_slice(&mut buf[..n], quiche::MAX_CONN_ID_LEN) else {
+            continue;
+        };
+        if hdr.ty != quiche::Type::Initial {
+            continue;
+        }
+        let Ok(mut quiche_cfg) = config.build(true) else {
+            continue;
+        };
+        let scid = quiche::ConnectionId::from_ref(&seed);
+        let Ok(conn) = quiche::accept(&scid, None, local_addr, peer, &mut quiche_cfg) else {
+            continue;
+        };
+        let (inbound_tx, inbound_rx) = mpsc::channel::<Datagram>(64);
+        let transport = spawn_driver(
+            Arc::clone(&socket),
+            conn,
+            peer,
+            ConnRole::Server,
+            InboundSource::Channel(inbound_rx),
+            Some(buf[..n].to_vec()),
+        );
+        routes.insert(peer, inbound_tx);
+        if accept_tx.send(transport).await.is_err() {
+            return;
         }
     }
 }
@@ -328,8 +403,29 @@ pub async fn connect(peer: SocketAddr, config: QuicConfig) -> io::Result<QuicTra
     let scid = quiche::ConnectionId::from_ref(&scid);
     let conn = quiche::connect(None, &scid, local_addr, peer, &mut quiche_cfg)
         .map_err(|e| io::Error::other(format!("quiche::connect: {e:?}")))?;
-    let transport = spawn_driver(Arc::new(sock), conn, peer, ConnRole::Client, None);
+    // The client owns its own connected UDP socket, so its driver reads
+    // datagrams straight off the socket -- there is only ever one peer
+    // and no demultiplexing to do.
+    let transport = spawn_driver(
+        Arc::new(sock),
+        conn,
+        peer,
+        ConnRole::Client,
+        InboundSource::Socket,
+        None,
+    );
     Ok(transport)
+}
+
+/// Where a connection driver reads inbound datagrams from.
+///
+/// A client driver owns a connected socket and reads it directly
+/// ([`Socket`](Self::Socket)); a server driver shares the listener
+/// socket, so the listener's demux task feeds it datagrams over a
+/// channel ([`Channel`](Self::Channel)).
+enum InboundSource {
+    Socket,
+    Channel(mpsc::Receiver<Datagram>),
 }
 
 #[allow(clippy::too_many_lines)]
@@ -338,6 +434,7 @@ fn spawn_driver(
     mut conn: quiche::Connection,
     peer: SocketAddr,
     role: ConnRole,
+    mut inbound: InboundSource,
     prime: Option<Vec<u8>>,
 ) -> QuicTransport {
     let (driver_to_app_tx, driver_to_app_rx) = mpsc::channel::<Vec<u8>>(64);
@@ -350,6 +447,8 @@ fn spawn_driver(
         let mut buf = vec![0u8; 65535];
         let mut out_buf = vec![0u8; MAX_DATAGRAM_SIZE];
         let mut pending_app_bytes: Vec<u8> = Vec::new();
+        // Reused batch buffer for the app-to-driver select branch.
+        let mut inbound_batch: Vec<Vec<u8>> = Vec::new();
 
         if let Some(mut pkt) = prime {
             let info = quiche::RecvInfo {
@@ -437,30 +536,68 @@ fn spawn_driver(
                 break;
             }
 
-            // Cap the loop wake interval so newly-queued application
-            // bytes are picked up promptly. Without this the driver
-            // would only re-enter the try_recv block at the QUIC
-            // idle-timeout cadence (multiple seconds), which is far
-            // too coarse for an interactive proxy.
+            // Cap the loop wake interval so a scheduled QUIC timeout
+            // (loss detection, idle) still fires promptly. Newly-queued
+            // application bytes and inbound datagrams wake the select
+            // directly through their own branches, so this is only a
+            // ceiling, not the polling cadence.
             let timeout = conn
                 .timeout()
                 .unwrap_or(Duration::from_millis(50))
                 .min(Duration::from_millis(10));
-            tokio::select! {
-                () = closed_for_driver.notified() => {
-                    done = true;
-                }
-                () = tokio::time::sleep(timeout) => {
-                    conn.on_timeout();
-                }
-                res = socket.recv_from(&mut buf) => {
-                    if let Ok((n, from)) = res {
-                        let info = quiche::RecvInfo { from, to: local_addr };
-                        if let Err(e) = conn.recv(&mut buf[..n], info) {
-                            tracing::debug!(?role, ?e, "quic conn.recv error");
+            match &mut inbound {
+                InboundSource::Socket => {
+                    tokio::select! {
+                        () = closed_for_driver.notified() => { done = true; }
+                        () = tokio::time::sleep(timeout) => { conn.on_timeout(); }
+                        // Wake as soon as the app queues bytes so the
+                        // next loop iteration flushes them onto the
+                        // stream without waiting for a timer tick.
+                        n = app_to_driver_rx.recv_many(&mut inbound_batch, 32) => {
+                            if n == 0 {
+                                done = true;
+                            } else {
+                                for b in inbound_batch.drain(..) {
+                                    pending_app_bytes.extend_from_slice(&b);
+                                }
+                            }
                         }
-                    } else {
-                        done = true;
+                        res = socket.recv_from(&mut buf) => {
+                            if let Ok((n, from)) = res {
+                                let info = quiche::RecvInfo { from, to: local_addr };
+                                if let Err(e) = conn.recv(&mut buf[..n], info) {
+                                    tracing::debug!(?role, ?e, "quic conn.recv error");
+                                }
+                            } else {
+                                done = true;
+                            }
+                        }
+                    }
+                }
+                InboundSource::Channel(rx) => {
+                    tokio::select! {
+                        () = closed_for_driver.notified() => { done = true; }
+                        () = tokio::time::sleep(timeout) => { conn.on_timeout(); }
+                        n = app_to_driver_rx.recv_many(&mut inbound_batch, 32) => {
+                            if n == 0 {
+                                done = true;
+                            } else {
+                                for b in inbound_batch.drain(..) {
+                                    pending_app_bytes.extend_from_slice(&b);
+                                }
+                            }
+                        }
+                        dgram = rx.recv() => {
+                            match dgram {
+                                Some(mut pkt) => {
+                                    let info = quiche::RecvInfo { from: peer, to: local_addr };
+                                    if let Err(e) = conn.recv(pkt.as_mut_slice(), info) {
+                                        tracing::debug!(?role, ?e, "quic conn.recv error");
+                                    }
+                                }
+                                None => { done = true; }
+                            }
+                        }
                     }
                 }
             }

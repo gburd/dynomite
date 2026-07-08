@@ -46,22 +46,3 @@ path = "junit.xml"
 report-name = "dynomite-conformance"
 store-success-output = false
 store-failure-output = true
-
-# The QUIC PBC round-trip integration test dials a real QUIC
-# listener and drives a ping/put/get exchange over a single
-# stream. The first exchange (ping) always completes; the second
-# (put) intermittently exceeds its read window under load -- a
-# QUIC handshake/stream-readiness timing race in the transport
-# adapter, not a correctness defect (the exchange is deterministic
-# when it is not starved). The race predates this config and
-# reproduces identically back through v1.2.0. Retry the test a
-# bounded number of times so a starved run does not fail the gate;
-# the underlying transport-poll investigation is tracked in
-# docs/journal/blocked.md. This is the only test granted a retry.
-[[profile.default.overrides]]
-filter = "test(quic_pbc_ping_put_get_round_trip)"
-retries = 3
-
-[[profile.conformance.overrides]]
-filter = "test(quic_pbc_ping_put_get_round_trip)"
-retries = 3

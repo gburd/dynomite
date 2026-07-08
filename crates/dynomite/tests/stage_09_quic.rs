@@ -122,3 +122,115 @@ async fn quic_loopback_round_trip() {
         "server did not receive the full payload"
     );
 }
+
+/// Regression: multiple sequential request/response exchanges on a
+/// single QUIC connection all complete.
+///
+/// The listener shares one UDP socket across the accept path and every
+/// connection driver. The original design had the accept loop and the
+/// connection drivers each call `recv_from` on that shared socket, so
+/// after the first exchange a subsequent inbound datagram was as
+/// likely to be consumed (and discarded) by the accept loop as
+/// delivered to the connection -- the connection stalled on its second
+/// request. The demux task now owns the socket read side and routes
+/// datagrams by peer, so every exchange on a live connection is
+/// delivered. This test drives ten sequential round-trips; with the
+/// bug it hangs on the second, so a pass is a deterministic signal the
+/// routing is correct (the count is fixed, not timing-dependent).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn quic_many_sequential_round_trips_on_one_connection() {
+    const ROUNDS: u8 = 10;
+    const MSG: usize = 8;
+
+    let (_keep_alive, cert_path, key_path) = make_cert_pair();
+    let server_cfg = QuicConfig::server_with_cert_paths(
+        cert_path.to_str().expect("cert path utf-8"),
+        key_path.to_str().expect("key path utf-8"),
+    );
+    let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let listener = QuicListener::bind(bind_addr, server_cfg)
+        .await
+        .expect("bind QUIC listener");
+    let server_addr = listener.local_addr();
+
+    // Server: loop-accept on the listener (as the real dyniak/dnode
+    // QUIC servers do) while a per-connection task echoes each 8-byte
+    // message back, ROUNDS times. The loop-accept is the trigger for
+    // the original bug: with the shared-socket design the re-entered
+    // accept path competed with the connection driver for inbound
+    // datagrams and stole the connection's later packets.
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<usize>();
+    let server_task = tokio::spawn(async move {
+        let mut done_tx = Some(done_tx);
+        loop {
+            let Ok(mut transport) = listener.accept().await else {
+                break;
+            };
+            let dt = done_tx.take();
+            tokio::spawn(async move {
+                let mut echoed = 0u8;
+                let mut buf = vec![0u8; 64];
+                let mut acc = Vec::<u8>::new();
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+                while echoed < ROUNDS && tokio::time::Instant::now() < deadline {
+                    match tokio::time::timeout(Duration::from_millis(500), transport.read(&mut buf))
+                        .await
+                    {
+                        Ok(Ok(n)) if n > 0 => acc.extend_from_slice(&buf[..n]),
+                        _ => continue,
+                    }
+                    while acc.len() >= MSG {
+                        let chunk: Vec<u8> = acc.drain(..MSG).collect();
+                        if transport.write_all(&chunk).await.is_err() {
+                            break;
+                        }
+                        echoed += 1;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                if let Some(dt) = dt {
+                    let _ = dt.send(echoed as usize);
+                }
+            });
+        }
+    });
+
+    let client_cfg = QuicConfig::client_insecure();
+    let mut client = connect(server_addr, client_cfg)
+        .await
+        .expect("client connect");
+
+    for round in 0u8..ROUNDS {
+        let payload: Vec<u8> = (0u8..MSG as u8).map(|b| b.wrapping_add(round)).collect();
+        client
+            .write_all(&payload)
+            .await
+            .unwrap_or_else(|e| panic!("round {round}: client write: {e}"));
+        let mut echo = [0u8; MSG];
+        let mut filled = 0usize;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while filled < MSG && tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(500), client.read(&mut echo[filled..]))
+                .await
+            {
+                Ok(Ok(n)) if n > 0 => filled += n,
+                _ => continue,
+            }
+        }
+        assert_eq!(
+            filled, MSG,
+            "round {round}: client did not read the full echo (connection stalled)"
+        );
+        assert_eq!(&echo[..], &payload[..], "round {round}: echo mismatch");
+    }
+
+    let rounds_echoed = tokio::time::timeout(Duration::from_secs(10), done_rx)
+        .await
+        .expect("server did not finish echoing")
+        .expect("server task dropped the done channel");
+    server_task.abort();
+    assert_eq!(
+        rounds_echoed, ROUNDS as usize,
+        "server did not echo every round"
+    );
+}

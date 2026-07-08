@@ -113,28 +113,33 @@ Mitigation status:
   CryptoProvider trait (Stage 13 embedding API), the override goes
   away.
 
-## QUIC PBC round-trip test flake (transport-poll readiness race)
+## QUIC PBC round-trip test flake (transport-poll readiness race) -- RESOLVED
 
-Date noted: 2026-07-08
+Date noted: 2026-07-08. Resolved: 2026-07-08.
 
-`crates/dyniak/tests/quic_pbc.rs::quic_pbc_ping_put_get_round_trip`
-intermittently times out on the PUT read (the second request/response
-on a single QUIC stream); the PING (first exchange) always completes.
-The failure reproduces identically back through v1.2.0, so it predates
-the 1.3.0 work and is not a regression. It is a readiness/timing race in
-the QUIC AsyncRead/AsyncWrite adapter (`dynomite::net::quic`) -- the
-second exchange occasionally stalls until the operation timeout when the
-connection event loop is starved under parallel load, rather than a
-correctness defect (the exchange is deterministic when not starved).
+Root cause (found by driver-level tracing): the QUIC listener shared a
+single UDP socket across the accept path and every connection driver,
+each calling `recv_from` on it. The dyniak/dnode QUIC servers loop-accept
+(`serve_pbc_quic_inner` calls `accept()` again after spawning a handler),
+so the re-entered accept loop competed with the live connection's driver
+for inbound datagrams and discarded the connection's later packets (it
+only keeps Initial packets). The connection then stalled on its second
+request and timed out. Not a timing race in the adapter -- a
+socket-ownership defect.
 
-Mitigation in place: a bounded `retries = 3` override for this single
-test in `.config/nextest.toml` (both the default and conformance
-profiles), so a starved run does not fail the gate.
+Fix (crates/dynomite/src/net/quic.rs): the listener now spawns one demux
+task that owns the socket read side, routes each datagram to the right
+connection by peer address, opens a connection on a fresh Initial
+packet, and hands accepted transports to `accept()` over a channel.
+Connection drivers no longer read the shared socket; the server driver
+receives datagrams from its demux-fed channel, the client driver reads
+its own connected socket. The driver select also gained an explicit
+app-bytes branch so queued writes flush without waiting for a timer tick.
 
-Investigation to do (not blocking the 1.3.0 release): determine why the
-split QUIC reader does not observe the second response promptly -- likely
-the transport needs the connection driver pumped between stream ops, or
-the writer half needs an explicit connection-level flush. This is a
-transport-internal fix and must land with a deterministic reproduction
-(a loom or seeded-scheduler test of the QUIC stream adapter) per the
-AGENTS.md 6.5 discipline before the retry override is removed.
+Verification (deterministic reproduction, AGENTS.md 6.5): new regression
+test `quic_many_sequential_round_trips_on_one_connection` in
+`crates/dynomite/tests/stage_09_quic.rs` drives ten sequential
+round-trips against a loop-accepting server. Teeth confirmed: 12/12
+failures on the pre-fix code, 15/15 passes on the fix; the original
+`quic_pbc_ping_put_get_round_trip` passed 25/25 after the fix (it failed
+~1-in-3 before). The nextest retry override has been removed.
