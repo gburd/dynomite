@@ -346,3 +346,5 @@ dyn_o_mite:
   distribution_shadow: vnode         # validate the new mode
                                      # against the old one
 ```
+
+[`dynomite::conf::ConfPool`]: https://docs.rs/dynomite-engine/latest/dynomite/conf/struct.ConfPool.html

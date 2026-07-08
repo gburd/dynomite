@@ -73,7 +73,7 @@ Each block is documented in its own chapter:
   `ServerHandle`, and `ServerEvent` shapes.
 * [Hooks and traits](./hooks.md) - the five pluggable traits, their
   default implementations, and when to write a custom one.
-* [Examples](./examples.md) - three end-to-end embedding sketches
+* [Examples](../examples/index.md) -- runnable, documented example programs
   that compose the surface above.
 
 ## Stability

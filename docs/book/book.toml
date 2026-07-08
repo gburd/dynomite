@@ -38,7 +38,7 @@ heading-split-level = 3
 
 [output.linkcheck]
 follow-web-links = false
-warning-policy = "warn"
+warning-policy = "error"
 exclude = ['dynomite\.local', 'example\.com']
 
 [preprocessor.mermaid]

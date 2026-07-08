@@ -6,7 +6,7 @@ gossip frames, and the AES key handshake - travels inside a DNODE
 envelope.
 
 This page documents the framing semantically. The Rust implementation
-lives in [`dynomite::proto::dnode`](../../crate/dynomite/proto/dnode/index.html).
+lives in [`dynomite::proto::dnode`](https://docs.rs/dynomite-engine/latest/dynomite/proto/dnode/index.html).
 
 ## Frame layout
 
@@ -115,5 +115,5 @@ RSA-wrapped AES key as the inline data field; when supplied, the
 encoder writes the wrapped bytes verbatim and updates `<mlen>` to
 match the wrapped key length.
 
-[`DmsgType`]: ../../crate/dynomite/proto/dnode/enum.DmsgType.html
-[`DynParseState`]: ../../crate/dynomite/proto/dnode/enum.DynParseState.html
+[`DmsgType`]: https://docs.rs/dynomite-engine/latest/dynomite/proto/dnode/enum.DmsgType.html
+[`DynParseState`]: https://docs.rs/dynomite-engine/latest/dynomite/proto/dnode/enum.DynParseState.html

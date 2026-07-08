@@ -219,3 +219,6 @@ The `PrometheusMetricsSink` mentioned in the design above is not
 shipped by Stage 13 to avoid adding a new workspace dependency;
 the `LoggingMetricsSink` is the default sink.
 Recorded as a Deviation in `docs/parity.md`.
+
+[`dynomite::embed`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/index.html
+[`dynomite::crypto::Crypto`]: https://docs.rs/dynomite-engine/latest/dynomite/crypto/struct.Crypto.html

@@ -212,8 +212,20 @@ Stage 13 lands the surface above in:
 * `crates/dynomite/src/embed/events.rs` - [`ServerEvent`], [`EventStream`].
 * `crates/dynomite/src/embed/snapshots.rs` - [`PeerSnapshot`],
   [`DatacenterSnapshot`], [`RingSnapshot`].
-* `crates/dynomite/src/embed/error.rs` - [`EmbedError`].
+* `crates/dynomite/src/embed/error.rs` -- the `EmbedError` type.
 
 The runtime tasks (gossip, stats, metrics, accept loops) live in
 `server.rs` next to [`ServerHandle`]; they are spawned by
 [`Server::start`] and observe a single `tokio_util::sync::CancellationToken`.
+
+<!-- API reference-link definitions (resolve the type shorthands above
+     to the generated rustdoc on docs.rs). -->
+[`ServerBuilder`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/struct.ServerBuilder.html
+[`Server`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/struct.Server.html
+[`Server::start`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/struct.Server.html
+[`ServerHandle`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/struct.ServerHandle.html
+[`ServerEvent`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/enum.ServerEvent.html
+[`EventStream`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/struct.EventStream.html
+[`PeerSnapshot`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/struct.PeerSnapshot.html
+[`DatacenterSnapshot`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/struct.DatacenterSnapshot.html
+[`RingSnapshot`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/struct.RingSnapshot.html

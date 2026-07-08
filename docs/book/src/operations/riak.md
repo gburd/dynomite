@@ -126,7 +126,7 @@ The repair sink wiring is materialised today as a
 scheduler; once the exchange protocol lands, only the body of
 the scheduler tick has to change.
 
-[`PeerChannelRepairSink`]: ../api/dynomited/riak/struct.PeerChannelRepairSink.html
+[`PeerChannelRepairSink`]: https://codeberg.org/gregburd/dynomite/src/branch/main/crates/dynomited/src/riak.rs
 
 ## Noxu as the backing datastore
 

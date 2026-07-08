@@ -1,6 +1,6 @@
 # Dynomite
 
-[![Codeberg CI](https://ci.codeberg.org/api/badges/gregburd/dynomite/status.svg)](https://codeberg.org/gregburd/dynomite/actions)
+[![Codeberg CI](https://codeberg.org/gregburd/dynomite/actions/workflows/ci.yml/badge.svg)](https://codeberg.org/gregburd/dynomite/actions)
 [![GitHub CI](https://github.com/gburd/dynomite/actions/workflows/ci.yml/badge.svg)](https://github.com/gburd/dynomite/actions/workflows/ci.yml)
 [![Docs](https://github.com/gburd/dynomite/actions/workflows/docs.yml/badge.svg)](https://gburd.github.io/dynomite/)
 [![crates.io](https://img.shields.io/crates/v/dynomite-engine.svg)](https://crates.io/crates/dynomite-engine)

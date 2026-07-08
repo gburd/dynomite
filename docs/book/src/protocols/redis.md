@@ -7,7 +7,7 @@ assumptions, so the historical `data_store: redis` alias and a
 `data_store: valkey` value select the exact same code path.
 
 The implementation lives in
-[`dynomite::proto::redis`](../../crate/dynomite/proto/redis/index.html).
+[`dynomite::proto::redis`](https://docs.rs/dynomite-engine/latest/dynomite/proto/redis/index.html).
 
 ## Wire format
 

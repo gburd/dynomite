@@ -247,3 +247,5 @@ counter `dynomite_pool_client_read_requests_total`:
 
 Drop the panel into a Grafana dashboard JSON under `panels[]` and
 adjust the `datasource` to point at your Prometheus instance.
+
+[`PeerState`]: https://docs.rs/dynomite-engine/latest/dynomite/cluster/peer/enum.PeerState.html

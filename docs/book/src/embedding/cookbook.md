@@ -3,7 +3,7 @@
 This page is the mainstream reference for embedding Dynomite as a
 library inside another Rust program. It complements
 [Server lifecycle](./server.md), [Hooks and traits](./hooks.md),
-and [Examples](./examples.md): the lifecycle and hooks pages pin
+and [Examples](../examples/index.md): the lifecycle and hooks pages pin
 the API surface, the examples page sketches three end-to-end
 scenarios, and the cookbook below answers the common questions
 embedders ask in order.
@@ -20,7 +20,7 @@ Dynomite ships in two equally first-class shapes:
   observability and lifecycle isolation from your application
   process and when you are happy proxying through a TCP socket.
 * `dynomite` (the library, in `crates/dynomite/`) - exposes the
-  same engine through the typed [`embed`](../../embedding/index.md)
+  same engine through the typed [`embed`](./index.md)
   API. The host program owns the tokio runtime, plugs custom
   hooks, drives the engine through a [`ServerHandle`], and reads
   metrics either by holding the live `Arc<Stats>` or by plugging
@@ -100,7 +100,7 @@ Dynomite's gossip / ring / quorum layer is independent of the
 backing store. The default in-crate `RedisDatastore` and
 `MemcacheDatastore` front the two protocols Dynomite was born to
 proxy, but any type that implements
-[`dynomite::embed::Datastore`](../../embedding/hooks.md#datastore)
+[`dynomite::embed::Datastore`](./hooks.md#datastore)
 slots in. Common targets:
 
 * `RocksDB`, `sled`, `redb`, in-process B-Trees - host the
@@ -113,7 +113,7 @@ slots in. Common targets:
   on top of the same trait.
 
 The trait surface (verbatim from
-[`hooks.rs`](../../embedding/hooks.md#datastore)):
+[`hooks.rs`](./hooks.md#datastore)):
 
 ```rust,no_run
 # use dynomite::embed::hooks::{BoxFuture, Datastore, DatastoreError, Protocol};
@@ -292,7 +292,7 @@ each suited to a different integration shape:
    contention.
 
 3. **Push**: implement
-   [`MetricsSink`](../../embedding/hooks.md#metricssink) and plug
+   [`MetricsSink`](./hooks.md#metricssink) and plug
    it via `ServerBuilder::metrics_sink`. The runtime calls
    `MetricsSink::emit(&snapshot)` on the cadence the trait
    reports through `flush_interval`. Use this to forward the
@@ -429,4 +429,5 @@ cookbook references) and the broader
 `crates/dynomite/tests/stage_13_embed.rs` integration suite.
 Both suites run in CI on every push.
 
-[`MetricsSink`]: ../../embedding/hooks.md#metricssink
+[`MetricsSink`]: ./hooks.md#metricssink
+[`ServerHandle`]: https://docs.rs/dynomite-engine/latest/dynomite/embed/struct.ServerHandle.html

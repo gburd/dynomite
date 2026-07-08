@@ -715,7 +715,7 @@ and regex queries answer from the local node only. The cluster-
 wide broadcast that fans an FT.SEARCH across every primary peer
 and merges the top-K hits is in flight on the
 `stage/ft-search-distributed` branch. Watch
-[`docs/dynvec/fold-into-redis-path.md`](../../dynvec/fold-into-redis-path.md)
+[`docs/dynvec/fold-into-redis-path.md`](https://codeberg.org/gregburd/dynomite/src/branch/main/docs/dynvec/fold-into-redis-path.md)
 for the design overview and the corresponding journal entry for
 status.
 
@@ -727,14 +727,14 @@ status.
 - **Architecture:** [`architecture.md`](./architecture.md) walks the
   request lifecycle from the listener through the dispatcher, the
   cluster routing layer, and the backend pool.
-- **Vector design:** [`docs/dynvec/architecture.md`](../../dynvec/architecture.md)
+- **Vector design:** [`docs/dynvec/architecture.md`](https://codeberg.org/gregburd/dynomite/src/branch/main/docs/dynvec/architecture.md)
   documents the dynvec engine that backs HSET indexing, HNSW graph
   layout, and the encoding/distance modules.
-- **Text design:** [`docs/dyntext/design.md`](../../dyntext/design.md)
+- **Text design:** [`docs/dyntext/design.md`](https://codeberg.org/gregburd/dynomite/src/branch/main/docs/dyntext/design.md)
   documents the trigram + bloom funnel that backs `@field:substring`
   and FT.REGEX.
 - **Production-readiness evidence:** the chaos-test reports under
-  [`dist/chaos-reports/v0.1.0/`](../../../dist/chaos-reports/v0.1.0/)
+  [`dist/chaos-reports/v0.1.0/`](https://codeberg.org/gregburd/dynomite/src/branch/main/dist/chaos-reports/v0.1.0)
   contain the full failure-injection results for the multi-host
   pre-tag pass. `multi-host-pass-8-redis.md` is the most recent
   Redis-backend run.

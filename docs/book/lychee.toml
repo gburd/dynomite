@@ -35,6 +35,12 @@ exclude = [
   '^https?://gburd\.github\.io',
   '^https?://docs\.rs/',
   '^https?://crates\.io/',
+  # CI badge SVG endpoints and the Actions landing pages resolve only
+  # after the first workflow run on each forge; they are valid targets
+  # but unresolvable on a fresh checkout, so the checker skips them.
+  '/actions/workflows/.*/badge\.svg$',
+  '^https?://codeberg\.org/gregburd/dynomite/actions',
+  '^https?://github\.com/gburd/dynomite/actions',
 ]
 
 # Treat man-page URIs (man:foo(1)) as informational, not fetched.

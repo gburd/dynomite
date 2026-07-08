@@ -2,7 +2,7 @@
 
 The `memcache` data store speaks the Memcached ASCII (text) protocol.
 The implementation lives in
-[`dynomite::proto::memcache`](../../crate/dynomite/proto/memcache/index.html).
+[`dynomite::proto::memcache`](https://docs.rs/dynomite-engine/latest/dynomite/proto/memcache/index.html).
 
 ## Wire format
 

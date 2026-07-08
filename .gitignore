@@ -29,3 +29,4 @@ dump.rdb
 .claude/
 .envrc
 .mcp.json
+.local-scratch/
