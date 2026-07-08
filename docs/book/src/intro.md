@@ -109,7 +109,7 @@ collected in [Design Decisions (Roads Not Taken)](./reference/roads-not-taken.md
 and called out inline wherever a choice matters.
 
 ```admonish note title="Origin and parity"
-This is a from-scratch Rust port of
+This is a from-scratch Rust implementation of
 [Netflix Dynomite](https://github.com/Netflix/dynomite), which itself
 extended Twitter's `twemproxy`. It aims to be functionally identical to
 the C original; the live symbol-level mapping is in

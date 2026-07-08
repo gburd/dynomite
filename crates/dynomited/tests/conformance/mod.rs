@@ -375,8 +375,8 @@ impl DynomitedNode {
         // the new dynomited's flock attempt does not race the
         // stale exclusive lock.
         let _ = std::fs::remove_file(&self.pid_file);
-        let bin = which_in_path("dynomited")
-            .unwrap_or_else(|| assert_cmd::cargo::cargo_bin("dynomited"));
+        let bin =
+            which_in_path("dynomited").unwrap_or_else(|| assert_cmd::cargo::cargo_bin("dynomited"));
         // Retry the spawn-and-bind dance: the previous instance
         // may still be holding the listen port (kernel cleanup
         // can lag behind a SIGKILL by several seconds).
@@ -440,8 +440,8 @@ impl Cluster {
     /// Returns an error if any backend or dynomited child fails
     /// to bind within the readiness window.
     pub fn launch(mut specs: Vec<NodeSpec>, pool_name: &str) -> io::Result<Self> {
-        let bin = which_in_path("dynomited")
-            .unwrap_or_else(|| assert_cmd::cargo::cargo_bin("dynomited"));
+        let bin =
+            which_in_path("dynomited").unwrap_or_else(|| assert_cmd::cargo::cargo_bin("dynomited"));
         let dir = tempfile::tempdir()?;
         let mut backends = Vec::with_capacity(specs.len());
         for s in &mut specs {

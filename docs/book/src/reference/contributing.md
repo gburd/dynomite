@@ -24,9 +24,10 @@ divergence as a **deviation** with a rationale.
 ```admonish note title="Why parity, and where the Rust code is idiomatic"
 Parity governs observable behavior, not code shape. The Rust code reads
 as first-class Rust -- traits, enums, async, typed errors -- and does not
-carry "ported from" comments. Where a C shape does not map cleanly to
-Rust, the project uses a two-layer pattern: an idiomatic inner layer and
-a thin parity shim that mirrors the C function's semantics. Both are
+carry origin-acknowledgement comments. Where a C shape does not map
+cleanly to Rust, the project uses a two-layer pattern: an idiomatic inner
+layer and a thin parity shim that mirrors the C function's semantics.
+Both are
 tested to produce identical behavior.
 ```
 

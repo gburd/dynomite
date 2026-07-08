@@ -116,8 +116,7 @@ fn cluster_info_returns_503_when_provider_unwired() {
         // Note: no with_cluster_info_provider call; the route
         // must return 503 in that mode and the CLI must surface
         // the failure.
-        let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink)
-            .expect("bind");
+        let server = StatsServer::bind("127.0.0.1:0".parse().unwrap(), sink).expect("bind");
         let addr = server.local_addr().expect("local_addr");
         let task = tokio::spawn(async move {
             let _ = server.run().await;

@@ -149,8 +149,8 @@ rebalancing on membership change move less data per moved token.
 
 <dl class="dyn-facts">
 <dt>One token per node</dt>
-<dd>Simple, matches the classic Dynomite deployment. Arc boundaries are
-the configured tokens; the seed list carries them.</dd>
+<dd>Simple, and the classic single-token-per-node deployment. Arc
+boundaries are the configured tokens; the seed list carries them.</dd>
 <dt>Many tokens per node (vnodes)</dt>
 <dd>Each token is a separate continuum point for the same peer index.
 Smoother load, cheaper rebalancing, larger continuum.</dd>
