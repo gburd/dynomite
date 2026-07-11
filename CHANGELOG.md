@@ -13,6 +13,55 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.4.0] - 2026-07-09
+
+Minor release. A dependency-currency refresh (notably the noxu storage
+engine's 7.5 performance line), a real QUIC transport fix, the property-
+testing framework update, and forge-aware documentation. Backward
+compatible.
+
+### Fixed
+
+- `net::quic`: a QUIC connection now survives multiple request/response
+  exchanges. The listener shared one UDP socket across the accept path
+  and every connection driver, all calling `recv_from`; because the
+  Riak/dnode QUIC servers loop-accept, the re-entered accept path stole
+  and discarded a live connection's later packets, so a connection
+  stalled on its second request. The listener now runs a single demux
+  task that owns the socket read side and routes datagrams to each
+  connection by peer address; drivers no longer race the socket. A
+  deterministic regression test
+  (`quic_many_sequential_round_trips_on_one_connection`) fails on the
+  old code and passes on the fix.
+
+### Changed
+
+- Dependency: noxu 7.4 -> 7.5 (umbrella noxu 7.5.1, noxu-db 7.5.2). A
+  performance release -- COOL/HOT cooling-clock evictor, sharded
+  active-txn registry, read-only-commit WAL/fsync fast path, cold-LN
+  single-read fault fix -- with no API break; the dyniak, dynomite-text
+  persist, and dynomite-vec noxu paths are unchanged.
+- Dependency: hegeltest (property testing, re-exported as hegel) 0.23
+  -> 0.25. No API change to the surface in use.
+- Dependencies: a semver-compatible refresh across 42 packages
+  (crossbeam-*, pest, quinn, regex, rustls-pki-types, time, and
+  others).
+
+### Documentation
+
+- The reference manual now renders repository source links to the forge
+  the reader is on: readers on GitHub Pages follow links to github.com,
+  readers on Codeberg Pages to codeberg.org. A `DYN_SRC_BASE/<path>`
+  sentinel is substituted per forge at build time by
+  `scripts/render-book.sh`, which both docs workflows and
+  `scripts/check.sh` invoke.
+- The documentation link checker is hardened so a third-party host
+  hiccup on a CI runner cannot block publishing internally-correct docs
+  (internal links remain strictly gated by mdbook-linkcheck); the
+  lychee external check is informational.
+- GitHub Pages publication is fixed and live at
+  `https://gburd.github.io/dynomite/`.
+
 ## [1.3.0] - 2026-07-08
 
 Minor release. A comprehensive reference-manual and getting-started
@@ -693,5 +742,5 @@ for the v0.1.0 release:
   release tag; smoke 60 s variant available under
   `--features chaos` for development cycles.
 
-[Unreleased]: https://github.com/gburd/dynomite/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/gburd/dynomite/compare/v1.4.0...HEAD
 [0.1.0]: https://github.com/gburd/dynomite/releases/tag/v0.1.0

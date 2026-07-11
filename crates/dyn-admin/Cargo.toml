@@ -28,7 +28,7 @@ thiserror = { workspace = true }
 prost = { workspace = true }
 
 [dev-dependencies]
-dynomite = { path = "../dynomite", package = "dynomite-engine", version = "1.3.0" }
+dynomite = { path = "../dynomite", package = "dynomite-engine", version = "1.4.0" }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
