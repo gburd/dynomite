@@ -2671,9 +2671,9 @@ checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
 
 [[package]]
 name = "noxu"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c4ed12e1d529f3ee4ad298b8075457f130ba9f16dea339d66460d4b0dc00009"
+checksum = "fa3a256f9c5f996bc24cf602ff1b4d79f3d2907b2d111ad30d06d5d37e2e3a67"
 dependencies = [
  "noxu-bind",
  "noxu-collections",
@@ -2685,9 +2685,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-bind"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abe6445c68800959fef3a075d02778f919a444fd67b500fba13874b9652c33d3"
+checksum = "04742d3c85c9c6e4d316717607694428d708f0103bdd257d0d66a1655d9a93ae"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2699,9 +2699,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-cleaner"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8f0516a1aac05ae8d00af13af0e7a379b8dacd7816a804eb45321c72c848970"
+checksum = "7068df36813723157518b884f834a003b03b20f9634d6ed7a12d43321b397eac"
 dependencies = [
  "bytes",
  "hashbrown 0.15.5",
@@ -2717,9 +2717,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-collections"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13e73cab40eba888dccc94a9dfcafe2ff3010d218f9cc7a2b94f243e0830b722"
+checksum = "c502001c2c4c10470afe70393a8314949234086463bdcee71d9e365e7e545249"
 dependencies = [
  "hashbrown 0.15.5",
  "noxu-bind",
@@ -2729,9 +2729,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-config"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ea464da24be1746f2d4647199cf2c236976bb8db6c76cd585e8affcf7c0d17a"
+checksum = "4d18d321310105eb43755fcdd38bd19b4321fc21a78eff23f9ab27d6062b9e5d"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -2741,9 +2741,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-db"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b02b327ad6b90ca5511e319b50d2165fda48100c9a20bb3a0c53f42965191ec"
+checksum = "35b94a562d4f89b80abc80c77807eb65c3bfd1ad980c421d7917123ee1890ebf"
 dependencies = [
  "bytes",
  "hashbrown 0.15.5",
@@ -2762,9 +2762,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-dbi"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f38d57d729e4e6da6235add9b889c96d4013fcf17b46e4f37455a9f27badffa"
+checksum = "5d29626137e46590aca502c598745ebdea92f481dfe8e70075c3be369dd38b57"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2787,9 +2787,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-engine"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f0f8a8bae376f41bbbcbed91a5932b4cc5ac58a836ad168ac6ff62e1cd315e"
+checksum = "436d94bb0dca4133bcb18c17040d8b44e23f9520f4179d72c3fc74f38d37b157"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -2811,9 +2811,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-evictor"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d130e02b3194c846c477c448e9b0a8215f21fbf8c6e513cebaa3812c393ed10"
+checksum = "7a06182198a7f63f4b540b9a3e6e10ee27cc92ae8578c492cbc3efd42e4bc464"
 dependencies = [
  "bytes",
  "hashbrown 0.15.5",
@@ -2832,9 +2832,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-latch"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bc6817b4cfc3d5caab0609c9ad69f287bd8a57bd6ffd33e043a1cd107ba272a"
+checksum = "89bbc33c4ecc755982d6e1e9628c646f4bf590ff99f2ecfadba826c3d5522a14"
 dependencies = [
  "log",
  "noxu-sync",
@@ -2843,9 +2843,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-log"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b4a938c03a2a33de666bb87ee996bd8ea112fc62688394eebfb9cf686dac443"
+checksum = "9f5dcec96f01d7db56654c2beda6237763db2c9e77753fe155c14c0ad718da90"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2865,9 +2865,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-persist"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d246074d19d71c3b4c8bfb5dc4da77e008650bcacf88876036782517f7faada"
+checksum = "c8e8a9bfdb6eb8a28dc340272ba29a417d8fea725b617ac31b4514d325ea3bf6"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
@@ -2878,9 +2878,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-persist-derive"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20e1ec940b2f0f0b0016daccbd74e57c18f8fb0a74733874b975684dec9edc3b"
+checksum = "fbc725ace85aa21164326b4bd70033034cd1b8840bfef9c3a8a4a632e12d1357"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2889,9 +2889,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-recovery"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e0e81aaa95af1bdc8d320d383940729ce0e88895516dd66a41029cc77a46302"
+checksum = "765e0985f42c99ee58fbf3556271c84d658f81a2f0306d063045cac24521b804"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2909,9 +2909,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-sync"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cb0bd5b796755ced0a8cad02cc6404598221662b77b12641e4f5613ff687779"
+checksum = "2750e3d8cb87127f7e80f36336592e1102e5152678ef09c899ab1f6021b5c6bc"
 dependencies = [
  "libc",
  "lock_api",
@@ -2919,9 +2919,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-tree"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29df8084e25d3ff4fc5b4bbd518cf19bd821b15a9eb51a74b7ea568360373cab"
+checksum = "4fa60acc5dad167a1de64c785e4ad7a13ec5018eb8fdd7c7d8e96d385808e391"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2937,9 +2937,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-txn"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dbbf32213da86b8da0a20131457ea768bd8d1ab57ca8f0c854ed8b69bddcee5"
+checksum = "24c4af1465ec2a85f89063ea341192f9922fffefbb06e1a3cfd0db45c6c5adbc"
 dependencies = [
  "byteorder",
  "hashbrown 0.15.5",
@@ -2955,9 +2955,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-util"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31e6ba0719ea5f97ef79907173824c1ff6e01dc6d2c9aeb0fa21722f29dfa42f"
+checksum = "a610e92e0a4bde208d9fb91f2e62681153f2b5f01d3293bf7be71fe600c8df37"
 dependencies = [
  "byteorder",
  "hashbrown 0.15.5",
@@ -2969,9 +2969,9 @@ dependencies = [
 
 [[package]]
 name = "noxu-xa"
-version = "7.5.2"
+version = "7.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "291f10390fd00ff9c669bd5b494c315cb654eef999661cce3f128164f038e75e"
+checksum = "d665d61a139f6b360e9ffa682003305f23437bf60205d32390731e25668bc88c"
 dependencies = [
  "hashbrown 0.15.5",
  "log",
