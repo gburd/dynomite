@@ -13,6 +13,18 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.4.1] - 2026-07-12
+
+Patch release. Advances the noxu storage engine to 7.5.3, whose evictor
+fix stops unbounded RSS growth on the cold-LN read-fault path (plus a
+search-hot-path allocation reduction and fsync instrumentation). No API
+change in noxu or dynomite; the dyniak, dynomite-text persist, and
+dynomite-vec noxu paths are unchanged. Backward compatible.
+
+### Changed
+
+- Dependency: noxu 7.5.2 -> 7.5.3.
+
 ## [1.4.0] - 2026-07-09
 
 Minor release. A dependency-currency refresh (notably the noxu storage
@@ -742,5 +754,5 @@ for the v0.1.0 release:
   release tag; smoke 60 s variant available under
   `--features chaos` for development cycles.
 
-[Unreleased]: https://github.com/gburd/dynomite/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/gburd/dynomite/compare/v1.4.1...HEAD
 [0.1.0]: https://github.com/gburd/dynomite/releases/tag/v0.1.0
