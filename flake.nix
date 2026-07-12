@@ -10,18 +10,28 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      rust-overlay,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
         toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-        pythonEnv = pkgs.python3.withPackages (ps: with ps; [
-          pyyaml
-          requests
-          pytest
-        ]);
-      in {
+        pythonEnv = pkgs.python3.withPackages (
+          ps: with ps; [
+            pyyaml
+            requests
+            pytest
+          ]
+        );
+      in
+      {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             toolchain
@@ -41,7 +51,7 @@
             mdbook
             mdbook-mermaid
             mdbook-admonish
-            mdbook-linkcheck
+            mdbook-linkcheck2
             lychee
 
             # Build deps for native crates (quiche bundles its own BoringSSL)
@@ -92,5 +102,6 @@
             echo "  run: scripts/check.sh"
           '';
         };
-      });
+      }
+    );
 }
