@@ -241,7 +241,7 @@ symbol is considered un-ported.
 | `crypto_deinit` | implicit (`Drop` of `Crypto`) | done (Stage 6) |
 | `base64_encode` | `dynomite::crypto::base64_encode` | done (Stage 6); standard alphabet with trailing `=` padding (matches the C `BIO_f_base64()` + `BIO_FLAGS_BASE64_NO_NL` output, which suppresses newlines but keeps padding) |
 | `base64_decode` (commented out in C) | `dynomite::crypto::base64_decode` | done (Stage 6); the C source ships the helper commented out, the Rust port exposes the symmetric decode that the DNODE handshake will need |
-| `aes_encrypt` | `dynomite::crypto::Crypto::aes_encrypt` (delegates to `crypto::aes::encrypt_to_vec`) | done (Stage 6); AES-128-CBC with the first 16 bytes of the key reused as the IV, no IV prefix in the output |
+| `aes_encrypt` | `dynomite::crypto::Crypto::aes_encrypt` (delegates to `crypto::aes::encrypt_to_vec`) | done (Stage 6); AES-128-CBC with the first 16 bytes of the key reused as the IV, no IV prefix in the output. An authenticated AES-256-GCM alternative (`crypto::aes::encrypt_to_vec_aead`, random nonce + tag, full 32-byte key) is provided for the peer plane; see `# Deviations` D-crypto. |
 | `aes_decrypt` | `dynomite::crypto::Crypto::aes_decrypt` (delegates to `crypto::aes::decrypt_to_vec`) | done (Stage 6) |
 | `dyn_aes_encrypt` | `dynomite::crypto::Crypto::dyn_aes_encrypt` (delegates to `crypto::aes::encrypt_to_chain`) | done (Stage 6); writes a fresh chain rather than mutating a single caller-supplied mbuf because the chunk-then-pool model is a closer fit for the tokio reactor than the C in-place `mbuf->end_extra` reservation |
 | `dyn_aes_decrypt` | `dynomite::crypto::Crypto::dyn_aes_decrypt` (delegates to `crypto::aes::decrypt_chain_to_chain`) | done (Stage 6) |
@@ -304,15 +304,25 @@ symbol is considered un-ported.
   and the first `signal()` call would diverge. We treat this as a
   benign reordering because pid-file writes are atomic via
   `flock` + `O_TRUNC`.
-* Token components above `u32::MAX` are saturated to `u32::MAX`
-  inside `dynomited::server::token_component_to_dyn`. The C
-  reference accepts arbitrary-precision tokens, but the existing
-  `dynomite::hashkit::DynToken` only carries four bytes. Tokens
-  beyond `u32::MAX` are vanishingly rare in practice (default
-  `tokens: '101134286'` is an order of magnitude below the limit)
-  and the saturation keeps the run-time wiring infallible. A full
-  big-int port of `DynToken` is tracked as a separate parity row
-  under `hashkit/token.c`.
+* Token components above `u32::MAX` are a hard configuration error
+  (a clear startup failure), raised inside
+  `dynomited::server::token_component_to_dyn`. The C reference
+  accepts arbitrary-precision tokens, but the existing
+  `dynomite::hashkit::DynToken` only carries four bytes. Rather
+  than saturate an oversized token to `u32::MAX` -- which would
+  silently place the node at a DIFFERENT ring position than the
+  operator configured, the worst outcome for a drop-in replacement
+  of a live C cluster whose tokens exceed `u32` (Cassandra-style
+  random tokens over the murmur space routinely do) -- the server
+  refuses to start. A wrong ring placement is worse than a clear
+  error. Common configs are well under the limit (default
+  `tokens: '101134286'`). A full big-int port of `DynToken` that
+  would accept arbitrary-precision tokens is tracked as a separate
+  parity row under `hashkit/token.c`; until it lands, oversized
+  tokens are rejected, never saturated.
+  Deviation rationale: a review (2026-07-23) correctly flagged the
+  prior saturation as a silent correctness hazard on the
+  identity-defining ring value.
 
 
 ## src/event/
@@ -1101,6 +1111,76 @@ encode/decode seam in
 `crates/dyniak/src/proto/pb/datatypes.rs::tests::itc_*`.
 
 ## Deviations
+
+### D-audit: deferred-row reconciliation (2026-07-23 review)
+
+The 2026-07-23 review correctly noted that the matrix carries many
+"deferred to Stage N" markers and that, by the matrix's own rule, a
+symbol without a completed row is considered un-ported. An audit of the
+rows the review named:
+
+* **stats `stats_make_cl_desc_rsp` / cluster-describe + dynamic-control
+  endpoints**: GENUINELY OPEN. The stats REST surface implements only
+  `GET /` and `GET /info` (JSON snapshot). The C engine's
+  `/cluster_describe`, `/help`, `/ping`, and the runtime mutator
+  endpoints (log level, consistency knobs, peer state, read-repair
+  toggle) are NOT implemented. This is a real parity gap at 1.4.1, not
+  a done-elsewhere row. Tracked; not a blocker for the engine's data
+  path but it is missing operational surface relative to the C engine.
+* **`redis_copy_bulk`**: GENUINELY OPEN. No Rust home; the mbuf-level
+  bulk-copy helper was folded conceptually into the conn FSM's chain
+  handling but the discrete symbol is not ported. Low risk (the
+  coalescer paths that would use it are covered by other helpers) but
+  recorded honestly as un-ported.
+* **SIGUSR1/SIGUSR2/SIGTTIN/SIGTTOU/SIGSEGV/SIGPIPE**: intentional
+  deviation, not an accidental gap -- see the Ambiguities entry; the
+  Rust runtime relies on tokio signal handling + OS defaults and does
+  not reproduce the C job-control/coredump signal semantics.
+* **gossip dict instantiations** (`dictTypeHeapString*`,
+  `dict_string_*`): RESOLVED. Folded into
+  `dynomite::cluster::gossip::GossipState` (matrix row "done Stage 10");
+  the deferring rows are stale bookkeeping, superseded by the
+  GossipState row.
+
+Conclusion: two named rows (`cluster_describe`/mutator endpoints,
+`redis_copy_bulk`) are genuinely still open at 1.4.1 and are now labelled
+as such rather than left implying completion; the signal and gossip-dict
+rows are, respectively, an intentional deviation and a resolved fold-in.
+The broader set of ~65 "deferred to Stage N" markers is stale
+development bookkeeping for stages that have shipped; the data-path
+symbols among them are covered by their superseding rows, and a full
+row-by-row reconciliation of the remaining operational-surface symbols
+is tracked as ongoing matrix hygiene.
+
+### D-crypto: authenticated peer cipher (AES-256-GCM) alongside C-compat CBC
+
+The C reference encrypts the DNODE peer plane with AES-128-CBC using
+the first 16 bytes of the key reused as the IV
+(`EVP_EncryptInit_ex(ctx, cipher, NULL, key, key)`) and no
+authentication tag. Reusing the key as a fixed IV makes the cipher
+deterministic (identical plaintext prefixes yield identical ciphertext
+prefixes across messages) and the channel is unauthenticated. That is
+the correct default only for wire compatibility with C peers, not for
+security.
+
+The Rust port keeps the exact C-compatible CBC primitives
+(`crypto::aes::encrypt_to_vec` / `decrypt_to_vec`, byte-pinned against
+the C output) for interop, and ADDS an authenticated AEAD primitive:
+`crypto::aes::encrypt_to_vec_aead` / `decrypt_to_vec_aead`, AES-256-GCM
+using the full 32-byte key with a fresh random 96-bit nonce per message
+(prefixed to the ciphertext) and a 128-bit tag. The AEAD form is
+non-deterministic, authenticated (tamper- and wrong-key-detecting,
+unlike CBC which false-accepts a wrong key on a single block ~0.4% of
+the time), and uses all 32 key bytes rather than wasting 16.
+
+Rationale: a review (2026-07-23) correctly flagged the inherited CBC
+IV-reuse as a real cryptographic weakness and recommended keeping the
+C-compatible mode for interop while adding and defaulting to an AEAD
+mode. The AEAD primitive is available and tested as of this change.
+Negotiating the cipher mode in the DNODE handshake (so a cluster
+defaults to AEAD and falls back to CBC only against C peers) is the
+remaining step and is tracked as a follow-up parity row; the primitive
+is in place so the wire-negotiation change is contained.
 
 ### D0: Noxu 2i storage layout
 

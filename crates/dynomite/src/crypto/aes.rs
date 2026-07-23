@@ -23,18 +23,34 @@
 //!
 //! # Security
 //!
-//! The AES key is reused as the IV
-//! (`EVP_EncryptInit_ex(ctx, cipher, NULL, key, key)`), which makes
-//! the cipher deterministic for a given (key, plaintext) pair: two
-//! encryptions of the same plaintext produce identical ciphertext.
-//! This is a known weakness, kept for wire compatibility with peers
-//! that do the same; embedders should treat the resulting channel as
-//! transport-layer encryption only, not as an authenticated channel.
-//! No AEAD layer is applied on top.
+//! The [`encrypt_to_vec`] / [`decrypt_to_vec`] family is AES-128-CBC
+//! with the AES key reused as the IV
+//! (`EVP_EncryptInit_ex(ctx, cipher, NULL, key, key)`), which makes the
+//! cipher deterministic for a given (key, plaintext) pair: two
+//! encryptions of the same plaintext produce identical ciphertext, and
+//! there is no authentication tag. This is a known weakness, kept
+//! ONLY for wire compatibility with C peers that do the same. It must
+//! not be treated as an authenticated channel.
+//!
+//! The [`encrypt_to_vec_aead`] / [`decrypt_to_vec_aead`] family is
+//! AES-256-GCM with a fresh random 96-bit nonce per message, prefixed
+//! to the ciphertext, plus a 128-bit authentication tag. It uses the
+//! full 32-byte key, is non-deterministic, and detects tampering. This
+//! is the preferred peer cipher; the CBC family exists only for
+//! interoperability with C peers during migration.
+//!
+//! The wire form of the AEAD output is:
+//!
+//! ```text
+//! [12-byte nonce][GCM ciphertext][16-byte tag]
+//! ```
 
 use aes::Aes128;
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use rand::RngCore;
 
 use crate::crypto::CryptoError;
 use crate::io::mbuf::{Mbuf, MbufPool, MbufQueue};
@@ -109,6 +125,72 @@ pub fn decrypt_to_vec(enc: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>,
     cipher
         .decrypt_padded_vec_mut::<Pkcs7>(enc)
         .map_err(|_| CryptoError::BadPadding)
+}
+
+/// AES-256-GCM nonce length in bytes (96-bit, the GCM standard).
+pub const AEAD_NONCE_LEN: usize = 12;
+
+/// AES-256-GCM authentication tag length in bytes (128-bit).
+pub const AEAD_TAG_LEN: usize = 16;
+
+/// Encrypt `msg` with AES-256-GCM using the full 32-byte `aes_key` and
+/// a fresh random 96-bit nonce. The output is `nonce || ciphertext ||
+/// tag`; it is non-deterministic (a new nonce per call) and
+/// authenticated (tampering is detected on decrypt).
+///
+/// This is the preferred peer cipher. Unlike [`encrypt_to_vec`] it
+/// uses all 32 key bytes, does not reuse the key as an IV, and adds an
+/// authentication tag. Prefer it over the CBC family except when
+/// interoperating with C peers that only speak the deterministic CBC
+/// form.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::crypto::Crypto;
+/// use dynomite::crypto::aes::{decrypt_to_vec_aead, encrypt_to_vec_aead};
+///
+/// let key = Crypto::generate_aes_key().unwrap();
+/// let a = encrypt_to_vec_aead(b"alpha", &key).unwrap();
+/// let b = encrypt_to_vec_aead(b"alpha", &key).unwrap();
+/// assert_ne!(a, b, "a fresh nonce makes each encryption distinct");
+/// assert_eq!(decrypt_to_vec_aead(&a, &key).unwrap(), b"alpha");
+/// ```
+///
+/// # Errors
+/// [`CryptoError::EncryptionFailed`] if the AEAD layer rejects the
+/// input (in practice only on an internal invariant violation).
+pub fn encrypt_to_vec_aead(msg: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>, CryptoError> {
+    let cipher = Aes256Gcm::new(aes_key.into());
+    let mut nonce_bytes = [0u8; AEAD_NONCE_LEN];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ct = cipher
+        .encrypt(nonce, msg)
+        .map_err(|_| CryptoError::EncryptionFailed)?;
+    let mut out = Vec::with_capacity(AEAD_NONCE_LEN + ct.len());
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+/// Decrypt the output of [`encrypt_to_vec_aead`], verifying the GCM
+/// authentication tag.
+///
+/// # Errors
+/// [`CryptoError::DecryptionFailed`] if `enc` is shorter than a nonce
+/// plus tag, or if tag verification fails (tampered or wrong-key
+/// ciphertext).
+pub fn decrypt_to_vec_aead(enc: &[u8], aes_key: &[u8; AES_KEYLEN]) -> Result<Vec<u8>, CryptoError> {
+    if enc.len() < AEAD_NONCE_LEN + AEAD_TAG_LEN {
+        return Err(CryptoError::DecryptionFailed);
+    }
+    let (nonce_bytes, ct) = enc.split_at(AEAD_NONCE_LEN);
+    let cipher = Aes256Gcm::new(aes_key.into());
+    let nonce = Nonce::from_slice(nonce_bytes);
+    cipher
+        .decrypt(nonce, ct)
+        .map_err(|_| CryptoError::DecryptionFailed)
 }
 
 /// Encrypt `msg` and write the ciphertext into a fresh chain of
@@ -315,5 +397,58 @@ mod tests {
         let bytes: Vec<u8> = plain.iter().flat_map(|m| m.readable().to_vec()).collect();
         assert_eq!(bytes, b"hello world");
         plain.recycle(&pool);
+    }
+
+    #[test]
+    fn aead_round_trips() {
+        let key = Crypto::generate_aes_key().unwrap();
+        let cipher = encrypt_to_vec_aead(b"hello aead", &key).unwrap();
+        // nonce + ciphertext + tag, and never the bare plaintext length.
+        assert!(cipher.len() >= AEAD_NONCE_LEN + AEAD_TAG_LEN);
+        let plain = decrypt_to_vec_aead(&cipher, &key).unwrap();
+        assert_eq!(plain, b"hello aead");
+    }
+
+    #[test]
+    fn aead_is_nondeterministic() {
+        let key = Crypto::generate_aes_key().unwrap();
+        let a = encrypt_to_vec_aead(b"same", &key).unwrap();
+        let b = encrypt_to_vec_aead(b"same", &key).unwrap();
+        assert_ne!(
+            a, b,
+            "a fresh random nonce makes each AEAD ciphertext distinct"
+        );
+        // Both still decrypt to the same plaintext.
+        assert_eq!(decrypt_to_vec_aead(&a, &key).unwrap(), b"same");
+        assert_eq!(decrypt_to_vec_aead(&b, &key).unwrap(), b"same");
+    }
+
+    #[test]
+    fn aead_detects_tampering() {
+        let key = Crypto::generate_aes_key().unwrap();
+        let mut cipher = encrypt_to_vec_aead(b"authentic", &key).unwrap();
+        // Flip a bit in the ciphertext body (past the nonce).
+        let last = cipher.len() - 1;
+        cipher[last] ^= 0x01;
+        assert!(
+            decrypt_to_vec_aead(&cipher, &key).is_err(),
+            "GCM tag verification must reject a tampered ciphertext"
+        );
+    }
+
+    #[test]
+    fn aead_wrong_key_is_rejected() {
+        let key_a = Crypto::generate_aes_key().unwrap();
+        let key_b = Crypto::generate_aes_key().unwrap();
+        let cipher = encrypt_to_vec_aead(b"secret", &key_a).unwrap();
+        // Unlike CBC (which false-passes ~0.4% on a wrong key), GCM tag
+        // verification rejects a wrong key deterministically.
+        assert!(decrypt_to_vec_aead(&cipher, &key_b).is_err());
+    }
+
+    #[test]
+    fn aead_too_short_is_rejected() {
+        let key = Crypto::generate_aes_key().unwrap();
+        assert!(decrypt_to_vec_aead(&[0u8; 4], &key).is_err());
     }
 }

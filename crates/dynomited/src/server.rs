@@ -2991,19 +2991,32 @@ fn seed_to_peer(
 fn token_component_to_dyn(
     component: &dynomite::conf::TokenComponent,
 ) -> Result<DynToken, ServerError> {
-    // `DynToken` carries a
-    // four-byte big-endian integer that fits the common case
-    // (single-rack ring with sub-`u32::MAX` tokens). Parse the
-    // decimal digits into u32 with saturation when oversized so
-    // operators with values beyond `u32::MAX` still get a valid,
-    // clearly-marked-up token rather than a panic. The behaviour
-    // is documented in `docs/parity.md`.
+    // `DynToken` carries a four-byte big-endian integer. A token whose
+    // decimal value exceeds `u32::MAX` cannot be represented and would
+    // land at a DIFFERENT ring position than the operator configured --
+    // a silent correctness hazard for a drop-in replacement (a live C
+    // cluster with Cassandra-style random tokens over the murmur space
+    // routinely exceeds u32). Refuse to start rather than saturate: a
+    // wrong ring placement is worse than a clear configuration error.
+    // Full arbitrary-precision token support is tracked as a parity row
+    // in `docs/parity.md`; until it lands, an oversized token is a hard
+    // error, never a saturation.
     let digits = &component.digits;
     let value = digits.parse::<u128>().map_err(|e| ServerError::BadConfig {
         field: "tokens",
         reason: format!("'{digits}': {e}"),
     })?;
-    let trimmed = u32::try_from(value).unwrap_or(u32::MAX);
+    let trimmed = u32::try_from(value).map_err(|_| ServerError::BadConfig {
+        field: "tokens",
+        reason: format!(
+            "'{digits}' exceeds the u32 ring token space ({}); tokens above u32::MAX are \
+             not yet representable and would place the node at a different ring position \
+             than configured. Use a token in 0..={} or file for arbitrary-precision \
+             token support.",
+            u32::MAX,
+            u32::MAX
+        ),
+    })?;
     Ok(DynToken::from_u32(trimmed))
 }
 
@@ -3120,10 +3133,33 @@ mod tests {
     }
 
     #[test]
-    fn token_component_saturates_above_u32() {
+    fn token_component_above_u32_is_rejected() {
+        // An oversized token must be a hard configuration error, not a
+        // silent saturation that would place the node at a different
+        // ring position than the operator configured.
         let cmp = dynomite::conf::TokenComponent {
             signum: 1,
             digits: "99999999999".to_string(),
+        };
+        let err = token_component_to_dyn(&cmp).unwrap_err();
+        match err {
+            ServerError::BadConfig { field, reason } => {
+                assert_eq!(field, "tokens");
+                assert!(
+                    reason.contains("exceeds the u32 ring token space"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected BadConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn token_component_at_u32_max_is_accepted() {
+        // The boundary value is representable and must be accepted.
+        let cmp = dynomite::conf::TokenComponent {
+            signum: 1,
+            digits: u32::MAX.to_string(),
         };
         let tok = token_component_to_dyn(&cmp).unwrap();
         assert_eq!(tok.get_int(), u32::MAX);

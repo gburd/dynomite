@@ -46,6 +46,7 @@ parking_lot = { workspace = true }
 ahash = { workspace = true }
 quiche = { workspace = true, optional = true }
 aes = { workspace = true }
+aes-gcm = { workspace = true }
 cbc = { workspace = true }
 cipher = { workspace = true }
 rsa = { workspace = true }

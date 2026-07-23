@@ -170,8 +170,10 @@ dynomite/                       # repo root (cwd)
   * Both transports support v4 and v6 listeners (configurable; bind syntax
     accepts `[::1]:8101` and `0.0.0.0:8101`).
 * **Crypto**: pure-Rust RustCrypto stack: `aes` + `cbc` for
-  AES-128-CBC, `rsa` + `sha1` for RSA OAEP, `rand` for the CSPRNG,
-  and the rsa crate's PKCS#1/PKCS#8 PEM helpers. AES-128-CBC
+  AES-128-CBC (the C-compatible peer cipher), `aes-gcm` for the
+  authenticated AES-256-GCM peer cipher added in response to the
+  2026-07-23 review, `rsa` + `sha1` for RSA OAEP, `rand` for the
+  CSPRNG, and the rsa crate's PKCS#1/PKCS#8 PEM helpers. AES-128-CBC
   PKCS#1v1.5 wrapping are required to match `dyn_crypto.c`. Pick one and stick
   with it; record the choice in AGENTS.md once Stage 6 begins.
 * **Config**: `serde` + `serde_yaml`. The C parser walks libyaml events and
@@ -193,7 +195,7 @@ dynomite/                       # repo root (cwd)
   `tokio`, `tokio-util`, `bytes`, `serde`, `serde_yaml`, `clap`, `tracing`,
   `tracing-subscriber`, `thiserror`, `anyhow`, `crossbeam-channel`,
   `crossbeam-queue` (Stage 2 SPSC ring), `parking_lot`, `ahash`, `quiche`,
-  `aes`, `cbc`, `cipher`, `rsa`, `sha1`, `rand`, `rand_core`, `base64`,
+  `aes`, `aes-gcm`, `cbc`, `cipher`, `rsa`, `sha1`, `rand`, `rand_core`, `base64`,
   `nix` (signals/daemonize), `socket2` (advanced socket opts), `time`,
   `httparse` (only for the stats REST endpoint - if avoidable, hand-roll).
   Dev-only: `criterion`, `hegeltest` (the property-testing crate the

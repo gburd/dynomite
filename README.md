@@ -25,8 +25,8 @@ on the distributed transaction (XA) support in Noxu based on 2PC.
 
 The ultimate goal with Dynomite is to be able to implement high availability and
 cross-datacenter replication on storage engines that do not inherently provide that
-functionality. The implementation is efficient, not complex (few moving parts), a
-reliably consistent p99, and highly performant.
+functionality. The design aims for few moving parts and a predictable p99; see the
+[Status](#status) section below for what is and is not yet demonstrated in practice.
 
 Dynomite, in this Rust form, can be deployed as a server fronting another
 engine as is the case with Valkey and MemcacheD or it can be embedded and used
@@ -84,9 +84,36 @@ matching the original) or QUIC (via the `quiche` crate, gated on the
 
 ## Status
 
-This is an in-progress port. See `PLAN.md` for the staged roadmap and
-`docs/parity.md` for the live C-to-Rust mapping. `AGENTS.md` is the
-operating manual for contributors (human or automated).
+This is an in-progress port and a young system. The version number
+(currently 1.x) reflects internal milestone cadence, not field-proven
+maturity: the project has extensive self-verification (a symbol-level
+parity ledger, deterministic-simulation and Elle history checks as merge
+gates, a multi-DC chaos gate, fuzzing, property tests) but no production
+hours and no independent adversarial audit yet. Treat it as a rigorously
+engineered, extensively self-tested young system, not as a drop-in
+replacement with a decade of field hardening behind it.
+
+Scope and non-goals worth stating up front:
+
+* **Consistency**: tunable quorum in the Dynamo tradition (eventual
+  consistency; quorum overlap is not linearizability). There is no
+  strong-consistency / consensus mode (the Riak `riak_ensemble`
+  analogue is out of scope).
+* **Cross-DC replication**: multi-datacenter replication is supported,
+  but there is no realtime cross-DC replication product analogous to
+  Riak Enterprise `riak_repl`.
+* **Dyniak search**: the `FT.*` surface is RediSearch-shaped
+  (vector / trigram-text / regex), served per-node, not
+  Yokozuna/Solr-compatible Riak Search; cluster-wide distributed search
+  fan-out is not yet the default.
+* **Mixed clusters**: interoperating a live Netflix Dynomite (C) cluster
+  with these Rust nodes in one ring is **not** a tested configuration.
+  The supported migration story is whole-cluster replacement, not
+  rolling node-by-node replacement of a running C cluster.
+
+See `PLAN.md` for the staged roadmap, `docs/parity.md` for the live
+C-to-Rust mapping (including intentional deviations and ambiguities),
+and `AGENTS.md` for the contributor operating manual.
 
 ## Quick start
 

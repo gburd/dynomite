@@ -1,5 +1,8 @@
 //! End-to-end served CRDT (data-type) integration tests.
 //!
+//! Gated on the `noxu` feature; without it the file compiles to
+//! nothing (the served CRDT path is backed by `NoxuDatastore`).
+//!
 //! Starts a real `serve_pbc` listener backed by [`NoxuDatastore`],
 //! drives `DtUpdateReq` / `DtFetchReq` over TCP, and asserts the served
 //! CRDT path converges to the arithmetically-expected value:
@@ -11,6 +14,8 @@
 //!   replicas), and applying the same op twice is idempotent (no
 //!   double-count) -- the exact behaviour that keeps single-key CRDT
 //!   updates always-available and convergent under partition.
+
+#![cfg(feature = "noxu")]
 
 use std::sync::Arc;
 
