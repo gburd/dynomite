@@ -290,6 +290,7 @@ async fn http_put_fans_out_to_replicas() {
     let hooks = RoutingHooks {
         router,
         outbound: outbound.clone(),
+        local_actor: dyniak::datatypes::ActorId::new("dc1", "local"),
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

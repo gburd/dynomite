@@ -43,6 +43,8 @@ const KIND_PUT: u8 = 0;
 const KIND_GET: u8 = 1;
 /// Op-kind discriminator for a [`PeerOp::Del`] frame.
 const KIND_DEL: u8 = 2;
+/// Op-kind discriminator for a [`PeerOp::DtUpdate`] frame.
+const KIND_DT_UPDATE: u8 = 3;
 
 /// Error decoding a [`PeerOp`] from its wire payload.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -96,6 +98,18 @@ pub fn encode_peer_op(op: &PeerOp) -> Vec<u8> {
             put_bytes(&mut out, bucket);
             put_bytes(&mut out, key);
         }
+        PeerOp::DtUpdate {
+            bucket_type,
+            bucket,
+            key,
+            op,
+        } => {
+            out.push(KIND_DT_UPDATE);
+            put_bytes(&mut out, bucket_type);
+            put_bytes(&mut out, bucket);
+            put_bytes(&mut out, key);
+            put_bytes(&mut out, op);
+        }
     }
     out
 }
@@ -142,6 +156,18 @@ pub fn decode_peer_op(buf: &[u8]) -> Result<PeerOp, ReplicaWireError> {
                 bucket_type,
                 bucket,
                 key,
+            }
+        }
+        KIND_DT_UPDATE => {
+            let bucket_type = r.bytes()?;
+            let bucket = r.bytes()?;
+            let key = r.bytes()?;
+            let op = r.bytes()?;
+            PeerOp::DtUpdate {
+                bucket_type,
+                bucket,
+                key,
+                op,
             }
         }
         other => return Err(ReplicaWireError::BadKind(other)),

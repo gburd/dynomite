@@ -107,6 +107,27 @@ impl ReplicaApplier {
             // Get replication is a read-repair / handoff read; write
             // replication does not need it. No-op for now.
             PeerOp::Get { .. } => {}
+            PeerOp::DtUpdate {
+                bucket, key, op, ..
+            } => {
+                // `op` carries the coordinator's merged CRDT STATE (not
+                // a delta). Merge it into the local stored state.
+                // Idempotent and commutative: a re-delivered or
+                // reordered state cannot double-count -- merging a
+                // state twice is a no-op (element-wise max).
+                let store =
+                    crate::crdt_store::CrdtStore::new(std::sync::Arc::clone(&self.datastore));
+                if let Err(e) = store.merge_state(&bucket, &key, &op).await {
+                    if !matches!(
+                        e,
+                        crate::crdt_store::CrdtStoreError::Datastore(DatastoreError::Unsupported(
+                            _
+                        ))
+                    ) {
+                        tracing::warn!(error = %e, "riak replica: local dt merge failed");
+                    }
+                }
+            }
         }
     }
 }

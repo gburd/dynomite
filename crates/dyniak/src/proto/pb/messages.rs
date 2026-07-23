@@ -115,6 +115,14 @@ pub enum MessageCode {
     DynAaeStatusReq = 220,
     /// `DynRpbAaeStatusResp` -- 221.
     DynAaeStatusResp = 221,
+    /// `DtFetchReq` -- 80. Riak data-type (CRDT) fetch.
+    DtFetchReq = 80,
+    /// `DtFetchResp` -- 81.
+    DtFetchResp = 81,
+    /// `DtUpdateReq` -- 82. Riak data-type (CRDT) update.
+    DtUpdateReq = 82,
+    /// `DtUpdateResp` -- 83.
+    DtUpdateResp = 83,
 }
 
 impl MessageCode {
@@ -156,6 +164,10 @@ impl MessageCode {
             209 => Self::DynClusterCommitResp,
             220 => Self::DynAaeStatusReq,
             221 => Self::DynAaeStatusResp,
+            80 => Self::DtFetchReq,
+            81 => Self::DtFetchResp,
+            82 => Self::DtUpdateReq,
+            83 => Self::DtUpdateResp,
             other => return Err(other),
         })
     }

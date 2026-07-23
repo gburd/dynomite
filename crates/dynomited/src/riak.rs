@@ -764,10 +764,18 @@ pub fn build_routing_hooks(
     peer_txs: &[(u32, String, mpsc::Sender<OutboundRequest>)],
 ) -> RoutingHooks {
     let mut points: Vec<RingPoint> = Vec::new();
+    let mut local_actor = dyniak::datatypes::ActorId::new("local", "local");
     for peer in pool.peers().read().iter() {
         let idx = peer.idx();
         let dc = peer.dc();
         let rack = peer.rack();
+        if peer.is_local() {
+            // This node's CRDT actor identity: (datacenter, unique peer
+            // name). Attributing each node's CRDT contribution to a
+            // distinct actor is what lets concurrent increments on
+            // partitioned replicas sum on merge instead of overwrite.
+            local_actor = dyniak::datatypes::ActorId::new(dc.to_string(), peer.endpoint().pname());
+        }
         for token in peer.tokens() {
             points.push(RingPoint::new(u64::from(token.get_int()), idx, dc, rack));
         }
@@ -780,7 +788,11 @@ pub fn build_routing_hooks(
         dynomite::cluster::map_hash(hash),
     ));
     let outbound = Arc::new(PeerChannelOutbound::new(peer_txs));
-    RoutingHooks { router, outbound }
+    RoutingHooks {
+        router,
+        outbound,
+        local_actor,
+    }
 }
 
 async fn bind(field: &'static str, addr: &str) -> Result<(SocketAddr, TcpListener), RiakWireError> {

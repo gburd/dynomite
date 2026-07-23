@@ -178,6 +178,7 @@ impl Harness {
         let hooks = RoutingHooks {
             router,
             outbound: outbound as Arc<dyn PeerOutbound>,
+            local_actor: dyniak::datatypes::ActorId::new("dc1", "local"),
         };
 
         let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());

@@ -55,6 +55,7 @@ pub mod flag;
 pub mod hlc;
 pub mod itc;
 pub mod register;
+pub mod serial;
 pub mod set;
 
 // Map and HyperLogLog land in the second CRDT slice; appended
@@ -83,6 +84,10 @@ pub use crate::datatypes::flag::EwFlag;
 pub use crate::datatypes::hlc::{hlc_cmp, Hlc, HlcError};
 pub use crate::datatypes::itc::{Event as ItcEvent, Id as ItcId, Itc};
 pub use crate::datatypes::register::LwwRegister;
+pub use crate::datatypes::serial::{
+    counter_from_bytes, counter_to_bytes, peek_tag, set_from_bytes, set_to_bytes, CrdtSerialError,
+    TAG_COUNTER, TAG_SET,
+};
 pub use crate::datatypes::set::OrSet;
 
 pub use crate::datatypes::hll::HyperLogLog;

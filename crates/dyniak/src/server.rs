@@ -547,6 +547,10 @@ async fn process_frame(
             single_frame(handle_cluster_commit(&frame.body, admin)?)
         }
         MessageCode::DynAaeStatusReq => single_frame(handle_aae_status(&frame.body, aae_status)?),
+        MessageCode::DtUpdateReq => {
+            single_frame(handle_dt_update(&frame.body, datastore, hooks).await?)
+        }
+        MessageCode::DtFetchReq => single_frame(handle_dt_fetch(&frame.body, datastore).await?),
         // Response codes are illegal inbound.
         MessageCode::ErrorResp
         | MessageCode::PingResp
@@ -558,6 +562,8 @@ async fn process_frame(
         | MessageCode::ListKeysResp
         | MessageCode::GetBucketResp
         | MessageCode::SetBucketResp
+        | MessageCode::DtUpdateResp
+        | MessageCode::DtFetchResp
         | MessageCode::IndexResp
         | MessageCode::MapRedResp
         | MessageCode::DynListPeersResp
@@ -855,6 +861,154 @@ async fn handle_del(
         }
         Err(e) => Ok(error_frame(format!("riak del: {e}"))),
     }
+}
+
+/// Handle a `DtUpdateReq` (CRDT data-type update, PBC code 82).
+///
+/// Decodes the counter/set op, attributes it to this node's actor,
+/// fans the OP (not a merged value) to every replica so each converges
+/// by merge, and applies it to the local CRDT state. Single-key CRDT
+/// updates are always accepted locally without a quorum, so this path
+/// stays available under partition and ring churn.
+async fn handle_dt_update(
+    body: &[u8],
+    datastore: &dyn Datastore,
+    hooks: Option<&RoutingHooks>,
+) -> Result<Frame, RiakError> {
+    use crate::crdt_store::{CrdtStore, CrdtValue};
+    use crate::proto::pb::{DtUpdateReq, DtUpdateResp};
+
+    let req = DtUpdateReq::decode(body)?;
+    let key = match req.key.as_ref() {
+        Some(k) if !k.is_empty() => k.clone(),
+        _ => {
+            return Ok(error_frame(
+                "riak dt_update: server-assigned keys not implemented; supply 'key'".into(),
+            ))
+        }
+    };
+    let actor = hooks.map_or_else(
+        || crate::datatypes::ActorId::new("local", "local"),
+        |h| h.local_actor.clone(),
+    );
+    // Translate the PBC DtOp into the internal CrdtOp attributed to
+    // this node's actor.
+    let Some(op) = req.op.as_ref().and_then(|o| dt_op_to_crdt(o, &actor)) else {
+        return Ok(error_frame(
+            "riak dt_update: unsupported or empty op (counter/set only)".into(),
+        ));
+    };
+    // Apply locally FIRST so we have the merged post-state to ship.
+    // Local apply is the source of availability -- it never waits on a
+    // replica or a quorum, so a single-key CRDT update succeeds during
+    // a partition or ring change.
+    let (value, state_bytes) =
+        match CrdtStore::apply_borrowed_with_state(datastore, &req.bucket, &key, &op).await {
+            Ok(v) => v,
+            Err(e) => return Ok(error_frame(format!("riak dt_update: {e}"))),
+        };
+    // Ship the merged STATE (not the delta op) to replicas so replica
+    // apply is an idempotent state merge: a re-delivered or reordered
+    // update cannot double-count (merging a state twice is a no-op).
+    if let Some(hooks) = hooks {
+        let bucket_type = req.r#type.as_slice();
+        if let Ok(decision) = hooks.router.try_route(bucket_type, &req.bucket, &key) {
+            for replica in decision.replica_list() {
+                hooks
+                    .outbound
+                    .dispatch(
+                        replica.peer_idx,
+                        crate::router::PeerOp::DtUpdate {
+                            bucket_type: decision.bucket_type.clone(),
+                            bucket: req.bucket.clone(),
+                            key: key.clone(),
+                            op: state_bytes.clone(),
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
+    let mut resp = DtUpdateResp::default();
+    match value {
+        CrdtValue::Counter(n) => resp.counter_value = Some(n),
+        CrdtValue::Set(elems) => resp.set_value = elems,
+        CrdtValue::Missing => {}
+    }
+    Ok(Frame::new(
+        MessageCode::DtUpdateResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+/// Handle a `DtFetchReq` (CRDT data-type fetch, PBC code 80).
+async fn handle_dt_fetch(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+    use crate::crdt_store::{CrdtStore, CrdtValue};
+    use crate::datatypes::{TAG_COUNTER, TAG_SET};
+    use crate::proto::pb::{DtFetchReq, DtFetchResp, DtValue, DATA_TYPE_COUNTER, DATA_TYPE_SET};
+
+    let req = DtFetchReq::decode(body)?;
+    // The bucket type selects the projection: `sets` -> OR-set,
+    // anything else -> counter (Riak's `counters` default).
+    let (tag, dtype) = if req.r#type == b"sets" {
+        (TAG_SET, DATA_TYPE_SET)
+    } else {
+        (TAG_COUNTER, DATA_TYPE_COUNTER)
+    };
+    let fetch_result = CrdtStore::fetch_borrowed(datastore, &req.bucket, &req.key, tag).await;
+    match fetch_result {
+        Ok(value) => {
+            let mut resp = DtFetchResp {
+                r#type: dtype,
+                ..DtFetchResp::default()
+            };
+            match value {
+                CrdtValue::Counter(n) => {
+                    resp.value = Some(DtValue {
+                        counter_value: Some(n),
+                        ..DtValue::default()
+                    });
+                }
+                CrdtValue::Set(elems) => {
+                    resp.value = Some(DtValue {
+                        set_value: elems,
+                        ..DtValue::default()
+                    });
+                }
+                CrdtValue::Missing => {}
+            }
+            Ok(Frame::new(
+                MessageCode::DtFetchResp.as_u8(),
+                resp.encode_to_vec(),
+            ))
+        }
+        Err(e) => Ok(error_frame(format!("riak dt_fetch: {e}"))),
+    }
+}
+
+/// Translate a PBC [`DtOp`] into the internal
+/// [`crate::crdt_store::CrdtOp`], attributing it to `actor`. Returns
+/// `None` for an empty or unsupported op (only counter and set are
+/// wired).
+fn dt_op_to_crdt(
+    op: &crate::proto::pb::DtOp,
+    actor: &crate::datatypes::ActorId,
+) -> Option<crate::crdt_store::CrdtOp> {
+    use crate::crdt_store::CrdtOp;
+    if let Some(c) = op.counter_op.as_ref() {
+        return Some(CrdtOp::Counter {
+            actor: actor.clone(),
+            delta: c.increment.unwrap_or(0),
+        });
+    }
+    if let Some(s) = op.set_op.as_ref() {
+        return Some(CrdtOp::Set {
+            actor: actor.clone(),
+            adds: s.adds.clone(),
+            removes: s.removes.clone(),
+        });
+    }
+    None
 }
 
 /// Run a 2i secondary-index query against the datastore.

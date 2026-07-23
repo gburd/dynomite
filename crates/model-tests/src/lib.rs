@@ -87,6 +87,7 @@
 #![forbid(unsafe_code)]
 
 pub mod aae;
+pub mod crdt_convergence;
 pub mod delta_crdt;
 pub mod gossip;
 pub mod hlc;

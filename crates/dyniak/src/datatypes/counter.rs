@@ -94,6 +94,31 @@ impl Crdt for PnCounter {
     }
 }
 
+impl PnCounter {
+    /// Borrow the raw `(pos, neg)` per-actor columns for
+    /// serialization. The user-visible value is
+    /// `sum(pos) - sum(neg)`; the columns are what merge joins.
+    #[must_use]
+    pub fn columns(
+        &self,
+    ) -> (
+        &std::collections::BTreeMap<ActorId, u64>,
+        &std::collections::BTreeMap<ActorId, u64>,
+    ) {
+        (&self.pos, &self.neg)
+    }
+
+    /// Reconstruct a counter from its `(pos, neg)` columns, the
+    /// inverse of [`PnCounter::columns`]. Used by deserialization.
+    #[must_use]
+    pub fn from_columns(
+        pos: std::collections::BTreeMap<ActorId, u64>,
+        neg: std::collections::BTreeMap<ActorId, u64>,
+    ) -> Self {
+        Self { pos, neg }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

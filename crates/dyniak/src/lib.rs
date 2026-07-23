@@ -126,6 +126,7 @@ pub mod mapreduce;
 // Re-exported below the prior block so parallel branches do
 // not conflict.
 pub mod bucket_props;
+pub mod crdt_store;
 pub mod replica_apply;
 pub mod replication;
 pub mod router;

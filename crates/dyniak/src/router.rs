@@ -346,6 +346,20 @@ pub enum PeerOp {
         /// Key supplied by the client.
         key: Vec<u8>,
     },
+    /// Forward a CRDT data-type update operation. Carries the OP
+    /// (not a merged value) plus the originating actor, so every
+    /// replica applies it to its local CRDT state and converges by
+    /// merge -- concurrent increments sum instead of overwriting.
+    DtUpdate {
+        /// Bucket type (`counters` / `sets`).
+        bucket_type: Vec<u8>,
+        /// Bucket name.
+        bucket: Vec<u8>,
+        /// Key supplied by the client.
+        key: Vec<u8>,
+        /// Serialized [`crate::crdt_store::CrdtOp`] payload.
+        op: Vec<u8>,
+    },
 }
 
 /// Receiver of replica-peer dispatches.
@@ -377,6 +391,11 @@ pub struct RoutingHooks {
     pub router: Arc<BucketRouter>,
     /// Per-peer outbound dispatcher invoked once per replica.
     pub outbound: Arc<dyn PeerOutbound>,
+    /// This node's CRDT actor identity (datacenter + peer name).
+    /// Every CRDT contribution this node coordinates is attributed
+    /// to this actor, so per-actor counter columns sum correctly
+    /// across replicas instead of overwriting.
+    pub local_actor: crate::datatypes::ActorId,
 }
 
 #[cfg(test)]

@@ -100,6 +100,40 @@ impl OrSet {
             .get(element)
             .is_some_and(ElementState::is_present)
     }
+
+    /// Export the raw per-element `(adds, removes)` tag sets for
+    /// serialization.
+    #[must_use]
+    pub fn raw_elements(&self) -> BTreeMap<Vec<u8>, (BTreeSet<Tag>, BTreeSet<Tag>)> {
+        self.elements
+            .iter()
+            .map(|(e, s)| (e.clone(), (s.adds.clone(), s.removes.clone())))
+            .collect()
+    }
+
+    /// Export the raw per-actor add counters for serialization.
+    #[must_use]
+    pub fn raw_actor_counters(&self) -> BTreeMap<ActorId, u64> {
+        self.actor_counters.clone()
+    }
+
+    /// Reconstruct an OR-set from its raw element and actor-counter
+    /// maps, the inverse of [`OrSet::raw_elements`] /
+    /// [`OrSet::raw_actor_counters`]. Used by deserialization.
+    #[must_use]
+    pub fn from_raw(
+        elements: BTreeMap<Vec<u8>, (BTreeSet<Tag>, BTreeSet<Tag>)>,
+        actor_counters: BTreeMap<ActorId, u64>,
+    ) -> Self {
+        let elements = elements
+            .into_iter()
+            .map(|(e, (adds, removes))| (e, ElementState { adds, removes }))
+            .collect();
+        Self {
+            elements,
+            actor_counters,
+        }
+    }
 }
 
 impl Crdt for OrSet {

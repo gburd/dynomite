@@ -60,6 +60,7 @@ fn make_routing_hooks(registry: Arc<BucketPropsRegistry>) -> RoutingHooks {
     RoutingHooks {
         router,
         outbound: Arc::new(NullOutbound),
+        local_actor: dyniak::datatypes::ActorId::new("dc1", "local"),
     }
 }
 
