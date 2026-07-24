@@ -1309,6 +1309,7 @@ mod tests {
                     tag: "colleague".into(),
                 },
             ],
+            context: Vec::new(),
         };
         let ds = store_with(Some(Ok(Some(obj.to_storage_bytes()))));
         let job = MapReduceJob {

@@ -87,6 +87,7 @@ impl ReplicaApplier {
                     content_type: None,
                     indexes: Vec::new(),
                     links: Vec::new(),
+                    context: Vec::new(),
                 };
                 let storage = envelope.to_storage_bytes();
                 match self.datastore.riak_put(&bucket, &key, &storage, &[]).await {

@@ -142,6 +142,13 @@ pub struct HttpObject {
     #[prost(message, repeated, tag = "4")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<HttpLink>,
+    /// Encoded per-object causal context (an interval tree clock).
+    /// Tag 5 was previously unused, so objects stored before causal
+    /// context existed decode here with an empty context (backward
+    /// compatible); an empty context is treated as the seed clock.
+    #[prost(bytes = "vec", tag = "5")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<u8>,
 }
 
 impl WireValue for HttpObject {
@@ -242,6 +249,7 @@ mod tests {
                 key: "bob".to_string(),
                 tag: "friend".to_string(),
             }],
+            context: Vec::new(),
         }
     }
 

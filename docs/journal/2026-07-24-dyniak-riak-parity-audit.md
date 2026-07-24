@@ -40,9 +40,13 @@ in the background.
   waits or merges; read repair for opaque objects is wired at the
   Redis/dispatch layer, not the PBC layer. Needs R/PR read semantics on
   the PBC path (effort M, uses the new request/response seam).
-* **Vector-clock causality on the PBC read path: PARTIAL.** ITC exists
-  for CRDT actor identity; opaque-object reads pick winners by checksum,
-  not by causal domination, and siblings are not surfaced on PBC.
+* **Vector-clock causality on the PBC read path: PARTIAL (improving).**
+  Opaque objects now carry a per-object ITC causal context: a PUT
+  advances the context and returns it (`RpbPutResp.vclock` /
+  `X-Riak-Vclock`), a GET returns it, and the write path detects a
+  concurrent write (client context diverges from stored). Sibling
+  RETENTION on a concurrent write (storing both values) and
+  cross-replica causal read-repair remain follow-up slices.
 * **CRDT-aware AAE repair payload: refine (S).** AAE ships the
   lexicographically-largest bytes; for CRDT keys it should ship the
   merged state.
@@ -54,7 +58,7 @@ Dimension scoreboard (audit 2):
 | Dim | Area | Status |
 | --- | --- | --- |
 | A | Data model (buckets/types/keys/objects/links/2i) | FULL except server-assigned keys (S) and 2i term enumeration (deferred) |
-| B | Vector clocks / causal context | ITC (not DVV) -- documented; siblings detected but not surfaced |
+| B | Vector clocks / causal context | ITC (not DVV) -- documented; per-object context now flows on get/put and concurrent writes are detected; sibling retention pending |
 | C | Conflict resolution | PARTIAL: siblings not surfaced to clients (see below) |
 | D | Quorum tunables (N/R/W/PR/PW/DW) | PARTIAL: N present; R/W/PR/PW/DW not on the read path; hinted-handoff persistence missing |
 | E | CRDTs | Counter/Set/Register/Flag present; Map/HLL code exists but not exported/handled |
@@ -138,7 +142,9 @@ Now done this session:
 
 Near-term correctness parity (highest surprise for a Riak user):
 1. KV object quorum read + read repair on the PBC path (R/PR). M.
-2. Surface siblings on PBC/HTTP for `allow_mult` buckets. M.
+2. Surface siblings on PBC/HTTP for `allow_mult` buckets. M. **Per-object
+   causal context DONE (get/put carry a vclock, concurrent writes
+   detected); sibling retention + multi-content read remain.**
 3. TTL / object expiry via the reaper. M. **Reaper capability DONE
    (`object_ttl_seconds`) + `ttl` bucket property DONE (settable/readable
    over PBC, bridged to the reaper config); the runtime reaper

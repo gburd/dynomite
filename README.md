@@ -120,12 +120,16 @@ them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
   path (a read returns as soon as it has a value rather than waiting for
   `r` responses). The bucket-properties `GET` currently echoes Riak's
   documented defaults rather than the stored per-bucket values.
-* **Siblings are detected but not surfaced.** Concurrent conflicts on an
-  opaque object are detected via the causal context and resolved to a
-  single deterministic value (lexicographic fallback); Dyniak does not
-  return a sibling set or a `300 Multiple Choices`, and `allow_mult`
-  does not yet change read behavior. For concurrent-write correctness,
-  use a CRDT (whose merge never drops a write).
+* **Causal context flows; sibling retention is pending.** Opaque objects
+  now carry a per-object causal context: a PUT advances it and returns
+  it (`RpbPutResp.vclock` / the `X-Riak-Vclock` header), a GET returns
+  it, and a concurrent write (the client's read context diverges from
+  the stored one) is detected. What is not yet done is sibling
+  RETENTION: a concurrent conflict still resolves to a single value
+  rather than storing both, so Dyniak does not yet return a sibling set
+  or a `300 Multiple Choices`, and `allow_mult` does not yet change read
+  behavior. For guaranteed concurrent-write correctness today, use a
+  CRDT (whose merge never drops a write).
 * **All six CRDTs are served over the wire.** Counter, Set, Register,
   Flag, Map (recursive, composing the others), and HyperLogLog are all
   reachable via PBC / HTTP `DtUpdate` / `DtFetch`.

@@ -625,6 +625,55 @@ fn handle_server_info(body: &[u8]) -> Result<Frame, RiakError> {
 /// fail to decode as an envelope; those are returned as a bare
 /// `RpbContent` whose `value` is the raw bytes so a value never
 /// disappears on read.
+/// Advance the per-object causal context for a write.
+///
+/// Public wrapper over the internal advance so the HTTP object path
+/// (a different module) tracks causality identically to the PBC path.
+/// Not part of the stable API.
+#[doc(hidden)]
+#[must_use]
+pub fn advance_object_context(prior: &[u8]) -> Vec<u8> {
+    advance_context(prior)
+}
+
+/// Advance the per-object causal context for a write.
+///
+/// Decodes the prior stored context (empty or undecodable -> the seed
+/// clock), issues a fresh ITC event so the returned context strictly
+/// dominates the prior one, and re-encodes it. A write therefore always
+/// produces a context that causally succeeds what it read, which is
+/// what lets a later read detect supersede-vs-concurrent.
+fn advance_context(prior: &[u8]) -> Vec<u8> {
+    let mut clock = if prior.is_empty() {
+        crate::datatypes::Itc::seed()
+    } else {
+        match crate::datatypes::Itc::decode(prior) {
+            Some(c) if c.has_authority() => c,
+            // A decoded peek stamp (id = 0) or an undecodable blob
+            // cannot issue an event; fall back to the seed so the write
+            // still advances a well-formed clock.
+            _ => crate::datatypes::Itc::seed(),
+        }
+    };
+    clock.event();
+    clock.encode()
+}
+
+/// Compare a client-supplied read context against a stored object's
+/// context. Returns `Some(Ordering)` when the two are causally ordered
+/// and `None` when they are concurrent (a conflict). An empty context
+/// on either side is the seed clock (dominated by any real write).
+fn context_cmp(client: &[u8], stored: &[u8]) -> Option<std::cmp::Ordering> {
+    let decode = |b: &[u8]| {
+        if b.is_empty() {
+            crate::datatypes::Itc::seed()
+        } else {
+            crate::datatypes::Itc::decode(b).unwrap_or_else(crate::datatypes::Itc::seed)
+        }
+    };
+    decode(client).partial_cmp_event(&decode(stored))
+}
+
 fn pbc_content_from_storage(stored: &[u8]) -> RpbContent {
     match HttpObject::from_storage_bytes(stored) {
         Ok(obj) => RpbContent {
@@ -730,10 +779,23 @@ async fn handle_get(
     // to the empty response so the `MemoryDatastore` trampoline
     // continues to behave identically.
     let resp = match datastore.riak_get(&req.bucket, &req.key).await {
-        Ok(Some(v)) => RpbGetResp {
-            content: vec![pbc_content_from_storage(&v)],
-            ..RpbGetResp::default()
-        },
+        Ok(Some(v)) => {
+            // Return the object's causal context in `vclock` so a client
+            // read-modify-write round-trips it; a subsequent put that
+            // carries it back is recognised as a causal successor.
+            let context = HttpObject::from_storage_bytes(&v)
+                .map(|o| o.context)
+                .unwrap_or_default();
+            RpbGetResp {
+                content: vec![pbc_content_from_storage(&v)],
+                vclock: if context.is_empty() {
+                    None
+                } else {
+                    Some(context)
+                },
+                ..RpbGetResp::default()
+            }
+        }
         Ok(None) | Err(DatastoreError::Unsupported(_)) => RpbGetResp::default(),
         Err(e) => {
             return Ok(error_frame(format!("riak get: {e}")));
@@ -801,6 +863,35 @@ async fn handle_put(
     // as `Link:` headers. Index pairs and the content-type are
     // mirrored onto the envelope so an HTTP read echoes them, matching
     // the HTTP put path.
+    // Advance the per-object causal context. Read the prior stored
+    // object's context and issue a fresh event so the new context
+    // strictly dominates it; return the encoded context in
+    // `RpbPutResp.vclock` so the client can round-trip it on its next
+    // write. (Sibling retention on a concurrent write is a following
+    // slice; this slice makes the context flow end to end and every
+    // write advances the clock so causality is tracked.)
+    let prior_context = match datastore.riak_get(&req.bucket, &key).await {
+        Ok(Some(bytes)) => HttpObject::from_storage_bytes(&bytes)
+            .map(|o| o.context)
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    // Detect a concurrent write: the client's supplied context
+    // (`req.vclock`, what it last read) is neither equal to nor a
+    // descendant of the stored context. With sibling retention this
+    // would fork a sibling; this slice logs the conflict and lets the
+    // write supersede (last-writer-by-arrival), never losing a
+    // causally-newer write.
+    if let Some(client_ctx) = req.vclock.as_ref() {
+        if context_cmp(client_ctx, &prior_context).is_none() {
+            tracing::debug!(
+                bucket = %String::from_utf8_lossy(&req.bucket),
+                key = %String::from_utf8_lossy(&key),
+                "riak put: concurrent write detected (client context diverges from stored)"
+            );
+        }
+    }
+    let new_context = advance_context(&prior_context);
     let envelope = HttpObject {
         value: content.value.clone(),
         content_type: content
@@ -815,16 +906,23 @@ async fn handle_put(
             })
             .collect(),
         links: content.links.iter().map(rpb_link_to_http).collect(),
+        context: new_context.clone(),
     };
     let storage = envelope.to_storage_bytes();
     match datastore
         .riak_put(&req.bucket, &key, &storage, &indexes)
         .await
     {
-        Ok(()) | Err(DatastoreError::Unsupported(_)) => Ok(Frame::new(
-            MessageCode::PutResp.as_u8(),
-            RpbPutResp::default().encode_to_vec(),
-        )),
+        Ok(()) | Err(DatastoreError::Unsupported(_)) => {
+            let resp = RpbPutResp {
+                vclock: Some(new_context),
+                ..RpbPutResp::default()
+            };
+            Ok(Frame::new(
+                MessageCode::PutResp.as_u8(),
+                resp.encode_to_vec(),
+            ))
+        }
         Err(e) => Ok(error_frame(format!("riak put: {e}"))),
     }
 }

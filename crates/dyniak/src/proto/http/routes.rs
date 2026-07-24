@@ -1081,6 +1081,12 @@ fn get_object_from_store(
         // Riak always emits a bucket-up link so a client can
         // navigate from an object back to its bucket.
         .header("Link", format!("</buckets/{bucket}>; rel=\"up\""));
+    // Return the object's causal context so a read-modify-write client
+    // can round-trip it on its next PUT. Encoded as hex (ASCII-safe, no
+    // extra dependency); a client treats it opaquely.
+    if !obj.context.is_empty() {
+        builder = builder.header("X-Riak-Vclock", hex_encode(&obj.context));
+    }
     for link in &obj.links {
         builder = builder.header(
             "Link",
@@ -1140,6 +1146,20 @@ async fn put_object_into_store(
     obj.indexes.extend(collect_index_headers(headers));
     obj.links.extend(collect_link_headers(headers));
 
+    // Advance the per-object causal context so an HTTP write tracks
+    // causality the same way the PBC path does: read the prior stored
+    // context, issue a fresh ITC event, and stamp it on the object.
+    // The context also surfaces to the client via the X-Riak-Vclock
+    // header on the response below.
+    let prior_context = store
+        .get_object(bucket.as_bytes(), key.as_bytes())
+        .ok()
+        .flatten()
+        .and_then(|b| HttpObject::from_storage_bytes(&b).ok())
+        .map(|o| o.context)
+        .unwrap_or_default();
+    obj.context = crate::server::advance_object_context(&prior_context);
+
     // Cross-node replica fan-out (fire-and-forget), mirroring the PBC
     // put path: route the key to its preference list and dispatch a
     // PeerOp::Put to each replica before persisting locally. Applied
@@ -1197,6 +1217,17 @@ async fn put_object_into_store(
 /// becomes one index entry. Header names are matched
 /// case-insensitively (hyper lower-cases them on receipt).
 #[cfg(feature = "noxu")]
+/// Lower-case hex-encode bytes (ASCII-safe transport for the opaque
+/// causal context in the `X-Riak-Vclock` header, no extra dependency).
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
 fn collect_index_headers(headers: &HeaderMap) -> Vec<HttpIndex> {
     const PREFIX: &str = "x-riak-index-";
     let mut out = Vec::new();
@@ -2207,6 +2238,7 @@ mod tests {
                 content_type: Some("text/plain".to_string()),
                 indexes: Vec::new(),
                 links: Vec::new(),
+                context: Vec::new(),
             };
             let body = Bytes::from(serde_json::to_vec(&obj).expect("json body"));
             let put = handle_route(
@@ -2272,6 +2304,7 @@ mod tests {
                 content_type: None,
                 indexes: Vec::new(),
                 links: Vec::new(),
+                context: Vec::new(),
             };
             let body = Bytes::from(serde_json::to_vec(&obj).expect("json body"));
             handle_route(
@@ -2310,6 +2343,7 @@ mod tests {
                 content_type: None,
                 indexes: Vec::new(),
                 links: Vec::new(),
+                context: Vec::new(),
             };
             let body = Bytes::from(serde_json::to_vec(&obj).expect("json body"));
             let put = handle_route(

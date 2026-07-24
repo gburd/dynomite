@@ -274,6 +274,7 @@ impl HttpTxnRequest {
                             })
                             .collect(),
                         links: Vec::new(),
+                        context: Vec::new(),
                     };
                     TxnOp::Put {
                         bucket: bucket.into_bytes(),

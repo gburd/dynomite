@@ -346,7 +346,12 @@ async fn exchange_put(r: &mut Reader, w: &mut Writer) {
     let resp = read_resp(r, MessageCode::PutResp).await;
     let parsed = RpbPutResp::decode(resp.body.as_slice()).expect("decode put");
     assert!(parsed.content.is_empty());
-    assert!(parsed.vclock.is_none());
+    // A put now returns the object's advanced causal context so a
+    // read-modify-write client can round-trip it.
+    assert!(
+        parsed.vclock.is_some_and(|v| !v.is_empty()),
+        "put returns a non-empty causal context"
+    );
 }
 
 async fn exchange_get(r: &mut Reader, w: &mut Writer) {

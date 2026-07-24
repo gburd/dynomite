@@ -87,6 +87,7 @@
 #![forbid(unsafe_code)]
 
 pub mod aae;
+pub mod causal_object;
 pub mod crdt_convergence;
 pub mod crdt_routing;
 pub mod delta_crdt;

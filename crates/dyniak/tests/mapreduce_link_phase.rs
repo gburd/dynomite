@@ -33,6 +33,7 @@ fn put_with_links(store: &NoxuDatastore, bucket: &[u8], key: &[u8], links: Vec<H
         content_type: None,
         indexes: Vec::new(),
         links,
+        context: Vec::new(),
     };
     store
         .put_object(bucket, key, &obj.to_storage_bytes(), &[])
