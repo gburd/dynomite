@@ -201,22 +201,35 @@ phase_mount() {
 
 
 # --- launch: write per-node dyniak config, start dynomited -----------
-# Each region is a DC; each node is its own rack (a full ring replica),
-# token 0, so n_val within a DC = nodes/region. dyn_seeds lists every
-# OTHER node as host:port:rack:dc:token. noxu data lands on /mnt/data
-# (real NVMe). The node advertises its public IP so cross-region peers
-# match its gossip identity.
+# Each region is a DC; each node is its own rack (a full ring replica).
+# Each node gets a DISTINCT token spread evenly across the u32 ring so
+# keys spread across the replica set (an all-token-0 ring collapses
+# every key onto the same n_val nodes, which is what masked the earlier
+# owner-centric convergence gap). dyn_seeds lists every OTHER node as
+# host:port:rack:dc:token. noxu data lands on /mnt/data (real NVMe).
+# The node advertises its public IP so cross-region peers match its
+# gossip identity.
 phase_launch() {
-  # Build the global seed list once (all nodes, private IPs for intra-
-  # AWS dnode traffic would need VPC peering; we use PUBLIC IPs since
-  # the mesh SG allows them cross-region).
+  # Count nodes so we can spread tokens evenly across the u32 ring.
+  local total
+  total=$(wc -l < "$STATE")
+  [ "$total" -ge 1 ] || total=1
+  # Build the global seed list once (all nodes, PUBLIC IPs since the
+  # mesh SG allows them cross-region). Each node's token = idx * (2^32 /
+  # total), a distinct point on the ring.
   local seeds=""
+  local idx=0
   while read -r region dc rack node arch itype iid pub priv; do
-    seeds="${seeds}${pub}:8101:${rack}:${dc}:0\n"
+    local tok=$(( idx * 4294967296 / total ))
+    seeds="${seeds}${pub}:8101:${rack}:${dc}:${tok}\n"
+    idx=$(( idx + 1 ))
   done < "$STATE"
   # Start dynomited on each node with the seed list minus itself.
   local region dc rack node arch itype iid pub priv
+  idx=0
   while read -r region dc rack node arch itype iid pub priv; do
+    local mytok=$(( idx * 4294967296 / total ))
+    idx=$(( idx + 1 ))
     local myseeds
     myseeds=$(printf "%b" "$seeds" | grep -v "^${pub}:" | sed 's/^/  - /')
     cat > "$STATE_DIR/conf-${pub}.yml" <<YML
@@ -234,7 +247,7 @@ dyn_o_mite:
   riak:
     pbc_listen: 0.0.0.0:8087
     http_listen: 0.0.0.0:8098
-  tokens: '0'
+  tokens: '${mytok}'
   dyn_seeds:
 ${myseeds}
 YML
