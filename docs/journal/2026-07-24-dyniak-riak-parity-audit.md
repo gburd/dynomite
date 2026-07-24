@@ -139,7 +139,10 @@ Near-term correctness parity (highest surprise for a Riak user):
 1. KV object quorum read + read repair on the PBC path (R/PR). M.
 2. Surface siblings on PBC/HTTP for `allow_mult` buckets. M.
 3. TTL / object expiry via the reaper. M. **Reaper capability DONE
-   (`object_ttl_seconds`); ttl-bucket-property bridge remains.**
+   (`object_ttl_seconds`) + `ttl` bucket property DONE (settable/readable
+   over PBC, bridged to the reaper config); the runtime reaper
+   orchestrator that spawns with the per-bucket ttl is the remaining
+   piece.**
 4. Server-assigned keys (POST unnamed). S. **DONE.**
 5. Map + HLL CRDT handlers (export + wire). M. **Register/Flag DONE;
    Map + HLL remain.**

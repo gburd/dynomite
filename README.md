@@ -131,10 +131,12 @@ them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
   served over PBC / HTTP. Map and HyperLogLog are implemented but not
   yet wired
   to the wire handlers.
-* **Object TTL / auto-expiry is not implemented.** The `ttl` bucket
-  property is not enforced; live objects are not auto-expired. (The
-  tombstone reaper, which reaps deleted-object markers after an age,
-  does work.)
+* **Object TTL / auto-expiry is partial.** The `ttl` bucket property is
+  settable and readable over PBC and the reaper can expire live objects
+  past their TTL, but the runtime reaper orchestrator that applies the
+  per-bucket TTL is not yet spawned in `dynomited`, so live objects are
+  not auto-expired at runtime today. (The tombstone reaper, which reaps
+  deleted-object markers after an age, is wired.)
 * **Read repair on the opaque-object read path is partial.** CRDT reads
   coordinate and merge across the replica set; opaque-object reads do
   not yet perform Riak-style quorum read-repair on the PBC path.
