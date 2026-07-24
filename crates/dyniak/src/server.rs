@@ -1275,6 +1275,10 @@ fn handle_get_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
                 .custom_module()
                 .map(|s| s.as_bytes().to_vec()),
             replication_strategy: Some(resolved.effective_strategy().to_wire()),
+            ttl_seconds: match resolved.effective_ttl_seconds() {
+                0 => None,
+                secs => Some(u32::try_from(secs).unwrap_or(u32::MAX)),
+            },
             ..RpbBucketProps::default()
         }
     } else {
@@ -1331,6 +1335,9 @@ fn handle_set_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
             }
             if let Some(n) = props.n_val {
                 bp.n_val = Some(u8::try_from(n).unwrap_or(u8::MAX));
+            }
+            if let Some(ttl) = props.ttl_seconds {
+                bp.ttl_seconds = Some(u64::from(ttl));
             }
             hooks.router.registry().set(bucket_type, &req.bucket, bp);
         }

@@ -825,6 +825,15 @@ pub struct RpbBucketProps {
     /// [`crate::datatypes::keyfun::KeyFun::Custom`].
     #[prost(bytes = "vec", optional, tag = "32")]
     pub chash_keyfun_module: Option<Vec<u8>>,
+    /// Object time-to-live in seconds (dyniak extension, tag 33).
+    ///
+    /// Riak expresses object expiry as a backend (leveldb) setting
+    /// rather than a `RpbBucketProps` field; dyniak surfaces it as a
+    /// bucket property so the reaper can expire live objects per
+    /// bucket type. `0` or unset means no expiry. Carried to
+    /// [`crate::reaper::ReaperConfig::object_ttl_seconds`].
+    #[prost(uint32, optional, tag = "33")]
+    pub ttl_seconds: Option<u32>,
 }
 
 /// `chash_keyfun = STD`: hash `<bucket>/<key>` (default).

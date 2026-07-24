@@ -68,6 +68,12 @@ pub struct BucketProps {
     /// names no module (or names an unregistered one), so a
     /// `Some` here is always a module the keyfun store knows.
     pub custom_keyfun_module: Option<String>,
+    /// Object time-to-live in seconds (Riak's `ttl` bucket
+    /// property). `None` or `Some(0)` means no expiry: live
+    /// objects are never reaped by age. A non-zero value is
+    /// carried to the reaper as
+    /// [`crate::reaper::ReaperConfig::object_ttl_seconds`].
+    pub ttl_seconds: Option<u64>,
 }
 
 impl BucketProps {
@@ -111,6 +117,14 @@ impl BucketProps {
     #[must_use]
     pub fn effective_n_val_with(&self, default: u8) -> u8 {
         self.n_val.unwrap_or(default)
+    }
+
+    /// Resolve the effective object TTL in seconds. `0` means no
+    /// expiry (the default): an unset `ttl_seconds` and an explicit
+    /// `Some(0)` both disable object expiry.
+    #[must_use]
+    pub fn effective_ttl_seconds(&self) -> u64 {
+        self.ttl_seconds.unwrap_or(0)
     }
 
     /// Convenience: effective [`KeyFun`] using
@@ -236,6 +250,7 @@ impl BucketPropsRegistry {
             strategy: Some(inner.default_strategy),
             n_val: Some(inner.default_n_val),
             custom_keyfun_module: None,
+            ttl_seconds: None,
         }
     }
 
@@ -299,6 +314,35 @@ mod tests {
         assert_eq!(p.effective_keyfun(), KeyFun::BucketOnly);
         assert_eq!(p.effective_strategy(), ReplicationStrategy::Topology);
         assert_eq!(p.effective_n_val(), 5);
+    }
+
+    #[test]
+    fn ttl_defaults_to_zero_and_round_trips() {
+        let reg = BucketPropsRegistry::new_riak_defaults();
+        // Unset ttl resolves to 0 (no expiry).
+        assert_eq!(reg.resolve(b"default", b"c").effective_ttl_seconds(), 0);
+        // A stored ttl round-trips through resolve.
+        reg.set(
+            b"default",
+            b"cache",
+            BucketProps {
+                ttl_seconds: Some(3600),
+                ..BucketProps::default()
+            },
+        );
+        assert_eq!(
+            reg.resolve(b"default", b"cache").effective_ttl_seconds(),
+            3600
+        );
+        // An explicit zero is also no-expiry.
+        assert_eq!(
+            BucketProps {
+                ttl_seconds: Some(0),
+                ..BucketProps::default()
+            }
+            .effective_ttl_seconds(),
+            0
+        );
     }
 
     #[test]
