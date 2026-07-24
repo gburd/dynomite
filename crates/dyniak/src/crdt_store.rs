@@ -25,8 +25,9 @@ use parking_lot::Mutex as SyncMutex;
 use tokio::sync::Mutex;
 
 use crate::datatypes::{
-    counter_from_bytes, counter_to_bytes, peek_tag, set_from_bytes, set_to_bytes, ActorId, Crdt,
-    OrSet, PnCounter, TAG_COUNTER, TAG_SET,
+    counter_from_bytes, counter_to_bytes, flag_from_bytes, flag_to_bytes, peek_tag,
+    register_from_bytes, register_to_bytes, set_from_bytes, set_to_bytes, ActorId, Crdt, EwFlag,
+    LwwRegister, OrSet, PnCounter, TAG_COUNTER, TAG_FLAG, TAG_REGISTER, TAG_SET,
 };
 use dynomite::embed::hooks::{Datastore, DatastoreError};
 
@@ -68,6 +69,20 @@ pub enum CrdtOp {
         /// Elements removed (observed-remove).
         removes: Vec<Vec<u8>>,
     },
+    /// LWW-register assignment.
+    Register {
+        /// Actor that produced the assignment.
+        actor: ActorId,
+        /// New register value.
+        value: Vec<u8>,
+    },
+    /// EW-flag toggle.
+    Flag {
+        /// Actor that produced the toggle.
+        actor: ActorId,
+        /// `true` enables the flag, `false` disables it.
+        enable: bool,
+    },
 }
 
 impl CrdtOp {
@@ -77,6 +92,8 @@ impl CrdtOp {
         match self {
             CrdtOp::Counter { .. } => TAG_COUNTER,
             CrdtOp::Set { .. } => TAG_SET,
+            CrdtOp::Register { .. } => TAG_REGISTER,
+            CrdtOp::Flag { .. } => TAG_FLAG,
         }
     }
 
@@ -121,6 +138,20 @@ impl CrdtOp {
                 }
                 set_to_bytes(&s)
             }
+            CrdtOp::Register { actor, value } => {
+                let mut r = LwwRegister::new();
+                r.assign_now(actor, value.clone());
+                register_to_bytes(&r)
+            }
+            CrdtOp::Flag { actor, enable } => {
+                let mut f = EwFlag::new();
+                if *enable {
+                    f.enable(actor);
+                } else {
+                    f.disable();
+                }
+                flag_to_bytes(&f)
+            }
         }
     }
 
@@ -151,6 +182,16 @@ impl CrdtOp {
                 for r in removes {
                     put_lp(&mut out, r);
                 }
+            }
+            CrdtOp::Register { actor, value } => {
+                put_lp(&mut out, actor.dc.as_bytes());
+                put_lp(&mut out, actor.peer.as_bytes());
+                put_lp(&mut out, value);
+            }
+            CrdtOp::Flag { actor, enable } => {
+                put_lp(&mut out, actor.dc.as_bytes());
+                put_lp(&mut out, actor.peer.as_bytes());
+                out.push(u8::from(*enable));
             }
         }
         out
@@ -193,6 +234,14 @@ impl CrdtOp {
                     adds,
                     removes,
                 })
+            }
+            TAG_REGISTER => {
+                let value = r.bytes()?;
+                Ok(CrdtOp::Register { actor, value })
+            }
+            TAG_FLAG => {
+                let enable = r.u8()? != 0;
+                Ok(CrdtOp::Flag { actor, enable })
             }
             other => Err(CrdtSerialError::UnknownTag(other)),
         }
@@ -255,6 +304,10 @@ pub enum CrdtValue {
     Counter(i64),
     /// Set members.
     Set(Vec<Vec<u8>>),
+    /// Register value.
+    Register(Vec<u8>),
+    /// Flag value.
+    Flag(bool),
     /// The key does not exist yet.
     Missing,
 }
@@ -285,6 +338,16 @@ pub fn merge_two_states(a: &[u8], b: &[u8]) -> Result<Vec<u8>, crate::datatypes:
             s.merge(&set_from_bytes(b)?);
             Ok(set_to_bytes(&s))
         }
+        TAG_REGISTER => {
+            let mut r = register_from_bytes(a)?;
+            r.merge(&register_from_bytes(b)?);
+            Ok(register_to_bytes(&r))
+        }
+        TAG_FLAG => {
+            let mut f = flag_from_bytes(a)?;
+            f.merge(&flag_from_bytes(b)?);
+            Ok(flag_to_bytes(&f))
+        }
         other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other)),
     }
 }
@@ -307,6 +370,8 @@ pub fn project_state(
         TAG_SET => Ok(CrdtValue::Set(
             set_from_bytes(state)?.value().into_iter().collect(),
         )),
+        TAG_REGISTER => Ok(CrdtValue::Register(register_from_bytes(state)?.value())),
+        TAG_FLAG => Ok(CrdtValue::Flag(flag_from_bytes(state)?.value())),
         other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other)),
     }
 }
@@ -426,6 +491,30 @@ impl CrdtStore {
                 datastore.riak_put(bucket, key, &bytes, &[]).await?;
                 Ok((CrdtValue::Set(s.value().into_iter().collect()), bytes))
             }
+            CrdtOp::Register { actor, value } => {
+                let mut r = match &current {
+                    Some(bytes) => register_from_bytes(bytes)?,
+                    None => LwwRegister::new(),
+                };
+                r.assign_now(actor, value.clone());
+                let bytes = register_to_bytes(&r);
+                datastore.riak_put(bucket, key, &bytes, &[]).await?;
+                Ok((CrdtValue::Register(r.value()), bytes))
+            }
+            CrdtOp::Flag { actor, enable } => {
+                let mut f = match &current {
+                    Some(bytes) => flag_from_bytes(bytes)?,
+                    None => EwFlag::new(),
+                };
+                if *enable {
+                    f.enable(actor);
+                } else {
+                    f.disable();
+                }
+                let bytes = flag_to_bytes(&f);
+                datastore.riak_put(bucket, key, &bytes, &[]).await?;
+                Ok((CrdtValue::Flag(f.value()), bytes))
+            }
         }
     }
 
@@ -448,6 +537,8 @@ impl CrdtStore {
             TAG_SET => Ok(CrdtValue::Set(
                 set_from_bytes(&bytes)?.value().into_iter().collect(),
             )),
+            TAG_REGISTER => Ok(CrdtValue::Register(register_from_bytes(&bytes)?.value())),
+            TAG_FLAG => Ok(CrdtValue::Flag(flag_from_bytes(&bytes)?.value())),
             other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other).into()),
         }
     }
@@ -511,6 +602,30 @@ impl CrdtStore {
                 self.datastore.riak_put(bucket, key, &bytes, &[]).await?;
                 Ok(CrdtValue::Set(s.value().into_iter().collect()))
             }
+            CrdtOp::Register { actor, value } => {
+                let mut r = match &current {
+                    Some(bytes) => register_from_bytes(bytes)?,
+                    None => LwwRegister::new(),
+                };
+                r.assign_now(actor, value.clone());
+                let bytes = register_to_bytes(&r);
+                self.datastore.riak_put(bucket, key, &bytes, &[]).await?;
+                Ok(CrdtValue::Register(r.value()))
+            }
+            CrdtOp::Flag { actor, enable } => {
+                let mut f = match &current {
+                    Some(bytes) => flag_from_bytes(bytes)?,
+                    None => EwFlag::new(),
+                };
+                if *enable {
+                    f.enable(actor);
+                } else {
+                    f.disable();
+                }
+                let bytes = flag_to_bytes(&f);
+                self.datastore.riak_put(bucket, key, &bytes, &[]).await?;
+                Ok(CrdtValue::Flag(f.value()))
+            }
         }
     }
 
@@ -563,6 +678,22 @@ impl CrdtStore {
                 s.merge(&set_from_bytes(state)?);
                 set_to_bytes(&s)
             }
+            TAG_REGISTER => {
+                let mut r = match &current {
+                    Some(b) => register_from_bytes(b)?,
+                    None => LwwRegister::new(),
+                };
+                r.merge(&register_from_bytes(state)?);
+                register_to_bytes(&r)
+            }
+            TAG_FLAG => {
+                let mut f = match &current {
+                    Some(b) => flag_from_bytes(b)?,
+                    None => EwFlag::new(),
+                };
+                f.merge(&flag_from_bytes(state)?);
+                flag_to_bytes(&f)
+            }
             other => return Err(crate::datatypes::CrdtSerialError::UnknownTag(other).into()),
         };
         datastore.riak_put(bucket, key, &merged, &[]).await?;
@@ -592,6 +723,8 @@ impl CrdtStore {
             TAG_SET => Ok(CrdtValue::Set(
                 set_from_bytes(&bytes)?.value().into_iter().collect(),
             )),
+            TAG_REGISTER => Ok(CrdtValue::Register(register_from_bytes(&bytes)?.value())),
+            TAG_FLAG => Ok(CrdtValue::Flag(flag_from_bytes(&bytes)?.value())),
             other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other).into()),
         }
     }
@@ -713,6 +846,128 @@ mod tests {
         assert_eq!(
             s.fetch(b"c", b"nope", TAG_COUNTER).await.unwrap(),
             CrdtValue::Missing
+        );
+    }
+
+    #[tokio::test]
+    async fn register_assign_then_fetch_returns_value() {
+        let s = store();
+        let op = CrdtOp::Register {
+            actor: ActorId::new("dc1", "a"),
+            value: b"hello".to_vec(),
+        };
+        let v = s.apply(b"c", b"k", &op).await.unwrap();
+        assert_eq!(v, CrdtValue::Register(b"hello".to_vec()));
+        let fetched = s.fetch(b"c", b"k", TAG_REGISTER).await.unwrap();
+        assert_eq!(fetched, CrdtValue::Register(b"hello".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn register_reassign_overwrites_via_lww() {
+        let s = store();
+        let assign = |peer: &str, v: &[u8]| CrdtOp::Register {
+            actor: ActorId::new("dc1", peer),
+            value: v.to_vec(),
+        };
+        // assign_now stamps with the wall clock; use a lexically
+        // greater second actor so the assertion holds even if both
+        // calls land in the same microsecond (the LWW tie-break is
+        // by actor id).
+        s.apply(b"c", b"k", &assign("a", b"first")).await.unwrap();
+        let v = s.apply(b"c", b"k", &assign("z", b"second")).await.unwrap();
+        assert_eq!(v, CrdtValue::Register(b"second".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn flag_enable_then_fetch_returns_true() {
+        let s = store();
+        let op = CrdtOp::Flag {
+            actor: ActorId::new("dc1", "a"),
+            enable: true,
+        };
+        let v = s.apply(b"c", b"k", &op).await.unwrap();
+        assert_eq!(v, CrdtValue::Flag(true));
+        let fetched = s.fetch(b"c", b"k", TAG_FLAG).await.unwrap();
+        assert_eq!(fetched, CrdtValue::Flag(true));
+    }
+
+    #[tokio::test]
+    async fn flag_disable_after_enable_reads_false() {
+        let s = store();
+        let actor = ActorId::new("dc1", "a");
+        s.apply(
+            b"c",
+            b"k",
+            &CrdtOp::Flag {
+                actor: actor.clone(),
+                enable: true,
+            },
+        )
+        .await
+        .unwrap();
+        let v = s
+            .apply(
+                b"c",
+                b"k",
+                &CrdtOp::Flag {
+                    actor,
+                    enable: false,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(v, CrdtValue::Flag(false));
+    }
+
+    #[test]
+    fn merge_two_states_picks_lww_register_winner() {
+        let mut early = LwwRegister::new();
+        early.assign(&ActorId::new("dc1", "a"), 1, b"early".to_vec());
+        let mut late = LwwRegister::new();
+        late.assign(&ActorId::new("dc1", "b"), 2, b"late".to_vec());
+        let merged =
+            merge_two_states(&register_to_bytes(&early), &register_to_bytes(&late)).unwrap();
+        assert_eq!(
+            project_state(&merged, TAG_REGISTER).unwrap(),
+            CrdtValue::Register(b"late".to_vec())
+        );
+    }
+
+    #[test]
+    fn merge_two_states_flag_is_enable_wins() {
+        let a = ActorId::new("dc1", "a");
+        let b = ActorId::new("dc1", "b");
+        let mut shared = EwFlag::new();
+        shared.enable(&a);
+        let mut disabled = shared.clone();
+        disabled.disable();
+        let mut concurrent_enable = shared.clone();
+        concurrent_enable.enable(&b);
+        let merged = merge_two_states(
+            &flag_to_bytes(&disabled),
+            &flag_to_bytes(&concurrent_enable),
+        )
+        .unwrap();
+        assert_eq!(
+            project_state(&merged, TAG_FLAG).unwrap(),
+            CrdtValue::Flag(true)
+        );
+    }
+
+    #[test]
+    fn project_state_covers_register_and_flag() {
+        let mut r = LwwRegister::new();
+        r.assign(&ActorId::new("dc1", "a"), 1, b"v".to_vec());
+        assert_eq!(
+            project_state(&register_to_bytes(&r), TAG_REGISTER).unwrap(),
+            CrdtValue::Register(b"v".to_vec())
+        );
+
+        let mut f = EwFlag::new();
+        f.enable(&ActorId::new("dc1", "a"));
+        assert_eq!(
+            project_state(&flag_to_bytes(&f), TAG_FLAG).unwrap(),
+            CrdtValue::Flag(true)
         );
     }
 }

@@ -47,6 +47,19 @@ pub const DATA_TYPE_HLL: i32 = 4;
 /// `DtFetchResp.type == GSET`. Wire-encoded as `5`. Reserved for
 /// the grow-only-set slice.
 pub const DATA_TYPE_GSET: i32 = 5;
+/// `DtFetchResp.type == REGISTER`. Wire-encoded as `6`.
+///
+/// Not part of Riak's published `riak_dt.proto`: upstream Riak
+/// only exposes a register as a nested map field
+/// (`MAP_FIELD_TYPE_REGISTER`), never as a top-level
+/// `DtFetch`/`DtUpdate` target. dyniak extends the top-level
+/// datatype space so a `registers`-typed bucket can carry a bare
+/// LWW-register, mirroring the `counters` / `sets` bucket-type
+/// convention already in use.
+pub const DATA_TYPE_REGISTER: i32 = 6;
+/// `DtFetchResp.type == FLAG`. Wire-encoded as `7`. Same dyniak
+/// extension as [`DATA_TYPE_REGISTER`], for a bare EW-flag.
+pub const DATA_TYPE_FLAG: i32 = 7;
 
 // ---- operation payloads ----------------------------------------------------
 
@@ -368,6 +381,16 @@ pub struct DtOp {
     /// Grow-only set operation.
     #[prost(message, optional, tag = "5")]
     pub gset_op: Option<GSetOp>,
+    /// LWW-register assignment. Not part of Riak's published
+    /// `riak_dt.proto` (upstream only carries a register inside a
+    /// map field); dyniak extends `DtOp` so a `registers`-typed
+    /// bucket can target a bare register directly.
+    #[prost(message, optional, tag = "6")]
+    pub register_op: Option<RegisterOp>,
+    /// EW-flag toggle. Same dyniak extension as [`Self::register_op`],
+    /// for a bare flag.
+    #[prost(message, optional, tag = "7")]
+    pub flag_op: Option<FlagOp>,
 }
 
 impl WireValue for DtOp {
@@ -400,6 +423,15 @@ pub struct DtValue {
     /// G-Set value (Riak emits this on tag 5 for `type == GSET`).
     #[prost(bytes = "vec", repeated, tag = "5")]
     pub gset_value: Vec<Vec<u8>>,
+    /// Register projection. Same dyniak extension as
+    /// [`DtOp::register_op`], for a bare register at the top level
+    /// of a `DtFetchResp`.
+    #[prost(bytes = "vec", optional, tag = "6")]
+    pub register_value: Option<Vec<u8>>,
+    /// Flag projection. Same dyniak extension as
+    /// [`DtOp::flag_op`], for a bare flag at the top level.
+    #[prost(bool, optional, tag = "7")]
+    pub flag_value: Option<bool>,
 }
 
 impl WireValue for DtValue {
@@ -570,6 +602,14 @@ pub struct DtUpdateResp {
     /// G-Set post-merge value.
     #[prost(bytes = "vec", repeated, tag = "7")]
     pub gset_value: Vec<Vec<u8>>,
+    /// Register post-merge value. dyniak extension mirroring
+    /// [`DtOp::register_op`].
+    #[prost(bytes = "vec", optional, tag = "8")]
+    pub register_value: Option<Vec<u8>>,
+    /// Flag post-merge value. dyniak extension mirroring
+    /// [`DtOp::flag_op`].
+    #[prost(bool, optional, tag = "9")]
+    pub flag_value: Option<bool>,
 }
 
 impl WireValue for DtUpdateResp {
@@ -615,6 +655,45 @@ mod tests {
         assert!(back.set_op.is_none());
         assert!(back.hll_op.is_none());
         assert!(back.gset_op.is_none());
+        assert!(back.register_op.is_none());
+        assert!(back.flag_op.is_none());
+    }
+
+    #[test]
+    fn dt_op_with_register_and_flag_payloads_round_trip() {
+        let register = DtOp {
+            register_op: Some(RegisterOp {
+                value: b"v".to_vec(),
+                ts_micros: None,
+            }),
+            ..DtOp::default()
+        };
+        let flag = DtOp {
+            flag_op: Some(FlagOp { enable: true }),
+            ..DtOp::default()
+        };
+        for op in [register, flag] {
+            let bytes = op.encode_to_vec();
+            let back = DtOp::decode(bytes.as_slice()).expect("decode");
+            assert_eq!(back, op);
+        }
+    }
+
+    #[test]
+    fn dt_value_with_register_and_flag_projections_round_trip() {
+        let register = DtValue {
+            register_value: Some(b"hi".to_vec()),
+            ..DtValue::default()
+        };
+        let flag = DtValue {
+            flag_value: Some(true),
+            ..DtValue::default()
+        };
+        for v in [register, flag] {
+            let bytes = v.encode_to_vec();
+            let back = DtValue::decode(bytes.as_slice()).expect("decode");
+            assert_eq!(back, v);
+        }
     }
 
     #[test]
@@ -703,6 +782,8 @@ mod tests {
             map_value: None,
             hll_value: None,
             gset_value: vec![],
+            register_value: None,
+            flag_value: None,
         };
         let bytes = resp.encode_to_vec();
         let back = DtUpdateResp::decode(bytes.as_slice()).expect("decode");
@@ -724,6 +805,8 @@ mod tests {
         assert_eq!(DATA_TYPE_MAP, 3);
         assert_eq!(DATA_TYPE_HLL, 4);
         assert_eq!(DATA_TYPE_GSET, 5);
+        assert_eq!(DATA_TYPE_REGISTER, 6);
+        assert_eq!(DATA_TYPE_FLAG, 7);
     }
 
     #[test]
@@ -963,6 +1046,8 @@ mod tests {
             })),
             hll_value: None,
             gset_value: vec![],
+            register_value: None,
+            flag_value: None,
         };
         let bytes = resp.encode_to_vec();
         let back = DtUpdateResp::decode(bytes.as_slice()).expect("decode");

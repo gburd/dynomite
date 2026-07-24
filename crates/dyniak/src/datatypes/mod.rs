@@ -85,8 +85,9 @@ pub use crate::datatypes::hlc::{hlc_cmp, Hlc, HlcError};
 pub use crate::datatypes::itc::{Event as ItcEvent, Id as ItcId, Itc};
 pub use crate::datatypes::register::LwwRegister;
 pub use crate::datatypes::serial::{
-    counter_from_bytes, counter_to_bytes, peek_tag, set_from_bytes, set_to_bytes, CrdtSerialError,
-    TAG_COUNTER, TAG_SET,
+    counter_from_bytes, counter_to_bytes, flag_from_bytes, flag_to_bytes, peek_tag,
+    register_from_bytes, register_to_bytes, set_from_bytes, set_to_bytes, CrdtSerialError,
+    TAG_COUNTER, TAG_FLAG, TAG_REGISTER, TAG_SET,
 };
 pub use crate::datatypes::set::OrSet;
 

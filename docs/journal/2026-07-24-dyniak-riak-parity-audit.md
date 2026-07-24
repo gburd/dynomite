@@ -129,13 +129,20 @@ NOT "better than Riak".
 Now done this session:
 * [x] CRDT read coordination (the #1 read-repair gating item).
 * [x] Server-assigned keys: `POST /buckets/{b}/keys` -> 201 + Location.
+* [x] Register and Flag CRDTs wired over the wire (Counter, Set,
+  Register, Flag now served; Map and HyperLogLog remain).
+* [x] Object TTL expiry in the reaper FSM
+  (`ReaperConfig::object_ttl_seconds`); wiring the `ttl` bucket property
+  through to it remains.
 
 Near-term correctness parity (highest surprise for a Riak user):
 1. KV object quorum read + read repair on the PBC path (R/PR). M.
 2. Surface siblings on PBC/HTTP for `allow_mult` buckets. M.
-3. TTL / object expiry via the reaper. M.
+3. TTL / object expiry via the reaper. M. **Reaper capability DONE
+   (`object_ttl_seconds`); ttl-bucket-property bridge remains.**
 4. Server-assigned keys (POST unnamed). S. **DONE.**
-5. Map + HLL CRDT handlers (export + wire). M.
+5. Map + HLL CRDT handlers (export + wire). M. **Register/Flag DONE;
+   Map + HLL remain.**
 6. Durable hinted-handoff queue. L.
 7. Pre/postcommit hooks. L.
 

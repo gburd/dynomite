@@ -126,9 +126,10 @@ them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
   return a sibling set or a `300 Multiple Choices`, and `allow_mult`
   does not yet change read behavior. For concurrent-write correctness,
   use a CRDT (whose merge never drops a write).
-* **CRDTs over the wire: Counter and Set today.** All types exist as
-  in-crate APIs; only counter and set are served over PBC / HTTP.
-  Register, Flag, Map, and HyperLogLog are implemented but not yet wired
+* **CRDTs over the wire: Counter, Set, Register, and Flag today.** All
+  types exist as in-crate APIs; Counter, Set, Register, and Flag are
+  served over PBC / HTTP. Map and HyperLogLog are implemented but not
+  yet wired
   to the wire handlers.
 * **Object TTL / auto-expiry is not implemented.** The `ttl` bucket
   property is not enforced; live objects are not auto-expired. (The

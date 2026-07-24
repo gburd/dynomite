@@ -897,7 +897,7 @@ async fn handle_dt_update(
     // this node's actor.
     let Some(op) = req.op.as_ref().and_then(|o| dt_op_to_crdt(o, &actor)) else {
         return Ok(error_frame(
-            "riak dt_update: unsupported or empty op (counter/set only)".into(),
+            "riak dt_update: unsupported or empty op (counter/set/register/flag only)".into(),
         ));
     };
     // A CRDT write always applies to the coordinator's LOCAL store
@@ -944,6 +944,8 @@ async fn handle_dt_update(
     match value {
         CrdtValue::Counter(n) => resp.counter_value = Some(n),
         CrdtValue::Set(elems) => resp.set_value = elems,
+        CrdtValue::Register(v) => resp.register_value = Some(v),
+        CrdtValue::Flag(b) => resp.flag_value = Some(b),
         CrdtValue::Missing => {}
     }
     Ok(Frame::new(
@@ -971,14 +973,22 @@ async fn handle_dt_fetch(
     hooks: Option<&RoutingHooks>,
 ) -> Result<Frame, RiakError> {
     use crate::crdt_store::{CrdtStore, CrdtValue};
-    use crate::datatypes::{TAG_COUNTER, TAG_SET};
-    use crate::proto::pb::{DtFetchReq, DtFetchResp, DtValue, DATA_TYPE_COUNTER, DATA_TYPE_SET};
+    use crate::datatypes::{TAG_COUNTER, TAG_FLAG, TAG_REGISTER, TAG_SET};
+    use crate::proto::pb::{
+        DtFetchReq, DtFetchResp, DtValue, DATA_TYPE_COUNTER, DATA_TYPE_FLAG, DATA_TYPE_REGISTER,
+        DATA_TYPE_SET,
+    };
 
     let req = DtFetchReq::decode(body)?;
     // The bucket type selects the projection: `sets` -> OR-set,
-    // anything else -> counter (Riak's `counters` default).
+    // `registers` -> LWW-register, `flags` -> EW-flag, anything
+    // else -> counter (Riak's `counters` default).
     let (tag, dtype) = if req.r#type == b"sets" {
         (TAG_SET, DATA_TYPE_SET)
+    } else if req.r#type == b"registers" {
+        (TAG_REGISTER, DATA_TYPE_REGISTER)
+    } else if req.r#type == b"flags" {
+        (TAG_FLAG, DATA_TYPE_FLAG)
     } else {
         (TAG_COUNTER, DATA_TYPE_COUNTER)
     };
@@ -1053,6 +1063,18 @@ async fn handle_dt_fetch(
                 ..DtValue::default()
             });
         }
+        CrdtValue::Register(v) => {
+            resp.value = Some(DtValue {
+                register_value: Some(v),
+                ..DtValue::default()
+            });
+        }
+        CrdtValue::Flag(b) => {
+            resp.value = Some(DtValue {
+                flag_value: Some(b),
+                ..DtValue::default()
+            });
+        }
         CrdtValue::Missing => {}
     }
     Ok(Frame::new(
@@ -1063,8 +1085,8 @@ async fn handle_dt_fetch(
 
 /// Translate a PBC [`DtOp`] into the internal
 /// [`crate::crdt_store::CrdtOp`], attributing it to `actor`. Returns
-/// `None` for an empty or unsupported op (only counter and set are
-/// wired).
+/// `None` for an empty or unsupported op (counter, set, register, and
+/// flag are wired; map is not).
 fn dt_op_to_crdt(
     op: &crate::proto::pb::DtOp,
     actor: &crate::datatypes::ActorId,
@@ -1081,6 +1103,18 @@ fn dt_op_to_crdt(
             actor: actor.clone(),
             adds: s.adds.clone(),
             removes: s.removes.clone(),
+        });
+    }
+    if let Some(r) = op.register_op.as_ref() {
+        return Some(CrdtOp::Register {
+            actor: actor.clone(),
+            value: r.value.clone(),
+        });
+    }
+    if let Some(f) = op.flag_op.as_ref() {
+        return Some(CrdtOp::Flag {
+            actor: actor.clone(),
+            enable: f.enable,
         });
     }
     None

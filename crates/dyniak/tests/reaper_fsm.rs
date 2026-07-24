@@ -30,6 +30,7 @@ fn small_cfg() -> ReaperConfig {
         reap_max_per_cycle: 4,
         reap_interval_seconds: 60,
         reaps_per_sec: 1_000_000,
+        object_ttl_seconds: 0,
     }
 }
 
@@ -267,6 +268,7 @@ fn sibling_resolution_window_respected() {
         reap_max_per_cycle: 100,
         reap_interval_seconds: 60,
         reaps_per_sec: 1_000_000,
+        object_ttl_seconds: 0,
     };
     let mut h = fresh(cfg, three_partitions());
     let _ = h.handle(State::Idle, EventType::Cast, Event::Tick);
@@ -422,6 +424,7 @@ fn throttle_admits_up_to_burst() {
     // bucket refills.
     let cfg = ReaperConfig {
         reaps_per_sec: 4,
+        object_ttl_seconds: 0,
         ..small_cfg()
     };
     let h = fresh(cfg, three_partitions());
@@ -538,6 +541,7 @@ fn reaper_is_monotonic_under_arbitrary_traffic(tc: TestCase) {
         reap_max_per_cycle: 1_000,
         reap_interval_seconds: 60,
         reaps_per_sec: 1_000_000,
+        object_ttl_seconds: 0,
     };
     let mut handler = fresh(cfg, three_partitions());
     let mut model: HashMap<u64, ModelState> = HashMap::new();

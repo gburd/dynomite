@@ -47,8 +47,8 @@ indexes, links, and causal context. See
 <a href="./objects.md">Buckets, Keys, and Objects</a>.</dd>
 <dt>Convergent data types</dt>
 <dd>Convergent data types (CRDTs) that merge concurrent writes
-automatically. Counter and Set are reachable over the wire today;
-Register, Flag, Map, and HyperLogLog exist in the codebase and are
+automatically. Counter, Set, Register, and Flag are reachable over the
+wire today; Map and HyperLogLog exist in the codebase and are
 tracked to be wired next. See
 <a href="./crdts.md">Convergent Data Types</a>.</dd>
 <dt>Transactions</dt>

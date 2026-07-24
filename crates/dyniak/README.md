@@ -51,9 +51,9 @@ that is the audience for dyniak.
   `/types/<bucket-type>/buckets/<bucket>/keys/<key>` for typed
   buckets, the `/mapred` MapReduce endpoint, and `/buckets/<bucket>/index/<idx>/...`
   for secondary index queries.
-* **CRDTs**: convergent data types on the Riak model. Counter and Set
-  are served over the wire today; Register, Flag, Map, and HyperLogLog
-  are implemented in-crate and tracked to be wired next. See
+* **CRDTs**: convergent data types on the Riak model. Counter, Set,
+  Register, and Flag are served over the wire today; Map and
+  HyperLogLog are implemented in-crate and tracked to be wired next. See
   `crates/dyniak/src/datatypes/`.
 * **Per-request quorums**: `R`, `W`, `PR`, `PW`, `DW`, `RW` are accepted
   for API compatibility. Only `n_val` (the replica count) is enforced
@@ -146,8 +146,8 @@ listeners. Operators who want process isolation can run separate
   `dynomite::embed::Datastore`, writes framed responses.
 * HTTP gateway (axum-based) for the `/buckets/...`, `/types/...`,
   `/mapred`, and `/buckets/<bucket>/index/...` paths.
-* CRDT types: Counter and Set served over the wire; Register, Flag,
-  Map, and HyperLogLog implemented in-crate, tracked to be wired next.
+* CRDT types: Counter, Set, Register, and Flag served over the wire;
+  Map and HyperLogLog implemented in-crate, tracked to be wired next.
 * MapReduce pipeline: 9 built-in phases + Wasm-hosted user phases
   (gated under `--features wasm`).
 * Tictac-style AAE (segmented merkle tree, persisted across

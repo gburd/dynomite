@@ -240,6 +240,8 @@ fn dt_update_resp_round_trips_for_orset() {
         map_value: None,
         hll_value: None,
         gset_value: vec![],
+        register_value: None,
+        flag_value: None,
     };
     let bytes = resp.encode_to_vec();
     let back = DtUpdateResp::decode(bytes.as_slice()).expect("decode");

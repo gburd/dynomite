@@ -72,8 +72,8 @@ pub use crate::proto::pb::mapreduce::{RpbMapRedReq, RpbMapRedResp};
 // below the prior block so parallel branches do not conflict.
 pub use crate::proto::pb::datatypes::{
     FlagOp, HllValue, MapEntry, MapField, MapOp, MapUpdate, MapValue, RegisterOp, ScalarOp,
-    ScalarValue, MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_FLAG, MAP_FIELD_TYPE_MAP,
-    MAP_FIELD_TYPE_REGISTER, MAP_FIELD_TYPE_SET,
+    ScalarValue, DATA_TYPE_FLAG, DATA_TYPE_REGISTER, MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_FLAG,
+    MAP_FIELD_TYPE_MAP, MAP_FIELD_TYPE_REGISTER, MAP_FIELD_TYPE_SET,
 };
 
 // Cluster admin extension messages -- v0.0.4 admin slice. The

@@ -46,6 +46,41 @@ impl EwFlag {
             self.removes.insert(tag.clone());
         }
     }
+
+    /// Export the raw add-tag set for serialization.
+    #[must_use]
+    pub fn raw_adds(&self) -> BTreeSet<Tag> {
+        self.adds.clone()
+    }
+
+    /// Export the raw remove-tag (tombstone) set for serialization.
+    #[must_use]
+    pub fn raw_removes(&self) -> BTreeSet<Tag> {
+        self.removes.clone()
+    }
+
+    /// Export the raw per-actor enable counters for serialization.
+    #[must_use]
+    pub fn raw_actor_counters(&self) -> std::collections::BTreeMap<ActorId, u64> {
+        self.actor_counters.clone()
+    }
+
+    /// Reconstruct an EW-flag from its raw add/remove tag sets and
+    /// actor-counter map, the inverse of [`EwFlag::raw_adds`] /
+    /// [`EwFlag::raw_removes`] / [`EwFlag::raw_actor_counters`]. Used
+    /// by deserialization.
+    #[must_use]
+    pub fn from_raw(
+        adds: BTreeSet<Tag>,
+        removes: BTreeSet<Tag>,
+        actor_counters: std::collections::BTreeMap<ActorId, u64>,
+    ) -> Self {
+        Self {
+            adds,
+            removes,
+            actor_counters,
+        }
+    }
 }
 
 impl Crdt for EwFlag {

@@ -77,6 +77,19 @@ impl LwwRegister {
     pub fn actor(&self) -> Option<&ActorId> {
         self.actor.as_ref()
     }
+
+    /// Reconstruct a register from its raw `(value, ts_micros,
+    /// actor)` state, the inverse of the [`Self::value`] /
+    /// [`Self::timestamp`] / [`Self::actor`] triple. Used by
+    /// deserialization.
+    #[must_use]
+    pub fn from_raw(value: Vec<u8>, ts_micros: u64, actor: Option<ActorId>) -> Self {
+        Self {
+            value,
+            ts_micros,
+            actor,
+        }
+    }
 }
 
 impl Crdt for LwwRegister {
