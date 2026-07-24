@@ -625,76 +625,158 @@ fn handle_server_info(body: &[u8]) -> Result<Frame, RiakError> {
 /// fail to decode as an envelope; those are returned as a bare
 /// `RpbContent` whose `value` is the raw bytes so a value never
 /// disappears on read.
-/// Advance the per-object causal context for a write.
+/// Advance the per-object causal context for a write coordinated by
+/// `actor`.
 ///
 /// Public wrapper over the internal advance so the HTTP object path
 /// (a different module) tracks causality identically to the PBC path.
 /// Not part of the stable API.
 #[doc(hidden)]
 #[must_use]
-pub fn advance_object_context(prior: &[u8]) -> Vec<u8> {
-    advance_context(prior)
+pub fn advance_object_context(prior: &[u8], actor: &[u8]) -> Vec<u8> {
+    advance_context(prior, actor)
 }
 
-/// Advance the per-object causal context for a write.
+/// Advance the per-object causal context for a write coordinated by
+/// `actor`.
 ///
-/// Decodes the prior stored context (empty or undecodable -> the seed
-/// clock), issues a fresh ITC event so the returned context strictly
-/// dominates the prior one, and re-encodes it. A write therefore always
-/// produces a context that causally succeeds what it read, which is
-/// what lets a later read detect supersede-vs-concurrent.
-fn advance_context(prior: &[u8]) -> Vec<u8> {
-    let mut clock = if prior.is_empty() {
-        crate::datatypes::Itc::seed()
-    } else {
-        match crate::datatypes::Itc::decode(prior) {
-            Some(c) if c.has_authority() => c,
-            // A decoded peek stamp (id = 0) or an undecodable blob
-            // cannot issue an event; fall back to the seed so the write
-            // still advances a well-formed clock.
-            _ => crate::datatypes::Itc::seed(),
-        }
-    };
-    clock.event();
-    clock.encode()
+/// Decodes the prior context the client read, increments `actor`'s dot,
+/// and re-encodes. A write produces a context that causally succeeds
+/// what its coordinator read; two writes coordinated by different
+/// actors from the same base are concurrent (siblings), which is what
+/// lets a read detect supersede-vs-concurrent.
+fn advance_context(prior: &[u8], actor: &[u8]) -> Vec<u8> {
+    let mut vc = crate::vclock::VClock::decode(prior);
+    vc.advance(actor);
+    vc.encode()
 }
 
 /// Compare a client-supplied read context against a stored object's
 /// context. Returns `Some(Ordering)` when the two are causally ordered
 /// and `None` when they are concurrent (a conflict). An empty context
-/// on either side is the seed clock (dominated by any real write).
+/// on either side is the bottom vector (dominated by any real write).
 fn context_cmp(client: &[u8], stored: &[u8]) -> Option<std::cmp::Ordering> {
-    let decode = |b: &[u8]| {
-        if b.is_empty() {
-            crate::datatypes::Itc::seed()
-        } else {
-            crate::datatypes::Itc::decode(b).unwrap_or_else(crate::datatypes::Itc::seed)
-        }
-    };
-    decode(client).partial_cmp_event(&decode(stored))
+    crate::vclock::VClock::decode(client).partial_cmp(&crate::vclock::VClock::decode(stored))
 }
 
-fn pbc_content_from_storage(stored: &[u8]) -> RpbContent {
-    match HttpObject::from_storage_bytes(stored) {
-        Ok(obj) => RpbContent {
-            value: obj.value,
-            content_type: obj.content_type.map(String::into_bytes),
-            links: obj.links.iter().map(http_link_to_rpb).collect(),
-            indexes: obj
-                .indexes
-                .iter()
-                .map(|i| RpbPair {
-                    key: i.name.clone().into_bytes(),
-                    value: Some(i.value.clone().into_bytes()),
-                })
-                .collect(),
-            ..RpbContent::default()
-        },
-        Err(_) => RpbContent {
-            value: stored.to_vec(),
-            ..RpbContent::default()
-        },
+/// Public wrapper over [`resolve_write`] so the HTTP object path (a
+/// different module) resolves a sibling-aware write identically to the
+/// PBC path. Not part of the stable API.
+#[doc(hidden)]
+#[must_use]
+pub fn resolve_object_write(
+    stored: &crate::proto::http::object::SiblingSet,
+    new_obj: &HttpObject,
+    allow_mult: bool,
+) -> crate::proto::http::object::SiblingSet {
+    resolve_write(stored, new_obj, allow_mult)
+}
+
+/// Resolve a write against the stored sibling set, producing the new
+/// stored set.
+///
+/// The new object's `context` must already be advanced (via
+/// [`advance_context`]) so it strictly dominates the context the client
+/// read. Resolution:
+///
+/// * every stored sibling the new write causally dominates is dropped
+///   (superseded);
+/// * if a stored sibling causally dominates the new write (a stale,
+///   late-arriving write), the stored set is returned unchanged;
+/// * otherwise the new write joins the set. When `allow_mult` is false,
+///   the set is then collapsed to a single value -- the causal winner,
+///   ties broken by the value bytes -- matching Riak's
+///   `last_write_wins` / no-siblings behaviour. When `allow_mult` is
+///   true, concurrent siblings are retained.
+///
+/// This never drops a causally-newer write, and under `allow_mult`
+/// never drops a concurrent write, matching `model-tests::causal_object`.
+fn resolve_write(
+    stored: &crate::proto::http::object::SiblingSet,
+    new_obj: &HttpObject,
+    allow_mult: bool,
+) -> crate::proto::http::object::SiblingSet {
+    use crate::proto::http::object::SiblingSet;
+    // A stored sibling that the new write dominates is superseded.
+    // A stored sibling that dominates the new write makes it stale.
+    let dominates =
+        |a: &[u8], b: &[u8]| matches!(context_cmp(a, b), Some(std::cmp::Ordering::Greater));
+    if stored
+        .siblings
+        .iter()
+        .any(|s| dominates(&s.context, &new_obj.context))
+    {
+        // The new write is causally behind a stored value; keep stored.
+        return stored.clone();
     }
+    let mut kept: Vec<HttpObject> = stored
+        .siblings
+        .iter()
+        .filter(|s| !dominates(&new_obj.context, &s.context))
+        .cloned()
+        .collect();
+    kept.push(new_obj.clone());
+    if !allow_mult && kept.len() > 1 {
+        // Collapse to one deterministic winner: the causal maximum,
+        // ties broken by value bytes so the choice is order-independent.
+        let winner = kept
+            .into_iter()
+            .reduce(|a, b| {
+                match context_cmp(&b.context, &a.context) {
+                    Some(std::cmp::Ordering::Greater) => b,
+                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal) => a,
+                    None => {
+                        // Concurrent: break the tie by value bytes.
+                        if b.value > a.value {
+                            b
+                        } else {
+                            a
+                        }
+                    }
+                }
+            })
+            .expect("invariant: kept has at least the new write");
+        return SiblingSet::single(winner);
+    }
+    SiblingSet { siblings: kept }
+}
+
+/// Map a decoded [`HttpObject`] to a PBC [`RpbContent`].
+fn pbc_content_from_object(obj: &HttpObject) -> RpbContent {
+    RpbContent {
+        value: obj.value.clone(),
+        content_type: obj.content_type.clone().map(String::into_bytes),
+        links: obj.links.iter().map(http_link_to_rpb).collect(),
+        indexes: obj
+            .indexes
+            .iter()
+            .map(|i| RpbPair {
+                key: i.name.clone().into_bytes(),
+                value: Some(i.value.clone().into_bytes()),
+            })
+            .collect(),
+        ..RpbContent::default()
+    }
+}
+
+/// Public wrapper over [`join_contexts`] for the HTTP object path.
+/// Not part of the stable API.
+#[doc(hidden)]
+pub fn join_object_contexts<'a>(contexts: impl Iterator<Item = &'a [u8]>) -> Vec<u8> {
+    join_contexts(contexts)
+}
+
+/// Join a set of encoded causal contexts into one that causally
+/// succeeds (or equals) every input (element-wise maximum of the
+/// version vectors). An empty or all-empty input yields the empty
+/// context. Used on a sibling read so the returned context lets a
+/// client's resolving write supersede every sibling.
+fn join_contexts<'a>(contexts: impl Iterator<Item = &'a [u8]>) -> Vec<u8> {
+    let mut acc = crate::vclock::VClock::new();
+    for c in contexts {
+        acc.merge(&crate::vclock::VClock::decode(c));
+    }
+    acc.encode()
 }
 
 /// Map a storage-form [`HttpLink`] (string fields) into the PBC
@@ -771,27 +853,32 @@ async fn handle_get(
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
     // For datastores that implement the Riak K/V layer (today:
-    // `NoxuDatastore`), fetch the object and emit it as a
-    // single-content `RpbGetResp`. The `RpbContent` carries the
-    // object value, its content-type, its 2i entries, and its links
-    // (mapped from the stored `HttpObject`), so a PBC client reads
-    // links natively. Datastores that report `Unsupported` fall back
-    // to the empty response so the `MemoryDatastore` trampoline
+    // `NoxuDatastore`), fetch the object(s) and emit them as an
+    // `RpbGetResp`. When the key holds a single value, one
+    // `RpbContent` is returned; when concurrent siblings coexist
+    // (allow_mult), every sibling is returned as its own `RpbContent`
+    // and the client resolves them, matching Riak's sibling read.
+    // Each `RpbContent` carries the object value, content-type, 2i
+    // entries, and links. Datastores that report `Unsupported` fall
+    // back to the empty response so the `MemoryDatastore` trampoline
     // continues to behave identically.
     let resp = match datastore.riak_get(&req.bucket, &req.key).await {
         Ok(Some(v)) => {
-            // Return the object's causal context in `vclock` so a client
-            // read-modify-write round-trips it; a subsequent put that
-            // carries it back is recognised as a causal successor.
-            let context = HttpObject::from_storage_bytes(&v)
-                .map(|o| o.context)
-                .unwrap_or_default();
+            let set =
+                crate::proto::http::object::SiblingSet::from_storage_bytes(&v).unwrap_or_default();
+            // The returned context is the causal join of every
+            // sibling's context, so a client that read a sibling set
+            // and writes back supersedes ALL of them (resolving the
+            // conflict), matching Riak's read-resolve-write loop.
+            let joined = join_contexts(set.siblings.iter().map(|o| o.context.as_slice()));
+            let content: Vec<RpbContent> =
+                set.siblings.iter().map(pbc_content_from_object).collect();
             RpbGetResp {
-                content: vec![pbc_content_from_storage(&v)],
-                vclock: if context.is_empty() {
+                content,
+                vclock: if joined.is_empty() {
                     None
                 } else {
-                    Some(context)
+                    Some(joined)
                 },
                 ..RpbGetResp::default()
             }
@@ -863,35 +950,34 @@ async fn handle_put(
     // as `Link:` headers. Index pairs and the content-type are
     // mirrored onto the envelope so an HTTP read echoes them, matching
     // the HTTP put path.
-    // Advance the per-object causal context. Read the prior stored
-    // object's context and issue a fresh event so the new context
-    // strictly dominates it; return the encoded context in
-    // `RpbPutResp.vclock` so the client can round-trip it on its next
-    // write. (Sibling retention on a concurrent write is a following
-    // slice; this slice makes the context flow end to end and every
-    // write advances the clock so causality is tracked.)
-    let prior_context = match datastore.riak_get(&req.bucket, &key).await {
-        Ok(Some(bytes)) => HttpObject::from_storage_bytes(&bytes)
-            .map(|o| o.context)
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    };
-    // Detect a concurrent write: the client's supplied context
-    // (`req.vclock`, what it last read) is neither equal to nor a
-    // descendant of the stored context. With sibling retention this
-    // would fork a sibling; this slice logs the conflict and lets the
-    // write supersede (last-writer-by-arrival), never losing a
-    // causally-newer write.
-    if let Some(client_ctx) = req.vclock.as_ref() {
-        if context_cmp(client_ctx, &prior_context).is_none() {
-            tracing::debug!(
-                bucket = %String::from_utf8_lossy(&req.bucket),
-                key = %String::from_utf8_lossy(&key),
-                "riak put: concurrent write detected (client context diverges from stored)"
-            );
+    // Sibling-aware causal write. Read the stored sibling set, advance
+    // a fresh context from what the CLIENT read (`req.vclock`), and
+    // resolve: supersede causally-dominated siblings, retain concurrent
+    // ones when the bucket allows siblings, or collapse to one value
+    // otherwise. The returned context is echoed in `RpbPutResp.vclock`
+    // so the client round-trips it on its next write.
+    let stored_set = match datastore.riak_get(&req.bucket, &key).await {
+        Ok(Some(bytes)) => {
+            crate::proto::http::object::SiblingSet::from_storage_bytes(&bytes).unwrap_or_default()
         }
-    }
-    let new_context = advance_context(&prior_context);
+        _ => crate::proto::http::object::SiblingSet::default(),
+    };
+    let client_ctx = req.vclock.clone().unwrap_or_default();
+    // The coordinating actor keys this write's dot. Two writes
+    // coordinated by different nodes from the same read context are
+    // concurrent; same-node writes are ordered. Without hooks (embedded
+    // single node) a fixed local actor is used.
+    let actor = hooks.map_or_else(
+        || b"local".to_vec(),
+        |h| format!("{}:{}", h.local_actor.dc, h.local_actor.peer).into_bytes(),
+    );
+    let new_context = advance_context(&client_ctx, &actor);
+    let allow_mult = hooks.is_some_and(|h| {
+        h.router
+            .registry()
+            .resolve(req.r#type.as_deref().unwrap_or(b""), &req.bucket)
+            .effective_allow_mult()
+    });
     let envelope = HttpObject {
         value: content.value.clone(),
         content_type: content
@@ -908,7 +994,8 @@ async fn handle_put(
         links: content.links.iter().map(rpb_link_to_http).collect(),
         context: new_context.clone(),
     };
-    let storage = envelope.to_storage_bytes();
+    let resolved = resolve_write(&stored_set, &envelope, allow_mult);
+    let storage = resolved.to_storage_bytes();
     match datastore
         .riak_put(&req.bucket, &key, &storage, &indexes)
         .await
@@ -1544,7 +1631,7 @@ fn handle_get_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
         let resolved = hooks.router.registry().resolve(bucket_type, &req.bucket);
         RpbBucketProps {
             n_val: Some(u32::from(resolved.effective_n_val())),
-            allow_mult: Some(false),
+            allow_mult: Some(resolved.effective_allow_mult()),
             last_write_wins: Some(false),
             chash_keyfun: Some(resolved.effective_keyfun().to_wire()),
             chash_keyfun_module: resolved
@@ -1612,6 +1699,9 @@ fn handle_set_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
             }
             if let Some(n) = props.n_val {
                 bp.n_val = Some(u8::try_from(n).unwrap_or(u8::MAX));
+            }
+            if let Some(am) = props.allow_mult {
+                bp.allow_mult = Some(am);
             }
             if let Some(ttl) = props.ttl_seconds {
                 bp.ttl_seconds = Some(u64::from(ttl));
@@ -2146,6 +2236,70 @@ mod tests {
     use super::*;
     use dynomite::embed::MemoryDatastore;
     use tokio::io::duplex;
+
+    /// Build an object carrying the encoded context `ctx`.
+    fn obj_with(value: &[u8], ctx: Vec<u8>) -> HttpObject {
+        HttpObject {
+            value: value.to_vec(),
+            context: ctx,
+            ..HttpObject::default()
+        }
+    }
+
+    #[test]
+    fn resolve_write_supersedes_a_causally_older_value() {
+        use crate::proto::http::object::SiblingSet;
+        let c1 = advance_context(&[], b"n1");
+        let stored = SiblingSet::single(obj_with(b"v1", c1.clone()));
+        let c2 = advance_context(&c1, b"n1");
+        let out = resolve_write(&stored, &obj_with(b"v2", c2), false);
+        assert_eq!(out.siblings.len(), 1, "newer write supersedes older");
+        assert_eq!(out.siblings[0].value, b"v2");
+    }
+
+    #[test]
+    fn resolve_write_ignores_a_stale_late_write() {
+        use crate::proto::http::object::SiblingSet;
+        let c1 = advance_context(&[], b"n1");
+        let c2 = advance_context(&c1, b"n1");
+        let stored = SiblingSet::single(obj_with(b"v2", c2));
+        // A late write still carrying the OLD context c1 is causally
+        // behind the stored c2 and must not overwrite it.
+        let out = resolve_write(&stored, &obj_with(b"stale", c1), false);
+        assert_eq!(out.siblings.len(), 1);
+        assert_eq!(out.siblings[0].value, b"v2", "stale write is dropped");
+    }
+
+    #[test]
+    fn resolve_write_retains_concurrent_siblings_under_allow_mult() {
+        use crate::proto::http::object::SiblingSet;
+        let a = advance_context(&[], b"n1");
+        let b = advance_context(&[], b"n2");
+        let stored = SiblingSet::single(obj_with(b"a", a));
+        let out = resolve_write(&stored, &obj_with(b"b", b), true);
+        assert_eq!(
+            out.siblings.len(),
+            2,
+            "concurrent writes are both retained under allow_mult"
+        );
+        let vals: std::collections::BTreeSet<&[u8]> =
+            out.siblings.iter().map(|o| o.value.as_slice()).collect();
+        assert!(vals.contains(b"a".as_slice()) && vals.contains(b"b".as_slice()));
+    }
+
+    #[test]
+    fn resolve_write_collapses_concurrent_without_allow_mult() {
+        use crate::proto::http::object::SiblingSet;
+        let a = advance_context(&[], b"n1");
+        let b = advance_context(&[], b"n2");
+        let stored = SiblingSet::single(obj_with(b"a", a));
+        let out = resolve_write(&stored, &obj_with(b"b", b), false);
+        assert_eq!(
+            out.siblings.len(),
+            1,
+            "without allow_mult a concurrent write collapses to one value"
+        );
+    }
 
     #[tokio::test]
     async fn ping_round_trips_over_duplex() {

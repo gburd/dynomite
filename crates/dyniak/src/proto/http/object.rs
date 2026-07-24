@@ -157,6 +157,80 @@ impl WireValue for HttpObject {
     }
 }
 
+/// Storage-form marker byte for a sibling set: distinguishes a
+/// multi-value blob from a legacy single-object blob. A legacy
+/// `HttpObject` protobuf always starts with a field tag byte (the
+/// smallest being 0x0A for tag 1), never 0xFF, so this marker is
+/// unambiguous.
+const SIBLING_SET_MARKER: u8 = 0xFF;
+
+/// A set of concurrent object values (siblings) stored under one key.
+///
+/// Riak keeps every concurrent write as a sibling when `allow_mult` is
+/// set, rather than dropping one. The storage form is a marker byte
+/// followed by the protobuf encoding of this message; a blob without
+/// the marker is a legacy single [`HttpObject`] and decodes as a
+/// one-element set (backward compatible).
+#[derive(Clone, Eq, PartialEq, Message, Serialize, Deserialize)]
+pub struct SiblingSet {
+    /// The concurrent object values. A causally-resolved key holds
+    /// exactly one; a key with unresolved concurrent writes holds
+    /// more than one.
+    #[prost(message, repeated, tag = "1")]
+    #[serde(default)]
+    pub siblings: Vec<HttpObject>,
+}
+
+impl SiblingSet {
+    /// A set holding a single object.
+    #[must_use]
+    pub fn single(obj: HttpObject) -> Self {
+        Self {
+            siblings: vec![obj],
+        }
+    }
+
+    /// The representative object for a read that expects a single
+    /// value (a MapReduce input, a transaction read): the causally
+    /// dominant sibling, or the first when they are concurrent. Returns
+    /// `None` for an empty set.
+    #[must_use]
+    pub fn primary(&self) -> Option<&HttpObject> {
+        self.siblings.first()
+    }
+
+    /// Serialise to the canonical storage form (marker byte + protobuf).
+    #[must_use]
+    pub fn to_storage_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(1 + self.encoded_len());
+        out.push(SIBLING_SET_MARKER);
+        out.extend_from_slice(&self.encode_to_vec());
+        out
+    }
+
+    /// Reconstruct from the canonical storage form. A blob starting
+    /// with the sibling marker decodes as a set; any other blob is a
+    /// legacy single [`HttpObject`] and becomes a one-element set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`prost::DecodeError`] when the payload after the marker
+    /// is not a valid `SiblingSet`, or a legacy blob is not a valid
+    /// `HttpObject`.
+    pub fn from_storage_bytes(bytes: &[u8]) -> Result<Self, prost::DecodeError> {
+        match bytes.split_first() {
+            Some((&SIBLING_SET_MARKER, rest)) => Self::decode(rest),
+            _ => Ok(Self::single(HttpObject::from_storage_bytes(bytes)?)),
+        }
+    }
+}
+
+impl WireValue for SiblingSet {
+    fn wire_type_id() -> WireTypeId {
+        WireTypeId::new("riak.http.SiblingSet")
+    }
+}
+
 impl HttpObject {
     /// Serialise the object into its canonical, encoding-independent
     /// storage form (its protobuf bytes).

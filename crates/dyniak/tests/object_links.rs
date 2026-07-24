@@ -18,7 +18,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use dyniak::datastore::NoxuDatastore;
-use dyniak::proto::http::object::HttpObject;
+use dyniak::proto::http::object::{HttpObject, SiblingSet};
 use dyniak::proto::pb::{
     read_frame, write_frame, Frame, MessageCode, RpbContent, RpbGetReq, RpbGetResp, RpbLink,
     RpbPutReq, RpbPutResp,
@@ -180,7 +180,12 @@ async fn http_link_headers_round_trip() {
         .get_object(b"people", b"alice")
         .expect("get_object")
         .expect("present");
-    let obj = HttpObject::from_storage_bytes(&stored).expect("decode envelope");
+    let obj = SiblingSet::from_storage_bytes(&stored)
+        .expect("decode envelope")
+        .siblings
+        .into_iter()
+        .next()
+        .expect("one sibling");
     assert_eq!(obj.links.len(), 2, "two links stored");
     assert!(obj
         .links
@@ -325,7 +330,12 @@ async fn pbc_link_put_is_visible_over_http() {
         .get_object(b"people", b"grace")
         .expect("get_object")
         .expect("present");
-    let obj = HttpObject::from_storage_bytes(&stored).expect("decode envelope");
+    let obj = SiblingSet::from_storage_bytes(&stored)
+        .expect("decode envelope")
+        .siblings
+        .into_iter()
+        .next()
+        .expect("one sibling");
     assert_eq!(obj.links.len(), 1, "pbc link persisted on the envelope");
     assert_eq!(obj.links[0].key, "dave");
     assert_eq!(obj.links[0].tag, "friend");

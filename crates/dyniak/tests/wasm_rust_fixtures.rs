@@ -137,6 +137,7 @@ fn real_rust_wasm_custom_keyfun_routes_live_keys() {
             strategy: Some(ReplicationStrategy::Successors),
             n_val: Some(1),
             custom_keyfun_module: Some("reverse".to_string()),
+            allow_mult: None,
             ttl_seconds: None,
         },
     );
@@ -207,6 +208,7 @@ fn real_rust_wasm_custom_keyfun_negative_paths() {
             strategy: Some(ReplicationStrategy::Successors),
             n_val: Some(1),
             custom_keyfun_module: Some("missing".to_string()),
+            allow_mult: None,
             ttl_seconds: None,
         },
     );

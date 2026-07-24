@@ -115,21 +115,24 @@ Riak-compatibility (`dyniak`) gaps worth knowing before you rely on
 them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
 
 * **Bucket quorum properties are not yet enforced.** `n_val` (the
-  replica count) is honored, but `r` / `w` / `pr` / `pw` / `dw` are
-  accepted for API compatibility and not yet applied on the read/write
-  path (a read returns as soon as it has a value rather than waiting for
-  `r` responses). The bucket-properties `GET` currently echoes Riak's
-  documented defaults rather than the stored per-bucket values.
-* **Causal context flows; sibling retention is pending.** Opaque objects
-  now carry a per-object causal context: a PUT advances it and returns
-  it (`RpbPutResp.vclock` / the `X-Riak-Vclock` header), a GET returns
-  it, and a concurrent write (the client's read context diverges from
-  the stored one) is detected. What is not yet done is sibling
-  RETENTION: a concurrent conflict still resolves to a single value
-  rather than storing both, so Dyniak does not yet return a sibling set
-  or a `300 Multiple Choices`, and `allow_mult` does not yet change read
-  behavior. For guaranteed concurrent-write correctness today, use a
-  CRDT (whose merge never drops a write).
+  replica count), `allow_mult`, and `ttl` are honored, but the quorum
+  knobs `r` / `w` / `pr` / `pw` / `dw` are accepted for API
+  compatibility and not yet applied on the read/write path (a read
+  returns as soon as it has a value rather than waiting for `r`
+  responses). The PBC `GetBucket` reflects the stored per-bucket
+  properties; the HTTP `/props` GET still echoes Riak's documented
+  defaults.
+* **Concurrent writes are retained as siblings.** Opaque objects carry a
+  per-object version-vector causal context: a PUT advances it (keyed by
+  the coordinating node) and returns it (`RpbPutResp.vclock` / the
+  `X-Riak-Vclock` header), a GET returns it. A write concurrent with the
+  stored value (its coordinator's read context diverges) is retained as
+  a sibling when the bucket sets `allow_mult`, so no concurrent write is
+  lost; a PBC read then returns every sibling as its own `RpbContent`
+  and an HTTP read returns `300 Multiple Choices`. Without `allow_mult`
+  a concurrent write collapses to a single deterministic value (Riak's
+  default). CRDTs remain the recommended path when you want automatic
+  merge rather than client-side sibling resolution.
 * **All six CRDTs are served over the wire.** Counter, Set, Register,
   Flag, Map (recursive, composing the others), and HyperLogLog are all
   reachable via PBC / HTTP `DtUpdate` / `DtFetch`.

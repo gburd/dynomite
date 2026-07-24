@@ -73,6 +73,7 @@ pub mod ramp;
 pub mod ramp_store;
 pub mod server;
 pub mod txn;
+pub mod vclock;
 
 pub use crate::error::RiakError;
 pub use crate::proto::http::{serve_http, serve_http_tls};

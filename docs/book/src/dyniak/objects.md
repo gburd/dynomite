@@ -149,17 +149,14 @@ The properties that matter most day to day:
 * **`last_write_wins`** -- whether conflicts are resolved by timestamp.
 
 ```admonish warning title="Which bucket properties are enforced today"
-Only `n_val` currently changes behavior (it sets the replica count).
-The quorum knobs (`r`, `w`, `pr`, `pw`, `dw`) and the conflict-mode
-flags (`allow_mult`, `last_write_wins`) are accepted for API
-compatibility but are **not yet enforced** on the read/write path: a
-read returns as soon as it has a value rather than waiting for `r`
-responses, and concurrent conflicts collapse to a single value (see
-[Conflict resolution](#conflict-resolution-and-siblings)) regardless of
-`allow_mult`. The properties `GET` currently echoes Riak's documented
-defaults rather than the stored per-bucket values. Per-request and
-per-bucket quorum enforcement is tracked follow-up work. For
-concurrent-write correctness today, use a CRDT.
+`n_val` (the replica count), `allow_mult` (sibling retention), and `ttl`
+(object expiry, via the reaper) change behavior. The quorum knobs (`r`,
+`w`, `pr`, `pw`, `dw`) are accepted for API compatibility but are **not
+yet enforced** on the read/write path: a read returns as soon as it has
+a value rather than waiting for `r` responses. The PBC `GetBucket`
+reflects the stored per-bucket properties; the HTTP `/props` GET still
+echoes Riak's documented defaults. Per-request and per-bucket quorum
+enforcement is tracked follow-up work.
 ```
 
 Set properties with `PUT`:
@@ -240,22 +237,23 @@ or genuinely concurrent.
   conflicting values, ties broken by the encoded clock. The read
   returns that one value.
 
-```admonish warning title="Siblings are detected but not surfaced yet"
-Dyniak does not return sibling sets to the client. A concurrent
-conflict is detected and logged, but collapsed to one value by the
-lexicographic fallback, so the losing concurrent write is dropped.
-There is no `300 Multiple Choices` response and no sibling array on a
-PBC / HTTP read. `allow_mult` is accepted as a bucket property but does
-not yet change read behavior.
+```admonish note title="Siblings are retained under allow_mult"
+With `allow_mult` set on the bucket, two writes concurrent under the
+per-object causal context are BOTH retained as siblings -- no concurrent
+write is lost. A PBC read returns every sibling as its own
+`RpbContent`; an HTTP read returns `300 Multiple Choices`. The client
+resolves the siblings and writes the resolution back carrying the
+context the read returned (the causal join of the siblings), which
+supersedes them all.
 
-If two clients may write the same opaque key concurrently and you need
-*both* contributions to survive, do not rely on `allow_mult`. Model the
-value as a **convergent data type (CRDT)** instead -- a counter, set, or
-map merges concurrent writes automatically and correctly with no lost
-write, because the merge is defined by the type's algebra rather than
-by a timestamp or lexicographic race. See
-[Convergent Data Types](./crdts.md). Full sibling retention for opaque
-objects is tracked follow-up work.
+Without `allow_mult` (the default), a concurrent write collapses to a
+single deterministic value, so a concurrent write can be lost -- use
+`allow_mult`, or a CRDT, when that matters.
+
+When the merge of concurrent writes is well-defined by the data (a
+count, a set, a map), a **convergent data type (CRDT)** is still the
+better tool: it merges automatically with no client-side sibling
+resolution. See [Convergent Data Types](./crdts.md).
 ```
 
 ### With `last_write_wins: true`

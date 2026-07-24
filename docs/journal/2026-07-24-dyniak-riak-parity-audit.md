@@ -142,9 +142,10 @@ Now done this session:
 
 Near-term correctness parity (highest surprise for a Riak user):
 1. KV object quorum read + read repair on the PBC path (R/PR). M.
-2. Surface siblings on PBC/HTTP for `allow_mult` buckets. M. **Per-object
-   causal context DONE (get/put carry a vclock, concurrent writes
-   detected); sibling retention + multi-content read remain.**
+2. Surface siblings on PBC/HTTP for `allow_mult` buckets. M. **DONE:
+   per-object version-vector context; concurrent writes retained as
+   siblings under allow_mult; PBC multi-content read + HTTP 300 Multiple
+   Choices. Cross-replica causal read-repair remains.**
 3. TTL / object expiry via the reaper. M. **Reaper capability DONE
    (`object_ttl_seconds`) + `ttl` bucket property DONE (settable/readable
    over PBC, bridged to the reaper config); the runtime reaper

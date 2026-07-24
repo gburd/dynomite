@@ -637,14 +637,17 @@ async fn run_link_phase(
             // Missing object: no links, no error.
             continue;
         };
-        let obj =
-            crate::proto::http::object::HttpObject::from_storage_bytes(&stored).map_err(|e| {
+        let set =
+            crate::proto::http::object::SiblingSet::from_storage_bytes(&stored).map_err(|e| {
                 MrError::PhaseFailed {
                     phase: phase_idx,
                     kind: "link",
                     message: format!("decode {in_bucket}/{in_key}: {e}"),
                 }
             })?;
+        let Some(obj) = set.primary() else {
+            continue;
+        };
         for link in &obj.links {
             let bucket_ok = bucket.is_none_or(|b| b == link.bucket);
             let tag_ok = tag.is_none_or(|t| t == link.tag);

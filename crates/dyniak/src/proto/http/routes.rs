@@ -67,7 +67,7 @@ use dyn_encoding::WireValue;
 
 use crate::proto::http::content_type::{select_codec, SUPPORTED_CONTENT_TYPES};
 #[cfg(feature = "noxu")]
-use crate::proto::http::object::{object_codecs, HttpIndex, HttpLink, HttpObject};
+use crate::proto::http::object::{object_codecs, HttpIndex, HttpLink, HttpObject, SiblingSet};
 use crate::txn::{HttpTxnRequest, HttpTxnResponse, TransactionalStore, TxnOutcome, TxnStoreError};
 
 /// Body type the gateway emits.
@@ -1046,8 +1046,9 @@ fn get_object_from_store(
         Ok(None) => return text_response(StatusCode::NOT_FOUND, "not found"),
         Err(e) => return storage_error_response(&e),
     };
-    let obj = match HttpObject::from_storage_bytes(&stored) {
-        Ok(o) => o,
+    let set = match SiblingSet::from_storage_bytes(&stored) {
+        Ok(s) if !s.siblings.is_empty() => s,
+        Ok(_) => return text_response(StatusCode::NOT_FOUND, "not found"),
         Err(e) => {
             return text_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1055,6 +1056,38 @@ fn get_object_from_store(
             );
         }
     };
+    // The context returned to the client is the causal join of every
+    // sibling, so a resolving write supersedes them all.
+    let joined =
+        crate::server::join_object_contexts(set.siblings.iter().map(|o| o.context.as_slice()));
+    // More than one sibling means an unresolved concurrent conflict.
+    // Riak answers a sibling read with 300 Multiple Choices and a
+    // plain-text manifest of the sibling vtags; the client fetches or
+    // resolves them. (Per-sibling fetch by vtag is a follow-up; the
+    // 300 + vclock is enough for a client to resolve-and-write-back.)
+    if set.siblings.len() > 1 {
+        let mut manifest = String::from("Siblings:\n");
+        for (i, _) in set.siblings.iter().enumerate() {
+            use std::fmt::Write as _;
+            let _ = writeln!(manifest, "sibling-{i}");
+        }
+        let body = if head_only {
+            Bytes::new()
+        } else {
+            Bytes::from(manifest)
+        };
+        let mut builder = Response::builder()
+            .status(StatusCode::MULTIPLE_CHOICES)
+            .header(CONTENT_TYPE, "text/plain")
+            .header("Server", SERVER_NAME);
+        if !joined.is_empty() {
+            builder = builder.header("X-Riak-Vclock", hex_encode(&joined));
+        }
+        return builder
+            .body(buffered_body(body))
+            .expect("invariant: multiple-choices response builder is well-formed");
+    }
+    let obj = set.siblings.into_iter().next().expect("len == 1 checked");
     // `ct` came from `select_codec`, so it is always one of the
     // registered baseline content-types; the `else` arm is defensive.
     let Some(codec) = object_codecs().for_content_type(ct) else {
@@ -1084,8 +1117,8 @@ fn get_object_from_store(
     // Return the object's causal context so a read-modify-write client
     // can round-trip it on its next PUT. Encoded as hex (ASCII-safe, no
     // extra dependency); a client treats it opaquely.
-    if !obj.context.is_empty() {
-        builder = builder.header("X-Riak-Vclock", hex_encode(&obj.context));
+    if !joined.is_empty() {
+        builder = builder.header("X-Riak-Vclock", hex_encode(&joined));
     }
     for link in &obj.links {
         builder = builder.header(
@@ -1146,19 +1179,35 @@ async fn put_object_into_store(
     obj.indexes.extend(collect_index_headers(headers));
     obj.links.extend(collect_link_headers(headers));
 
-    // Advance the per-object causal context so an HTTP write tracks
-    // causality the same way the PBC path does: read the prior stored
-    // context, issue a fresh ITC event, and stamp it on the object.
-    // The context also surfaces to the client via the X-Riak-Vclock
-    // header on the response below.
-    let prior_context = store
+    // Sibling-aware causal write, mirroring the PBC path. The client's
+    // read context arrives in the `X-Riak-Vclock` request header
+    // (hex-encoded); advance a fresh context from it, then resolve
+    // against the stored sibling set. `allow_mult` from the bucket
+    // props decides whether a concurrent write is retained as a sibling
+    // or collapsed. The new context surfaces on the response via the
+    // `X-Riak-Vclock` header below.
+    let client_ctx = headers
+        .get("x-riak-vclock")
+        .and_then(|v| v.to_str().ok())
+        .and_then(hex_decode)
+        .unwrap_or_default();
+    let actor = ctx.hooks.as_ref().map_or_else(
+        || b"local".to_vec(),
+        |h| format!("{}:{}", h.local_actor.dc, h.local_actor.peer).into_bytes(),
+    );
+    obj.context = crate::server::advance_object_context(&client_ctx, &actor);
+    let stored_set = store
         .get_object(bucket.as_bytes(), key.as_bytes())
         .ok()
         .flatten()
-        .and_then(|b| HttpObject::from_storage_bytes(&b).ok())
-        .map(|o| o.context)
+        .and_then(|b| SiblingSet::from_storage_bytes(&b).ok())
         .unwrap_or_default();
-    obj.context = crate::server::advance_object_context(&prior_context);
+    let allow_mult = ctx.hooks.as_ref().is_some_and(|h| {
+        h.router
+            .registry()
+            .resolve(b"", bucket.as_bytes())
+            .effective_allow_mult()
+    });
 
     // Cross-node replica fan-out (fire-and-forget), mirroring the PBC
     // put path: route the key to its preference list and dispatch a
@@ -1189,7 +1238,8 @@ async fn put_object_into_store(
     }
 
     let indexes = obj.index_pairs();
-    let storage = obj.to_storage_bytes();
+    let resolved = crate::server::resolve_object_write(&stored_set, &obj, allow_mult);
+    let storage = resolved.to_storage_bytes();
     match store.put_object(bucket.as_bytes(), key.as_bytes(), &storage, &indexes) {
         Ok(()) => {
             // Feed any declared text / vector indexes for this bucket
@@ -1226,6 +1276,34 @@ fn hex_encode(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+/// Decode a lower/upper-case hex string back to bytes. Returns `None`
+/// on an odd length or a non-hex digit (a malformed client vclock is
+/// treated as an absent context rather than an error).
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let val = |c: u8| -> Option<u8> {
+        match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        }
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        let hi = val(bytes[i])?;
+        let lo = val(bytes[i + 1])?;
+        out.push((hi << 4) | lo);
+        i += 2;
+    }
+    Some(out)
 }
 
 fn collect_index_headers(headers: &HeaderMap) -> Vec<HttpIndex> {

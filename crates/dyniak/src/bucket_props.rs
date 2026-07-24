@@ -68,6 +68,11 @@ pub struct BucketProps {
     /// names no module (or names an unregistered one), so a
     /// `Some` here is always a module the keyfun store knows.
     pub custom_keyfun_module: Option<String>,
+    /// Whether the bucket keeps siblings on a concurrent write
+    /// (Riak's `allow_mult`). `None` means the default (`false`:
+    /// concurrent writes collapse to one value). `Some(true)` retains
+    /// concurrent siblings so a read can surface them.
+    pub allow_mult: Option<bool>,
     /// Object time-to-live in seconds (Riak's `ttl` bucket
     /// property). `None` or `Some(0)` means no expiry: live
     /// objects are never reaped by age. A non-zero value is
@@ -125,6 +130,13 @@ impl BucketProps {
     #[must_use]
     pub fn effective_ttl_seconds(&self) -> u64 {
         self.ttl_seconds.unwrap_or(0)
+    }
+
+    /// Resolve the effective `allow_mult`. Defaults to `false`
+    /// (concurrent writes collapse to a single value).
+    #[must_use]
+    pub fn effective_allow_mult(&self) -> bool {
+        self.allow_mult.unwrap_or(false)
     }
 
     /// Convenience: effective [`KeyFun`] using
@@ -250,6 +262,7 @@ impl BucketPropsRegistry {
             strategy: Some(inner.default_strategy),
             n_val: Some(inner.default_n_val),
             custom_keyfun_module: None,
+            allow_mult: None,
             ttl_seconds: None,
         }
     }
