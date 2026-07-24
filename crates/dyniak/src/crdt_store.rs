@@ -159,8 +159,10 @@ impl CrdtOp {
     /// Parse an op from [`CrdtOp::to_bytes`].
     ///
     /// # Errors
-    /// [`CrdtSerialError::Truncated`] on a short buffer,
-    /// [`CrdtSerialError::UnknownTag`] on an unknown type tag.
+    /// [`crate::datatypes::CrdtSerialError::Truncated`] on a short
+    /// buffer,
+    /// [`crate::datatypes::CrdtSerialError::UnknownTag`] on an unknown
+    /// type tag.
     pub fn from_bytes(buf: &[u8]) -> Result<Self, crate::datatypes::CrdtSerialError> {
         use crate::datatypes::CrdtSerialError;
         let mut r = OpReader { buf, pos: 0 };

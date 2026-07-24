@@ -190,7 +190,7 @@ pub async fn serve_http_with_wasm(
 /// Run the HTTP accept loop on `listener`, wiring both a search
 /// registry and a Wasm phase store into the gateway. A single
 /// `data_store: dyniak` pool can configure both surfaces at once,
-/// so this entry point carries both into one [`routes::RouteCtx`].
+/// so this entry point carries both into one internal route context.
 ///
 /// Available only when the crate is built with both the `search`
 /// and `wasm` Cargo features.

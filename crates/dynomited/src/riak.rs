@@ -749,7 +749,7 @@ impl PeerOutbound for PeerChannelOutbound {
 /// `(peer, token)` in the pool (skipping the local peer -- a write
 /// always lands locally, so the local node is never a forwarding
 /// target), a Riak-defaults [`dyniak::BucketPropsRegistry`], and a
-/// [`BucketRouter`] over the pool's [`HashType`]. The router's
+/// [`BucketRouter`] over the pool's hash type. The router's
 /// replica plan then drives a fan-out through a
 /// [`PeerChannelOutbound`] over `peer_txs`.
 ///

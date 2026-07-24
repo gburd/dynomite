@@ -114,7 +114,7 @@ pub enum WasmStoreError {
 /// bytes)` pairs; each entry is pre-compiled via
 /// [`Module::new`](wasmtime::Module::new). At run time the
 /// executor looks up modules by id, instantiates a fresh
-/// [`Store`](wasmtime::Store) per invocation, and dispatches to
+/// [`wasmtime::Store`] per invocation, and dispatches to
 /// `phase_apply`.
 ///
 /// One [`Engine`] is shared across all registered modules so

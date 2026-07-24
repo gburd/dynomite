@@ -13,6 +13,51 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.6.0] - 2026-07-24
+
+Minor release. Dyniak CRDT convergence across the replica set (write and
+read), a request/response peer plane for read coordination,
+server-assigned HTTP keys, and a documentation honesty pass aligning the
+Riak-compatibility claims with what the code enforces today. Backward
+compatible.
+
+### Added
+
+- `dyniak`: CRDT **read coordination**. A `DtFetch` to any node fans the
+  fetch to the key's replica set, merges the returned states, and
+  answers with the converged value, also writing the merged state back
+  locally (read repair for the coordinator). This closes the read half
+  of the owner-centric convergence gap: previously a fetch to a
+  non-owner returned partial or stale state. Built on a new
+  request/response peer seam (`ReplicaApplySink::apply_query`,
+  `PeerOutbound::request`, and a dnode `Res` write-back); on a
+  fire-and-forget transport it falls back to the local value with
+  anti-entropy as the backstop. Integration test plus a DST routing
+  model with a negative control.
+- `dyniak`: CRDT **write convergence across the replica set**. A write
+  applies locally (always available, no quorum wait) and fans the merged
+  full state to every replica of the key; each merges idempotently
+  (element-wise max), so a re-delivered or reordered state cannot
+  double-count and every replica converges. Validated at scale: a
+  multi-region chaos run (6 nodes, real NVMe, 200 keys, 12370 ops, two
+  partitions and two node churns) reported zero lost updates and zero
+  over-counts with always-available writes and bounded p99.
+- `dyniak`: **server-assigned keys**. `POST /buckets/{b}/keys` (no key)
+  stores the object under a generated key and replies `201 Created` with
+  a `Location` header, matching Riak's HTTP behavior.
+
+### Changed
+
+- Documentation honesty pass on the Dyniak-vs-Riak surface: bucket
+  quorum properties (`r`/`w`/`pr`/`pw`/`dw`) are accepted for API
+  compatibility but only `n_val` is enforced; concurrent conflicts are
+  detected but resolved to a single value (siblings are not surfaced,
+  `allow_mult` does not change read behavior); only Counter and Set
+  CRDTs are served over the wire (Register/Flag/Map/HyperLogLog exist
+  in-crate, not yet wired); the `ttl` bucket property is not enforced.
+  The README Status section and the mdBook Dyniak chapters now state
+  these plainly. See `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`.
+
 ## [1.5.0] - 2026-07-23
 
 Minor release. Served, convergent Dyniak CRDTs; a review-driven
