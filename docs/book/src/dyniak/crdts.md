@@ -233,8 +233,23 @@ was lost and no coordination was needed.</p>
 
 The exchange that carries CRDT state between replicas is the same
 anti-entropy machinery described in
-[Anti-Entropy and Repair](./aae.md); read repair on a quorum read also
-merges divergent replicas before answering.
+[Anti-Entropy and Repair](./aae.md).
+
+```admonish note title="Implementation status: write vs read convergence"
+A write applies to the coordinating node and fans the merged state to
+the key's replica set, where each replica merges it idempotently
+(element-wise max), so **every replica converges** and no update is lost
+or double-counted. This is validated at scale under partitions and node
+churn: a multi-region chaos run reports zero lost updates and zero
+over-counts.
+
+Reads currently target a replica (a topology-aware client routes to
+nodes that hold the key); a fetch to a *non-replica* reads local state
+only. Fanning a fetch across the replica set and merging the responses
+before answering -- read coordination -- needs a request/response peer
+plane and is tracked as follow-up work. Until then, anti-entropy is the
+convergence backstop between replicas.
+```
 
 ## Choosing a type
 
