@@ -110,21 +110,38 @@ impl ReplicaApplier {
             PeerOp::DtUpdate {
                 bucket, key, op, ..
             } => {
-                // `op` carries the coordinator's merged CRDT STATE (not
-                // a delta). Merge it into the local stored state.
-                // Idempotent and commutative: a re-delivered or
-                // reordered state cannot double-count -- merging a
-                // state twice is a no-op (element-wise max).
+                // `op` is discriminated: a leading byte marks whether
+                // the payload is a CRDT STATE (merge idempotently) or a
+                // CRDT OP (apply/accumulate once). A replica fan ships
+                // state; a coordinator forward ships an op.
                 let store =
                     crate::crdt_store::CrdtStore::new(std::sync::Arc::clone(&self.datastore));
-                if let Err(e) = store.merge_state(&bucket, &key, &op).await {
+                let res = match op.split_first() {
+                    Some((&crate::crdt_store::DT_WIRE_STATE, body)) => {
+                        store.merge_state(&bucket, &key, body).await
+                    }
+                    Some((&crate::crdt_store::DT_WIRE_OP, body)) => {
+                        match crate::crdt_store::CrdtOp::from_bytes(body) {
+                            Ok(parsed) => store.apply(&bucket, &key, &parsed).await.map(|_| ()),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "riak replica: undecodable dt op");
+                                return;
+                            }
+                        }
+                    }
+                    _ => {
+                        // Legacy / untagged payload: treat as state.
+                        store.merge_state(&bucket, &key, &op).await
+                    }
+                };
+                if let Err(e) = res {
                     if !matches!(
                         e,
                         crate::crdt_store::CrdtStoreError::Datastore(DatastoreError::Unsupported(
                             _
                         ))
                     ) {
-                        tracing::warn!(error = %e, "riak replica: local dt merge failed");
+                        tracing::warn!(error = %e, "riak replica: local dt apply/merge failed");
                     }
                 }
             }

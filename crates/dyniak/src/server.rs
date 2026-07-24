@@ -898,22 +898,31 @@ async fn handle_dt_update(
             "riak dt_update: unsupported or empty op (counter/set only)".into(),
         ));
     };
-    // Apply locally FIRST so we have the merged post-state to ship.
-    // Local apply is the source of availability -- it never waits on a
-    // replica or a quorum, so a single-key CRDT update succeeds during
-    // a partition or ring change.
+    // A CRDT write always applies to the coordinator's LOCAL store
+    // first: this accumulates THIS node's actor contribution (each node
+    // has a distinct actor id, so per-actor counter columns sum rather
+    // than overwrite on merge), and never waits on a quorum -- so the
+    // write is always-available during partitions and ring changes. The
+    // resulting merged full state is then fanned to every replica of
+    // the key; each replica merges it idempotently (element-wise max),
+    // so a re-delivered or reordered state cannot double-count. Because
+    // the fan carries full state (not a delta), every replica that
+    // receives it converges, and anti-entropy fills any replica a
+    // fire-and-forget fan missed.
     let (value, state_bytes) =
         match CrdtStore::apply_borrowed_with_state(datastore, &req.bucket, &key, &op).await {
-            Ok(v) => v,
+            Ok(r) => r,
             Err(e) => return Ok(error_frame(format!("riak dt_update: {e}"))),
         };
-    // Ship the merged STATE (not the delta op) to replicas so replica
-    // apply is an idempotent state merge: a re-delivered or reordered
-    // update cannot double-count (merging a state twice is a no-op).
     if let Some(hooks) = hooks {
         let bucket_type = req.r#type.as_slice();
         if let Ok(decision) = hooks.router.try_route(bucket_type, &req.bucket, &key) {
+            let wire = crate::crdt_store::to_state_wire(&state_bytes);
             for replica in decision.replica_list() {
+                // Skip a fan to ourselves; we already applied locally.
+                if replica.peer_idx == hooks.local_peer_idx {
+                    continue;
+                }
                 hooks
                     .outbound
                     .dispatch(
@@ -922,7 +931,7 @@ async fn handle_dt_update(
                             bucket_type: decision.bucket_type.clone(),
                             bucket: req.bucket.clone(),
                             key: key.clone(),
-                            op: state_bytes.clone(),
+                            op: wire.clone(),
                         },
                     )
                     .await;

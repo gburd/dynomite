@@ -214,7 +214,7 @@ async fn replicated_op_converges_and_is_idempotent() {
             bucket_type: b"counters".to_vec(),
             bucket: b"chaos".to_vec(),
             key: b"c".to_vec(),
-            op: state.to_vec(),
+            op: dyniak::crdt_store::to_state_wire(state),
         })
     };
     applier_b.apply(&wire(&state_after_both)).await;

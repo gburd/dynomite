@@ -30,6 +30,22 @@ use crate::datatypes::{
 };
 use dynomite::embed::hooks::{Datastore, DatastoreError};
 
+/// Replica-apply wire discriminator: the payload is a serialized CRDT
+/// STATE to be merged idempotently (element-wise max).
+pub const DT_WIRE_STATE: u8 = 0;
+/// Replica-apply wire discriminator: the payload is a serialized CRDT
+/// OP to be applied (accumulated) once by the receiving replica.
+pub const DT_WIRE_OP: u8 = 1;
+
+/// Wrap a serialized CRDT state for the replica-apply wire (merge path).
+#[must_use]
+pub fn to_state_wire(state_bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(state_bytes.len() + 1);
+    out.push(DT_WIRE_STATE);
+    out.extend_from_slice(state_bytes);
+    out
+}
+
 /// A CRDT operation to apply to a key, carrying the originating
 /// actor so each node's contribution is attributed distinctly (the
 /// per-actor G-Counter columns are what let concurrent increments sum
@@ -61,6 +77,50 @@ impl CrdtOp {
         match self {
             CrdtOp::Counter { .. } => TAG_COUNTER,
             CrdtOp::Set { .. } => TAG_SET,
+        }
+    }
+
+    /// Wire form for FORWARDING this op to the primary replica so it
+    /// APPLIES (accumulates) the op. A leading discriminator byte marks
+    /// op-vs-state so the replica-apply path knows whether to accumulate
+    /// (op) or merge idempotently (state).
+    #[must_use]
+    pub fn to_op_wire(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(48);
+        out.push(DT_WIRE_OP);
+        out.extend_from_slice(&self.to_bytes());
+        out
+    }
+
+    /// Build the serialized single-contribution CRDT STATE for this op
+    /// (the op applied to an empty CRDT), suitable for shipping to a
+    /// replica that will merge it. Because merge is idempotent
+    /// (element-wise max), a replica can merge this state any number of
+    /// times, in any order, and converge -- so the coordinator can fan
+    /// the same state to every replica whether or not it is itself a
+    /// replica, and no single node needs to hold the authoritative base.
+    #[must_use]
+    pub fn to_state_bytes(&self) -> Vec<u8> {
+        match self {
+            CrdtOp::Counter { actor, delta } => {
+                let mut c = PnCounter::new();
+                c.apply(actor, *delta);
+                counter_to_bytes(&c)
+            }
+            CrdtOp::Set {
+                actor,
+                adds,
+                removes,
+            } => {
+                let mut s = OrSet::new();
+                for e in adds {
+                    s.add(actor, e.clone());
+                }
+                for e in removes {
+                    s.remove(e);
+                }
+                set_to_bytes(&s)
+            }
         }
     }
 
@@ -195,6 +255,28 @@ pub enum CrdtValue {
     Set(Vec<Vec<u8>>),
     /// The key does not exist yet.
     Missing,
+}
+
+/// Project a serialized CRDT state to its value without a datastore.
+///
+/// Used to report the value of a just-computed contribution when the
+/// coordinating node is not itself a replica of the key (so it has no
+/// local stored state to read). `tag` selects the projection.
+///
+/// # Errors
+/// [`crate::datatypes::CrdtSerialError`] on a corrupt blob or a tag
+/// that does not match the requested projection.
+pub fn project_state(
+    state: &[u8],
+    tag: u8,
+) -> Result<CrdtValue, crate::datatypes::CrdtSerialError> {
+    match tag {
+        TAG_COUNTER => Ok(CrdtValue::Counter(counter_from_bytes(state)?.value())),
+        TAG_SET => Ok(CrdtValue::Set(
+            set_from_bytes(state)?.value().into_iter().collect(),
+        )),
+        other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other)),
+    }
 }
 
 /// Error applying or fetching a CRDT.
@@ -413,10 +495,25 @@ impl CrdtStore {
         key: &[u8],
         state: &[u8],
     ) -> Result<(), CrdtStoreError> {
+        Self::merge_state_borrowed(self.datastore.as_ref(), bucket, key, state).await
+    }
+
+    /// Merge a serialized CRDT state into `(bucket, key)` against a
+    /// borrowed datastore (no per-key lock). The datastore's own
+    /// per-key write atomicity orders concurrent local merges; a rare
+    /// read-then-write interleaving self-corrects because merge is
+    /// idempotent and commutative.
+    ///
+    /// # Errors
+    /// As [`CrdtStore::merge_state`].
+    pub async fn merge_state_borrowed(
+        datastore: &dyn Datastore,
+        bucket: &[u8],
+        key: &[u8],
+        state: &[u8],
+    ) -> Result<(), CrdtStoreError> {
         let tag = peek_tag(state)?;
-        let lock = self.key_lock(bucket, key);
-        let _guard = lock.lock().await;
-        let current = self.datastore.riak_get(bucket, key).await?;
+        let current = datastore.riak_get(bucket, key).await?;
         let merged = match tag {
             TAG_COUNTER => {
                 let mut c = match &current {
@@ -436,7 +533,7 @@ impl CrdtStore {
             }
             other => return Err(crate::datatypes::CrdtSerialError::UnknownTag(other).into()),
         };
-        self.datastore.riak_put(bucket, key, &merged, &[]).await?;
+        datastore.riak_put(bucket, key, &merged, &[]).await?;
         Ok(())
     }
 

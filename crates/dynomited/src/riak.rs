@@ -765,6 +765,7 @@ pub fn build_routing_hooks(
 ) -> RoutingHooks {
     let mut points: Vec<RingPoint> = Vec::new();
     let mut local_actor = dyniak::datatypes::ActorId::new("local", "local");
+    let mut local_peer_idx = 0u32;
     for peer in pool.peers().read().iter() {
         let idx = peer.idx();
         let dc = peer.dc();
@@ -775,6 +776,7 @@ pub fn build_routing_hooks(
             // distinct actor is what lets concurrent increments on
             // partitioned replicas sum on merge instead of overwrite.
             local_actor = dyniak::datatypes::ActorId::new(dc.to_string(), peer.endpoint().pname());
+            local_peer_idx = idx;
         }
         for token in peer.tokens() {
             points.push(RingPoint::new(u64::from(token.get_int()), idx, dc, rack));
@@ -792,6 +794,7 @@ pub fn build_routing_hooks(
         router,
         outbound,
         local_actor,
+        local_peer_idx,
     }
 }
 

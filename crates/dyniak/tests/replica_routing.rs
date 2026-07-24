@@ -291,6 +291,7 @@ async fn http_put_fans_out_to_replicas() {
         router,
         outbound: outbound.clone(),
         local_actor: dyniak::datatypes::ActorId::new("dc1", "local"),
+        local_peer_idx: 0,
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

@@ -396,6 +396,12 @@ pub struct RoutingHooks {
     /// to this actor, so per-actor counter columns sum correctly
     /// across replicas instead of overwriting.
     pub local_actor: crate::datatypes::ActorId,
+    /// This node's peer index in the pool. Used to decide whether the
+    /// coordinating node is itself a replica of a key: a CRDT write is
+    /// applied locally only when this node is in the key's replica set,
+    /// and is fanned to the OTHER replicas -- so data lands on replicas,
+    /// not on whichever node the client happened to reach.
+    pub local_peer_idx: u32,
 }
 
 #[cfg(test)]

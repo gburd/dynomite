@@ -179,6 +179,7 @@ impl Harness {
             router,
             outbound: outbound as Arc<dyn PeerOutbound>,
             local_actor: dyniak::datatypes::ActorId::new("dc1", "local"),
+            local_peer_idx: 0,
         };
 
         let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
