@@ -266,10 +266,12 @@ Riak DVV need to switch decoders; the byte shape is documented
 as a deviation under `docs/parity.md` D4 and the "Causality
 clock divergence" ambiguity entry.
 
-Operator-visible behaviour is unchanged from a typical client's
-perspective: the same `R / W` quorum semantics, the same
-sibling presentation, the same `return_body` shape on
-`DtUpdateResp`.
+Operator-visible behaviour from a typical client's perspective:
+the context blob round-trips verbatim and the `return_body`
+shape on `DtUpdateResp` matches. Note the caveats above: the
+`R` / `W` quorum knobs are accepted but not yet enforced, and
+concurrent conflicts resolve to a single value rather than a
+surfaced sibling set.
 
 References:
 

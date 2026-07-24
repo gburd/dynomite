@@ -139,19 +139,28 @@ curl -s http://127.0.0.1:8098/buckets/users/props
 The properties that matter most day to day:
 
 * **`n_val`** -- the replication factor: how many copies of each object
-  the ring keeps. The default is 3.
-* **`r` / `w`** -- the default read and write quorums for the bucket, in
-  the absence of a per-request override. `"quorum"` means a majority of
-  `n_val`.
-* **`pr` / `pw`** -- primary-replica read and write quorums: how many of
-  the responding replicas must be *primary* owners (not fallback nodes
-  holding a hinted-handoff copy).
-* **`dw`** -- durable-write quorum: how many replicas must have
-  committed the write durably.
-* **`allow_mult`** -- whether the bucket keeps siblings on a conflict
-  (below).
-* **`last_write_wins`** -- whether conflicts are resolved by timestamp
-  rather than by keeping siblings.
+  the ring keeps. The default is 3. This one is honored: the router
+  places each key on `n_val` replicas.
+* **`r` / `w`** -- read and write quorums. `"quorum"` means a majority
+  of `n_val`.
+* **`pr` / `pw`** -- primary-replica read and write quorums.
+* **`dw`** -- durable-write quorum.
+* **`allow_mult`** -- whether the bucket keeps siblings on a conflict.
+* **`last_write_wins`** -- whether conflicts are resolved by timestamp.
+
+```admonish warning title="Which bucket properties are enforced today"
+Only `n_val` currently changes behavior (it sets the replica count).
+The quorum knobs (`r`, `w`, `pr`, `pw`, `dw`) and the conflict-mode
+flags (`allow_mult`, `last_write_wins`) are accepted for API
+compatibility but are **not yet enforced** on the read/write path: a
+read returns as soon as it has a value rather than waiting for `r`
+responses, and concurrent conflicts collapse to a single value (see
+[Conflict resolution](#conflict-resolution-and-siblings)) regardless of
+`allow_mult`. The properties `GET` currently echoes Riak's documented
+defaults rather than the stored per-bucket values. Per-request and
+per-bucket quorum enforcement is tracked follow-up work. For
+concurrent-write correctness today, use a CRDT.
+```
 
 Set properties with `PUT`:
 
@@ -211,84 +220,90 @@ are not. The rationale and citations are in
 [Riak mode ops](../operations/riak.md#causality-tracking).
 ```
 
-## Siblings and conflict resolution
+## Conflict resolution and siblings
 
 Here is the heart of the Dynamo model. Because Dyniak is masterless and
 eventually consistent, two clients can write the same key at the same
-time without either seeing the other. What happens next depends on the
-bucket's properties.
+time without either seeing the other. Dyniak tracks causality with an
+interval tree clock (ITC) carried as the object context, so it can tell
+whether two writes are causally ordered (one descends from the other)
+or genuinely concurrent.
 
-### With `allow_mult: true` (recommended)
+### How a conflict is resolved today
 
-The two concurrent writes are *both* kept as *siblings*. A later read of
-the key surfaces both values and the client resolves them:
+* **Causally ordered writes**: the later write descends from the
+  earlier context and simply supersedes it. No conflict.
+* **Concurrent writes** (both descend from the same context, neither
+  saw the other): Dyniak *detects* the conflict via the ITC comparison
+  and emits a `dyniak::aae::repair` warning, then resolves it to a
+  single deterministic value -- the lexicographically-largest of the
+  conflicting values, ties broken by the encoded clock. The read
+  returns that one value.
 
-```mermaid
-flowchart TB
-  W1[client 1 PUT value=A ctx v0] --> N1(node)
-  W2[client 2 PUT value=B ctx v0] --> N1
-  N1 --> S{concurrent?<br/>both saw v0}
-  S -->|yes| SIB[store both:<br/>siblings A and B]
-  SIB --> R[next GET returns A and B]
-  R --> RES[client merges to C, writes back with the combined context]
-  RES --> DONE[single value C]
+```admonish warning title="Siblings are detected but not surfaced yet"
+Dyniak does not return sibling sets to the client. A concurrent
+conflict is detected and logged, but collapsed to one value by the
+lexicographic fallback, so the losing concurrent write is dropped.
+There is no `300 Multiple Choices` response and no sibling array on a
+PBC / HTTP read. `allow_mult` is accepted as a bucket property but does
+not yet change read behavior.
+
+If two clients may write the same opaque key concurrently and you need
+*both* contributions to survive, do not rely on `allow_mult`. Model the
+value as a **convergent data type (CRDT)** instead -- a counter, set, or
+map merges concurrent writes automatically and correctly with no lost
+write, because the merge is defined by the type's algebra rather than
+by a timestamp or lexicographic race. See
+[Convergent Data Types](./crdts.md). Full sibling retention for opaque
+objects is tracked follow-up work.
 ```
-<p class="dyn-caption">Concurrent writes that both descend from the same
-context become siblings. The next reader sees both, resolves them into
-one value, and writes the resolution back. Siblings are a feature: they
-never silently drop a write.</p>
-
-Over HTTP a sibling read is signalled by a `300 Multiple Choices`
-status; the client fetches each sibling and resolves. This is the
-safe default because it never loses a write.
 
 ### With `last_write_wins: true`
 
-The store keeps only the write with the higher timestamp and silently
-discards the other. This is simpler for clients -- no sibling handling
--- but it can lose a concurrent write. Use it only when the value is
-disposable or the write rate makes conflicts vanishingly rare.
+The store keeps only the write with the higher timestamp and discards
+the other -- an explicit, documented last-write-wins policy. Use it
+when the value is disposable or the write rate makes conflicts
+vanishingly rare. (In practice the lexicographic fallback above already
+collapses concurrent opaque writes to one value; `last_write_wins`
+makes that intent explicit at the bucket level.)
 
 ```admonish note title="Road not taken: CRDTs over last-write-wins-only"
-Dyniak keeps both `last_write_wins` and sibling-based resolution, but it
-also ships convergent data types (CRDTs) as a third, better option for
-the common cases -- counters, sets, maps. A CRDT merges concurrent
-writes *automatically and correctly* with no sibling handling and no
-lost write, because the merge is defined by the data type's algebra
-rather than by a timestamp race. If your value is a count, a set, or a
-map, reach for a CRDT before you reach for last-write-wins. See
-[Convergent Data Types](./crdts.md) and
+Dyniak ships convergent data types (CRDTs) as the recommended option
+for the common concurrent-write cases -- counters, sets, maps. A CRDT
+merges concurrent writes *automatically and correctly* with no lost
+write, because the merge is defined by the data type's algebra rather
+than by a timestamp or lexicographic race. If your value is a count, a
+set, or a map, reach for a CRDT before you reach for an opaque object.
+See [Convergent Data Types](./crdts.md) and
 [Roads Not Taken](../reference/roads-not-taken.md).
 ```
 
 ## A worked read-modify-write
 
-Putting the pieces together, the canonical safe update loop is:
+Putting the pieces together, the canonical update loop reads (carrying
+the causal context), modifies, and writes back:
 
 ```python
 import riak
 
 client = riak.RiakClient(host='127.0.0.1', pb_port=8087)
 bucket = client.bucket('users')
-bucket.set_property('allow_mult', True)
 
 # fetch (carries the causal context)
 obj = bucket.get('alice')
 
-if len(obj.siblings) > 1:
-    # resolve the conflict: application-specific merge
-    merged = resolve(obj.siblings)
-    obj.data = merged
-else:
-    obj.data = update(obj.data)
-
-# store echoes the context automatically through the client library
+# modify; the client library echoes the context back on store, so a
+# write that descends from this read supersedes it cleanly.
+obj.data = update(obj.data)
 obj.store()
 ```
 
-The client library carries the context for you; the only judgement call
-is `resolve()`, and even that disappears if you model the value as a
-CRDT. That is the subject of the next chapter.
+The client library carries the context for you. A write that descends
+from the read supersedes it; two writes that both descend from the same
+context are concurrent, and -- as described above -- Dyniak currently
+resolves them to a single deterministic value rather than surfacing
+siblings. If losing one of two concurrent writes to the same key is not
+acceptable, model the value as a CRDT, the subject of the next chapter.
 
 ## Where to next
 

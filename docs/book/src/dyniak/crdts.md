@@ -72,8 +72,9 @@ assert!(a < b);   // lexicographic on (dc, peer)
 
 ## The six types
 
-Dyniak ships the same six data types Riak did. Four are primitive; the
-map composes them; the HyperLogLog is a cardinality estimator.
+Dyniak defines the same six data types Riak did. Four are primitive; the
+map composes them; the HyperLogLog is a cardinality estimator. (See the
+wire-reachability note below for which are served over the wire today.)
 
 ```mermaid
 flowchart TB
@@ -92,6 +93,17 @@ flowchart TB
 <p class="dyn-caption">The six Dyniak CRDTs. A Map field may hold any
 primitive type or, recursively, another Map -- the same composition
 Riak's riak_dt_map offers.</p>
+
+```admonish warning title="Wire reachability: Counter and Set today"
+All six types exist as first-class, tested Rust APIs (the examples in
+this chapter are doctests). Over the Dyniak PBC / HTTP wire, however,
+only **Counter** and **Set** are currently served: a `DtUpdate` /
+`DtFetch` for the `counters` or `sets` bucket type is handled, and the
+read coordinates and merges across the replica set. Register, Flag, Map,
+and HyperLogLog are implemented in the crate but not yet wired to the
+wire handlers; sending one over PBC / HTTP is not yet served. Wiring the
+remaining four is tracked follow-up work.
+```
 
 ### Counter
 

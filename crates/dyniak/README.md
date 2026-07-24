@@ -51,15 +51,19 @@ that is the audience for dyniak.
   `/types/<bucket-type>/buckets/<bucket>/keys/<key>` for typed
   buckets, the `/mapred` MapReduce endpoint, and `/buckets/<bucket>/index/<idx>/...`
   for secondary index queries.
-* **CRDTs**: the same six data types Riak ships -- Counter, Set,
-  Register, Flag, Map, HyperLogLog -- with the same merge semantics.
-  See `crates/dyniak/src/datatypes/`.
-* **Per-request quorums**: `R`, `W`, `PR`, `PW`, `DW`, `RW` headers
-  are honoured the same way Riak honours them.
-* **Sibling-aware conflict resolution**: writes that race produce
-  siblings; reads with `notfound_ok=false` and `basic_quorum=true`
-  surface them. The DVV (dotted version vector) encoding matches
-  Riak's vclock semantics.
+* **CRDTs**: convergent data types on the Riak model. Counter and Set
+  are served over the wire today; Register, Flag, Map, and HyperLogLog
+  are implemented in-crate and tracked to be wired next. See
+  `crates/dyniak/src/datatypes/`.
+* **Per-request quorums**: `R`, `W`, `PR`, `PW`, `DW`, `RW` are accepted
+  for API compatibility. Only `n_val` (the replica count) is enforced
+  today; the quorum knobs are not yet applied on the read/write path.
+* **Conflict resolution**: writes that race are detected via the causal
+  context and resolved to a single deterministic value. Sibling sets
+  are not yet surfaced to clients (no `300 Multiple Choices`), and
+  `allow_mult` does not yet change read behavior; for concurrent-write
+  correctness use a CRDT. Causality is tracked with an interval tree
+  clock (ITC), not a Riak DVV (a documented deviation).
 * **Active anti-entropy**: dyniak's AAE exchange protocol is
   modelled on Riak's `riak_kv_index_hashtree` (the TicTac-style
   segmented merkle tree at `crates/hashtree/`).
@@ -67,9 +71,9 @@ that is the audience for dyniak.
 * **MapReduce**: a JSON pipeline driven by the same
   `inputs / query / timeout` envelope; built-in phases match the
   Erlang module names where possible (`riak_kv_mapreduce`).
-* **Bucket types**: declared, not auto-created; properties (n_val,
-  consistency, datatype, allow_mult, last_write_wins) honoured
-  per Riak semantics.
+* **Bucket types**: declared, not auto-created. `n_val` is honored;
+  the remaining properties (quorum knobs, `allow_mult`,
+  `last_write_wins`) are accepted but not yet enforced.
 
 ## How dyniak differs from Riak
 
@@ -142,8 +146,8 @@ listeners. Operators who want process isolation can run separate
   `dynomite::embed::Datastore`, writes framed responses.
 * HTTP gateway (axum-based) for the `/buckets/...`, `/types/...`,
   `/mapred`, and `/buckets/<bucket>/index/...` paths.
-* Six CRDT types: Counter, Set, Register, Flag, Map, HyperLogLog,
-  with sibling-aware merge.
+* CRDT types: Counter and Set served over the wire; Register, Flag,
+  Map, and HyperLogLog implemented in-crate, tracked to be wired next.
 * MapReduce pipeline: 9 built-in phases + Wasm-hosted user phases
   (gated under `--features wasm`).
 * Tictac-style AAE (segmented merkle tree, persisted across

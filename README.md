@@ -111,6 +111,33 @@ Scope and non-goals worth stating up front:
   The supported migration story is whole-cluster replacement, not
   rolling node-by-node replacement of a running C cluster.
 
+Riak-compatibility (`dyniak`) gaps worth knowing before you rely on
+them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
+
+* **Bucket quorum properties are not yet enforced.** `n_val` (the
+  replica count) is honored, but `r` / `w` / `pr` / `pw` / `dw` are
+  accepted for API compatibility and not yet applied on the read/write
+  path (a read returns as soon as it has a value rather than waiting for
+  `r` responses). The bucket-properties `GET` currently echoes Riak's
+  documented defaults rather than the stored per-bucket values.
+* **Siblings are detected but not surfaced.** Concurrent conflicts on an
+  opaque object are detected via the causal context and resolved to a
+  single deterministic value (lexicographic fallback); Dyniak does not
+  return a sibling set or a `300 Multiple Choices`, and `allow_mult`
+  does not yet change read behavior. For concurrent-write correctness,
+  use a CRDT (whose merge never drops a write).
+* **CRDTs over the wire: Counter and Set today.** All types exist as
+  in-crate APIs; only counter and set are served over PBC / HTTP.
+  Register, Flag, Map, and HyperLogLog are implemented but not yet wired
+  to the wire handlers.
+* **Object TTL / auto-expiry is not implemented.** The `ttl` bucket
+  property is not enforced; live objects are not auto-expired. (The
+  tombstone reaper, which reaps deleted-object markers after an age,
+  does work.)
+* **Read repair on the opaque-object read path is partial.** CRDT reads
+  coordinate and merge across the replica set; opaque-object reads do
+  not yet perform Riak-style quorum read-repair on the PBC path.
+
 See `PLAN.md` for the staged roadmap, `docs/parity.md` for the live
 C-to-Rust mapping (including intentional deviations and ambiguities),
 and `AGENTS.md` for the contributor operating manual.

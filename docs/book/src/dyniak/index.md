@@ -46,8 +46,10 @@ same Riak client libraries connect unmodified.</dd>
 indexes, links, and causal context. See
 <a href="./objects.md">Buckets, Keys, and Objects</a>.</dd>
 <dt>Convergent data types</dt>
-<dd>The same six CRDTs Riak shipped -- Counter, Set, Register, Flag,
-Map, and HyperLogLog -- with sibling-aware merge. See
+<dd>Convergent data types (CRDTs) that merge concurrent writes
+automatically. Counter and Set are reachable over the wire today;
+Register, Flag, Map, and HyperLogLog exist in the codebase and are
+tracked to be wired next. See
 <a href="./crdts.md">Convergent Data Types</a>.</dd>
 <dt>Transactions</dt>
 <dd>Cross-node multi-key atomic updates over two-phase commit, plus a
@@ -75,12 +77,17 @@ What is compatible:
 * The PBC operation set (Ping, ServerInfo, Get, Put, Del, GetBucket,
   SetBucket, ListBuckets, ListKeys, Index, MapRed) and the HTTP route
   shapes.
-* Per-request quorum semantics: `R`, `W`, `PR`, `PW`, `DW`, `RW`.
-* Sibling-aware conflict resolution: racing writes produce siblings; a
-  read surfaces them and the client resolves.
+* Per-request quorum fields (`R`, `W`, `PR`, `PW`, `DW`, `RW`) are
+  accepted on the wire for compatibility but not yet enforced (see the
+  status note below).
+* Conflict handling: racing writes are detected via the causal context
+  and resolved to a single value; sibling sets are not yet surfaced to
+  clients (use a CRDT for concurrent-write correctness).
 * Bucket properties (`n_val`, `allow_mult`, `last_write_wins`, and the
-  rest) declared, not auto-created, per Riak semantics.
-* CRDT merge semantics for all six data types.
+  rest) declared, not auto-created, per Riak semantics. Only `n_val`
+  currently changes behavior.
+* CRDT merge semantics for the implemented data types (counter, set,
+  register, flag; map and HyperLogLog are tracked follow-up).
 
 Where the byte shape differs:
 
