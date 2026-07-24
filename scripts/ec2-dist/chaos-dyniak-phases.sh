@@ -218,28 +218,54 @@ dyn_o_mite:
   listen: 0.0.0.0:8102
   data_store: 2
   noxu_path: /mnt/data/noxu
-  pbc_listen: 0.0.0.0:8087
-  http_listen: 0.0.0.0:8098
   stats_listen: 0.0.0.0:22222
+  servers:
+  - 127.0.0.1:6379:1
+
+  riak:
+    pbc_listen: 0.0.0.0:8087
+    http_listen: 0.0.0.0:8098
   tokens: '0'
   dyn_seeds:
 ${myseeds}
 YML
     nscp "$STATE_DIR/conf-${pub}.yml" "$pub" '~/dyniak.yml'
-    nsh "$pub" "sudo pkill -9 -x dynomited 2>/dev/null; sleep 1; \
+    nsh "$pub" "sudo pkill -9 -x dynomited 2>/dev/null; \
+      for _i in \$(seq 1 15); do pgrep -x dynomited >/dev/null || break; sudo pkill -9 -x dynomited; sleep 1; done; \
+      for _i in \$(seq 1 20); do sudo ss -tln | grep -qE ':8101|:8102|:8087|:22222' || break; sleep 1; done; \
       DYN_ADVERTISE_ADDR=${pub} nohup ~/dynomited -c ~/dyniak.yml > ~/dynomited.log 2>&1 </dev/null & \
-      sleep 2; echo started" >/dev/null 2>&1
+      for _i in \$(seq 1 20); do ss -tln | grep -q :8087 && break; sleep 1; done; echo started" >/dev/null 2>&1
     log "launched dyniak on $region/$pub"
   done < "$STATE"
   # Give gossip + PBC listeners time to come up, then verify PBC is
-  # reachable on every node.
-  sleep 30
+  # reachable on every node, retrying a clean restart on any node whose
+  # PBC did not bind (a near-simultaneous restart of all nodes can race
+  # a peer's reconnect to a dying socket and hit EADDRINUSE; an isolated
+  # clean restart -- kill, poll ports free, launch, poll bound --
+  # succeeds).
+  sleep 20
+  local region dc rack node arch itype iid pub priv
+  while read -r region dc rack node arch itype iid pub priv; do
+    local attempt
+    for attempt in 1 2 3 4; do
+      if nsh "$pub" 'ss -tln | grep -q :8087 && echo up' 2>/dev/null | grep -q up; then
+        break
+      fi
+      log "retry dyniak restart on $region/$pub (attempt $attempt)"
+      nsh "$pub" "sudo pkill -9 -x dynomited 2>/dev/null; \
+        for _i in \$(seq 1 20); do pgrep -x dynomited >/dev/null || break; sudo pkill -9 -x dynomited; sleep 1; done; \
+        for _i in \$(seq 1 25); do sudo ss -tln | grep -qE ':8101|:8102|:8087|:22222' || break; sleep 1; done; \
+        DYN_ADVERTISE_ADDR=${pub} nohup ~/dynomited -c ~/dyniak.yml > ~/dynomited.log 2>&1 </dev/null & \
+        for _i in \$(seq 1 25); do ss -tln | grep -q :8087 && break; sleep 1; done" >/dev/null 2>&1
+    done
+  done < "$STATE"
+  # Final count.
   local up=0
   while read -r region dc rack node arch itype iid pub priv; do
     if nsh "$pub" 'ss -tln | grep -q :8087 && echo up' 2>/dev/null | grep -q up; then
       up=$((up+1))
     else
-      log "WARN: PBC not up on $pub"; tail -3 "$STATE_DIR"/dynomited.log 2>/dev/null || true
+      log "WARN: PBC still not up on $pub after retries"
       nsh "$pub" 'tail -3 ~/dynomited.log 2>/dev/null | sed "s/\x1b\[[0-9;]*m//g"' 2>/dev/null | tail -3 >&2
     fi
   done < "$STATE"
@@ -265,11 +291,28 @@ inject_partition() { # <victim_pub> <peer_pub_csv> <hold_secs>
 
 churn_node() { # <victim_pub> <down_secs>
   local victim=$1 down=$2
-  nsh "$victim" 'sudo pkill -9 -x dynomited' 2>/dev/null
+  nsh "$victim" 'sudo pkill -9 -x dynomited; for _i in $(seq 1 15); do pgrep -x dynomited >/dev/null || break; sudo pkill -9 -x dynomited; sleep 1; done' 2>/dev/null
   log "churned (killed) dynomited on $victim for ${down}s"
   sleep "$down"
-  nsh "$victim" "DYN_ADVERTISE_ADDR=${victim} nohup ~/dynomited -c ~/dyniak.yml > ~/dynomited.log 2>&1 </dev/null & sleep 2; echo up" >/dev/null 2>&1
-  log "restarted dynomited on $victim (node rejoins the ring)"
+  # Restart with a settle after kill so the kernel releases the listening
+  # sockets, then poll ports-free, launch, poll-bound; retry a few times
+  # if the rebind races a dying socket (EADDRINUSE aborts the whole
+  # server build). A real deployment restarts dynomited under a process
+  # manager (systemd), which is what this loop stands in for.
+  local attempt
+  for attempt in 1 2 3 4; do
+    nsh "$victim" "sudo pkill -9 -x dynomited 2>/dev/null; sleep 3; \
+      for _i in \$(seq 1 30); do sudo ss -tln | grep -qE ':8101|:8102|:8087|:22222' || break; sleep 1; done; \
+      DYN_ADVERTISE_ADDR=${victim} nohup ~/dynomited -c ~/dyniak.yml > ~/dynomited.log 2>&1 </dev/null & \
+      for _i in \$(seq 1 30); do ss -tln | grep -q :8087 && break; sleep 1; done" >/dev/null 2>&1
+    if nsh "$victim" 'ss -tln | grep -q :8087 && echo up' 2>/dev/null | grep -q up; then
+      log "restarted dynomited on $victim (node rejoined the ring, PBC up, attempt $attempt)"
+      return 0
+    fi
+    log "churn restart on $victim did not bind PBC (attempt $attempt); retrying"
+  done
+  log "WARN: dynomited on $victim did not rebind PBC after churn"
+  nsh "$victim" 'tail -2 ~/dynomited.log 2>/dev/null | sed "s/\x1b\[[0-9;]*m//g"' 2>/dev/null | tail -2 >&2
 }
 
 
@@ -284,15 +327,27 @@ churn_node() { # <victim_pub> <down_secs>
 phase_load() {
   local dur="${LOAD_DURATION:-240}"      # seconds of load
   local keyspace="${KEYSPACE:-200}"
+  # Reset the op history on every load-gen so a re-run does not inflate
+  # the reconstructed expectation with a prior run's ops.
+  local _lg
+  while read -r _r _d _iid _lg _p; do
+    nsh "$_lg" 'rm -f /tmp/chaos-history.jsonl /tmp/load-summary.json /tmp/load.err' 2>/dev/null
+  done < "$LOADSTATE"
   # Start load on every load-gen against its region's first node.
   local region dc pub priv gi=0
-  while read -r region dc pub priv; do
+  while read -r region dc iid pub priv; do
     # Find a dyniak node in the same region to target.
     local target
     target=$(awk -v r="$region" '$1==r{print $8; exit}' "$STATE")
     [ -z "$target" ] && { log "no dyniak target for loadgen $region"; return 1; }
+    # Failover host list: local-region node first, then every other node.
+    # A topology-aware client stays available when its preferred node is
+    # down by routing to another; this measures CLUSTER availability.
+    local others hostlist
+    others=$(awk -v t="$target" '$8!=t{print $8}' "$STATE" | paste -sd,)
+    hostlist="${target}${others:+,$others}"
     gi=$((gi+1))
-    nsh "$pub" "nohup python3 ~/driver.py load --host $target --port 8087 \
+    nsh "$pub" "nohup python3 ~/driver.py load --hosts $hostlist --port 8087 \
       --workload counter --btype counters --keyspace $keyspace \
       --duration $dur --seed $gi --gen-id gen${gi} \
       --history /tmp/chaos-history.jsonl > /tmp/load-summary.json 2>/tmp/load.err </dev/null & echo started" >/dev/null 2>&1
@@ -330,7 +385,7 @@ phase_load() {
 
   # --- collect per-generator availability + p99 --------------------
   : > "$RESULTS/load-summaries.txt"
-  while read -r region dc pub priv; do
+  while read -r region dc iid pub priv; do
     nsh "$pub" 'cat /tmp/load-summary.json 2>/dev/null' 2>/dev/null >> "$RESULTS/load-summaries.txt"
     echo >> "$RESULTS/load-summaries.txt"
   done < "$LOADSTATE"
@@ -338,12 +393,12 @@ phase_load() {
 
   # --- reconstruct expected per-key counts from ALL histories ------
   : > "$RESULTS/all-history.jsonl"
-  while read -r region dc pub priv; do
+  while read -r region dc iid pub priv; do
     nsh "$pub" 'cat /tmp/chaos-history.jsonl 2>/dev/null' 2>/dev/null >> "$RESULTS/all-history.jsonl"
   done < "$LOADSTATE"
 
   local checker_gen
-  checker_gen=$(head -1 "$LOADSTATE" | awk '{print $3}')
+  checker_gen=$(head -1 "$LOADSTATE" | awk '{print $4}')
   nscp "$SRC_DIR/scripts/ec2-dist/chaos-verify.py" "$checker_gen" '~/verify.py'
   # Ship the merged history to the checker gen.
   nscp "$RESULTS/all-history.jsonl" "$checker_gen" '~/all-history.jsonl'

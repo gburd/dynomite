@@ -181,6 +181,13 @@ def run_load(args):
     rng = random.Random(args.seed)
     hist = open(args.history, "a", buffering=1)
     deadline = time.time() + args.duration
+    # Failover host list: the driver prefers its local-region node but
+    # rotates to another node when its current one is unreachable, so a
+    # single node being down (churned) does not make the CLIENT
+    # unavailable -- this measures CLUSTER availability, the property
+    # under test, the way a topology-aware client (Riak's, Dyno) does.
+    hosts = [h for h in args.hosts.split(",") if h] or [args.host]
+    hi = 0
     sock = None
     n_ok = 0
     n_err = 0
@@ -199,7 +206,7 @@ def run_load(args):
         err = ""
         try:
             if sock is None:
-                sock = connect(args.host, args.port, args.timeout)
+                sock = connect(hosts[hi % len(hosts)], args.port, args.timeout)
             send_frame(sock, DT_UPDATE_REQ, body)
             code, _ = recv_frame(sock)
             ok = code == DT_UPDATE_RESP
@@ -213,6 +220,8 @@ def run_load(args):
             except Exception:        # noqa: BLE001
                 pass
             sock = None
+            # Fail over to the next host for the next attempt.
+            hi += 1
         dt = time.time() - t0
         lat.append(dt)
         if ok:
@@ -264,6 +273,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["load", "fetch"])
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--hosts", default="",
+                    help="comma-separated failover host list (load mode); overrides --host")
     ap.add_argument("--port", type=int, default=8087)
     ap.add_argument("--bucket", default="chaos")
     ap.add_argument("--btype", default="counters")
