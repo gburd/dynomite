@@ -126,11 +126,9 @@ them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
   return a sibling set or a `300 Multiple Choices`, and `allow_mult`
   does not yet change read behavior. For concurrent-write correctness,
   use a CRDT (whose merge never drops a write).
-* **CRDTs over the wire: Counter, Set, Register, and Flag today.** All
-  types exist as in-crate APIs; Counter, Set, Register, and Flag are
-  served over PBC / HTTP. Map and HyperLogLog are implemented but not
-  yet wired
-  to the wire handlers.
+* **All six CRDTs are served over the wire.** Counter, Set, Register,
+  Flag, Map (recursive, composing the others), and HyperLogLog are all
+  reachable via PBC / HTTP `DtUpdate` / `DtFetch`.
 * **Object TTL / auto-expiry is partial.** The `ttl` bucket property is
   settable and readable over PBC and the reaper can expire live objects
   past their TTL, but the runtime reaper orchestrator that applies the

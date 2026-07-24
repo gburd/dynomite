@@ -13,8 +13,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::datatypes::map::{FieldKey, FieldType, FieldValue, Map};
 use crate::datatypes::set::{OrSet, Tag};
-use crate::datatypes::{ActorId, Crdt, EwFlag, LwwRegister, PnCounter};
+use crate::datatypes::{ActorId, Crdt, EwFlag, HyperLogLog, LwwRegister, PnCounter};
 
 /// Current serialization format version.
 const FORMAT_V1: u8 = 1;
@@ -27,6 +28,10 @@ pub const TAG_SET: u8 = 2;
 pub const TAG_REGISTER: u8 = 3;
 /// Type tag: EW-flag state.
 pub const TAG_FLAG: u8 = 4;
+/// Type tag: observed-remove map state.
+pub const TAG_MAP: u8 = 5;
+/// Type tag: HyperLogLog state.
+pub const TAG_HLL: u8 = 6;
 
 /// Error decoding stored CRDT state.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -323,6 +328,139 @@ pub fn flag_from_bytes(buf: &[u8]) -> Result<EwFlag, CrdtSerialError> {
     Ok(EwFlag::from_raw(adds, removes, counters))
 }
 
+// ---- Map --------------------------------------------------------------------
+
+/// Serialize an observed-remove map to its stored form.
+///
+/// Field values recurse through the corresponding `*_to_bytes`
+/// serializer for each scalar type, length-prefixed so a decoder
+/// does not need to understand a field's payload shape to skip
+/// past it; a [`FieldValue::NestedMap`] recurses into
+/// `map_to_bytes` again, so a doubly (or deeper) nested map
+/// serializes correctly.
+#[must_use]
+pub fn map_to_bytes(m: &Map) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64);
+    out.push(FORMAT_V1);
+    out.push(TAG_MAP);
+    let fields = m.raw_fields();
+    put_u64(&mut out, fields.len() as u64);
+    for (key, (adds, removes, value)) in fields {
+        put_bytes(&mut out, &key.name);
+        out.push(field_type_wire(key.field_type));
+        put_tags(&mut out, &adds);
+        put_tags(&mut out, &removes);
+        put_bytes(&mut out, &field_value_to_bytes(&value));
+    }
+    let counters = m.raw_actor_counters();
+    put_u64(&mut out, counters.len() as u64);
+    for (actor, n) in counters {
+        put_actor(&mut out, &actor);
+        put_u64(&mut out, n);
+    }
+    out
+}
+
+fn field_type_wire(t: FieldType) -> u8 {
+    match t {
+        FieldType::Counter => TAG_COUNTER,
+        FieldType::OrSet => TAG_SET,
+        FieldType::LwwRegister => TAG_REGISTER,
+        FieldType::EwFlag => TAG_FLAG,
+        FieldType::NestedMap => TAG_MAP,
+    }
+}
+
+fn field_type_from_wire(tag: u8) -> Result<FieldType, CrdtSerialError> {
+    match tag {
+        TAG_COUNTER => Ok(FieldType::Counter),
+        TAG_SET => Ok(FieldType::OrSet),
+        TAG_REGISTER => Ok(FieldType::LwwRegister),
+        TAG_FLAG => Ok(FieldType::EwFlag),
+        TAG_MAP => Ok(FieldType::NestedMap),
+        other => Err(CrdtSerialError::UnknownTag(other)),
+    }
+}
+
+fn field_value_to_bytes(v: &FieldValue) -> Vec<u8> {
+    match v {
+        FieldValue::Counter(c) => counter_to_bytes(c),
+        FieldValue::OrSet(s) => set_to_bytes(s),
+        FieldValue::LwwRegister(r) => register_to_bytes(r),
+        FieldValue::EwFlag(f) => flag_to_bytes(f),
+        FieldValue::NestedMap(m) => map_to_bytes(m),
+    }
+}
+
+fn field_value_from_bytes(
+    bytes: &[u8],
+    field_type: FieldType,
+) -> Result<FieldValue, CrdtSerialError> {
+    match field_type {
+        FieldType::Counter => Ok(FieldValue::Counter(counter_from_bytes(bytes)?)),
+        FieldType::OrSet => Ok(FieldValue::OrSet(set_from_bytes(bytes)?)),
+        FieldType::LwwRegister => Ok(FieldValue::LwwRegister(register_from_bytes(bytes)?)),
+        FieldType::EwFlag => Ok(FieldValue::EwFlag(flag_from_bytes(bytes)?)),
+        FieldType::NestedMap => Ok(FieldValue::NestedMap(Box::new(map_from_bytes(bytes)?))),
+    }
+}
+
+/// Decode an observed-remove map from its stored form.
+///
+/// # Errors
+/// Version / tag / truncation / trailing errors per [`CrdtSerialError`].
+pub fn map_from_bytes(buf: &[u8]) -> Result<Map, CrdtSerialError> {
+    let mut r = Reader::new(buf);
+    check_header(&mut r, TAG_MAP)?;
+    let nf = r.u64()?;
+    let mut fields = BTreeMap::new();
+    for _ in 0..nf {
+        let name = r.bytes()?;
+        let field_type = field_type_from_wire(r.u8()?)?;
+        let adds = read_tags(&mut r)?;
+        let removes = read_tags(&mut r)?;
+        let value_bytes = r.bytes()?;
+        let value = field_value_from_bytes(&value_bytes, field_type)?;
+        fields.insert(FieldKey::new(name, field_type), (adds, removes, value));
+    }
+    let nc = r.u64()?;
+    let mut counters = BTreeMap::new();
+    for _ in 0..nc {
+        let actor = r.actor()?;
+        let n = r.u64()?;
+        counters.insert(actor, n);
+    }
+    r.done()?;
+    Ok(Map::from_raw(fields, counters))
+}
+
+// ---- HyperLogLog -------------------------------------------------------------
+
+/// Serialize a HyperLogLog register array to its stored form.
+#[must_use]
+pub fn hll_to_bytes(h: &HyperLogLog) -> Vec<u8> {
+    let mut out = Vec::with_capacity(h.registers().len() + 16);
+    out.push(FORMAT_V1);
+    out.push(TAG_HLL);
+    put_bytes(&mut out, h.registers());
+    out
+}
+
+/// Decode a HyperLogLog register array from its stored form.
+///
+/// # Errors
+/// Version / tag / truncation / trailing errors per
+/// [`CrdtSerialError`], plus [`CrdtSerialError::Truncated`] if the
+/// decoded register array is not exactly
+/// [`crate::datatypes::hll::REGISTER_COUNT`] bytes.
+pub fn hll_from_bytes(buf: &[u8]) -> Result<HyperLogLog, CrdtSerialError> {
+    let mut r = Reader::new(buf);
+    check_header(&mut r, TAG_HLL)?;
+    let registers = r.bytes()?;
+    r.done()?;
+    HyperLogLog::from_registers(registers).ok_or(CrdtSerialError::Truncated)
+}
+
 // ---- header ----------------------------------------------------------------
 
 /// Peek the type tag of a stored CRDT blob without fully decoding it.
@@ -348,7 +486,13 @@ fn check_header(r: &mut Reader<'_>, expected_tag: u8) -> Result<(), CrdtSerialEr
     let tag = r.u8()?;
     if tag == expected_tag {
         Ok(())
-    } else if tag == TAG_COUNTER || tag == TAG_SET || tag == TAG_REGISTER || tag == TAG_FLAG {
+    } else if tag == TAG_COUNTER
+        || tag == TAG_SET
+        || tag == TAG_REGISTER
+        || tag == TAG_FLAG
+        || tag == TAG_MAP
+        || tag == TAG_HLL
+    {
         Err(CrdtSerialError::TypeMismatch {
             found: tag,
             expected: expected_tag,
@@ -575,5 +719,254 @@ mod tests {
                 expected: TAG_FLAG
             }
         ));
+    }
+
+    fn counter_field(name: &str) -> FieldKey {
+        FieldKey::new(name.as_bytes(), FieldType::Counter)
+    }
+
+    fn register_field(name: &str) -> FieldKey {
+        FieldKey::new(name.as_bytes(), FieldType::LwwRegister)
+    }
+
+    fn flag_field(name: &str) -> FieldKey {
+        FieldKey::new(name.as_bytes(), FieldType::EwFlag)
+    }
+
+    fn set_field(name: &str) -> FieldKey {
+        FieldKey::new(name.as_bytes(), FieldType::OrSet)
+    }
+
+    fn map_field(name: &str) -> FieldKey {
+        FieldKey::new(name.as_bytes(), FieldType::NestedMap)
+    }
+
+    #[test]
+    fn map_round_trips_with_counter_register_flag_and_set_fields() {
+        use crate::datatypes::map::{MapOp, NestedOp};
+
+        let a = aid("a");
+        let mut m = Map::new();
+        m.apply(
+            &a,
+            &MapOp::Update {
+                field: counter_field("hits"),
+                op: NestedOp::Counter(7),
+            },
+        );
+        m.apply(
+            &a,
+            &MapOp::Update {
+                field: register_field("name"),
+                op: NestedOp::RegisterAssign {
+                    value: b"alice".to_vec(),
+                    ts_micros: 5,
+                },
+            },
+        );
+        m.apply(
+            &a,
+            &MapOp::Update {
+                field: flag_field("on"),
+                op: NestedOp::Flag(true),
+            },
+        );
+        m.apply(
+            &a,
+            &MapOp::Update {
+                field: set_field("tags"),
+                op: NestedOp::SetAdd(b"x".to_vec()),
+            },
+        );
+
+        let bytes = map_to_bytes(&m);
+        assert_eq!(peek_tag(&bytes).unwrap(), TAG_MAP);
+        let back = map_from_bytes(&bytes).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(back.value(), m.value());
+    }
+
+    #[test]
+    fn nested_map_round_trips() {
+        use crate::datatypes::map::{MapOp, NestedOp};
+
+        let a = aid("a");
+        let mut m = Map::new();
+        m.apply(
+            &a,
+            &MapOp::Update {
+                field: map_field("inner"),
+                op: NestedOp::Map(Box::new(MapOp::Update {
+                    field: counter_field("hits"),
+                    op: NestedOp::Counter(3),
+                })),
+            },
+        );
+
+        let bytes = map_to_bytes(&m);
+        let back = map_from_bytes(&bytes).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(back.value(), m.value());
+    }
+
+    #[test]
+    fn doubly_nested_map_round_trips() {
+        use crate::datatypes::map::{MapOp, NestedOp};
+
+        let a = aid("a");
+        let mut m = Map::new();
+        m.apply(
+            &a,
+            &MapOp::Update {
+                field: map_field("outer"),
+                op: NestedOp::Map(Box::new(MapOp::Update {
+                    field: map_field("inner"),
+                    op: NestedOp::Map(Box::new(MapOp::Update {
+                        field: counter_field("hits"),
+                        op: NestedOp::Counter(9),
+                    })),
+                })),
+            },
+        );
+
+        let bytes = map_to_bytes(&m);
+        let back = map_from_bytes(&bytes).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(back.value(), m.value());
+    }
+
+    #[test]
+    fn empty_map_round_trips() {
+        let m = Map::new();
+        let back = map_from_bytes(&map_to_bytes(&m)).unwrap();
+        assert_eq!(back, m);
+        assert!(back.value().is_empty());
+    }
+
+    #[test]
+    fn map_merge_through_serialization_is_commutative_and_idempotent() {
+        use crate::datatypes::map::{MapOp, NestedOp};
+
+        let a = aid("a");
+        let b = aid("b");
+        let mut x = Map::new();
+        x.apply(
+            &a,
+            &MapOp::Update {
+                field: counter_field("c"),
+                op: NestedOp::Counter(3),
+            },
+        );
+        let mut y = Map::new();
+        y.apply(
+            &b,
+            &MapOp::Update {
+                field: counter_field("c"),
+                op: NestedOp::Counter(5),
+            },
+        );
+        let mut x2 = map_from_bytes(&map_to_bytes(&x)).unwrap();
+        let y2 = map_from_bytes(&map_to_bytes(&y)).unwrap();
+
+        let mut left = x2.clone();
+        left.merge(&y2);
+        let mut right = y2.clone();
+        right.merge(&x2);
+        assert_eq!(left.value(), right.value());
+
+        x2.merge(&y2);
+        x2.merge(&y2);
+        assert_eq!(x2.value(), left.value());
+    }
+
+    #[test]
+    fn map_type_mismatch_is_rejected() {
+        let mut c = PnCounter::new();
+        c.increment(&aid("a"), 1);
+        let bytes = counter_to_bytes(&c);
+        let err = map_from_bytes(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            CrdtSerialError::TypeMismatch {
+                found: TAG_COUNTER,
+                expected: TAG_MAP
+            }
+        ));
+    }
+
+    #[test]
+    fn hll_round_trips() {
+        let mut h = HyperLogLog::new();
+        for i in 0u32..500 {
+            h.add(i.to_be_bytes());
+        }
+        let bytes = hll_to_bytes(&h);
+        assert_eq!(peek_tag(&bytes).unwrap(), TAG_HLL);
+        let back = hll_from_bytes(&bytes).unwrap();
+        assert_eq!(back, h);
+        assert_eq!(back.value(), h.value());
+    }
+
+    #[test]
+    fn empty_hll_round_trips() {
+        let h = HyperLogLog::new();
+        let back = hll_from_bytes(&hll_to_bytes(&h)).unwrap();
+        assert_eq!(back, h);
+        assert_eq!(back.value(), 0);
+    }
+
+    #[test]
+    fn hll_merge_through_serialization_is_commutative_and_idempotent() {
+        let mut a = HyperLogLog::new();
+        for i in 0u32..200 {
+            a.add(i.to_be_bytes());
+        }
+        let mut b = HyperLogLog::new();
+        for i in 100u32..300 {
+            b.add(i.to_be_bytes());
+        }
+        let mut a2 = hll_from_bytes(&hll_to_bytes(&a)).unwrap();
+        let b2 = hll_from_bytes(&hll_to_bytes(&b)).unwrap();
+
+        let mut left = a2.clone();
+        left.merge(&b2);
+        let mut right = b2.clone();
+        right.merge(&a2);
+        assert_eq!(left, right);
+
+        a2.merge(&b2);
+        a2.merge(&b2);
+        assert_eq!(a2, left);
+    }
+
+    #[test]
+    fn hll_type_mismatch_is_rejected() {
+        let mut f = EwFlag::new();
+        f.enable(&aid("a"));
+        let bytes = flag_to_bytes(&f);
+        let err = hll_from_bytes(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            CrdtSerialError::TypeMismatch {
+                found: TAG_FLAG,
+                expected: TAG_HLL
+            }
+        ));
+    }
+
+    #[test]
+    fn peek_tag_distinguishes_all_six_types() {
+        let counter = counter_to_bytes(&PnCounter::new());
+        let set = set_to_bytes(&OrSet::new());
+        let register = register_to_bytes(&LwwRegister::new());
+        let flag = flag_to_bytes(&EwFlag::new());
+        let map = map_to_bytes(&Map::new());
+        let hll = hll_to_bytes(&HyperLogLog::new());
+        assert_eq!(peek_tag(&counter).unwrap(), TAG_COUNTER);
+        assert_eq!(peek_tag(&set).unwrap(), TAG_SET);
+        assert_eq!(peek_tag(&register).unwrap(), TAG_REGISTER);
+        assert_eq!(peek_tag(&flag).unwrap(), TAG_FLAG);
+        assert_eq!(peek_tag(&map).unwrap(), TAG_MAP);
+        assert_eq!(peek_tag(&hll).unwrap(), TAG_HLL);
     }
 }

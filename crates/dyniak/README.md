@@ -146,8 +146,8 @@ listeners. Operators who want process isolation can run separate
   `dynomite::embed::Datastore`, writes framed responses.
 * HTTP gateway (axum-based) for the `/buckets/...`, `/types/...`,
   `/mapred`, and `/buckets/<bucket>/index/...` paths.
-* CRDT types: Counter, Set, Register, and Flag served over the wire;
-  Map and HyperLogLog implemented in-crate, tracked to be wired next.
+* CRDT types: all six served over the wire -- Counter, Set, Register,
+  Flag, Map (recursive), and HyperLogLog.
 * MapReduce pipeline: 9 built-in phases + Wasm-hosted user phases
   (gated under `--features wasm`).
 * Tictac-style AAE (segmented merkle tree, persisted across

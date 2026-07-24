@@ -134,6 +134,21 @@ impl HyperLogLog {
     pub fn registers(&self) -> &[u8] {
         &self.registers
     }
+
+    /// Reconstruct an HLL from a raw register array, the inverse
+    /// of [`Self::registers`]. Used by deserialization.
+    ///
+    /// Returns `None` if `registers` is not exactly
+    /// [`REGISTER_COUNT`] bytes long.
+    #[must_use]
+    pub fn from_registers(registers: Vec<u8>) -> Option<Self> {
+        if registers.len() != REGISTER_COUNT {
+            return None;
+        }
+        Some(Self {
+            registers: registers.into_boxed_slice(),
+        })
+    }
 }
 
 impl Crdt for HyperLogLog {

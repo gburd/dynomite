@@ -897,7 +897,8 @@ async fn handle_dt_update(
     // this node's actor.
     let Some(op) = req.op.as_ref().and_then(|o| dt_op_to_crdt(o, &actor)) else {
         return Ok(error_frame(
-            "riak dt_update: unsupported or empty op (counter/set/register/flag only)".into(),
+            "riak dt_update: unsupported or empty op (counter/set/register/flag/map/hll only)"
+                .into(),
         ));
     };
     // A CRDT write always applies to the coordinator's LOCAL store
@@ -946,6 +947,8 @@ async fn handle_dt_update(
         CrdtValue::Set(elems) => resp.set_value = elems,
         CrdtValue::Register(v) => resp.register_value = Some(v),
         CrdtValue::Flag(b) => resp.flag_value = Some(b),
+        CrdtValue::Map(fields) => resp.map_value = Some(Box::new(map_value_to_wire(&fields))),
+        CrdtValue::Hll(n) => resp.hll_value = Some(n),
         CrdtValue::Missing => {}
     }
     Ok(Frame::new(
@@ -973,15 +976,16 @@ async fn handle_dt_fetch(
     hooks: Option<&RoutingHooks>,
 ) -> Result<Frame, RiakError> {
     use crate::crdt_store::{CrdtStore, CrdtValue};
-    use crate::datatypes::{TAG_COUNTER, TAG_FLAG, TAG_REGISTER, TAG_SET};
+    use crate::datatypes::{TAG_COUNTER, TAG_FLAG, TAG_HLL, TAG_MAP, TAG_REGISTER, TAG_SET};
     use crate::proto::pb::{
-        DtFetchReq, DtFetchResp, DtValue, DATA_TYPE_COUNTER, DATA_TYPE_FLAG, DATA_TYPE_REGISTER,
-        DATA_TYPE_SET,
+        DtFetchReq, DtFetchResp, DATA_TYPE_COUNTER, DATA_TYPE_FLAG, DATA_TYPE_HLL, DATA_TYPE_MAP,
+        DATA_TYPE_REGISTER, DATA_TYPE_SET,
     };
 
     let req = DtFetchReq::decode(body)?;
     // The bucket type selects the projection: `sets` -> OR-set,
-    // `registers` -> LWW-register, `flags` -> EW-flag, anything
+    // `registers` -> LWW-register, `flags` -> EW-flag, `maps` ->
+    // observed-remove map, `hlls`/`hll` -> HyperLogLog, anything
     // else -> counter (Riak's `counters` default).
     let (tag, dtype) = if req.r#type == b"sets" {
         (TAG_SET, DATA_TYPE_SET)
@@ -989,6 +993,10 @@ async fn handle_dt_fetch(
         (TAG_REGISTER, DATA_TYPE_REGISTER)
     } else if req.r#type == b"flags" {
         (TAG_FLAG, DATA_TYPE_FLAG)
+    } else if req.r#type == b"maps" {
+        (TAG_MAP, DATA_TYPE_MAP)
+    } else if req.r#type == b"hlls" || req.r#type == b"hll" {
+        (TAG_HLL, DATA_TYPE_HLL)
     } else {
         (TAG_COUNTER, DATA_TYPE_COUNTER)
     };
@@ -1050,43 +1058,56 @@ async fn handle_dt_fetch(
         r#type: dtype,
         ..DtFetchResp::default()
     };
-    match value {
-        CrdtValue::Counter(n) => {
-            resp.value = Some(DtValue {
-                counter_value: Some(n),
-                ..DtValue::default()
-            });
-        }
-        CrdtValue::Set(elems) => {
-            resp.value = Some(DtValue {
-                set_value: elems,
-                ..DtValue::default()
-            });
-        }
-        CrdtValue::Register(v) => {
-            resp.value = Some(DtValue {
-                register_value: Some(v),
-                ..DtValue::default()
-            });
-        }
-        CrdtValue::Flag(b) => {
-            resp.value = Some(DtValue {
-                flag_value: Some(b),
-                ..DtValue::default()
-            });
-        }
-        CrdtValue::Missing => {}
-    }
+    resp.value = crdt_value_to_dt_value(value);
     Ok(Frame::new(
         MessageCode::DtFetchResp.as_u8(),
         resp.encode_to_vec(),
     ))
 }
 
+/// Project a [`crate::crdt_store::CrdtValue`] into the [`DtValue`]
+/// wire envelope carried by a `DtFetchResp`. Returns `None` for
+/// [`crate::crdt_store::CrdtValue::Missing`], matching Riak's
+/// absent-`value` response for a key that does not exist.
+fn crdt_value_to_dt_value(
+    value: crate::crdt_store::CrdtValue,
+) -> Option<crate::proto::pb::DtValue> {
+    use crate::crdt_store::CrdtValue;
+    use crate::proto::pb::DtValue;
+
+    match value {
+        CrdtValue::Counter(n) => Some(DtValue {
+            counter_value: Some(n),
+            ..DtValue::default()
+        }),
+        CrdtValue::Set(elems) => Some(DtValue {
+            set_value: elems,
+            ..DtValue::default()
+        }),
+        CrdtValue::Register(v) => Some(DtValue {
+            register_value: Some(v),
+            ..DtValue::default()
+        }),
+        CrdtValue::Flag(b) => Some(DtValue {
+            flag_value: Some(b),
+            ..DtValue::default()
+        }),
+        CrdtValue::Map(fields) => Some(DtValue {
+            map_value: Some(Box::new(map_value_to_wire(&fields))),
+            ..DtValue::default()
+        }),
+        CrdtValue::Hll(n) => Some(DtValue {
+            hll_value: Some(n),
+            ..DtValue::default()
+        }),
+        CrdtValue::Missing => None,
+    }
+}
+
 /// Translate a PBC [`DtOp`] into the internal
 /// [`crate::crdt_store::CrdtOp`], attributing it to `actor`. Returns
-/// `None` for an empty or unsupported op (counter, set, register, and
-/// flag are wired; map is not).
+/// `None` for an empty or unsupported op. Counter, set, register,
+/// flag, map, and HLL are all wired.
 fn dt_op_to_crdt(
     op: &crate::proto::pb::DtOp,
     actor: &crate::datatypes::ActorId,
@@ -1117,7 +1138,165 @@ fn dt_op_to_crdt(
             enable: f.enable,
         });
     }
+    if let Some(m) = op.map_op.as_ref() {
+        return Some(CrdtOp::Map {
+            actor: actor.clone(),
+            ops: pbc_map_op_to_internal(m),
+        });
+    }
+    if let Some(h) = op.hll_op.as_ref() {
+        return Some(CrdtOp::Hll {
+            actor: actor.clone(),
+            items: h.add_value.clone(),
+        });
+    }
     None
+}
+
+/// Translate a PBC [`crate::proto::pb::MapOp`] batch into the
+/// internal [`crate::datatypes::MapOp`] sequence [`Map::apply`]
+/// consumes one at a time.
+///
+/// A field-level `SetOp` batch (multiple adds/removes in one
+/// [`crate::proto::pb::ScalarOp`]) expands into one internal op per
+/// element, since [`crate::datatypes::NestedOp::SetAdd`] /
+/// [`crate::datatypes::NestedOp::SetRemove`] are each singular. A
+/// field or update whose `field`/`op` is absent, or whose
+/// `field_type` is not a recognized [`crate::datatypes::FieldType`]
+/// wire code, is dropped rather than rejecting the whole batch.
+fn pbc_map_op_to_internal(op: &crate::proto::pb::MapOp) -> Vec<crate::datatypes::MapOp> {
+    use crate::datatypes::{FieldKey, FieldType, MapOp};
+
+    let mut ops = Vec::with_capacity(op.updates.len() + op.removes.len());
+    for update in &op.updates {
+        let Some(field) = update.field.as_ref() else {
+            continue;
+        };
+        let Some(field_type) = FieldType::from_wire(field.field_type) else {
+            continue;
+        };
+        let Some(scalar) = update.op.as_ref() else {
+            continue;
+        };
+        let key = FieldKey::new(field.name.clone(), field_type);
+        for nested in pbc_scalar_op_to_nested(scalar) {
+            ops.push(MapOp::Update {
+                field: key.clone(),
+                op: nested,
+            });
+        }
+    }
+    for field in &op.removes {
+        if let Some(field_type) = FieldType::from_wire(field.field_type) {
+            ops.push(MapOp::Remove {
+                field: FieldKey::new(field.name.clone(), field_type),
+            });
+        }
+    }
+    ops
+}
+
+/// Translate one PBC [`crate::proto::pb::ScalarOp`] into zero or more
+/// [`crate::datatypes::NestedOp`]s applied to the same field. A
+/// register op without an explicit `ts_micros` is stamped with the
+/// current wall clock, matching [`crate::datatypes::LwwRegister::assign_now`]'s
+/// policy for the top-level `DtOp::register_op` path.
+fn pbc_scalar_op_to_nested(op: &crate::proto::pb::ScalarOp) -> Vec<crate::datatypes::NestedOp> {
+    use crate::datatypes::NestedOp;
+
+    if let Some(c) = op.counter_op.as_ref() {
+        return vec![NestedOp::Counter(c.increment.unwrap_or(0))];
+    }
+    if let Some(s) = op.set_op.as_ref() {
+        let mut nested = Vec::with_capacity(s.adds.len() + s.removes.len());
+        for a in &s.adds {
+            nested.push(NestedOp::SetAdd(a.clone()));
+        }
+        for r in &s.removes {
+            nested.push(NestedOp::SetRemove(r.clone()));
+        }
+        return nested;
+    }
+    if let Some(r) = op.register_op.as_ref() {
+        let ts_micros = r.ts_micros.unwrap_or_else(now_micros);
+        return vec![NestedOp::RegisterAssign {
+            value: r.value.clone(),
+            ts_micros,
+        }];
+    }
+    if let Some(f) = op.flag_op.as_ref() {
+        return vec![NestedOp::Flag(f.enable)];
+    }
+    if let Some(m) = op.map_op.as_ref() {
+        return pbc_map_op_to_internal(m)
+            .into_iter()
+            .map(|inner| NestedOp::Map(Box::new(inner)))
+            .collect();
+    }
+    Vec::new()
+}
+
+/// Current wall-clock time in microseconds since the Unix epoch,
+/// clamped to `u64::MAX` on overflow. Used to stamp a map register
+/// field's [`crate::datatypes::NestedOp::RegisterAssign`] when the
+/// client did not supply an explicit timestamp.
+fn now_micros() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_micros()).unwrap_or(u64::MAX))
+}
+
+/// Project a [`crate::crdt_store::CrdtValue::Map`] field set into the
+/// PBC [`crate::proto::pb::MapValue`] wire shape, recursing into
+/// [`crate::datatypes::FieldValue::NestedMap`].
+fn map_value_to_wire(
+    fields: &std::collections::BTreeMap<crate::datatypes::FieldKey, crate::datatypes::FieldValue>,
+) -> crate::proto::pb::MapValue {
+    use crate::proto::pb::{MapEntry, MapField, MapValue};
+
+    MapValue {
+        entries: fields
+            .iter()
+            .map(|(key, value)| MapEntry {
+                field: Some(MapField {
+                    name: key.name.clone(),
+                    field_type: key.field_type.to_wire(),
+                }),
+                value: Some(field_value_to_wire(value)),
+            })
+            .collect(),
+    }
+}
+
+/// Project one [`crate::datatypes::FieldValue`] into the PBC
+/// [`crate::proto::pb::ScalarValue`] wire shape.
+fn field_value_to_wire(value: &crate::datatypes::FieldValue) -> crate::proto::pb::ScalarValue {
+    use crate::datatypes::{Crdt, FieldValue};
+    use crate::proto::pb::ScalarValue;
+
+    match value {
+        FieldValue::Counter(c) => ScalarValue {
+            counter_value: Some(c.value()),
+            ..ScalarValue::default()
+        },
+        FieldValue::OrSet(s) => ScalarValue {
+            set_value: s.value().into_iter().collect(),
+            ..ScalarValue::default()
+        },
+        FieldValue::LwwRegister(r) => ScalarValue {
+            register_value: Some(r.value()),
+            ..ScalarValue::default()
+        },
+        FieldValue::EwFlag(f) => ScalarValue {
+            flag_value: Some(f.value()),
+            ..ScalarValue::default()
+        },
+        FieldValue::NestedMap(m) => ScalarValue {
+            map_value: Some(Box::new(map_value_to_wire(&m.value()))),
+            ..ScalarValue::default()
+        },
+    }
 }
 
 /// Run a 2i secondary-index query against the datastore.

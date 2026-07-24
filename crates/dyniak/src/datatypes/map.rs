@@ -342,6 +342,57 @@ impl Map {
             .filter(|(_, e)| e.is_present())
             .map(|(k, e)| (k, &e.value))
     }
+
+    /// Export the raw per-field `(add-tags, remove-tags, value)`
+    /// state for serialization. Includes tombstoned fields (not
+    /// filtered by the field-presence check) so a round trip
+    /// through [`Map::from_raw`] reproduces the exact CRDT state,
+    /// not just its value projection.
+    #[must_use]
+    pub fn raw_fields(&self) -> BTreeMap<FieldKey, (BTreeSet<Tag>, BTreeSet<Tag>, FieldValue)> {
+        self.fields
+            .iter()
+            .map(|(k, e)| {
+                (
+                    k.clone(),
+                    (e.adds.clone(), e.removes.clone(), e.value.clone()),
+                )
+            })
+            .collect()
+    }
+
+    /// Export the raw per-actor update counters for serialization.
+    #[must_use]
+    pub fn raw_actor_counters(&self) -> BTreeMap<ActorId, u64> {
+        self.actor_counters.clone()
+    }
+
+    /// Reconstruct a map from its raw field and actor-counter
+    /// state, the inverse of [`Map::raw_fields`] /
+    /// [`Map::raw_actor_counters`]. Used by deserialization.
+    #[must_use]
+    pub fn from_raw(
+        fields: BTreeMap<FieldKey, (BTreeSet<Tag>, BTreeSet<Tag>, FieldValue)>,
+        actor_counters: BTreeMap<ActorId, u64>,
+    ) -> Self {
+        let fields = fields
+            .into_iter()
+            .map(|(k, (adds, removes, value))| {
+                (
+                    k,
+                    FieldEntry {
+                        adds,
+                        removes,
+                        value,
+                    },
+                )
+            })
+            .collect();
+        Self {
+            fields,
+            actor_counters,
+        }
+    }
 }
 
 impl Crdt for Map {

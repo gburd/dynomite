@@ -18,16 +18,18 @@
 //! and the write-back; cross-node concurrency needs no coordination
 //! because the CRDT merge resolves it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use parking_lot::Mutex as SyncMutex;
 use tokio::sync::Mutex;
 
 use crate::datatypes::{
-    counter_from_bytes, counter_to_bytes, flag_from_bytes, flag_to_bytes, peek_tag,
-    register_from_bytes, register_to_bytes, set_from_bytes, set_to_bytes, ActorId, Crdt, EwFlag,
-    LwwRegister, OrSet, PnCounter, TAG_COUNTER, TAG_FLAG, TAG_REGISTER, TAG_SET,
+    counter_from_bytes, counter_to_bytes, flag_from_bytes, flag_to_bytes, hll_from_bytes,
+    hll_to_bytes, map_from_bytes, map_to_bytes, peek_tag, register_from_bytes, register_to_bytes,
+    set_from_bytes, set_to_bytes, ActorId, Crdt, EwFlag, FieldKey, FieldType, FieldValue,
+    HyperLogLog, LwwRegister, Map, MapOp, NestedOp, OrSet, PnCounter, TAG_COUNTER, TAG_FLAG,
+    TAG_HLL, TAG_MAP, TAG_REGISTER, TAG_SET,
 };
 use dynomite::embed::hooks::{Datastore, DatastoreError};
 
@@ -83,6 +85,25 @@ pub enum CrdtOp {
         /// `true` enables the flag, `false` disables it.
         enable: bool,
     },
+    /// Observed-remove map update or remove batch, recursively
+    /// covering nested maps.
+    Map {
+        /// Actor that produced the batch. [`Map::apply`] mints
+        /// every fresh OR-Set tag (including tags for nested maps)
+        /// from this single actor.
+        actor: ActorId,
+        /// The field-level operations to apply, in order.
+        ops: Vec<MapOp>,
+    },
+    /// HyperLogLog item batch.
+    Hll {
+        /// Actor that produced the batch. Carried for wire-format
+        /// symmetry with the other variants; [`HyperLogLog::add`]
+        /// does not attribute items to an actor.
+        actor: ActorId,
+        /// Items to fold into the register array.
+        items: Vec<Vec<u8>>,
+    },
 }
 
 impl CrdtOp {
@@ -94,6 +115,8 @@ impl CrdtOp {
             CrdtOp::Set { .. } => TAG_SET,
             CrdtOp::Register { .. } => TAG_REGISTER,
             CrdtOp::Flag { .. } => TAG_FLAG,
+            CrdtOp::Map { .. } => TAG_MAP,
+            CrdtOp::Hll { .. } => TAG_HLL,
         }
     }
 
@@ -152,6 +175,20 @@ impl CrdtOp {
                 }
                 flag_to_bytes(&f)
             }
+            CrdtOp::Map { actor, ops } => {
+                let mut m = Map::new();
+                for op in ops {
+                    m.apply(actor, op);
+                }
+                map_to_bytes(&m)
+            }
+            CrdtOp::Hll { items, .. } => {
+                let mut h = HyperLogLog::new();
+                for item in items {
+                    h.add(item);
+                }
+                hll_to_bytes(&h)
+            }
         }
     }
 
@@ -192,6 +229,22 @@ impl CrdtOp {
                 put_lp(&mut out, actor.dc.as_bytes());
                 put_lp(&mut out, actor.peer.as_bytes());
                 out.push(u8::from(*enable));
+            }
+            CrdtOp::Map { actor, ops } => {
+                put_lp(&mut out, actor.dc.as_bytes());
+                put_lp(&mut out, actor.peer.as_bytes());
+                out.extend_from_slice(&(ops.len() as u64).to_be_bytes());
+                for op in ops {
+                    put_map_op(&mut out, op);
+                }
+            }
+            CrdtOp::Hll { actor, items } => {
+                put_lp(&mut out, actor.dc.as_bytes());
+                put_lp(&mut out, actor.peer.as_bytes());
+                out.extend_from_slice(&(items.len() as u64).to_be_bytes());
+                for item in items {
+                    put_lp(&mut out, item);
+                }
             }
         }
         out
@@ -243,8 +296,142 @@ impl CrdtOp {
                 let enable = r.u8()? != 0;
                 Ok(CrdtOp::Flag { actor, enable })
             }
+            TAG_MAP => {
+                let no = usize::try_from(r.u64()?)
+                    .map_err(|_| crate::datatypes::CrdtSerialError::Truncated)?;
+                let mut ops = Vec::with_capacity(no);
+                for _ in 0..no {
+                    ops.push(read_map_op(&mut r)?);
+                }
+                Ok(CrdtOp::Map { actor, ops })
+            }
+            TAG_HLL => {
+                let ni = usize::try_from(r.u64()?)
+                    .map_err(|_| crate::datatypes::CrdtSerialError::Truncated)?;
+                let mut items = Vec::with_capacity(ni);
+                for _ in 0..ni {
+                    items.push(r.bytes()?);
+                }
+                Ok(CrdtOp::Hll { actor, items })
+            }
             other => Err(CrdtSerialError::UnknownTag(other)),
         }
+    }
+}
+
+/// Field-type wire byte for a [`FieldKey`] on the `CrdtOp` wire.
+/// Matches [`FieldType::to_wire`] narrowed to a `u8`; every
+/// discriminant fits in `1..=5`.
+fn put_field_type(out: &mut Vec<u8>, t: FieldType) {
+    out.push(u8::try_from(t.to_wire()).unwrap_or(0));
+}
+
+fn read_field_type(r: &mut OpReader<'_>) -> Result<FieldType, crate::datatypes::CrdtSerialError> {
+    let code = i32::from(r.u8()?);
+    FieldType::from_wire(code).ok_or(crate::datatypes::CrdtSerialError::UnknownTag(
+        u8::try_from(code).unwrap_or(0),
+    ))
+}
+
+fn put_field_key(out: &mut Vec<u8>, k: &FieldKey) {
+    put_lp(out, &k.name);
+    put_field_type(out, k.field_type);
+}
+
+fn read_field_key(r: &mut OpReader<'_>) -> Result<FieldKey, crate::datatypes::CrdtSerialError> {
+    let name = r.bytes()?;
+    let field_type = read_field_type(r)?;
+    Ok(FieldKey::new(name, field_type))
+}
+
+/// Nested-op discriminants on the `CrdtOp` wire. Distinct from the
+/// stored-state [`crate::datatypes::TAG_MAP`] family since a
+/// [`NestedOp`] is an operation, not a value.
+const NESTED_OP_COUNTER: u8 = 1;
+const NESTED_OP_SET_ADD: u8 = 2;
+const NESTED_OP_SET_REMOVE: u8 = 3;
+const NESTED_OP_REGISTER_ASSIGN: u8 = 4;
+const NESTED_OP_FLAG: u8 = 5;
+const NESTED_OP_MAP: u8 = 6;
+
+/// Top-level `MapOp` discriminants on the `CrdtOp` wire.
+const MAP_OP_UPDATE: u8 = 1;
+const MAP_OP_REMOVE: u8 = 2;
+
+fn put_map_op(out: &mut Vec<u8>, op: &MapOp) {
+    match op {
+        MapOp::Update { field, op } => {
+            out.push(MAP_OP_UPDATE);
+            put_field_key(out, field);
+            put_nested_op(out, op);
+        }
+        MapOp::Remove { field } => {
+            out.push(MAP_OP_REMOVE);
+            put_field_key(out, field);
+        }
+    }
+}
+
+fn read_map_op(r: &mut OpReader<'_>) -> Result<MapOp, crate::datatypes::CrdtSerialError> {
+    use crate::datatypes::CrdtSerialError;
+    match r.u8()? {
+        MAP_OP_UPDATE => {
+            let field = read_field_key(r)?;
+            let op = read_nested_op(r)?;
+            Ok(MapOp::Update { field, op })
+        }
+        MAP_OP_REMOVE => {
+            let field = read_field_key(r)?;
+            Ok(MapOp::Remove { field })
+        }
+        other => Err(CrdtSerialError::UnknownTag(other)),
+    }
+}
+
+fn put_nested_op(out: &mut Vec<u8>, op: &NestedOp) {
+    match op {
+        NestedOp::Counter(delta) => {
+            out.push(NESTED_OP_COUNTER);
+            out.extend_from_slice(&delta.to_be_bytes());
+        }
+        NestedOp::SetAdd(elt) => {
+            out.push(NESTED_OP_SET_ADD);
+            put_lp(out, elt);
+        }
+        NestedOp::SetRemove(elt) => {
+            out.push(NESTED_OP_SET_REMOVE);
+            put_lp(out, elt);
+        }
+        NestedOp::RegisterAssign { value, ts_micros } => {
+            out.push(NESTED_OP_REGISTER_ASSIGN);
+            put_lp(out, value);
+            out.extend_from_slice(&ts_micros.to_be_bytes());
+        }
+        NestedOp::Flag(enable) => {
+            out.push(NESTED_OP_FLAG);
+            out.push(u8::from(*enable));
+        }
+        NestedOp::Map(inner) => {
+            out.push(NESTED_OP_MAP);
+            put_map_op(out, inner);
+        }
+    }
+}
+
+fn read_nested_op(r: &mut OpReader<'_>) -> Result<NestedOp, crate::datatypes::CrdtSerialError> {
+    use crate::datatypes::CrdtSerialError;
+    match r.u8()? {
+        NESTED_OP_COUNTER => Ok(NestedOp::Counter(r.i64()?)),
+        NESTED_OP_SET_ADD => Ok(NestedOp::SetAdd(r.bytes()?)),
+        NESTED_OP_SET_REMOVE => Ok(NestedOp::SetRemove(r.bytes()?)),
+        NESTED_OP_REGISTER_ASSIGN => {
+            let value = r.bytes()?;
+            let ts_micros = r.u64()?;
+            Ok(NestedOp::RegisterAssign { value, ts_micros })
+        }
+        NESTED_OP_FLAG => Ok(NestedOp::Flag(r.u8()? != 0)),
+        NESTED_OP_MAP => Ok(NestedOp::Map(Box::new(read_map_op(r)?))),
+        other => Err(CrdtSerialError::UnknownTag(other)),
     }
 }
 
@@ -308,6 +495,10 @@ pub enum CrdtValue {
     Register(Vec<u8>),
     /// Flag value.
     Flag(bool),
+    /// Map field projection: present fields and their CRDT values.
+    Map(BTreeMap<FieldKey, FieldValue>),
+    /// HyperLogLog cardinality estimate.
+    Hll(u64),
     /// The key does not exist yet.
     Missing,
 }
@@ -348,6 +539,16 @@ pub fn merge_two_states(a: &[u8], b: &[u8]) -> Result<Vec<u8>, crate::datatypes:
             f.merge(&flag_from_bytes(b)?);
             Ok(flag_to_bytes(&f))
         }
+        TAG_MAP => {
+            let mut m = map_from_bytes(a)?;
+            m.merge(&map_from_bytes(b)?);
+            Ok(map_to_bytes(&m))
+        }
+        TAG_HLL => {
+            let mut h = hll_from_bytes(a)?;
+            h.merge(&hll_from_bytes(b)?);
+            Ok(hll_to_bytes(&h))
+        }
         other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other)),
     }
 }
@@ -372,6 +573,8 @@ pub fn project_state(
         )),
         TAG_REGISTER => Ok(CrdtValue::Register(register_from_bytes(state)?.value())),
         TAG_FLAG => Ok(CrdtValue::Flag(flag_from_bytes(state)?.value())),
+        TAG_MAP => Ok(CrdtValue::Map(map_from_bytes(state)?.value())),
+        TAG_HLL => Ok(CrdtValue::Hll(hll_from_bytes(state)?.value())),
         other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other)),
     }
 }
@@ -515,6 +718,30 @@ impl CrdtStore {
                 datastore.riak_put(bucket, key, &bytes, &[]).await?;
                 Ok((CrdtValue::Flag(f.value()), bytes))
             }
+            CrdtOp::Map { actor, ops } => {
+                let mut m = match &current {
+                    Some(bytes) => map_from_bytes(bytes)?,
+                    None => Map::new(),
+                };
+                for op in ops {
+                    m.apply(actor, op);
+                }
+                let bytes = map_to_bytes(&m);
+                datastore.riak_put(bucket, key, &bytes, &[]).await?;
+                Ok((CrdtValue::Map(m.value()), bytes))
+            }
+            CrdtOp::Hll { items, .. } => {
+                let mut h = match &current {
+                    Some(bytes) => hll_from_bytes(bytes)?,
+                    None => HyperLogLog::new(),
+                };
+                for item in items {
+                    h.add(item);
+                }
+                let bytes = hll_to_bytes(&h);
+                datastore.riak_put(bucket, key, &bytes, &[]).await?;
+                Ok((CrdtValue::Hll(h.value()), bytes))
+            }
         }
     }
 
@@ -539,6 +766,8 @@ impl CrdtStore {
             )),
             TAG_REGISTER => Ok(CrdtValue::Register(register_from_bytes(&bytes)?.value())),
             TAG_FLAG => Ok(CrdtValue::Flag(flag_from_bytes(&bytes)?.value())),
+            TAG_MAP => Ok(CrdtValue::Map(map_from_bytes(&bytes)?.value())),
+            TAG_HLL => Ok(CrdtValue::Hll(hll_from_bytes(&bytes)?.value())),
             other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other).into()),
         }
     }
@@ -626,6 +855,30 @@ impl CrdtStore {
                 self.datastore.riak_put(bucket, key, &bytes, &[]).await?;
                 Ok(CrdtValue::Flag(f.value()))
             }
+            CrdtOp::Map { actor, ops } => {
+                let mut m = match &current {
+                    Some(bytes) => map_from_bytes(bytes)?,
+                    None => Map::new(),
+                };
+                for op in ops {
+                    m.apply(actor, op);
+                }
+                let bytes = map_to_bytes(&m);
+                self.datastore.riak_put(bucket, key, &bytes, &[]).await?;
+                Ok(CrdtValue::Map(m.value()))
+            }
+            CrdtOp::Hll { items, .. } => {
+                let mut h = match &current {
+                    Some(bytes) => hll_from_bytes(bytes)?,
+                    None => HyperLogLog::new(),
+                };
+                for item in items {
+                    h.add(item);
+                }
+                let bytes = hll_to_bytes(&h);
+                self.datastore.riak_put(bucket, key, &bytes, &[]).await?;
+                Ok(CrdtValue::Hll(h.value()))
+            }
         }
     }
 
@@ -694,6 +947,22 @@ impl CrdtStore {
                 f.merge(&flag_from_bytes(state)?);
                 flag_to_bytes(&f)
             }
+            TAG_MAP => {
+                let mut m = match &current {
+                    Some(b) => map_from_bytes(b)?,
+                    None => Map::new(),
+                };
+                m.merge(&map_from_bytes(state)?);
+                map_to_bytes(&m)
+            }
+            TAG_HLL => {
+                let mut h = match &current {
+                    Some(b) => hll_from_bytes(b)?,
+                    None => HyperLogLog::new(),
+                };
+                h.merge(&hll_from_bytes(state)?);
+                hll_to_bytes(&h)
+            }
             other => return Err(crate::datatypes::CrdtSerialError::UnknownTag(other).into()),
         };
         datastore.riak_put(bucket, key, &merged, &[]).await?;
@@ -725,6 +994,8 @@ impl CrdtStore {
             )),
             TAG_REGISTER => Ok(CrdtValue::Register(register_from_bytes(&bytes)?.value())),
             TAG_FLAG => Ok(CrdtValue::Flag(flag_from_bytes(&bytes)?.value())),
+            TAG_MAP => Ok(CrdtValue::Map(map_from_bytes(&bytes)?.value())),
+            TAG_HLL => Ok(CrdtValue::Hll(hll_from_bytes(&bytes)?.value())),
             other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other).into()),
         }
     }
@@ -968,6 +1239,149 @@ mod tests {
         assert_eq!(
             project_state(&flag_to_bytes(&f), TAG_FLAG).unwrap(),
             CrdtValue::Flag(true)
+        );
+    }
+
+    fn counter_field(name: &str) -> FieldKey {
+        FieldKey::new(name.as_bytes(), FieldType::Counter)
+    }
+
+    fn register_field(name: &str) -> FieldKey {
+        FieldKey::new(name.as_bytes(), FieldType::LwwRegister)
+    }
+
+    #[tokio::test]
+    async fn map_update_adds_counter_and_register_fields_then_fetch() {
+        let s = store();
+        let actor = ActorId::new("dc1", "a");
+        let ops = vec![
+            MapOp::Update {
+                field: counter_field("hits"),
+                op: NestedOp::Counter(4),
+            },
+            MapOp::Update {
+                field: register_field("name"),
+                op: NestedOp::RegisterAssign {
+                    value: b"alice".to_vec(),
+                    ts_micros: 9,
+                },
+            },
+        ];
+        let applied = s
+            .apply(
+                b"c",
+                b"k",
+                &CrdtOp::Map {
+                    actor: actor.clone(),
+                    ops,
+                },
+            )
+            .await
+            .unwrap();
+        let CrdtValue::Map(ref fields) = applied else {
+            panic!("expected map value");
+        };
+        match fields.get(&counter_field("hits")) {
+            Some(FieldValue::Counter(c)) => assert_eq!(c.value(), 4),
+            other => panic!("expected counter field, got {other:?}"),
+        }
+        match fields.get(&register_field("name")) {
+            Some(FieldValue::LwwRegister(r)) => assert_eq!(r.value(), b"alice".to_vec()),
+            other => panic!("expected register field, got {other:?}"),
+        }
+
+        let fetched = s.fetch(b"c", b"k", TAG_MAP).await.unwrap();
+        assert_eq!(fetched, applied);
+    }
+
+    #[tokio::test]
+    async fn hll_add_then_fetch_returns_cardinality() {
+        let s = store();
+        let actor = ActorId::new("dc1", "a");
+        let items: Vec<Vec<u8>> = (0u32..500).map(|i| i.to_be_bytes().to_vec()).collect();
+        let applied = s
+            .apply(b"c", b"k", &CrdtOp::Hll { actor, items })
+            .await
+            .unwrap();
+        let CrdtValue::Hll(n) = applied else {
+            panic!("expected hll value");
+        };
+        assert!((450..=550).contains(&n), "cardinality {n} not near 500");
+
+        let fetched = s.fetch(b"c", b"k", TAG_HLL).await.unwrap();
+        assert_eq!(fetched, CrdtValue::Hll(n));
+    }
+
+    #[test]
+    fn merge_two_states_map_recursively_merges_fields() {
+        let a = ActorId::new("dc1", "a");
+        let b = ActorId::new("dc1", "b");
+        let mut left = Map::new();
+        left.apply(
+            &a,
+            &MapOp::Update {
+                field: counter_field("c"),
+                op: NestedOp::Counter(3),
+            },
+        );
+        let mut right = Map::new();
+        right.apply(
+            &b,
+            &MapOp::Update {
+                field: counter_field("c"),
+                op: NestedOp::Counter(5),
+            },
+        );
+        let merged = merge_two_states(&map_to_bytes(&left), &map_to_bytes(&right)).unwrap();
+        let CrdtValue::Map(fields) = project_state(&merged, TAG_MAP).unwrap() else {
+            panic!("expected map value");
+        };
+        match fields.get(&counter_field("c")) {
+            Some(FieldValue::Counter(c)) => assert_eq!(c.value(), 8),
+            other => panic!("expected counter field, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_two_states_hll_is_elementwise_max() {
+        let mut a = HyperLogLog::new();
+        for i in 0u32..200 {
+            a.add(i.to_be_bytes());
+        }
+        let mut b = HyperLogLog::new();
+        for i in 100u32..300 {
+            b.add(i.to_be_bytes());
+        }
+        let merged = merge_two_states(&hll_to_bytes(&a), &hll_to_bytes(&b)).unwrap();
+        let CrdtValue::Hll(n) = project_state(&merged, TAG_HLL).unwrap() else {
+            panic!("expected hll value");
+        };
+        assert!(
+            (250..=350).contains(&n),
+            "merged cardinality {n} not near 300"
+        );
+    }
+
+    #[test]
+    fn project_state_covers_map_and_hll() {
+        let mut m = Map::new();
+        m.apply(
+            &ActorId::new("dc1", "a"),
+            &MapOp::Update {
+                field: counter_field("c"),
+                op: NestedOp::Counter(2),
+            },
+        );
+        let CrdtValue::Map(fields) = project_state(&map_to_bytes(&m), TAG_MAP).unwrap() else {
+            panic!("expected map value");
+        };
+        assert_eq!(fields.len(), 1);
+
+        let mut h = HyperLogLog::new();
+        h.add(b"x");
+        assert_eq!(
+            project_state(&hll_to_bytes(&h), TAG_HLL).unwrap(),
+            CrdtValue::Hll(h.value())
         );
     }
 }

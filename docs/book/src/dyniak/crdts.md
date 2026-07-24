@@ -94,15 +94,14 @@ flowchart TB
 primitive type or, recursively, another Map -- the same composition
 Riak's riak_dt_map offers.</p>
 
-```admonish warning title="Wire reachability: Counter, Set, Register, Flag"
-All six types exist as first-class, tested Rust APIs (the examples in
-this chapter are doctests). Over the Dyniak PBC / HTTP wire, **Counter**,
-**Set**, **Register**, and **Flag** are served: a `DtUpdate` /
-`DtFetch` for the `counters`, `sets`, `registers`, or `flags` bucket
-type is handled, and the read coordinates and merges across the replica
-set. Map and HyperLogLog are implemented in the crate but not yet wired
-to the wire handlers; sending one over PBC / HTTP is not yet served.
-Wiring the remaining two is tracked follow-up work.
+```admonish note title="All six types are served over the wire"
+All six types are first-class, tested Rust APIs (the examples in this
+chapter are doctests) AND served over the Dyniak PBC / HTTP wire:
+**Counter**, **Set**, **Register**, **Flag**, **Map**, and
+**HyperLogLog**. A `DtUpdate` / `DtFetch` for the `counters`, `sets`,
+`registers`, `flags`, `maps`, or `hlls` bucket type is handled, and a
+read coordinates and merges across the replica set. Map fields may be
+counters, sets, registers, flags, or (recursively) nested maps.
 ```
 
 ### Counter
