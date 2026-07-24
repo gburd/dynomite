@@ -18,6 +18,7 @@
 //! | GET, HEAD   | `/buckets/{bucket}/keys/{key}`           | Fetch object               |
 //! | PUT         | `/buckets/{bucket}/keys/{key}`           | Store object               |
 //! | POST        | `/buckets/{bucket}/keys/{key}`           | Store object (key required)|
+//! | POST        | `/buckets/{bucket}/keys`                 | Store under a server-assigned key (201 + Location) |
 //! | DELETE      | `/buckets/{bucket}/keys/{key}`           | Delete object              |
 //! | GET         | `/buckets?buckets=true`                  | List buckets (chunked)     |
 //! | GET         | `/buckets/{bucket}/keys?keys=true`       | List keys (chunked)        |
@@ -53,7 +54,8 @@ use futures_core::Stream;
 use futures_util::StreamExt;
 use http_body_util::{combinators::UnsyncBoxBody, BodyExt, Full, StreamBody};
 use hyper::body::{Frame as HttpFrame, Incoming};
-use hyper::header::{ACCEPT, CONTENT_TYPE, TRANSFER_ENCODING};
+use hyper::header::{ACCEPT, CONTENT_TYPE, LOCATION, TRANSFER_ENCODING};
+use hyper::http::HeaderValue;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode};
 
 use dynomite::embed::hooks::DatastoreByteStream;
@@ -236,6 +238,10 @@ enum Route<'a> {
     /// key path component even for server-assigned keys; we accept
     /// it for parity).
     PostObject { bucket: &'a str, key: &'a str },
+    /// `POST /buckets/{bucket}/keys` (no key) -- store an object under
+    /// a SERVER-ASSIGNED key. Riak replies `201 Created` with a
+    /// `Location` header naming the generated key.
+    PostNewObject { bucket: &'a str },
     /// `DELETE /buckets/{bucket}/keys/{key}`
     DeleteObject { bucket: &'a str, key: &'a str },
     /// `GET /buckets?buckets=true`
@@ -304,6 +310,7 @@ impl<'a> Route<'a> {
             }
             ("PUT", ["buckets", b, "keys", k]) => Some(Self::PutObject { bucket: b, key: k }),
             ("POST", ["buckets", b, "keys", k]) => Some(Self::PostObject { bucket: b, key: k }),
+            ("POST", ["buckets", b, "keys"]) => Some(Self::PostNewObject { bucket: b }),
             ("DELETE", ["buckets", b, "keys", k]) => Some(Self::DeleteObject { bucket: b, key: k }),
             ("GET", ["buckets", b, "keys"]) if has_flag(query, "keys", "true") => {
                 Some(Self::ListKeys { bucket: b })
@@ -395,6 +402,7 @@ async fn handle_route(
         Route::PutObject { bucket, key } | Route::PostObject { bucket, key } => {
             handle_put(bucket, key, headers, body, &ctx).await
         }
+        Route::PostNewObject { bucket } => handle_post_new_key(bucket, headers, body, &ctx).await,
         Route::DeleteObject { bucket, key } => handle_delete(bucket, key, &ctx).await,
         Route::ListBuckets => list_buckets_response(headers, &ctx.datastore),
         Route::ListKeys { bucket } => list_keys_response(bucket, headers, &ctx.datastore),
@@ -519,6 +527,69 @@ async fn handle_get(
         let _ = (bucket, key, ct, head_only);
     }
     text_response(StatusCode::NOT_FOUND, "not found")
+}
+
+/// Handle `POST /buckets/{bucket}/keys` with no key: store the object
+/// under a server-assigned key and reply `201 Created` with a
+/// `Location` header, matching Riak's HTTP behavior.
+async fn handle_post_new_key(
+    bucket: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+    ctx: &RouteCtx,
+) -> Response<ResponseBody> {
+    let key = generate_object_key();
+    let put = handle_put(bucket, &key, headers, body, ctx).await;
+    // Only rewrite to 201 + Location when the underlying store
+    // accepted the write (2xx). A client error / not-acceptable /
+    // store error passes through unchanged.
+    if !put.status().is_success() {
+        return put;
+    }
+    let location = format!("/buckets/{bucket}/keys/{key}");
+    let (mut parts, body) = put.into_parts();
+    parts.status = StatusCode::CREATED;
+    if let Ok(v) = HeaderValue::from_str(&location) {
+        parts.headers.insert(LOCATION, v);
+    }
+    Response::from_parts(parts, body)
+}
+
+/// Generate a unique server-assigned object key without a random-
+/// number dependency: a strictly-increasing process-local counter
+/// combined with the wall-clock nanosecond, base36-encoded. Two keys
+/// generated in the same process never collide (the counter is
+/// monotonic); across processes the nanosecond prefix makes a
+/// collision astronomically unlikely for the server-assigned-key use
+/// case (a client that needs a guaranteed-unique key supplies its
+/// own).
+fn generate_object_key() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| {
+        u64::try_from(d.as_nanos() & u128::from(u64::MAX)).unwrap_or(0)
+    });
+    // Mix so neither field alone determines the key.
+    let mixed = nanos.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(n);
+    format!("{}{}", to_base36(mixed), to_base36(n))
+}
+
+/// Base36-encode a `u64` (0-9a-z), lower-case, no padding.
+fn to_base36(mut v: u64) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    if v == 0 {
+        return "0".to_string();
+    }
+    let mut buf = [0u8; 13];
+    let mut i = buf.len();
+    while v > 0 {
+        i -= 1;
+        buf[i] = DIGITS[(v % 36) as usize];
+        v /= 36;
+    }
+    String::from_utf8_lossy(&buf[i..]).into_owned()
 }
 
 async fn handle_put(
@@ -2416,6 +2487,24 @@ mod tests {
                 key: "k",
             }
         );
+        // POST with no key -> server-assigned key route.
+        let r = Route::parse(&Method::POST, "/buckets/u/keys", None).expect("post new");
+        assert_eq!(r, Route::PostNewObject { bucket: "u" });
+    }
+
+    #[test]
+    fn generated_object_keys_are_unique_and_base36() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..10_000 {
+            let k = generate_object_key();
+            assert!(!k.is_empty());
+            assert!(
+                k.bytes()
+                    .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase()),
+                "key must be base36: {k}"
+            );
+            assert!(seen.insert(k.clone()), "duplicate generated key: {k}");
+        }
     }
 
     #[test]

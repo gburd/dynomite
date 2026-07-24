@@ -76,7 +76,9 @@ Dimension scoreboard (audit 2):
    (fire-and-forget) rather than durably queued for replay. Effort L.
    (Deferred, but not clearly flagged in code.)
 4. **Server-assigned keys rejected.** `POST /buckets/{b}/keys` returns an
-   error instead of `201 + Location`. Effort S.
+   error instead of `201 + Location`. Effort S. **DONE 2026-07-24**:
+   `POST /buckets/{b}/keys` (no key) now stores under a generated
+   base36 key and replies `201 Created` + `Location`.
 5. **Map + HLL CRDTs not reachable.** Modules exist but are not exported
    and have no handlers. Effort M.
 6. **Pre/postcommit hooks not executed.** Wire fields skipped on decode.
@@ -126,12 +128,13 @@ NOT "better than Riak".
 
 Now done this session:
 * [x] CRDT read coordination (the #1 read-repair gating item).
+* [x] Server-assigned keys: `POST /buckets/{b}/keys` -> 201 + Location.
 
 Near-term correctness parity (highest surprise for a Riak user):
 1. KV object quorum read + read repair on the PBC path (R/PR). M.
 2. Surface siblings on PBC/HTTP for `allow_mult` buckets. M.
 3. TTL / object expiry via the reaper. M.
-4. Server-assigned keys (POST unnamed). S.
+4. Server-assigned keys (POST unnamed). S. **DONE.**
 5. Map + HLL CRDT handlers (export + wire). M.
 6. Durable hinted-handoff queue. L.
 7. Pre/postcommit hooks. L.

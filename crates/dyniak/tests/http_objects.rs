@@ -298,6 +298,52 @@ async fn put_empty_body_returns_400() {
 }
 
 #[tokio::test]
+async fn post_without_key_assigns_a_key_and_returns_201() {
+    let (addr, _ds, server, _dir) = spawn_noxu_server().await;
+
+    // POST to the collection (no key) -> server-assigned key.
+    let req = "POST /buckets/u/keys HTTP/1.1\r\n\
+         Host: x\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: 13\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {\"v\":\"hello\"}"
+        .to_string();
+    let resp = send_raw(addr, &req).await;
+    let head_end = find_subslice(&resp, b"\r\n\r\n").expect("headers");
+    let head = std::str::from_utf8(&resp[..head_end]).expect("ascii");
+    assert_eq!(parse_response(&resp).0, 201, "server-assigned key -> 201");
+
+    // Extract the Location header and confirm it names a key under the
+    // bucket, then GET that key back to prove the object was stored.
+    let location = head
+        .split("\r\n")
+        .find_map(|l| {
+            l.split_once(':')
+                .filter(|(k, _)| k.eq_ignore_ascii_case("location"))
+                .map(|(_, v)| v.trim().to_string())
+        })
+        .expect("Location header present");
+    assert!(
+        location.starts_with("/buckets/u/keys/"),
+        "Location names the bucket key: {location}"
+    );
+    let key = location.trim_start_matches("/buckets/u/keys/");
+    assert!(!key.is_empty(), "assigned key is non-empty");
+
+    let get = send_raw(addr, &get_request(&location, "application/json")).await;
+    assert_eq!(
+        parse_response(&get).0,
+        200,
+        "the server-assigned object is retrievable at its Location"
+    );
+
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn put_undecodable_body_returns_400() {
     let (addr, _ds, server, _dir) = spawn_noxu_server().await;
 
