@@ -13,6 +13,50 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.5.0] - 2026-07-23
+
+Minor release. Served, convergent Dyniak CRDTs; a review-driven
+security and correctness pass. Backward compatible except that an
+oversized ring token is now a startup error rather than a silent
+saturation (see Fixed).
+
+### Added
+
+- `dyniak`: served, convergent CRDTs (counters + sets). The PBC server
+  now handles `DtUpdateReq` / `DtFetchReq` (codes 82/80); a client
+  update applies locally (always available, no quorum), the merged
+  state is shipped to the key's replicas, and replica apply merges it
+  idempotently, so concurrent partitioned increments SUM (converge)
+  instead of overwriting. Previously the CRDT types existed but no
+  served endpoint applied them and replica apply was last-write-wins.
+  Per-node actor attribution; state-ship + max-merge for idempotent,
+  reorder-safe, duplicate-safe replication. DST convergence model with
+  an LWW negative control; wire + replicated-apply integration tests.
+- `crypto`: an authenticated AES-256-GCM peer cipher
+  (`crypto::aes::encrypt_to_vec_aead` / `decrypt_to_vec_aead`) -- full
+  32-byte key, random 96-bit nonce, 128-bit tag -- alongside the
+  C-compatible AES-128-CBC form (kept for interop). New dep aes-gcm.
+
+### Fixed
+
+- `dynomited`: a ring token whose value exceeds `u32::MAX` is now a
+  hard configuration error. It was previously saturated to `u32::MAX`,
+  which silently placed the node at a different ring position than
+  configured -- a correctness hazard for migrating a live C cluster.
+  Arbitrary-precision tokens remain tracked; oversized tokens are
+  rejected, never saturated.
+
+### Changed
+
+- README: the Status section now states the Riak non-goals (no
+  riak_repl realtime cross-DC, no riak_ensemble strong consistency, FT
+  search is per-node RediSearch-shaped not Yokozuna/Solr), disclaims
+  untested mixed C/Rust clusters (whole-cluster replacement only), and
+  frames the version as internal-milestone cadence, not field-proven
+  maturity. Prompted by an external review (2026-07-23); see
+  docs/journal/2026-07-23-review-response.md and parity.md deviations
+  D-crypto and D-audit.
+
 ## [1.4.1] - 2026-07-12
 
 Patch release. Advances the noxu storage engine to 7.5.3, whose evictor
@@ -754,5 +798,5 @@ for the v0.1.0 release:
   release tag; smoke 60 s variant available under
   `--features chaos` for development cycles.
 
-[Unreleased]: https://github.com/gburd/dynomite/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/gburd/dynomite/compare/v1.5.0...HEAD
 [0.1.0]: https://github.com/gburd/dynomite/releases/tag/v0.1.0

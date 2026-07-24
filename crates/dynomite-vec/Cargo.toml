@@ -1,7 +1,7 @@
 [package]
 name = "dynomite-vec"
 description = "Vector storage + HNSW ANN index engine for the Dynomite Rust port"
-version = "1.4.1"
+version = "1.5.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
