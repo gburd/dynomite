@@ -177,7 +177,16 @@ phase_mount() {
   local pub cnt=0
   while read -r _ _ _ _ _ _ _ pub _; do
     nsh "$pub" '
-      DEV=$(lsblk -dpno NAME,MOUNTPOINT | awk "\$2==\"\" && \$1!~/nvme0/ {print \$1; exit}")
+      # Pick the largest whole disk that has NO mounted partition and
+      # is not itself mounted -- the instance-store NVMe. Device NAMING
+      # is not reliable (on some instances the root is nvme1 and the
+      # instance store is nvme0), so select by "unused + largest", not
+      # by name.
+      DEV=$(lsblk -bdpno NAME,SIZE,TYPE | awk "\$3==\"disk\"{print \$1, \$2}" | while read d sz; do
+        # skip a disk that is mounted or whose partitions are mounted
+        mounted=$(lsblk -no MOUNTPOINT "$d" 2>/dev/null | grep -c .)
+        [ "$mounted" -eq 0 ] && echo "$sz $d"
+      done | sort -rn | head -1 | awk "{print \$2}")
       if [ -n "$DEV" ] && [ ! -d /mnt/data/lost+found ]; then
         sudo mkfs.xfs -f "$DEV" >/dev/null 2>&1 || sudo mkfs.ext4 -F "$DEV" >/dev/null 2>&1
         sudo mkdir -p /mnt/data && sudo mount "$DEV" /mnt/data && sudo chown ec2-user:ec2-user /mnt/data
