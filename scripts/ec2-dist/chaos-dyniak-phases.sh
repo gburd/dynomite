@@ -62,12 +62,14 @@ allowlist_everywhere() {
 
 launch_one() { # <region> <sg> <itype> <role> <idx>  -> "iid pub priv" on stdout
   local region=$1 sg=$2 itype=$3 role=$4 idx=$5
-  local ami=${AMI[$region]} az=${AZ[$region]} attempt out iid
+  local ami=${AMI[$region]} attempt out iid
   for attempt in 1 2 3 4 5; do
+    # No AZ pin: let AWS place the instance in whichever AZ of the
+    # region has capacity for the type (a pinned AZ hits
+    # InsufficientInstanceCapacity for larger metal/NVMe types).
     out=$(aws ec2 run-instances --region "$region" --image-id "$ami" \
       --instance-type "$itype" --count 1 \
       --key-name "${RUN_ID}-key" --security-group-ids "$sg" \
-      --placement "AvailabilityZone=$az" \
       --tag-specifications "ResourceType=instance,Tags=[{Key=$TAG,Value=$RUN_ID},{Key=Name,Value=${RUN_ID}-${role}-${DC[$region]}-${idx}},{Key=role,Value=$role}]" \
       --query 'Instances[0].InstanceId' --output text 2>>"$STATE_DIR/provision.err")
     iid="$out"

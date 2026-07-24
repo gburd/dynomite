@@ -1,5 +1,15 @@
 # Chaos finding: Dyniak CRDT convergence is owner-centric, not per-replica
 
+> RESOLVED 2026-07-24 for the WRITE path. See
+> `2026-07-24-crdt-replica-convergence-fix.md`: writes now apply
+> locally (accumulate) and fan full state to the key's replica set;
+> each replica merges idempotently (element-wise max). A re-run of
+> this same chaos test with distinct ring tokens and a Dynamo-model
+> verify reported `all_converged=true`, `lost_count=0`,
+> `overcount_count=0` over 200 keys / 12370 ops through 2 partitions +
+> 2 churns. Read coordination (fan a `DtFetch` to the replica set and
+> merge) remains tracked as a request/response-plane feature.
+
 Date: 2026-07-24
 Run: chaos-20260723-222519 (clean 6-node / 3-region cluster on local
 NVMe, 3 regional load generators, 2 net splits + 2 node churns during a
