@@ -360,6 +360,22 @@ pub enum PeerOp {
         /// Serialized [`crate::crdt_store::CrdtOp`] payload.
         op: Vec<u8>,
     },
+    /// Query a peer replica for its local CRDT state (read
+    /// coordination). Unlike the other ops this expects a REPLY: the
+    /// peer reads its local stored state for the key and returns the
+    /// serialized CRDT state so the coordinator can merge the replica
+    /// set and answer with the converged value.
+    DtFetch {
+        /// Bucket type (`counters` / `sets`).
+        bucket_type: Vec<u8>,
+        /// Bucket name.
+        bucket: Vec<u8>,
+        /// Key supplied by the client.
+        key: Vec<u8>,
+        /// CRDT type tag selecting the projection
+        /// ([`crate::crdt_store::CrdtOp::type_tag`]).
+        tag: u8,
+    },
 }
 
 /// Receiver of replica-peer dispatches.
@@ -381,6 +397,18 @@ pub trait PeerOutbound: Send + Sync + std::fmt::Debug {
     /// is fire-and-forget so an unreachable peer does not block
     /// the request handler.
     fn dispatch(&self, peer_idx: u32, op: PeerOp) -> BoxFuture<'_, ()>;
+
+    /// Send `op` to the peer at `peer_idx` and await a reply, up to an
+    /// implementation-defined timeout. Returns the reply payload, or
+    /// `None` if the peer is unreachable, times out, or the transport
+    /// does not support request/response. This is the read-
+    /// coordination path (a `PeerOp::DtFetch` fans to the replica set
+    /// and the coordinator merges the replies). The default returns
+    /// `None` so a fire-and-forget-only transport needs no change.
+    fn request(&self, peer_idx: u32, op: PeerOp) -> BoxFuture<'_, Option<Vec<u8>>> {
+        let _ = (peer_idx, op);
+        Box::pin(async { None })
+    }
 }
 
 /// Routing-hook bundle handed to

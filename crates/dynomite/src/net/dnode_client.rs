@@ -117,6 +117,35 @@ pub async fn dnode_client_loop(
     }
 }
 
+/// Frame `reply` bytes back to a peer as a dnode `Res` carrying
+/// `reply_id`, over the connection's transport. Used by the read-
+/// coordination path: a replica answers a `DtFetch` query with its
+/// local CRDT state so the coordinator can merge the replica set.
+async fn write_replica_reply(
+    conn: &mut Conn,
+    reply_id: crate::core::types::MsgId,
+    reply: &[u8],
+) -> Result<(), NetError> {
+    let mut header_buf = conn.mbuf_pool().get();
+    crate::proto::dnode::dmsg_write(
+        &mut header_buf,
+        reply_id,
+        crate::proto::dnode::DmsgType::Res,
+        0,
+        true,
+        None,
+        u32::try_from(reply.len()).unwrap_or(u32::MAX),
+    )
+    .map_err(|e| NetError::Dnode(format!("{e:?}")))?;
+    let header_len = header_buf.readable().len();
+    if let Some(t) = conn.transport_mut() {
+        t.write_all(header_buf.readable()).await?;
+        t.write_all(reply).await?;
+        conn.record_send(header_len + reply.len());
+    }
+    Ok(())
+}
+
 async fn drive_dnode_parser(
     conn: &mut Conn,
     handler: &ClientHandler,
@@ -173,7 +202,19 @@ async fn drive_dnode_parser(
                 // data-plane request.
                 if matches!(dmsg.ty, DmsgType::RiakReplica) {
                     if let Some(sink) = handler.replica_sink() {
-                        sink.apply(&payload).await;
+                        // A replica op may be a fire-and-forget write
+                        // (apply, no reply) or a read-coordination
+                        // query (apply_query returns Some(reply)). Try
+                        // the query path first; if it yields reply
+                        // bytes, frame them back to the requester as a
+                        // `Res` carrying the same dmsg id so the
+                        // coordinator's outstanding request resolves.
+                        let reply_id = dmsg.id;
+                        if let Some(reply) = sink.apply_query(&payload).await {
+                            write_replica_reply(conn, reply_id, &reply).await?;
+                        } else {
+                            sink.apply(&payload).await;
+                        }
                     }
                     continue;
                 }

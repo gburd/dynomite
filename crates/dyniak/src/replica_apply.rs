@@ -104,9 +104,10 @@ impl ReplicaApplier {
                     }
                 }
             }
-            // Get replication is a read-repair / handoff read; write
-            // replication does not need it. No-op for now.
-            PeerOp::Get { .. } => {}
+            // A Get is a read-repair / handoff read and a DtFetch is a
+            // read-coordination QUERY answered by `apply_query`; neither
+            // is a write, so the write-apply path is a no-op for both.
+            PeerOp::Get { .. } | PeerOp::DtFetch { .. } => {}
             PeerOp::DtUpdate {
                 bucket, key, op, ..
             } => {
@@ -152,6 +153,31 @@ impl ReplicaApplier {
 impl ReplicaApplySink for ReplicaApplier {
     fn apply<'a>(&'a self, payload: &'a [u8]) -> BoxFuture<'a, ()> {
         Box::pin(async move { self.apply_op(payload).await })
+    }
+
+    fn apply_query<'a>(&'a self, payload: &'a [u8]) -> BoxFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move {
+            // Only a DtFetch expects a reply; every other op is a
+            // fire-and-forget write handled by `apply`. Returning
+            // `None` for a non-fetch tells the receive loop to fall
+            // through to `apply` (no double-apply).
+            let op = decode_peer_op(payload).ok()?;
+            let PeerOp::DtFetch { bucket, key, .. } = op else {
+                return None;
+            };
+            // Read the local stored CRDT state for the key and return
+            // the raw serialized state so the coordinator can merge
+            // it with the other replicas' states. An absent key
+            // replies with an empty payload (no contribution).
+            match self.datastore.riak_get(&bucket, &key).await {
+                Ok(Some(state)) => Some(state),
+                Ok(None) => Some(Vec::new()),
+                Err(e) => {
+                    tracing::debug!(error = %e, "riak replica: dt fetch read failed");
+                    Some(Vec::new())
+                }
+            }
+        })
     }
 }
 

@@ -550,7 +550,9 @@ async fn process_frame(
         MessageCode::DtUpdateReq => {
             single_frame(handle_dt_update(&frame.body, datastore, hooks).await?)
         }
-        MessageCode::DtFetchReq => single_frame(handle_dt_fetch(&frame.body, datastore).await?),
+        MessageCode::DtFetchReq => {
+            single_frame(handle_dt_fetch(&frame.body, datastore, hooks).await?)
+        }
         // Response codes are illegal inbound.
         MessageCode::ErrorResp
         | MessageCode::PingResp
@@ -951,7 +953,23 @@ async fn handle_dt_update(
 }
 
 /// Handle a `DtFetchReq` (CRDT data-type fetch, PBC code 80).
-async fn handle_dt_fetch(body: &[u8], datastore: &dyn Datastore) -> Result<Frame, RiakError> {
+/// Test-only entry point for the CRDT fetch handler with routing
+/// hooks, so integration tests can exercise read coordination without
+/// standing up a full PBC listener. Not part of the stable API.
+#[doc(hidden)]
+pub async fn handle_dt_fetch_for_test(
+    body: &[u8],
+    datastore: &dyn Datastore,
+    hooks: Option<&RoutingHooks>,
+) -> Result<crate::proto::pb::framer::Frame, RiakError> {
+    handle_dt_fetch(body, datastore, hooks).await
+}
+
+async fn handle_dt_fetch(
+    body: &[u8],
+    datastore: &dyn Datastore,
+    hooks: Option<&RoutingHooks>,
+) -> Result<Frame, RiakError> {
     use crate::crdt_store::{CrdtStore, CrdtValue};
     use crate::datatypes::{TAG_COUNTER, TAG_SET};
     use crate::proto::pb::{DtFetchReq, DtFetchResp, DtValue, DATA_TYPE_COUNTER, DATA_TYPE_SET};
@@ -964,35 +982,83 @@ async fn handle_dt_fetch(body: &[u8], datastore: &dyn Datastore) -> Result<Frame
     } else {
         (TAG_COUNTER, DATA_TYPE_COUNTER)
     };
-    let fetch_result = CrdtStore::fetch_borrowed(datastore, &req.bucket, &req.key, tag).await;
-    match fetch_result {
-        Ok(value) => {
-            let mut resp = DtFetchResp {
-                r#type: dtype,
-                ..DtFetchResp::default()
-            };
-            match value {
-                CrdtValue::Counter(n) => {
-                    resp.value = Some(DtValue {
-                        counter_value: Some(n),
-                        ..DtValue::default()
-                    });
+    // Read coordination: fan a DtFetch to every OTHER replica of the
+    // key, merge each returned state into the local state, and
+    // project the converged value. This makes a fetch to ANY node --
+    // replica or not -- return the full value, matching Riak's
+    // merge-on-read for data types. On a transport without request/
+    // response (fire-and-forget only) `request` returns `None` and we
+    // fall back to the local value; anti-entropy is the backstop.
+    let mut merged_state: Vec<u8> = match datastore.riak_get(&req.bucket, &req.key).await {
+        Ok(Some(s)) => s,
+        _ => Vec::new(),
+    };
+    if let Some(hooks) = hooks {
+        if let Ok(decision) = hooks.router.try_route(&req.r#type, &req.bucket, &req.key) {
+            for replica in decision.replica_list() {
+                if replica.peer_idx == hooks.local_peer_idx {
+                    continue;
                 }
-                CrdtValue::Set(elems) => {
-                    resp.value = Some(DtValue {
-                        set_value: elems,
-                        ..DtValue::default()
-                    });
+                let reply = hooks
+                    .outbound
+                    .request(
+                        replica.peer_idx,
+                        crate::router::PeerOp::DtFetch {
+                            bucket_type: decision.bucket_type.clone(),
+                            bucket: req.bucket.clone(),
+                            key: req.key.clone(),
+                            tag,
+                        },
+                    )
+                    .await;
+                if let Some(state) = reply {
+                    if !state.is_empty() {
+                        merged_state =
+                            match crate::crdt_store::merge_two_states(&merged_state, &state) {
+                                Ok(m) => m,
+                                Err(_) => merged_state,
+                            };
+                    }
                 }
-                CrdtValue::Missing => {}
             }
-            Ok(Frame::new(
-                MessageCode::DtFetchResp.as_u8(),
-                resp.encode_to_vec(),
-            ))
         }
-        Err(e) => Ok(error_frame(format!("riak dt_fetch: {e}"))),
     }
+    // Project the merged state; an empty merged state is Missing.
+    let value = if merged_state.is_empty() {
+        CrdtValue::Missing
+    } else {
+        crate::crdt_store::project_state(&merged_state, tag).unwrap_or(CrdtValue::Missing)
+    };
+    // Persist the merged state locally so a subsequent local read is
+    // already converged (read repair for the coordinating node). Best
+    // effort: a failure just means the next fetch re-merges.
+    if !matches!(value, CrdtValue::Missing) {
+        let _ =
+            CrdtStore::merge_state_borrowed(datastore, &req.bucket, &req.key, &merged_state).await;
+    }
+    let mut resp = DtFetchResp {
+        r#type: dtype,
+        ..DtFetchResp::default()
+    };
+    match value {
+        CrdtValue::Counter(n) => {
+            resp.value = Some(DtValue {
+                counter_value: Some(n),
+                ..DtValue::default()
+            });
+        }
+        CrdtValue::Set(elems) => {
+            resp.value = Some(DtValue {
+                set_value: elems,
+                ..DtValue::default()
+            });
+        }
+        CrdtValue::Missing => {}
+    }
+    Ok(Frame::new(
+        MessageCode::DtFetchResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
 }
 
 /// Translate a PBC [`DtOp`] into the internal

@@ -74,6 +74,18 @@ pub trait ReplicaApplySink: Send + Sync {
     /// datastore. Errors are logged by the implementor and
     /// swallowed; the receive loop never blocks on the result.
     fn apply<'a>(&'a self, payload: &'a [u8]) -> BoxFuture<'a, ()>;
+
+    /// Apply a replica op that expects a reply, returning the reply
+    /// bytes to frame back to the requester as a `Res`, or `None` if
+    /// the op produces no reply (the receive loop then treats it as
+    /// fire-and-forget). This is the read-coordination path: a peer
+    /// fetch reads local state and returns it so the coordinator can
+    /// merge the replica set. The default returns `None`, so a sink
+    /// that only handles writes needs no change.
+    fn apply_query<'a>(&'a self, payload: &'a [u8]) -> BoxFuture<'a, Option<Vec<u8>>> {
+        let _ = payload;
+        Box::pin(async { None })
+    }
 }
 
 /// Boxed future returned by [`ReplicaApplySink::apply`].

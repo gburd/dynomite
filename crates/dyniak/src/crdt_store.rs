@@ -257,6 +257,36 @@ pub enum CrdtValue {
     Missing,
 }
 
+/// Merge two serialized CRDT states of the same type into one
+/// serialized state (element-wise max). Used by read coordination to
+/// combine replica states without touching a datastore.
+///
+/// # Errors
+/// [`crate::datatypes::CrdtSerialError`] if either blob is corrupt or
+/// the two blobs are different CRDT types.
+pub fn merge_two_states(a: &[u8], b: &[u8]) -> Result<Vec<u8>, crate::datatypes::CrdtSerialError> {
+    if a.is_empty() {
+        return Ok(b.to_vec());
+    }
+    if b.is_empty() {
+        return Ok(a.to_vec());
+    }
+    let tag = peek_tag(a)?;
+    match tag {
+        TAG_COUNTER => {
+            let mut c = counter_from_bytes(a)?;
+            c.merge(&counter_from_bytes(b)?);
+            Ok(counter_to_bytes(&c))
+        }
+        TAG_SET => {
+            let mut s = set_from_bytes(a)?;
+            s.merge(&set_from_bytes(b)?);
+            Ok(set_to_bytes(&s))
+        }
+        other => Err(crate::datatypes::CrdtSerialError::UnknownTag(other)),
+    }
+}
+
 /// Project a serialized CRDT state to its value without a datastore.
 ///
 /// Used to report the value of a just-computed contribution when the
