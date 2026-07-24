@@ -118,6 +118,7 @@ pub struct HttpLink {
 ///     content_type: Some("text/plain".to_string()),
 ///     indexes: Vec::new(),
 ///     links: Vec::new(),
+///     context: Vec::new(),
 /// };
 /// assert_eq!(obj.value, b"hello");
 /// ```

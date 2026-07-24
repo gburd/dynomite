@@ -1258,17 +1258,9 @@ async fn put_object_into_store(
     }
 }
 
-/// Collect `X-Riak-Index-<name>: <value>` headers into a list of
-/// [`HttpIndex`] entries.
-///
-/// Riak's HTTP API carries secondary indexes as headers named
-/// `X-Riak-Index-<index>_int` or `X-Riak-Index-<index>_bin`. A
-/// single header may carry several comma-separated values; each
-/// becomes one index entry. Header names are matched
-/// case-insensitively (hyper lower-cases them on receipt).
-#[cfg(feature = "noxu")]
 /// Lower-case hex-encode bytes (ASCII-safe transport for the opaque
 /// causal context in the `X-Riak-Vclock` header, no extra dependency).
+#[cfg(feature = "noxu")]
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -1281,6 +1273,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// Decode a lower/upper-case hex string back to bytes. Returns `None`
 /// on an odd length or a non-hex digit (a malformed client vclock is
 /// treated as an absent context rather than an error).
+#[cfg(feature = "noxu")]
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
     if !s.len().is_multiple_of(2) {
@@ -1306,6 +1299,15 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+#[cfg(feature = "noxu")]
+/// Collect `X-Riak-Index-<name>: <value>` headers into a list of
+/// [`HttpIndex`] entries.
+///
+/// Riak's HTTP API carries secondary indexes as headers named
+/// `X-Riak-Index-<index>_int` or `X-Riak-Index-<index>_bin`. A
+/// single header may carry several comma-separated values; each
+/// becomes one index entry. Header names are matched
+/// case-insensitively (hyper lower-cases them on receipt).
 fn collect_index_headers(headers: &HeaderMap) -> Vec<HttpIndex> {
     const PREFIX: &str = "x-riak-index-";
     let mut out = Vec::new();

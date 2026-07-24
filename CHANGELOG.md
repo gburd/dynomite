@@ -13,6 +13,47 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.7.0] - 2026-07-24
+
+Minor release. Full Dyniak CRDT coverage (all six data types served
+over the wire), object TTL expiry, and per-object causal context with
+concurrent-write sibling retention. Backward compatible: the object
+storage form gains a sibling wrapper that decodes legacy single-object
+blobs transparently.
+
+### Added
+
+- `dyniak`: **all six CRDTs served over the wire.** Register and Flag
+  join Counter and Set; Map (recursive, composing the others) and
+  HyperLogLog complete the set. A `DtUpdate` / `DtFetch` for the
+  `registers`, `flags`, `maps`, or `hlls` bucket type is handled, and
+  reads coordinate + merge across the replica set. Each type has
+  versioned-tagged serialization, merge/apply/project support in
+  `crdt_store`, and a PBC round-trip test.
+- `dyniak`: **object TTL expiry.** `ReaperConfig::object_ttl_seconds`
+  reaps a live object once its age exceeds the TTL (0 = no expiry), and
+  a `ttl` bucket property (dyniak extension, settable/readable over
+  PBC) carries the per-bucket TTL to the reaper.
+- `dyniak`: **per-object causal context and sibling retention.** Opaque
+  objects carry a dotted version-vector context keyed by the
+  coordinating node. A PUT advances it and returns it
+  (`RpbPutResp.vclock` / `X-Riak-Vclock`); a GET returns it. A write
+  concurrent with the stored value is retained as a sibling when the
+  bucket sets `allow_mult` -- no concurrent write is lost -- and a PBC
+  read returns every sibling as its own `RpbContent` while an HTTP read
+  returns `300 Multiple Choices`. Without `allow_mult` a concurrent
+  write collapses to one deterministic value (Riak's default). New
+  `SiblingSet` storage form decodes legacy single-object blobs. A
+  stateright model (`causal_object`) with a negative control proves the
+  resolution never drops a causally-newer write.
+
+### Changed
+
+- Documentation (README Status, mdBook Dyniak chapters) updated to state
+  which bucket properties are enforced (`n_val`, `allow_mult`, `ttl`)
+  vs accepted-not-enforced (the `r`/`w`/`pr`/`pw`/`dw` quorum knobs),
+  and that all six CRDTs are wire-reachable.
+
 ## [1.6.0] - 2026-07-24
 
 Minor release. Dyniak CRDT convergence across the replica set (write and
