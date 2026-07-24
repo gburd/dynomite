@@ -112,6 +112,11 @@ pub struct ReaperConfig {
     /// [`ReaperHandler::try_admit_reap`] before the
     /// orchestrator issues each `riak_delete`.
     pub reaps_per_sec: u64,
+    /// Object time-to-live (in seconds). A live object whose age
+    /// exceeds this is reaped, matching Riak's `ttl` bucket
+    /// property. A value of `0` (the default) disables object
+    /// expiry: live objects are never reaped by age.
+    pub object_ttl_seconds: u64,
 }
 
 impl Default for ReaperConfig {
@@ -122,6 +127,7 @@ impl Default for ReaperConfig {
             reap_max_per_cycle: DEFAULT_REAP_MAX_PER_CYCLE,
             reap_interval_seconds: DEFAULT_REAP_INTERVAL_SECONDS,
             reaps_per_sec: DEFAULT_REAPS_PER_SEC,
+            object_ttl_seconds: 0,
         }
     }
 }
@@ -526,9 +532,13 @@ impl ReaperHandler {
     /// * it is a [`KeyKind::Tombstone`] and its age exceeds
     ///   [`ReaperConfig::reap_tombstones_after_seconds`]; or
     /// * it is a [`KeyKind::Sibling`] and its age exceeds
-    ///   [`ReaperConfig::reap_siblings_after_seconds`].
+    ///   [`ReaperConfig::reap_siblings_after_seconds`]; or
+    /// * it is a [`KeyKind::Live`] object, object expiry is enabled
+    ///   ([`ReaperConfig::object_ttl_seconds`] is non-zero), and its
+    ///   age exceeds that TTL.
     ///
-    /// Live keys are never candidates.
+    /// Live keys are never candidates when object expiry is disabled
+    /// (`object_ttl_seconds == 0`, the default).
     ///
     /// # Examples
     ///
@@ -557,7 +567,14 @@ impl ReaperHandler {
     #[must_use]
     pub fn is_reap_candidate(&self, key: &ScannedKey) -> bool {
         match key.kind {
-            KeyKind::Live => false,
+            KeyKind::Live => {
+                // Object TTL: a live object is reaped once its age
+                // exceeds the configured time-to-live. A TTL of 0
+                // disables expiry, so live objects are never reaped
+                // by age (Riak's default).
+                self.config.object_ttl_seconds > 0
+                    && key.age >= Duration::from_secs(self.config.object_ttl_seconds)
+            }
             KeyKind::Tombstone => {
                 key.age >= Duration::from_secs(self.config.reap_tombstones_after_seconds)
             }
@@ -766,6 +783,7 @@ mod tests {
             reap_max_per_cycle: 4,
             reap_interval_seconds: 60,
             reaps_per_sec: 1_000_000,
+            object_ttl_seconds: 0,
         }
     }
 
@@ -832,6 +850,8 @@ mod tests {
 
     #[test]
     fn scanning_live_key_is_never_queued() {
+        // With object_ttl_seconds == 0 (the default), a live object is
+        // never a reap candidate regardless of age.
         let mut h = handler();
         let _ = h.handle(State::Idle, EventType::Cast, Event::Tick);
         let _ = h.handle(
@@ -841,6 +861,30 @@ mod tests {
         );
         assert_eq!(h.batch_len(), 0);
         assert_eq!(h.scanned_this_cycle(), 1);
+    }
+
+    #[test]
+    fn live_object_past_ttl_is_reaped() {
+        // With object_ttl_seconds set, a live object older than the TTL
+        // becomes a reap candidate; one younger than the TTL does not.
+        let mut c = cfg();
+        c.object_ttl_seconds = 100;
+        let h = ReaperHandler::with_config(b"users".to_vec(), c);
+        assert!(
+            h.is_reap_candidate(&key(0, KeyKind::Live, 200)),
+            "a live object older than the TTL must be reaped"
+        );
+        assert!(
+            !h.is_reap_candidate(&key(0, KeyKind::Live, 50)),
+            "a live object younger than the TTL must not be reaped"
+        );
+    }
+
+    #[test]
+    fn live_object_ttl_zero_never_reaps() {
+        // TTL of zero disables object expiry even for very old objects.
+        let h = ReaperHandler::with_config(b"users".to_vec(), cfg());
+        assert!(!h.is_reap_candidate(&key(0, KeyKind::Live, u64::from(u32::MAX))));
     }
 
     #[test]
