@@ -67,6 +67,8 @@
 
 pub mod datastore;
 pub mod error;
+#[cfg(feature = "wasm")]
+pub mod precommit;
 pub mod proto;
 pub mod ramp;
 #[cfg(feature = "noxu")]

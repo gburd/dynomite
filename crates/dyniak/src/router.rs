@@ -430,6 +430,28 @@ pub trait PeerOutbound: Send + Sync + std::fmt::Debug {
 
 /// Routing-hook bundle handed to
 /// [`crate::server::serve_pbc_with_routing`].
+/// Runs a bucket's precommit hook over a write value before it
+/// commits. Implemented by the WASM hook engine
+/// ([`crate::precommit::PrecommitHooks`]); kept as a trait here so
+/// [`RoutingHooks`] does not depend on the `wasm` feature.
+pub trait PrecommitRunner: Send + Sync + std::fmt::Debug {
+    /// Run the hook module `module_id` over `value`. Returns the
+    /// value to store (possibly transformed), or an `Err(reason)` that
+    /// vetoes the write, or a transport-level error string.
+    fn run(&self, module_id: &str, value: &[u8]) -> Result<Vec<u8>, PrecommitVeto>;
+}
+
+/// Outcome of a rejected or failed precommit hook.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PrecommitVeto {
+    /// The hook vetoed the write with this reason.
+    Rejected(String),
+    /// The hook could not run (missing module, trap, timeout).
+    Error(String),
+}
+
+/// Routing-hook bundle handed to
+/// [`crate::server::serve_pbc_with_routing`].
 #[derive(Clone, Debug)]
 pub struct RoutingHooks {
     /// Bucket-aware request router.
@@ -447,6 +469,10 @@ pub struct RoutingHooks {
     /// and is fanned to the OTHER replicas -- so data lands on replicas,
     /// not on whichever node the client happened to reach.
     pub local_peer_idx: u32,
+    /// Optional precommit-hook runner. When a bucket names a
+    /// `precommit_module`, an object write is run through it before it
+    /// commits; the hook may transform the value or veto the write.
+    pub precommit: Option<Arc<dyn PrecommitRunner>>,
 }
 
 #[cfg(test)]

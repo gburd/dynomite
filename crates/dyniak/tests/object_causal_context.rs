@@ -160,6 +160,7 @@ async fn concurrent_writes_surface_as_siblings_under_allow_mult() {
         outbound: Arc::new(NoopOutbound) as Arc<dyn dyniak::router::PeerOutbound>,
         local_actor: dyniak::datatypes::ActorId::new("dc1", "local"),
         local_peer_idx: 0,
+        precommit: None,
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -333,6 +334,7 @@ async fn coordinated_read_merges_sibling_sets_across_replicas() {
         outbound: Arc::new(stores.clone()) as Arc<dyn dyniak::router::PeerOutbound>,
         local_actor: dyniak::datatypes::ActorId::new("dc1", "n0"),
         local_peer_idx: 0,
+        precommit: None,
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");

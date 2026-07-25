@@ -170,7 +170,16 @@ Near-term correctness parity (highest surprise for a Riak user):
    (`enable_hinted_handoff` + `hint_dir`). Tested by
    `durable_round_trip_survives_reopen` and the replay suite. The
    default remains RAM-only (durability is opt-in via `hint_dir`).**
-7. Pre/postcommit hooks. L.
+7. Pre/postcommit hooks. L. **Precommit DONE: a WASM precommit hook
+   (`crate::precommit::PrecommitHooks`, same linear-memory ABI as
+   keyfuns / MapReduce) named per bucket via the `precommit_module`
+   property runs on every object write; it may transform the value or
+   VETO the write (rejected -> error frame, nothing stored). Wired
+   through `RoutingHooks.precommit` (a feature-agnostic
+   `PrecommitRunner` trait) and spawned in dynomited from the pool's
+   WASM store. Postcommit (fire-and-forget notification after a
+   successful write) remains -- it needs an async side-effect plane and
+   does not gate the write.**
 
 Benchmark credibility:
 8. Populate criterion baselines; activate the regression gate. S.

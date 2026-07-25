@@ -127,6 +127,7 @@ fn hooks_over(peers: &[u32], local_idx: u32, outbound: Arc<InMemPeers>) -> Routi
         outbound,
         local_actor: ActorId::new("dc1", format!("r{local_idx}")),
         local_peer_idx: local_idx,
+        precommit: None,
     }
 }
 

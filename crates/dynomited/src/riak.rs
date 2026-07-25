@@ -795,6 +795,7 @@ pub fn build_routing_hooks(
         outbound,
         local_actor,
         local_peer_idx,
+        precommit: None,
     }
 }
 

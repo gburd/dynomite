@@ -1017,6 +1017,77 @@ async fn handle_get(
     ))
 }
 
+/// Fan the resolved SiblingSet `storage` to every replica of the key
+/// except the coordinating node, via `RepairPut` (stored verbatim).
+/// Fire and forget: a missed replica is reconciled by the next read's
+/// read-repair or by anti-entropy. A no-op without routing hooks.
+async fn fan_repair_put(
+    hooks: Option<&RoutingHooks>,
+    bucket_type: &[u8],
+    bucket: &[u8],
+    key: &[u8],
+    storage: &[u8],
+) {
+    let Some(hooks) = hooks else { return };
+    let Ok(decision) = hooks.router.try_route(bucket_type, bucket, key) else {
+        return;
+    };
+    for replica in decision.replica_list() {
+        if replica.peer_idx == hooks.local_peer_idx {
+            continue;
+        }
+        hooks
+            .outbound
+            .dispatch(
+                replica.peer_idx,
+                PeerOp::RepairPut {
+                    bucket_type: decision.bucket_type.clone(),
+                    bucket: bucket.to_vec(),
+                    key: key.to_vec(),
+                    storage: storage.to_vec(),
+                },
+            )
+            .await;
+    }
+}
+
+/// Run the bucket's precommit hook over `value` if one is configured
+/// and a runner is wired. Returns the value to store (possibly
+/// transformed), or an `Err(message)` to reject the write with an error
+/// frame. A bucket without a `precommit_module`, or hooks without a
+/// runner, passes the value through unchanged.
+fn run_precommit(
+    hooks: Option<&RoutingHooks>,
+    bucket_type: &[u8],
+    bucket: &[u8],
+    value: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let Some(hooks) = hooks else {
+        return Ok(value);
+    };
+    let Some(runner) = hooks.precommit.as_ref() else {
+        return Ok(value);
+    };
+    let Some(module) = hooks
+        .router
+        .registry()
+        .resolve(bucket_type, bucket)
+        .precommit_module()
+        .map(ToString::to_string)
+    else {
+        return Ok(value);
+    };
+    match runner.run(&module, &value) {
+        Ok(transformed) => Ok(transformed),
+        Err(crate::router::PrecommitVeto::Rejected(reason)) => {
+            Err(format!("riak put: precommit hook rejected: {reason}"))
+        }
+        Err(crate::router::PrecommitVeto::Error(msg)) => {
+            Err(format!("riak put: precommit hook error: {msg}"))
+        }
+    }
+}
+
 async fn handle_put(
     body: &[u8],
     datastore: &dyn Datastore,
@@ -1080,8 +1151,21 @@ async fn handle_put(
             .resolve(req.r#type.as_deref().unwrap_or(b""), &req.bucket)
             .effective_allow_mult()
     });
+    // Precommit hook: if the bucket names a precommit_module and a hook
+    // runner is wired, run the write value through it before storing.
+    // The hook may transform the value (accept) or veto the write
+    // (reject -> error frame, nothing stored).
+    let value = match run_precommit(
+        hooks,
+        req.r#type.as_deref().unwrap_or(b""),
+        &req.bucket,
+        content.value.clone(),
+    ) {
+        Ok(v) => v,
+        Err(msg) => return Ok(error_frame(msg)),
+    };
     let envelope = HttpObject {
-        value: content.value.clone(),
+        value: value.clone(),
         content_type: content
             .content_type
             .as_deref()
@@ -1106,31 +1190,16 @@ async fn handle_put(
         Ok(()) | Err(DatastoreError::Unsupported(_)) => {
             // Fan the resolved SiblingSet storage to every other
             // replica so they hold a byte-identical, causally-correct
-            // copy (RepairPut stores it verbatim rather than re-wrapping
-            // a bare value with a seed context). Fire and forget; a miss
-            // is reconciled by the next read's read-repair or by AAE.
-            if let Some(hooks) = hooks {
-                let bucket_type = req.r#type.as_deref().unwrap_or(b"");
-                if let Ok(decision) = hooks.router.try_route(bucket_type, &req.bucket, &key) {
-                    for replica in decision.replica_list() {
-                        if replica.peer_idx == hooks.local_peer_idx {
-                            continue;
-                        }
-                        hooks
-                            .outbound
-                            .dispatch(
-                                replica.peer_idx,
-                                PeerOp::RepairPut {
-                                    bucket_type: decision.bucket_type.clone(),
-                                    bucket: req.bucket.clone(),
-                                    key: key.clone(),
-                                    storage: storage.clone(),
-                                },
-                            )
-                            .await;
-                    }
-                }
-            }
+            // copy. Fire and forget; a miss is reconciled by the next
+            // read's read-repair or by AAE.
+            fan_repair_put(
+                hooks,
+                req.r#type.as_deref().unwrap_or(b""),
+                &req.bucket,
+                &key,
+                &storage,
+            )
+            .await;
             let resp = RpbPutResp {
                 vclock: Some(new_context),
                 ..RpbPutResp::default()

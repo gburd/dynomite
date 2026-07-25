@@ -73,6 +73,10 @@ pub struct BucketProps {
     /// concurrent writes collapse to one value). `Some(true)` retains
     /// concurrent siblings so a read can surface them.
     pub allow_mult: Option<bool>,
+    /// Id of the WASM precommit-hook module for this bucket, if any.
+    /// A write is run through this hook before it commits; the hook may
+    /// transform the value or veto the write. `None` means no hook.
+    pub precommit_module: Option<String>,
     /// Object time-to-live in seconds (Riak's `ttl` bucket
     /// property). `None` or `Some(0)` means no expiry: live
     /// objects are never reaped by age. A non-zero value is
@@ -137,6 +141,12 @@ impl BucketProps {
     #[must_use]
     pub fn effective_allow_mult(&self) -> bool {
         self.allow_mult.unwrap_or(false)
+    }
+
+    /// The precommit-hook module id for this bucket, if any.
+    #[must_use]
+    pub fn precommit_module(&self) -> Option<&str> {
+        self.precommit_module.as_deref()
     }
 
     /// Convenience: effective [`KeyFun`] using
@@ -263,6 +273,7 @@ impl BucketPropsRegistry {
             n_val: Some(inner.default_n_val),
             custom_keyfun_module: None,
             allow_mult: None,
+            precommit_module: None,
             ttl_seconds: None,
         }
     }

@@ -932,11 +932,27 @@ impl Server {
                 // (a single-node pool needs no fan-out).
                 handles.map(|mut h| {
                     if is_dyniak && !gossip_peer_txs.is_empty() {
-                        h.hooks = Some(crate::riak::build_routing_hooks(
+                        let mut rh = crate::riak::build_routing_hooks(
                             &server_pool,
                             pool_config.hash,
                             &gossip_peer_txs,
-                        ));
+                        );
+                        // Wire precommit hooks from the pool's WASM
+                        // module store (the same store keyfuns and
+                        // MapReduce phases use), so a bucket that names
+                        // a `precommit_module` runs its write through
+                        // that module before committing.
+                        #[cfg(feature = "wasm")]
+                        {
+                            if let Some(wasm) = h.wasm.as_ref() {
+                                rh.precommit = Some(Arc::new(
+                                    dyniak::precommit::PrecommitHooks::new(wasm.clone()),
+                                )
+                                    as Arc<dyn dyniak::router::PrecommitRunner>);
+                            }
+                        }
+                        let _ = &mut rh;
+                        h.hooks = Some(rh);
                     }
                     h
                 })

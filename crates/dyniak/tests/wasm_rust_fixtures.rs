@@ -138,6 +138,7 @@ fn real_rust_wasm_custom_keyfun_routes_live_keys() {
             n_val: Some(1),
             custom_keyfun_module: Some("reverse".to_string()),
             allow_mult: None,
+            precommit_module: None,
             ttl_seconds: None,
         },
     );
@@ -209,6 +210,7 @@ fn real_rust_wasm_custom_keyfun_negative_paths() {
             n_val: Some(1),
             custom_keyfun_module: Some("missing".to_string()),
             allow_mult: None,
+            precommit_module: None,
             ttl_seconds: None,
         },
     );
