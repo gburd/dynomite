@@ -163,7 +163,13 @@ Near-term correctness parity (highest surprise for a Riak user):
 4. Server-assigned keys (POST unnamed). S. **DONE.**
 5. Map + HLL CRDT handlers (export + wire). M. **DONE (all six CRDTs
    are now wire-reachable).**
-6. Durable hinted-handoff queue. L.
+6. Durable hinted-handoff queue. L. **ALREADY DONE (audit finding was
+   about the RAM-only default): `HintStore::open` gives a durable,
+   write-through, replay-on-restart backend under `<hint_dir>/peer-<n>
+   .hints`, wired in dynomited when `hint_dir` is configured
+   (`enable_hinted_handoff` + `hint_dir`). Tested by
+   `durable_round_trip_survives_reopen` and the replay suite. The
+   default remains RAM-only (durability is opt-in via `hint_dir`).**
 7. Pre/postcommit hooks. L.
 
 Benchmark credibility:
