@@ -637,6 +637,17 @@ pub fn advance_object_context(prior: &[u8], actor: &[u8]) -> Vec<u8> {
     advance_context(prior, actor)
 }
 
+/// Wall-clock seconds since the Unix epoch, stamped on an object write
+/// so the reaper can compute its age for TTL expiry. Clock going
+/// backwards or before the epoch yields `0` (treated as unknown age,
+/// never expired).
+#[must_use]
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// Advance the per-object causal context for a write coordinated by
 /// `actor`.
 ///
@@ -1084,6 +1095,7 @@ async fn handle_put(
             .collect(),
         links: content.links.iter().map(rpb_link_to_http).collect(),
         context: new_context.clone(),
+        written_at_unix: now_unix(),
     };
     let resolved = resolve_write(&stored_set, &envelope, allow_mult);
     let storage = resolved.to_storage_bytes();

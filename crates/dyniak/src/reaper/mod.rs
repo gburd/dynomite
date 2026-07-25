@@ -105,6 +105,11 @@
 //! * [`fsm`] -- the reaper coordinator [`gen_fsm::FsmHandler`].
 
 pub mod fsm;
+#[cfg(feature = "noxu")]
+pub mod orchestrator;
+
+#[cfg(feature = "noxu")]
+pub use crate::reaper::orchestrator::{OrchestratorConfig, ReaperOrchestrator};
 
 pub use crate::reaper::fsm::{
     Event, KeyKind, ReaperConfig, ReaperCycleComplete, ReaperHandler, ReaperOutcome, ScannedKey,

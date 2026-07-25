@@ -119,6 +119,7 @@ pub struct HttpLink {
 ///     indexes: Vec::new(),
 ///     links: Vec::new(),
 ///     context: Vec::new(),
+///     written_at_unix: 0,
 /// };
 /// assert_eq!(obj.value, b"hello");
 /// ```
@@ -150,6 +151,14 @@ pub struct HttpObject {
     #[prost(bytes = "vec", tag = "5")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<u8>,
+    /// Wall-clock write time, seconds since the Unix epoch. Tag 6 was
+    /// previously unused, so pre-timestamp objects decode with `0`
+    /// (backward compatible), which the reaper treats as "unknown age"
+    /// and never expires. Set on every write so the reaper can expire
+    /// an object once `now - written_at_unix` exceeds the bucket TTL.
+    #[prost(uint64, tag = "6")]
+    #[serde(default)]
+    pub written_at_unix: u64,
 }
 
 impl WireValue for HttpObject {
@@ -325,6 +334,7 @@ mod tests {
                 tag: "friend".to_string(),
             }],
             context: Vec::new(),
+            written_at_unix: 0,
         }
     }
 

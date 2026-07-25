@@ -174,6 +174,7 @@ async fn put_json_then_get_json_round_trips_value() {
         indexes: Vec::new(),
         links: Vec::new(),
         context: Vec::new(),
+        written_at_unix: 0,
     };
     let body = serde_json::to_string(&obj).expect("json body");
 
@@ -194,6 +195,7 @@ async fn put_json_then_get_json_round_trips_value() {
     // the logical object the client sent.
     assert!(!back.context.is_empty(), "GET returns a causal context");
     back.context.clear();
+    back.written_at_unix = 0;
     assert_eq!(back, obj);
     assert_eq!(back.value, b"the quick brown fox");
 
@@ -214,6 +216,7 @@ async fn put_json_then_get_cbor_and_protobuf_cross_encode() {
         }],
         links: Vec::new(),
         context: Vec::new(),
+        written_at_unix: 0,
     };
     let body = serde_json::to_string(&obj).expect("json body");
 
@@ -238,6 +241,7 @@ async fn put_json_then_get_cbor_and_protobuf_cross_encode() {
     assert_eq!(ct.as_deref(), Some("application/cbor"));
     let mut from_cbor = decode_object("application/cbor", &cbor_body);
     from_cbor.context.clear();
+    from_cbor.written_at_unix = 0;
     assert_eq!(from_cbor, obj, "cbor decodes to the same logical object");
 
     // GET as protobuf.
@@ -251,6 +255,7 @@ async fn put_json_then_get_cbor_and_protobuf_cross_encode() {
     assert_eq!(ct.as_deref(), Some("application/x-protobuf"));
     let mut from_pb = decode_object("application/x-protobuf", &pb_body);
     from_pb.context.clear();
+    from_pb.written_at_unix = 0;
     assert_eq!(from_pb, obj, "protobuf decodes to the same logical object");
 
     // The protobuf GET body is the canonical storage form, plus the
@@ -258,6 +263,7 @@ async fn put_json_then_get_cbor_and_protobuf_cross_encode() {
     // client-sent object's canonical bytes.
     let mut pb_obj = decode_object("application/x-protobuf", &pb_body);
     pb_obj.context.clear();
+    pb_obj.written_at_unix = 0;
     assert_eq!(pb_obj.to_storage_bytes(), obj.to_storage_bytes());
 
     server.abort();
@@ -381,6 +387,7 @@ async fn delete_then_get_returns_404() {
         indexes: Vec::new(),
         links: Vec::new(),
         context: Vec::new(),
+        written_at_unix: 0,
     };
     let body = serde_json::to_string(&obj).expect("json body");
     let resp = send_raw(
@@ -429,6 +436,7 @@ async fn x_riak_index_header_fans_out_and_round_trips() {
         indexes: Vec::new(),
         links: Vec::new(),
         context: Vec::new(),
+        written_at_unix: 0,
     };
     let body = serde_json::to_string(&obj).expect("json body");
     let resp = send_raw(
@@ -481,6 +489,7 @@ async fn head_request_returns_headers_without_body() {
         indexes: Vec::new(),
         links: Vec::new(),
         context: Vec::new(),
+        written_at_unix: 0,
     };
     let body = serde_json::to_string(&obj).expect("json body");
     let resp = send_raw(
@@ -519,6 +528,7 @@ async fn memory_datastore_falls_back_without_panic() {
         indexes: Vec::new(),
         links: Vec::new(),
         context: Vec::new(),
+        written_at_unix: 0,
     };
     let body = serde_json::to_string(&obj).expect("json body");
     let resp = send_raw(

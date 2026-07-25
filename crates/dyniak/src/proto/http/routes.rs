@@ -1196,6 +1196,7 @@ async fn put_object_into_store(
         |h| format!("{}:{}", h.local_actor.dc, h.local_actor.peer).into_bytes(),
     );
     obj.context = crate::server::advance_object_context(&client_ctx, &actor);
+    obj.written_at_unix = crate::server::now_unix();
     let stored_set = store
         .get_object(bucket.as_bytes(), key.as_bytes())
         .ok()
@@ -2320,6 +2321,7 @@ mod tests {
                 indexes: Vec::new(),
                 links: Vec::new(),
                 context: Vec::new(),
+                written_at_unix: 0,
             };
             let body = Bytes::from(serde_json::to_vec(&obj).expect("json body"));
             let put = handle_route(
@@ -2386,6 +2388,7 @@ mod tests {
                 indexes: Vec::new(),
                 links: Vec::new(),
                 context: Vec::new(),
+                written_at_unix: 0,
             };
             let body = Bytes::from(serde_json::to_vec(&obj).expect("json body"));
             handle_route(
@@ -2425,6 +2428,7 @@ mod tests {
                 indexes: Vec::new(),
                 links: Vec::new(),
                 context: Vec::new(),
+                written_at_unix: 0,
             };
             let body = Bytes::from(serde_json::to_vec(&obj).expect("json body"));
             let put = handle_route(

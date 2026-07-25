@@ -34,6 +34,7 @@ fn put_with_links(store: &NoxuDatastore, bucket: &[u8], key: &[u8], links: Vec<H
         indexes: Vec::new(),
         links,
         context: Vec::new(),
+        written_at_unix: 0,
     };
     store
         .put_object(bucket, key, &obj.to_storage_bytes(), &[])

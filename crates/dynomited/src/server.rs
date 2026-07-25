@@ -944,6 +944,30 @@ impl Server {
             None => None,
         };
 
+        // Spawn the object-expiry reaper for a `data_store: dyniak`
+        // pool backed by noxu. It sweeps the primary key space on an
+        // interval and deletes objects past their bucket's `ttl`
+        // property (read from the same registry the router uses, so a
+        // `ttl` set via SetBucket takes effect). A bucket without a
+        // `ttl` (the default) is never touched. The task exits on the
+        // shared shutdown signal.
+        #[cfg(feature = "riak")]
+        let _reaper_handle: Option<tokio::task::JoinHandle<()>> = match (
+            noxu_shared.as_ref(),
+            riak_handles.as_ref().and_then(|h| h.hooks.as_ref()),
+        ) {
+            (Some(noxu), Some(hooks)) => {
+                let orchestrator = dyniak::reaper::ReaperOrchestrator::new(
+                    noxu.clone(),
+                    hooks.router.registry().clone(),
+                    dyniak::reaper::OrchestratorConfig::default(),
+                );
+                let reaper_shutdown = shutdown_rx.clone();
+                Some(tokio::spawn(orchestrator.run(reaper_shutdown)))
+            }
+            _ => None,
+        };
+
         let (entropy_driver, entropy_key_path) =
             build_entropy_driver(&conf_pool, &server_pool, &pool_name);
 

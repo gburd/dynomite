@@ -275,6 +275,7 @@ impl HttpTxnRequest {
                             .collect(),
                         links: Vec::new(),
                         context: Vec::new(),
+                        written_at_unix: crate::server::now_unix(),
                     };
                     TxnOp::Put {
                         bucket: bucket.into_bytes(),

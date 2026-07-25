@@ -155,11 +155,11 @@ Near-term correctness parity (highest surprise for a Riak user):
    siblings under allow_mult; PBC multi-content read + HTTP 300 Multiple
    Choices; cross-replica causal read coordination + read-repair (see
    item 1).**
-3. TTL / object expiry via the reaper. M. **Reaper capability DONE
-   (`object_ttl_seconds`) + `ttl` bucket property DONE (settable/readable
-   over PBC, bridged to the reaper config); the runtime reaper
-   orchestrator that spawns with the per-bucket ttl is the remaining
-   piece.**
+3. TTL / object expiry via the reaper. M. **DONE: reaper FSM
+   (`object_ttl_seconds`), `ttl` bucket property (PBC settable/readable),
+   object write-timestamp (`HttpObject.written_at_unix`), and a runtime
+   `ReaperOrchestrator` spawned in dynomited that sweeps the primary
+   key space on an interval and deletes objects past their bucket TTL.**
 4. Server-assigned keys (POST unnamed). S. **DONE.**
 5. Map + HLL CRDT handlers (export + wire). M. **DONE (all six CRDTs
    are now wire-reachable).**

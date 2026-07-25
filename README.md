@@ -136,15 +136,16 @@ them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
 * **All six CRDTs are served over the wire.** Counter, Set, Register,
   Flag, Map (recursive, composing the others), and HyperLogLog are all
   reachable via PBC / HTTP `DtUpdate` / `DtFetch`.
-* **Object TTL / auto-expiry is partial.** The `ttl` bucket property is
-  settable and readable over PBC and the reaper can expire live objects
-  past their TTL, but the runtime reaper orchestrator that applies the
-  per-bucket TTL is not yet spawned in `dynomited`, so live objects are
-  not auto-expired at runtime today. (The tombstone reaper, which reaps
-  deleted-object markers after an age, is wired.)
-* **Read repair on the opaque-object read path is partial.** CRDT reads
-  coordinate and merge across the replica set; opaque-object reads do
-  not yet perform Riak-style quorum read-repair on the PBC path.
+* **Object TTL / auto-expiry works.** The `ttl` bucket property (PBC
+  settable/readable) is applied by a runtime reaper spawned in
+  `dynomited`: it sweeps the primary key space on an interval and
+  deletes objects whose age (from a stored write timestamp) exceeds
+  their bucket TTL. A bucket without a `ttl` is never expired. (The
+  tombstone reaper for deleted-object markers is also wired.)
+* **Read repair works on both paths.** CRDT reads and opaque-object
+  reads both coordinate across the replica set: a GET fans to the
+  replicas, merges by causal frontier (or CRDT merge), returns the
+  converged value(s), and read-repairs replicas that were behind.
 
 See `PLAN.md` for the staged roadmap, `docs/parity.md` for the live
 C-to-Rust mapping (including intentional deviations and ambiguities),

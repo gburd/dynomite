@@ -1313,6 +1313,7 @@ mod tests {
                 },
             ],
             context: Vec::new(),
+            written_at_unix: 0,
         };
         let ds = store_with(Some(Ok(Some(obj.to_storage_bytes()))));
         let job = MapReduceJob {
