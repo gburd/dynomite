@@ -148,8 +148,15 @@ Near-term correctness parity (highest surprise for a Riak user):
    value(s), and read-repairs replicas that were behind
    (`PeerOp::RepairPut` ships the resolved SiblingSet storage verbatim).
    The write fan also ships the resolved storage so replicas hold
-   byte-identical, causally-correct copies. R/PR quorum tunables (wait
-   for R responses / fail below PR) remain.**
+   byte-identical, causally-correct copies. **Quorum tunables DONE too:**
+   `r`/`w`/`pr`/`pw`/`dw` are bucket properties with per-request
+   overrides (`crate::quorum::resolve`, symbolic one/quorum/all/default);
+   a GET enforces R (counts responses, fails below quorum) and a PUT
+   enforces W (counts local + acked replica writes, fails below quorum),
+   with availability fallback on a fire-and-forget transport. DST model
+   `quorum_decision` (sound-success + available-above-quorum + a
+   one-wins negative control) and integration tests
+   (`quorum_enforcement`) cover it.**
 2. Surface siblings on PBC/HTTP for `allow_mult` buckets. M. **DONE:
    per-object version-vector context; concurrent writes retained as
    siblings under allow_mult; PBC multi-content read + HTTP 300 Multiple

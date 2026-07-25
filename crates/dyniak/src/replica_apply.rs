@@ -176,28 +176,42 @@ impl ReplicaApplySink for ReplicaApplier {
 
     fn apply_query<'a>(&'a self, payload: &'a [u8]) -> BoxFuture<'a, Option<Vec<u8>>> {
         Box::pin(async move {
-            // Only a DtFetch expects a reply; every other op is a
-            // fire-and-forget write handled by `apply`. Returning
-            // `None` for a non-fetch tells the receive loop to fall
-            // through to `apply` (no double-apply).
             let op = decode_peer_op(payload).ok()?;
-            // Only a read query (DtFetch / Get) expects a reply; writes
-            // (Put/Del/DtUpdate/RepairPut) return None so the receive
-            // loop falls through to `apply`.
-            let (PeerOp::DtFetch { bucket, key, .. } | PeerOp::Get { bucket, key, .. }) = op else {
-                return None;
-            };
-            // Read the local stored bytes for the key and return them
-            // so the coordinator can merge with the other replicas: for
-            // a DtFetch this is the serialized CRDT state, for a Get the
-            // serialized SiblingSet. An absent key replies empty.
-            match self.datastore.riak_get(&bucket, &key).await {
-                Ok(Some(bytes)) => Some(bytes),
-                Ok(None) => Some(Vec::new()),
-                Err(e) => {
-                    tracing::debug!(error = %e, "riak replica: read-coordination read failed");
-                    Some(Vec::new())
+            match op {
+                // Read queries (DtFetch / Get) reply with the local
+                // stored bytes so the coordinator can merge across the
+                // replica set: a DtFetch returns the serialized CRDT
+                // state, a Get the serialized SiblingSet. An absent key
+                // replies empty.
+                PeerOp::DtFetch { bucket, key, .. } | PeerOp::Get { bucket, key, .. } => {
+                    match self.datastore.riak_get(&bucket, &key).await {
+                        Ok(Some(bytes)) => Some(bytes),
+                        Ok(None) => Some(Vec::new()),
+                        Err(e) => {
+                            tracing::debug!(error = %e, "riak replica: read-coordination read failed");
+                            Some(Vec::new())
+                        }
+                    }
                 }
+                // A RepairPut stores the canonical SiblingSet verbatim
+                // AND replies with an ack (a single 1 byte) so the
+                // coordinator can count it toward the write quorum W. A
+                // store failure replies empty (not counted).
+                PeerOp::RepairPut {
+                    bucket,
+                    key,
+                    storage,
+                    ..
+                } => match self.datastore.riak_put(&bucket, &key, &storage, &[]).await {
+                    Ok(()) | Err(DatastoreError::Unsupported(_)) => Some(vec![1u8]),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "riak replica: repair put (acked) failed");
+                        Some(Vec::new())
+                    }
+                },
+                // Other ops (Put/Del/DtUpdate) are fire-and-forget:
+                // return None so the receive loop calls `apply`.
+                _ => None,
             }
         })
     }

@@ -83,6 +83,19 @@ pub struct BucketProps {
     /// carried to the reaper as
     /// [`crate::reaper::ReaperConfig::object_ttl_seconds`].
     pub ttl_seconds: Option<u64>,
+    /// Default read quorum (`r`). `None` means `quorum`. Symbolic
+    /// values (`one`/`quorum`/`all`) use the reserved magic values in
+    /// [`crate::quorum`]; a literal is a count.
+    pub r: Option<u32>,
+    /// Default write quorum (`w`). `None` means `quorum`.
+    pub w: Option<u32>,
+    /// Default primary-read quorum (`pr`). `None` means `0` (no primary
+    /// requirement).
+    pub pr: Option<u32>,
+    /// Default primary-write quorum (`pw`). `None` means `0`.
+    pub pw: Option<u32>,
+    /// Default durable-write quorum (`dw`). `None` means `quorum`.
+    pub dw: Option<u32>,
 }
 
 impl BucketProps {
@@ -147,6 +160,40 @@ impl BucketProps {
     #[must_use]
     pub fn precommit_module(&self) -> Option<&str> {
         self.precommit_module.as_deref()
+    }
+
+    /// Resolve the effective read quorum `R` for `n_val`, applying a
+    /// per-request override when supplied (Riak precedence: request >
+    /// bucket default > `quorum`).
+    #[must_use]
+    pub fn effective_r(&self, n_val: u8, request: Option<u32>) -> u32 {
+        crate::quorum::resolve(request, n_val, self.r)
+    }
+
+    /// Resolve the effective write quorum `W` for `n_val`.
+    #[must_use]
+    pub fn effective_w(&self, n_val: u8, request: Option<u32>) -> u32 {
+        crate::quorum::resolve(request, n_val, self.w)
+    }
+
+    /// Resolve the effective primary-read quorum `PR` for `n_val`.
+    /// Defaults to `0` (no primary requirement).
+    #[must_use]
+    pub fn effective_pr(&self, n_val: u8, request: Option<u32>) -> u32 {
+        match request.or(self.pr) {
+            None => 0,
+            some => crate::quorum::resolve(some, n_val, self.pr),
+        }
+    }
+
+    /// Resolve the effective primary-write quorum `PW` for `n_val`.
+    /// Defaults to `0`.
+    #[must_use]
+    pub fn effective_pw(&self, n_val: u8, request: Option<u32>) -> u32 {
+        match request.or(self.pw) {
+            None => 0,
+            some => crate::quorum::resolve(some, n_val, self.pw),
+        }
     }
 
     /// Convenience: effective [`KeyFun`] using
@@ -275,6 +322,11 @@ impl BucketPropsRegistry {
             allow_mult: None,
             precommit_module: None,
             ttl_seconds: None,
+            r: None,
+            w: None,
+            pr: None,
+            pw: None,
+            dw: None,
         }
     }
 
@@ -367,6 +419,32 @@ mod tests {
             .effective_ttl_seconds(),
             0
         );
+    }
+
+    #[test]
+    fn quorum_resolves_request_over_bucket_default_over_quorum() {
+        use crate::quorum::{QUORUM_ALL, QUORUM_ONE};
+        // Bucket with no r/w defaults: R and W default to quorum (2 of 3).
+        let p = BucketProps::default();
+        assert_eq!(p.effective_r(3, None), 2);
+        assert_eq!(p.effective_w(3, None), 2);
+        // A per-request override wins.
+        assert_eq!(p.effective_r(3, Some(QUORUM_ALL)), 3);
+        assert_eq!(p.effective_w(3, Some(QUORUM_ONE)), 1);
+        // A bucket default of all, no request -> all.
+        let all = BucketProps {
+            r: Some(QUORUM_ALL),
+            w: Some(QUORUM_ONE),
+            ..BucketProps::default()
+        };
+        assert_eq!(all.effective_r(3, None), 3);
+        assert_eq!(all.effective_w(3, None), 1);
+        // A request still overrides the bucket default.
+        assert_eq!(all.effective_r(3, Some(QUORUM_ONE)), 1);
+        // PR/PW default to 0 (no primary requirement).
+        assert_eq!(p.effective_pr(3, None), 0);
+        assert_eq!(p.effective_pw(3, None), 0);
+        assert_eq!(p.effective_pr(3, Some(QUORUM_ALL)), 3);
     }
 
     #[test]

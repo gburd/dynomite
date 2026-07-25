@@ -903,6 +903,43 @@ fn rpb_link_to_http(link: &RpbLink) -> HttpLink {
     }
 }
 
+/// Read-repair: push the converged sibling set to every replica whose
+/// reply was strictly behind the merged frontier, and repair the
+/// coordinator's own local store so a subsequent local read is already
+/// converged. Fire and forget; a miss is reconciled by the next read
+/// or by anti-entropy. A no-op when the merged set is empty.
+async fn read_repair_behind(
+    hooks: &RoutingHooks,
+    decision: &crate::router::RouteDecision,
+    datastore: &dyn Datastore,
+    bucket: &[u8],
+    key: &[u8],
+    merged: &crate::proto::http::object::SiblingSet,
+    replies: &[(u32, crate::proto::http::object::SiblingSet)],
+) {
+    if merged.siblings.is_empty() {
+        return;
+    }
+    let merged_bytes = merged.to_storage_bytes();
+    for (peer_idx, remote) in replies {
+        if sibling_set_is_behind(remote, merged) {
+            hooks
+                .outbound
+                .dispatch(
+                    *peer_idx,
+                    PeerOp::RepairPut {
+                        bucket_type: decision.bucket_type.clone(),
+                        bucket: bucket.to_vec(),
+                        key: key.to_vec(),
+                        storage: merged_bytes.clone(),
+                    },
+                )
+                .await;
+        }
+    }
+    let _ = datastore.riak_put(bucket, key, &merged_bytes, &[]).await;
+}
+
 async fn handle_get(
     body: &[u8],
     datastore: &dyn Datastore,
@@ -929,16 +966,22 @@ async fn handle_get(
     // On a fire-and-forget transport `request` returns `None` and we
     // fall back to the local value with anti-entropy as the backstop.
     let mut allow_mult = false;
+    // A read counts responses against the read quorum R. The local
+    // store is one response (a value or a clean not-found). Each
+    // replica that replies (Some, even empty = not-found) adds one.
+    let mut responses: u32 = 1;
+    let mut required_r: u32 = 1;
+    let mut target_replicas: u32 = 1;
     if let Some(hooks) = hooks {
         let bucket_type = req.r#type.as_deref().unwrap_or(b"");
         if let Ok(decision) = hooks.router.try_route(bucket_type, &req.bucket, &req.key) {
-            allow_mult = hooks
-                .router
-                .registry()
-                .resolve(bucket_type, &req.bucket)
-                .effective_allow_mult();
+            let props = hooks.router.registry().resolve(bucket_type, &req.bucket);
+            allow_mult = props.effective_allow_mult();
+            required_r = props.effective_r(props.effective_n_val(), req.r);
+            let replicas = decision.replica_list();
+            target_replicas = u32::try_from(replicas.len().max(1)).unwrap_or(u32::MAX);
             let mut replies: Vec<(u32, SiblingSet)> = Vec::new();
-            for replica in decision.replica_list() {
+            for replica in &replicas {
                 if replica.peer_idx == hooks.local_peer_idx {
                     continue;
                 }
@@ -954,6 +997,9 @@ async fn handle_get(
                     )
                     .await;
                 if let Some(bytes) = reply {
+                    // A reply (even empty = not-found) is a response
+                    // toward R.
+                    responses = responses.saturating_add(1);
                     let remote = SiblingSet::from_storage_bytes(&bytes).unwrap_or_default();
                     if !remote.siblings.is_empty() {
                         merged = merge_sibling_sets(&merged, &remote, allow_mult);
@@ -961,33 +1007,41 @@ async fn handle_get(
                     }
                 }
             }
-            // Read-repair: push the converged set to any replica whose
-            // reply was strictly behind the merged frontier. Fire and
-            // forget; a miss is reconciled by the next read or by AAE.
-            if !merged.siblings.is_empty() {
-                let merged_bytes = merged.to_storage_bytes();
-                for (peer_idx, remote) in &replies {
-                    if sibling_set_is_behind(remote, &merged) {
-                        hooks
-                            .outbound
-                            .dispatch(
-                                *peer_idx,
-                                PeerOp::RepairPut {
-                                    bucket_type: decision.bucket_type.clone(),
-                                    bucket: req.bucket.clone(),
-                                    key: req.key.clone(),
-                                    storage: merged_bytes.clone(),
-                                },
-                            )
-                            .await;
-                    }
-                }
-                // Repair the coordinating node's own store too, so a
-                // subsequent local read is already converged.
-                let _ = datastore
-                    .riak_put(&req.bucket, &req.key, &merged_bytes, &[])
-                    .await;
-            }
+            // Read-repair: push the converged set to replicas that were
+            // behind, and repair the coordinator's own store.
+            read_repair_behind(
+                hooks,
+                &decision,
+                datastore,
+                &req.bucket,
+                &req.key,
+                &merged,
+                &replies,
+            )
+            .await;
+        }
+    }
+
+    // Enforce the read quorum R: fewer responses than R means the
+    // reachable replicas cannot satisfy the requested consistency. R is
+    // clamped to the reachable replica count so `all` still succeeds
+    // once every replica responds.
+    //
+    // Availability caveat: on a fire-and-forget transport `request`
+    // returns `None` for every replica, so `responses` stays at 1 (the
+    // local read). We must not fail every read in that case -- R is
+    // only enforced when the transport actually answers (at least one
+    // remote reply, or a single-replica target where local alone
+    // satisfies R). Same behavior as the CRDT read path: a transport
+    // without request/response falls back to the local value with
+    // anti-entropy as the backstop.
+    {
+        let needed = required_r.min(target_replicas.max(1));
+        let transport_answered = responses > 1 || target_replicas <= 1;
+        if transport_answered && responses < needed {
+            return Ok(error_frame(format!(
+                "riak get: read quorum not met ({responses}/{needed} responses)"
+            )));
         }
     }
 
@@ -1017,37 +1071,81 @@ async fn handle_get(
     ))
 }
 
-/// Fan the resolved SiblingSet `storage` to every replica of the key
-/// except the coordinating node, via `RepairPut` (stored verbatim).
-/// Fire and forget: a missed replica is reconciled by the next read's
-/// read-repair or by anti-entropy. A no-op without routing hooks.
-async fn fan_repair_put(
+/// Fan the resolved SiblingSet `storage` to the key's replicas via
+/// `RepairPut` and enforce the write quorum `w`: the local store counts
+/// as one ack, each replica that acks (a request/reply RepairPut)
+/// counts as one more. Returns `Ok(())` once `w` acks are gathered, or
+/// `Err(reason)` if the reachable replicas cannot satisfy `w`. With no
+/// routing hooks the local ack alone satisfies `w <= 1`.
+///
+/// `local_ok` is whether the coordinator's own local store succeeded
+/// (it always attempts the write before fanning).
+async fn fan_repair_put_quorum(
     hooks: Option<&RoutingHooks>,
     bucket_type: &[u8],
     bucket: &[u8],
     key: &[u8],
     storage: &[u8],
-) {
-    let Some(hooks) = hooks else { return };
-    let Ok(decision) = hooks.router.try_route(bucket_type, bucket, key) else {
-        return;
+    w: u32,
+    local_ok: bool,
+) -> Result<(), String> {
+    let mut acks: u32 = u32::from(local_ok);
+    let Some(hooks) = hooks else {
+        return quorum_result(acks, w, 1);
     };
-    for replica in decision.replica_list() {
+    let Ok(decision) = hooks.router.try_route(bucket_type, bucket, key) else {
+        return quorum_result(acks, w, 1);
+    };
+    let replicas = decision.replica_list();
+    // Reachable target count = replica set size (local counted above if
+    // it is a replica; treat the set size as the ceiling for w).
+    let target = u32::try_from(replicas.len().max(1)).unwrap_or(u32::MAX);
+    let mut remote_targets = 0u32;
+    for replica in &replicas {
         if replica.peer_idx == hooks.local_peer_idx {
             continue;
         }
-        hooks
-            .outbound
-            .dispatch(
-                replica.peer_idx,
-                PeerOp::RepairPut {
-                    bucket_type: decision.bucket_type.clone(),
-                    bucket: bucket.to_vec(),
-                    key: key.to_vec(),
-                    storage: storage.to_vec(),
-                },
-            )
-            .await;
+        remote_targets = remote_targets.saturating_add(1);
+        let op = PeerOp::RepairPut {
+            bucket_type: decision.bucket_type.clone(),
+            bucket: bucket.to_vec(),
+            key: key.to_vec(),
+            storage: storage.to_vec(),
+        };
+        // Prefer the acked request path (counts toward W). If the
+        // transport does not answer (returns None -- a fire-and-forget
+        // transport that did not deliver), fall back to a plain
+        // dispatch so the write still fans out (delivery is not lost;
+        // W just goes unacked and is treated as best-effort below).
+        match hooks.outbound.request(replica.peer_idx, op.clone()).await {
+            Some(ack) if !ack.is_empty() => acks = acks.saturating_add(1),
+            Some(_) => {}
+            None => hooks.outbound.dispatch(replica.peer_idx, op).await,
+        }
+    }
+    // Availability caveat (mirrors the read path): on a fire-and-forget
+    // transport no acks come back, so only enforce W when the transport
+    // actually answered (some ack, or no remote target so local alone
+    // satisfies W).
+    let transport_answered = acks > u32::from(local_ok) || remote_targets == 0;
+    if transport_answered {
+        quorum_result(acks, w, target)
+    } else {
+        Ok(())
+    }
+}
+
+/// Decide a quorum outcome: satisfied when `acks >= w`. `w` is clamped
+/// to the reachable `target` so a `w` above the replica count still
+/// succeeds once every reachable replica acks (Riak treats `all` as N).
+fn quorum_result(acks: u32, w: u32, target: u32) -> Result<(), String> {
+    let needed = w.min(target.max(1));
+    if acks >= needed {
+        Ok(())
+    } else {
+        Err(format!(
+            "riak put: write quorum not met ({acks}/{needed} acks)"
+        ))
     }
 }
 
@@ -1183,34 +1281,34 @@ async fn handle_put(
     };
     let resolved = resolve_write(&stored_set, &envelope, allow_mult);
     let storage = resolved.to_storage_bytes();
-    match datastore
+    let local_ok = match datastore
         .riak_put(&req.bucket, &key, &storage, &indexes)
         .await
     {
-        Ok(()) | Err(DatastoreError::Unsupported(_)) => {
-            // Fan the resolved SiblingSet storage to every other
-            // replica so they hold a byte-identical, causally-correct
-            // copy. Fire and forget; a miss is reconciled by the next
-            // read's read-repair or by AAE.
-            fan_repair_put(
-                hooks,
-                req.r#type.as_deref().unwrap_or(b""),
-                &req.bucket,
-                &key,
-                &storage,
-            )
-            .await;
-            let resp = RpbPutResp {
-                vclock: Some(new_context),
-                ..RpbPutResp::default()
-            };
-            Ok(Frame::new(
-                MessageCode::PutResp.as_u8(),
-                resp.encode_to_vec(),
-            ))
-        }
-        Err(e) => Ok(error_frame(format!("riak put: {e}"))),
+        Ok(()) | Err(DatastoreError::Unsupported(_)) => true,
+        Err(e) => return Ok(error_frame(format!("riak put: {e}"))),
+    };
+    // Fan the resolved SiblingSet storage to the key's replicas and
+    // enforce the write quorum W (request > bucket default > quorum).
+    // The local store counts as one ack; each acking replica adds one.
+    let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+    let w = hooks.map_or(1, |h| {
+        let props = h.router.registry().resolve(bucket_type, &req.bucket);
+        props.effective_w(props.effective_n_val(), req.w)
+    });
+    if let Err(reason) =
+        fan_repair_put_quorum(hooks, bucket_type, &req.bucket, &key, &storage, w, local_ok).await
+    {
+        return Ok(error_frame(reason));
     }
+    let resp = RpbPutResp {
+        vclock: Some(new_context),
+        ..RpbPutResp::default()
+    };
+    Ok(Frame::new(
+        MessageCode::PutResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
 }
 
 async fn handle_del(
@@ -1842,6 +1940,10 @@ fn handle_get_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
                 0 => None,
                 secs => Some(u32::try_from(secs).unwrap_or(u32::MAX)),
             },
+            r: Some(resolved.effective_r(resolved.effective_n_val(), None)),
+            w: Some(resolved.effective_w(resolved.effective_n_val(), None)),
+            pr: Some(resolved.effective_pr(resolved.effective_n_val(), None)),
+            pw: Some(resolved.effective_pw(resolved.effective_n_val(), None)),
             ..RpbBucketProps::default()
         }
     } else {
@@ -1905,6 +2007,13 @@ fn handle_set_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
             if let Some(ttl) = props.ttl_seconds {
                 bp.ttl_seconds = Some(u64::from(ttl));
             }
+            // Quorum tunables: stored as bucket defaults so a later
+            // read/write with no per-request override uses them.
+            bp.r = props.r;
+            bp.w = props.w;
+            bp.pr = props.pr;
+            bp.pw = props.pw;
+            bp.dw = props.dw;
             hooks.router.registry().set(bucket_type, &req.bucket, bp);
         }
     }

@@ -70,6 +70,7 @@ pub mod error;
 #[cfg(feature = "wasm")]
 pub mod precommit;
 pub mod proto;
+pub mod quorum;
 pub mod ramp;
 #[cfg(feature = "noxu")]
 pub mod ramp_store;

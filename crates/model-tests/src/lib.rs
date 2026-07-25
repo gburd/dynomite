@@ -94,6 +94,7 @@ pub mod delta_crdt;
 pub mod gossip;
 pub mod hlc;
 pub mod quorum;
+pub mod quorum_decision;
 pub mod ramp;
 pub mod replication;
 pub mod ring;

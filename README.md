@@ -114,14 +114,15 @@ Scope and non-goals worth stating up front:
 Riak-compatibility (`dyniak`) gaps worth knowing before you rely on
 them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
 
-* **Bucket quorum properties are not yet enforced.** `n_val` (the
-  replica count), `allow_mult`, and `ttl` are honored, but the quorum
-  knobs `r` / `w` / `pr` / `pw` / `dw` are accepted for API
-  compatibility and not yet applied on the read/write path (a read
-  returns as soon as it has a value rather than waiting for `r`
-  responses). The PBC `GetBucket` reflects the stored per-bucket
-  properties; the HTTP `/props` GET still echoes Riak's documented
-  defaults.
+* **Bucket quorum properties are enforced.** `n_val`, `allow_mult`,
+  `ttl`, and the quorum knobs `r` / `w` / `pr` / `pw` / `dw` are honored
+  (symbolic `one` / `quorum` / `all` / `default` or a literal count,
+  with per-request overrides). A read waits for `R` responses and a
+  write for `W` acks across the key's replica set, failing below quorum
+  -- except on a fire-and-forget peer transport, where the operation
+  falls back to local (availability) with anti-entropy as the backstop.
+  The PBC `GetBucket` reflects the stored per-bucket properties; the
+  HTTP `/props` GET still echoes Riak's documented defaults.
 * **Concurrent writes are retained as siblings.** Opaque objects carry a
   per-object version-vector causal context: a PUT advances it (keyed by
   the coordinating node) and returns it (`RpbPutResp.vclock` / the
