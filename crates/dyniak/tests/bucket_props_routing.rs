@@ -261,19 +261,23 @@ async fn bucketonly_keyfun_routes_two_keys_to_same_primary() {
     h.put(b"users", b"bob", b"bob-value").await;
 
     let dispatches = h.drain_dispatches();
-    assert_eq!(
-        dispatches.len(),
-        1,
-        "BUCKETONLY routes both keys to one peer; saw {dispatches:?}"
-    );
-    let (_peer, ops) = dispatches.into_iter().next().expect("one entry");
-    assert_eq!(ops.len(), 2, "two PUTs land on the same peer");
-    for op in &ops {
-        match op {
-            PeerOp::Put { bucket, .. } => assert_eq!(bucket, b"users"),
-            other => panic!("expected Put op, got {other:?}"),
+    // n_val=1 routes both keys to the same single replica. That replica
+    // is fanned RepairPut only when it is not the coordinator (peer 0).
+    // When the primary is peer 0 the writes are local-only (no fan).
+    for (peer, ops) in &dispatches {
+        assert_ne!(*peer, 0, "the coordinator does not fan to itself");
+        for op in ops {
+            match op {
+                PeerOp::RepairPut { bucket, .. } => assert_eq!(bucket, b"users"),
+                other => panic!("expected RepairPut op, got {other:?}"),
+            }
         }
     }
+    // At most one peer receives fans (both keys route to one primary).
+    assert!(
+        dispatches.len() <= 1,
+        "BUCKETONLY routes both keys to one peer; saw {dispatches:?}"
+    );
     h.shutdown().await;
 }
 
@@ -290,22 +294,34 @@ async fn successors_strategy_fans_one_put_out_to_three_peers() {
     h.put(b"users", b"alice", b"alice-value").await;
 
     let dispatches = h.drain_dispatches();
-    assert_eq!(
-        dispatches.len(),
-        3,
-        "Successors n_val=3 fans out to 3 distinct peers; saw {dispatches:?}"
+    // The write fans the resolved SiblingSet storage to the key's
+    // replicas via RepairPut, skipping the coordinating node (peer 0)
+    // when it is itself a replica. So we see between 2 and 3 fans, all
+    // RepairPut for users/alice whose decoded value is alice-value.
+    assert!(
+        (2..=3).contains(&dispatches.len()),
+        "Successors n_val=3 fans to the replica set minus self; saw {dispatches:?}"
     );
     for (peer, ops) in &dispatches {
+        assert_ne!(*peer, 0, "the coordinator does not fan to itself");
         assert_eq!(ops.len(), 1, "peer {peer} sees exactly one op");
         match &ops[0] {
-            PeerOp::Put {
-                bucket, key, value, ..
+            PeerOp::RepairPut {
+                bucket,
+                key,
+                storage,
+                ..
             } => {
                 assert_eq!(bucket, b"users");
                 assert_eq!(key, b"alice");
-                assert_eq!(value, b"alice-value");
+                let set = dyniak::proto::http::object::SiblingSet::from_storage_bytes(storage)
+                    .expect("decode fanned storage");
+                assert!(
+                    set.siblings.iter().any(|o| o.value == b"alice-value"),
+                    "fanned storage carries the written value"
+                );
             }
-            other => panic!("expected Put op, got {other:?}"),
+            other => panic!("expected RepairPut op, got {other:?}"),
         }
     }
     h.shutdown().await;

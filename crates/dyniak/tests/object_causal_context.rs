@@ -209,3 +209,159 @@ async fn concurrent_writes_surface_as_siblings_under_allow_mult() {
     server.abort();
     let _ = server.await;
 }
+
+/// An outbound backed by one datastore per peer, answering `Get`
+/// read-coordination queries and applying `RepairPut`s. Lets a
+/// coordinated read merge sibling sets held on distinct replicas.
+#[derive(Clone)]
+struct PerPeerStores {
+    stores: std::sync::Arc<std::collections::HashMap<u32, Arc<dyniak::datastore::NoxuDatastore>>>,
+}
+
+impl std::fmt::Debug for PerPeerStores {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PerPeerStores").finish_non_exhaustive()
+    }
+}
+
+impl dyniak::router::PeerOutbound for PerPeerStores {
+    fn dispatch(
+        &self,
+        peer_idx: u32,
+        op: dyniak::router::PeerOp,
+    ) -> dynomite::embed::hooks::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            if let dyniak::router::PeerOp::RepairPut {
+                bucket,
+                key,
+                storage,
+                ..
+            } = op
+            {
+                if let Some(ds) = self.stores.get(&peer_idx) {
+                    let _ = ds.put_object(&bucket, &key, &storage, &[]);
+                }
+            }
+        })
+    }
+
+    fn request(
+        &self,
+        peer_idx: u32,
+        op: dyniak::router::PeerOp,
+    ) -> dynomite::embed::hooks::BoxFuture<'_, Option<Vec<u8>>> {
+        Box::pin(async move {
+            let dyniak::router::PeerOp::Get { bucket, key, .. } = op else {
+                return None;
+            };
+            let ds = self.stores.get(&peer_idx)?;
+            match ds.get_object(&bucket, &key) {
+                Ok(Some(b)) => Some(b),
+                _ => Some(Vec::new()),
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn coordinated_read_merges_sibling_sets_across_replicas() {
+    use dyniak::bucket_props::{BucketProps, BucketPropsRegistry};
+    use dyniak::proto::http::object::{HttpObject, SiblingSet};
+    use dyniak::replication::{RingPoint, RingView};
+    use dyniak::router::{BucketRouter, RoutingHooks};
+    use dynomite::hashkit::HashType;
+
+    // Three peers, each with its own store. Peers 1 and 2 hold DIFFERENT
+    // concurrent siblings of the same key; peer 0 (the coordinator)
+    // holds neither. A coordinated read at peer 0 must fan Get to the
+    // replica set, merge the two siblings, and return both.
+    let dirs: Vec<tempfile::TempDir> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let mut map = std::collections::HashMap::new();
+    for (i, d) in dirs.iter().enumerate() {
+        let ds = dyniak::datastore::NoxuDatastore::open_transactional(d.path()).expect("noxu");
+        map.insert(u32::try_from(i).expect("peer index fits u32"), Arc::new(ds));
+    }
+    let stores = PerPeerStores {
+        stores: std::sync::Arc::new(map),
+    };
+
+    // Seed peer 1 with sibling "red" (context {n1:1}) and peer 2 with
+    // sibling "blue" (context {n2:1}) -- concurrent.
+    let mk = |val: &[u8], actor: &[u8]| -> Vec<u8> {
+        let ctx = dyniak::vclock::VClock::decode(&[]);
+        let mut ctx = ctx;
+        ctx.advance(actor);
+        SiblingSet::single(HttpObject {
+            value: val.to_vec(),
+            context: ctx.encode(),
+            ..HttpObject::default()
+        })
+        .to_storage_bytes()
+    };
+    stores.stores[&1]
+        .put_object(b"cart", b"k", &mk(b"red", b"n1"), &[])
+        .expect("seed n1");
+    stores.stores[&2]
+        .put_object(b"cart", b"k", &mk(b"blue", b"n2"), &[])
+        .expect("seed n2");
+
+    // Coordinator = peer 0, its own (empty) store is the serve_pbc ds.
+    let coord_ds: Arc<dyn Datastore> = stores.stores[&0].clone();
+    let registry = Arc::new(BucketPropsRegistry::new_riak_defaults());
+    registry.set(
+        b"",
+        b"cart",
+        BucketProps {
+            allow_mult: Some(true),
+            n_val: Some(3),
+            ..BucketProps::default()
+        },
+    );
+    // Degenerate ring: all three peers at distinct tokens; n_val=3 puts
+    // every key on all three.
+    let span = u64::from(u32::MAX);
+    let pts: Vec<RingPoint> = (0..3u32)
+        .map(|i| RingPoint::new(u64::from(i) * span / 3, i, "dc1", "r1"))
+        .collect();
+    let router = Arc::new(BucketRouter::new(
+        registry,
+        Arc::new(RingView::new(pts)),
+        HashType::Murmur,
+    ));
+    let hooks = RoutingHooks {
+        router,
+        outbound: Arc::new(stores.clone()) as Arc<dyn dyniak::router::PeerOutbound>,
+        local_actor: dyniak::datatypes::ActorId::new("dc1", "n0"),
+        local_peer_idx: 0,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let admin = Arc::new(dynomite::cluster::admin_rpc::NoopClusterAdmin);
+    let server = tokio::spawn(async move {
+        let _ = dyniak::server::serve_pbc_with_routing(listener, coord_ds, admin, hooks).await;
+    });
+    let mut c = TcpStream::connect(addr).await.expect("connect");
+
+    let get = RpbGetReq {
+        bucket: b"cart".to_vec(),
+        key: b"k".to_vec(),
+        ..RpbGetReq::default()
+    };
+    send_frame(&mut c, MessageCode::GetReq.as_u8(), &get.encode_to_vec()).await;
+    let (code, body) = recv_frame(&mut c).await;
+    assert_eq!(code, MessageCode::GetResp.as_u8());
+    let resp = RpbGetResp::decode(body.as_slice()).expect("get resp");
+    let values: std::collections::BTreeSet<Vec<u8>> =
+        resp.content.iter().map(|c| c.value.clone()).collect();
+    assert_eq!(
+        resp.content.len(),
+        2,
+        "coordinated read merges the two replicas' concurrent siblings"
+    );
+    assert!(values.contains(b"red".as_slice()));
+    assert!(values.contains(b"blue".as_slice()));
+
+    server.abort();
+    let _ = server.await;
+}

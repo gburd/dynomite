@@ -376,6 +376,23 @@ pub enum PeerOp {
         /// ([`crate::crdt_store::CrdtOp::type_tag`]).
         tag: u8,
     },
+    /// Store a pre-serialized object `SiblingSet` verbatim on the
+    /// replica. Unlike [`PeerOp::Put`] (which carries a bare value the
+    /// receiver wraps in a fresh envelope with a seed context), this
+    /// carries the coordinator's canonical storage bytes -- the full
+    /// sibling set with per-object causal contexts -- so the replica
+    /// holds a byte-identical, causally-correct copy. Used by the
+    /// object write fan-out and by read-repair.
+    RepairPut {
+        /// Bucket type (`default` when unset).
+        bucket_type: Vec<u8>,
+        /// Bucket name.
+        bucket: Vec<u8>,
+        /// Key supplied by the client.
+        key: Vec<u8>,
+        /// Canonical `SiblingSet` storage bytes, stored verbatim.
+        storage: Vec<u8>,
+    },
 }
 
 /// Receiver of replica-peer dispatches.

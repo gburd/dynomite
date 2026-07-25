@@ -320,29 +320,42 @@ async fn http_put_fans_out_to_replicas() {
 
     serve.abort();
 
-    // The put fanned out one PeerOp::Put per replica (n_val=3).
+    // The put fanned the resolved SiblingSet storage to the key's
+    // replicas via RepairPut, skipping the coordinator (peer 0) when it
+    // is itself a replica (so 2 or 3 fans for n_val=3).
     let ops = outbound.ops.lock().expect("lock");
-    assert_eq!(
-        ops.len(),
-        3,
-        "n_val=3 yields 3 replica dispatches, got {}",
+    assert!(
+        (2..=3).contains(&ops.len()),
+        "n_val=3 fans to the replica set minus self, got {}",
         ops.len()
     );
-    for (_peer, op) in ops.iter() {
+    for (peer, op) in ops.iter() {
+        assert_ne!(*peer, 0, "the coordinator does not fan to itself");
         match op {
-            PeerOp::Put {
-                bucket, key, value, ..
+            PeerOp::RepairPut {
+                bucket,
+                key,
+                storage,
+                ..
             } => {
                 assert_eq!(bucket, b"users");
                 assert_eq!(key, b"alice");
-                assert_eq!(value, &vec![104u8, 105u8]);
+                let set = dyniak::proto::http::object::SiblingSet::from_storage_bytes(storage)
+                    .expect("decode fanned storage");
+                assert!(
+                    set.siblings.iter().any(|o| o.value == vec![104u8, 105u8]),
+                    "fanned storage carries the written value"
+                );
             }
-            other => panic!("expected PeerOp::Put, got {other:?}"),
+            other => panic!("expected PeerOp::RepairPut, got {other:?}"),
         }
     }
     // Replicas are distinct peers.
     let mut peers: Vec<u32> = ops.iter().map(|(p, _)| *p).collect();
     peers.sort_unstable();
     peers.dedup();
-    assert_eq!(peers.len(), 3, "replicas are distinct peers");
+    assert!(
+        (2..=3).contains(&peers.len()),
+        "replicas are distinct peers"
+    );
 }

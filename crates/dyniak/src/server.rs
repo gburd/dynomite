@@ -741,6 +741,75 @@ fn resolve_write(
     SiblingSet { siblings: kept }
 }
 
+/// Whether `remote` is strictly behind `merged`: `merged` holds a
+/// sibling that `remote` does not have an equal-or-dominating value
+/// for. Used to decide whether a replica needs a read-repair push.
+fn sibling_set_is_behind(
+    remote: &crate::proto::http::object::SiblingSet,
+    merged: &crate::proto::http::object::SiblingSet,
+) -> bool {
+    let dominates_or_eq = |a: &[u8], b: &[u8]| {
+        matches!(
+            context_cmp(a, b),
+            Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+        )
+    };
+    // For every sibling in the merged frontier, the remote must hold a
+    // sibling whose context dominates-or-equals it AND whose value
+    // matches; otherwise the remote is missing part of the frontier.
+    merged.siblings.iter().any(|m| {
+        !remote
+            .siblings
+            .iter()
+            .any(|r| r.value == m.value && dominates_or_eq(&r.context, &m.context))
+    })
+}
+
+/// Merge a remote replica's sibling set into the local one, keeping the
+/// causal frontier of the union: drop any sibling causally dominated by
+/// another, retain concurrent ones. `allow_mult` controls the final
+/// collapse (a single deterministic value when siblings are disabled),
+/// matching [`resolve_write`]. This is the read-coordination merge: a
+/// coordinated read folds every replica's set through this to converge
+/// on the union frontier, so a read at any node returns the same
+/// value(s) as a read at the most up-to-date replica.
+fn merge_sibling_sets(
+    local: &crate::proto::http::object::SiblingSet,
+    remote: &crate::proto::http::object::SiblingSet,
+    allow_mult: bool,
+) -> crate::proto::http::object::SiblingSet {
+    let mut acc = local.clone();
+    for sib in &remote.siblings {
+        // Fold each remote sibling in as if it were an incoming write.
+        // resolve_write drops it if dominated, supersedes locals it
+        // dominates, and retains it when concurrent -- exactly the
+        // union-frontier merge. allow_mult=true here so the frontier is
+        // preserved during the fold; the caller collapses once at the
+        // end when siblings are disabled.
+        acc = resolve_write(&acc, sib, true);
+    }
+    if !allow_mult && acc.siblings.len() > 1 {
+        // Collapse the converged frontier to one deterministic value.
+        let winner = acc
+            .siblings
+            .into_iter()
+            .reduce(|a, b| match context_cmp(&b.context, &a.context) {
+                Some(std::cmp::Ordering::Greater) => b,
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal) => a,
+                None => {
+                    if b.value > a.value {
+                        b
+                    } else {
+                        a
+                    }
+                }
+            })
+            .expect("invariant: a non-empty set collapses to one");
+        return crate::proto::http::object::SiblingSet::single(winner);
+    }
+    acc
+}
+
 /// Map a decoded [`HttpObject`] to a PBC [`RpbContent`].
 fn pbc_content_from_object(obj: &HttpObject) -> RpbContent {
     RpbContent {
@@ -828,66 +897,109 @@ async fn handle_get(
     datastore: &dyn Datastore,
     hooks: Option<&RoutingHooks>,
 ) -> Result<Frame, RiakError> {
+    use crate::proto::http::object::SiblingSet;
     let req = RpbGetReq::decode(body)?;
-    if let Some(hooks) = hooks {
-        let bucket_type = req.r#type.as_deref().unwrap_or(b"");
-        let decision = match hooks.router.try_route(bucket_type, &req.bucket, &req.key) {
-            Ok(d) => d,
-            Err(e) => return Ok(error_frame(format!("riak get: {e}"))),
-        };
-        for replica in decision.replica_list() {
-            hooks
-                .outbound
-                .dispatch(
-                    replica.peer_idx,
-                    PeerOp::Get {
-                        bucket_type: decision.bucket_type.clone(),
-                        bucket: req.bucket.clone(),
-                        key: req.key.clone(),
-                    },
-                )
-                .await;
-        }
-    }
     // Trampoline through the substrate so dispatch counts tick.
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
-    // For datastores that implement the Riak K/V layer (today:
-    // `NoxuDatastore`), fetch the object(s) and emit them as an
-    // `RpbGetResp`. When the key holds a single value, one
-    // `RpbContent` is returned; when concurrent siblings coexist
-    // (allow_mult), every sibling is returned as its own `RpbContent`
-    // and the client resolves them, matching Riak's sibling read.
-    // Each `RpbContent` carries the object value, content-type, 2i
-    // entries, and links. Datastores that report `Unsupported` fall
-    // back to the empty response so the `MemoryDatastore` trampoline
-    // continues to behave identically.
-    let resp = match datastore.riak_get(&req.bucket, &req.key).await {
-        Ok(Some(v)) => {
-            let set =
-                crate::proto::http::object::SiblingSet::from_storage_bytes(&v).unwrap_or_default();
-            // The returned context is the causal join of every
-            // sibling's context, so a client that read a sibling set
-            // and writes back supersedes ALL of them (resolving the
-            // conflict), matching Riak's read-resolve-write loop.
-            let joined = join_contexts(set.siblings.iter().map(|o| o.context.as_slice()));
-            let content: Vec<RpbContent> =
-                set.siblings.iter().map(pbc_content_from_object).collect();
-            RpbGetResp {
-                content,
-                vclock: if joined.is_empty() {
-                    None
-                } else {
-                    Some(joined)
-                },
-                ..RpbGetResp::default()
+
+    // Local sibling set for the key (empty when absent / unsupported).
+    let mut merged = match datastore.riak_get(&req.bucket, &req.key).await {
+        Ok(Some(v)) => SiblingSet::from_storage_bytes(&v).unwrap_or_default(),
+        Ok(None) | Err(DatastoreError::Unsupported(_)) => SiblingSet::default(),
+        Err(e) => return Ok(error_frame(format!("riak get: {e}"))),
+    };
+
+    // Read coordination: fan a Get to every OTHER replica of the key,
+    // merge each returned sibling set into the local one (keeping the
+    // causal frontier of the union), and read-repair replicas that were
+    // behind. A read at ANY node -- replica or not -- then returns the
+    // converged value(s), matching Riak's merge-on-read + read-repair.
+    // On a fire-and-forget transport `request` returns `None` and we
+    // fall back to the local value with anti-entropy as the backstop.
+    let mut allow_mult = false;
+    if let Some(hooks) = hooks {
+        let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+        if let Ok(decision) = hooks.router.try_route(bucket_type, &req.bucket, &req.key) {
+            allow_mult = hooks
+                .router
+                .registry()
+                .resolve(bucket_type, &req.bucket)
+                .effective_allow_mult();
+            let mut replies: Vec<(u32, SiblingSet)> = Vec::new();
+            for replica in decision.replica_list() {
+                if replica.peer_idx == hooks.local_peer_idx {
+                    continue;
+                }
+                let reply = hooks
+                    .outbound
+                    .request(
+                        replica.peer_idx,
+                        PeerOp::Get {
+                            bucket_type: decision.bucket_type.clone(),
+                            bucket: req.bucket.clone(),
+                            key: req.key.clone(),
+                        },
+                    )
+                    .await;
+                if let Some(bytes) = reply {
+                    let remote = SiblingSet::from_storage_bytes(&bytes).unwrap_or_default();
+                    if !remote.siblings.is_empty() {
+                        merged = merge_sibling_sets(&merged, &remote, allow_mult);
+                        replies.push((replica.peer_idx, remote));
+                    }
+                }
+            }
+            // Read-repair: push the converged set to any replica whose
+            // reply was strictly behind the merged frontier. Fire and
+            // forget; a miss is reconciled by the next read or by AAE.
+            if !merged.siblings.is_empty() {
+                let merged_bytes = merged.to_storage_bytes();
+                for (peer_idx, remote) in &replies {
+                    if sibling_set_is_behind(remote, &merged) {
+                        hooks
+                            .outbound
+                            .dispatch(
+                                *peer_idx,
+                                PeerOp::RepairPut {
+                                    bucket_type: decision.bucket_type.clone(),
+                                    bucket: req.bucket.clone(),
+                                    key: req.key.clone(),
+                                    storage: merged_bytes.clone(),
+                                },
+                            )
+                            .await;
+                    }
+                }
+                // Repair the coordinating node's own store too, so a
+                // subsequent local read is already converged.
+                let _ = datastore
+                    .riak_put(&req.bucket, &req.key, &merged_bytes, &[])
+                    .await;
             }
         }
-        Ok(None) | Err(DatastoreError::Unsupported(_)) => RpbGetResp::default(),
-        Err(e) => {
-            return Ok(error_frame(format!("riak get: {e}")));
-        }
+    }
+
+    // Emit the converged sibling set. One value -> one `RpbContent`;
+    // concurrent siblings -> one `RpbContent` each (the client
+    // resolves). The returned context is the causal join of the
+    // frontier so a resolving write supersedes them all.
+    let joined = join_contexts(merged.siblings.iter().map(|o| o.context.as_slice()));
+    let content: Vec<RpbContent> = merged
+        .siblings
+        .iter()
+        .map(pbc_content_from_object)
+        .collect();
+    let resp = RpbGetResp {
+        content,
+        vclock: if joined.is_empty() {
+            None
+        } else {
+            Some(joined)
+        },
+        ..RpbGetResp::default()
     };
+    let _ = allow_mult;
     Ok(Frame::new(
         MessageCode::GetResp.as_u8(),
         resp.encode_to_vec(),
@@ -916,27 +1028,6 @@ async fn handle_put(
     // (`RpbContent` at tag 4). A request that omits it stores an
     // empty value, matching Riak's tolerance for a contentless put.
     let content = req.content.clone().unwrap_or_default();
-    if let Some(hooks) = hooks {
-        let bucket_type = req.r#type.as_deref().unwrap_or(b"");
-        let decision = match hooks.router.try_route(bucket_type, &req.bucket, &key) {
-            Ok(d) => d,
-            Err(e) => return Ok(error_frame(format!("riak put: {e}"))),
-        };
-        for replica in decision.replica_list() {
-            hooks
-                .outbound
-                .dispatch(
-                    replica.peer_idx,
-                    PeerOp::Put {
-                        bucket_type: decision.bucket_type.clone(),
-                        bucket: req.bucket.clone(),
-                        key: key.clone(),
-                        value: content.value.clone(),
-                    },
-                )
-                .await;
-        }
-    }
     let indexes: Vec<(Vec<u8>, Vec<u8>)> = content
         .indexes
         .iter()
@@ -1001,6 +1092,33 @@ async fn handle_put(
         .await
     {
         Ok(()) | Err(DatastoreError::Unsupported(_)) => {
+            // Fan the resolved SiblingSet storage to every other
+            // replica so they hold a byte-identical, causally-correct
+            // copy (RepairPut stores it verbatim rather than re-wrapping
+            // a bare value with a seed context). Fire and forget; a miss
+            // is reconciled by the next read's read-repair or by AAE.
+            if let Some(hooks) = hooks {
+                let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+                if let Ok(decision) = hooks.router.try_route(bucket_type, &req.bucket, &key) {
+                    for replica in decision.replica_list() {
+                        if replica.peer_idx == hooks.local_peer_idx {
+                            continue;
+                        }
+                        hooks
+                            .outbound
+                            .dispatch(
+                                replica.peer_idx,
+                                PeerOp::RepairPut {
+                                    bucket_type: decision.bucket_type.clone(),
+                                    bucket: req.bucket.clone(),
+                                    key: key.clone(),
+                                    storage: storage.clone(),
+                                },
+                            )
+                            .await;
+                    }
+                }
+            }
             let resp = RpbPutResp {
                 vclock: Some(new_context),
                 ..RpbPutResp::default()

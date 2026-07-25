@@ -1209,37 +1209,38 @@ async fn put_object_into_store(
             .effective_allow_mult()
     });
 
-    // Cross-node replica fan-out (fire-and-forget), mirroring the PBC
-    // put path: route the key to its preference list and dispatch a
-    // PeerOp::Put to each replica before persisting locally. Applied
-    // replica ops are terminal on the receiver (no re-forward), so a
-    // write fans out exactly once. Without hooks the write is
+    // The replica fan happens AFTER local resolution below (using the
+    // resolved SiblingSet storage via RepairPut), so replicas hold a
+    // byte-identical, causally-correct copy. Without hooks the write is
     // local-only.
+
+    let indexes = obj.index_pairs();
+    let resolved = crate::server::resolve_object_write(&stored_set, &obj, allow_mult);
+    let storage = resolved.to_storage_bytes();
     if let Some(hooks) = ctx.hooks.as_ref() {
         if let Ok(decision) = hooks
             .router
             .try_route(b"", bucket.as_bytes(), key.as_bytes())
         {
             for replica in decision.replica_list() {
+                if replica.peer_idx == hooks.local_peer_idx {
+                    continue;
+                }
                 hooks
                     .outbound
                     .dispatch(
                         replica.peer_idx,
-                        crate::router::PeerOp::Put {
+                        crate::router::PeerOp::RepairPut {
                             bucket_type: decision.bucket_type.clone(),
                             bucket: bucket.as_bytes().to_vec(),
                             key: key.as_bytes().to_vec(),
-                            value: obj.value.clone(),
+                            storage: storage.clone(),
                         },
                     )
                     .await;
             }
         }
     }
-
-    let indexes = obj.index_pairs();
-    let resolved = crate::server::resolve_object_write(&stored_set, &obj, allow_mult);
-    let storage = resolved.to_storage_bytes();
     match store.put_object(bucket.as_bytes(), key.as_bytes(), &storage, &indexes) {
         Ok(()) => {
             // Feed any declared text / vector indexes for this bucket

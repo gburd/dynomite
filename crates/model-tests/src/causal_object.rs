@@ -288,4 +288,70 @@ mod tests {
              a concurrent write); if this passes the model has no teeth"
         );
     }
+
+    /// Keep only the causal frontier of `set` (drop any element another
+    /// element dominates) -- the operation `resolve_write` /
+    /// `merge_sibling_sets` performs when folding replica states.
+    fn frontier(set: &BTreeSet<Stored>) -> BTreeSet<Stored> {
+        set.iter()
+            .filter(|w| !set.iter().any(|o| o != *w && o.dominates(w)))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn read_coordination_merges_partial_replicas_to_the_full_frontier() {
+        // Model read coordination: a set of writes is distributed across
+        // R replicas, each replica holding an ARBITRARY subset (a
+        // dropped fan-out, a lagging replica). A coordinated read merges
+        // every replica's frontier; the result must equal the frontier
+        // of ALL writes -- no concurrent write is missed regardless of
+        // how the writes were scattered. This is the invariant the KV
+        // read-coordination path (merge_sibling_sets across the replica
+        // set) provides.
+        //
+        // Build a fixed set of concurrent + causally-ordered writes.
+        let w = |id: u8, obs: &[u8]| Stored {
+            id,
+            observed: obs.iter().copied().collect(),
+        };
+        // 1 and 2 concurrent (neither observed the other); 3 descends
+        // from 1 (observed 1); 4 concurrent with everything.
+        let all: BTreeSet<Stored> = [w(1, &[]), w(2, &[]), w(3, &[1]), w(4, &[])]
+            .into_iter()
+            .collect();
+        let full_frontier = frontier(&all);
+        // The full frontier drops 1 (dominated by 3): {2, 3, 4}.
+        assert_eq!(full_frontier.len(), 3);
+
+        // Enumerate every way to split `all` across 3 replicas (each
+        // write independently assigned to one of the 3), and confirm
+        // merging the replicas' frontiers always reconstructs the full
+        // frontier.
+        let writes: Vec<Stored> = all.iter().cloned().collect();
+        let r = 3usize;
+        let assignments = r.pow(u32::try_from(writes.len()).expect("few writes"));
+        for mask in 0..assignments {
+            let mut replicas: Vec<BTreeSet<Stored>> = vec![BTreeSet::new(); r];
+            let mut m = mask;
+            for wr in &writes {
+                let target = m % r;
+                m /= r;
+                replicas[target].insert(wr.clone());
+            }
+            // Coordinated read: union the replica frontiers, then take
+            // the frontier of the union (what merge_sibling_sets does).
+            let mut union: BTreeSet<Stored> = BTreeSet::new();
+            for rep in &replicas {
+                for s in frontier(rep) {
+                    union.insert(s);
+                }
+            }
+            let merged = frontier(&union);
+            assert_eq!(
+                merged, full_frontier,
+                "coordinated read of a partial split (mask {mask}) must equal the full frontier"
+            );
+        }
+    }
 }

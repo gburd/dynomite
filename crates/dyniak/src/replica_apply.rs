@@ -105,6 +105,23 @@ impl ReplicaApplier {
                     }
                 }
             }
+            PeerOp::RepairPut {
+                bucket,
+                key,
+                storage,
+                ..
+            } => {
+                // Store the coordinator's canonical SiblingSet bytes
+                // verbatim: this is a byte-identical, causally-correct
+                // copy (write fan-out or read-repair), not a bare value
+                // to re-wrap.
+                match self.datastore.riak_put(&bucket, &key, &storage, &[]).await {
+                    Ok(()) | Err(DatastoreError::Unsupported(_)) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, "riak replica: repair put failed");
+                    }
+                }
+            }
             // A Get is a read-repair / handoff read and a DtFetch is a
             // read-coordination QUERY answered by `apply_query`; neither
             // is a write, so the write-apply path is a no-op for both.
@@ -163,18 +180,21 @@ impl ReplicaApplySink for ReplicaApplier {
             // `None` for a non-fetch tells the receive loop to fall
             // through to `apply` (no double-apply).
             let op = decode_peer_op(payload).ok()?;
-            let PeerOp::DtFetch { bucket, key, .. } = op else {
+            // Only a read query (DtFetch / Get) expects a reply; writes
+            // (Put/Del/DtUpdate/RepairPut) return None so the receive
+            // loop falls through to `apply`.
+            let (PeerOp::DtFetch { bucket, key, .. } | PeerOp::Get { bucket, key, .. }) = op else {
                 return None;
             };
-            // Read the local stored CRDT state for the key and return
-            // the raw serialized state so the coordinator can merge
-            // it with the other replicas' states. An absent key
-            // replies with an empty payload (no contribution).
+            // Read the local stored bytes for the key and return them
+            // so the coordinator can merge with the other replicas: for
+            // a DtFetch this is the serialized CRDT state, for a Get the
+            // serialized SiblingSet. An absent key replies empty.
             match self.datastore.riak_get(&bucket, &key).await {
-                Ok(Some(state)) => Some(state),
+                Ok(Some(bytes)) => Some(bytes),
                 Ok(None) => Some(Vec::new()),
                 Err(e) => {
-                    tracing::debug!(error = %e, "riak replica: dt fetch read failed");
+                    tracing::debug!(error = %e, "riak replica: read-coordination read failed");
                     Some(Vec::new())
                 }
             }

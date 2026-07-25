@@ -48,6 +48,9 @@ const KIND_DT_UPDATE: u8 = 3;
 /// Op-kind discriminator for a [`PeerOp::DtFetch`] frame (expects a
 /// reply carrying the peer's local CRDT state).
 const KIND_DT_FETCH: u8 = 4;
+/// Op-kind discriminator for a [`PeerOp::RepairPut`] frame (stores
+/// canonical `SiblingSet` storage bytes verbatim).
+const KIND_REPAIR_PUT: u8 = 5;
 
 /// Error decoding a [`PeerOp`] from its wire payload.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -125,6 +128,18 @@ pub fn encode_peer_op(op: &PeerOp) -> Vec<u8> {
             put_bytes(&mut out, key);
             out.push(*tag);
         }
+        PeerOp::RepairPut {
+            bucket_type,
+            bucket,
+            key,
+            storage,
+        } => {
+            out.push(KIND_REPAIR_PUT);
+            put_bytes(&mut out, bucket_type);
+            put_bytes(&mut out, bucket);
+            put_bytes(&mut out, key);
+            put_bytes(&mut out, storage);
+        }
     }
     out
 }
@@ -195,6 +210,18 @@ pub fn decode_peer_op(buf: &[u8]) -> Result<PeerOp, ReplicaWireError> {
                 bucket,
                 key,
                 tag,
+            }
+        }
+        KIND_REPAIR_PUT => {
+            let bucket_type = r.bytes()?;
+            let bucket = r.bytes()?;
+            let key = r.bytes()?;
+            let storage = r.bytes()?;
+            PeerOp::RepairPut {
+                bucket_type,
+                bucket,
+                key,
+                storage,
             }
         }
         other => return Err(ReplicaWireError::BadKind(other)),
