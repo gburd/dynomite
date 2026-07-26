@@ -17,7 +17,7 @@
 # Usage: deploy-mixed.sh {up|down|status}
 set -euo pipefail
 
-PROFILE=numa
+PROFILE=ouch
 RUN_ID="$(cat /tmp/dyn-ec2-runid 2>/dev/null | sed 's/RUN_ID=//')"
 [ -z "$RUN_ID" ] && { echo "no RUN_ID in /tmp/dyn-ec2-runid" >&2; exit 1; }
 TAG="dyn-run"

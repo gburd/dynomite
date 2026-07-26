@@ -13,11 +13,11 @@
 #   scripts/ec2-dist/deploy.sh down      # terminate + clean everything
 #   scripts/ec2-dist/deploy.sh status    # list tagged resources
 #
-# Requires: AWS_PROFILE (numa) with EC2 create/terminate, and a
+# Requires: AWS_PROFILE (ouch) with EC2 create/terminate, and a
 # RUN_ID in /tmp/dyn-ec2-runid.
 set -euo pipefail
 
-PROFILE="${AWS_PROFILE:-numa}"
+PROFILE="${AWS_PROFILE:-ouch}"
 RUN_ID="$(cat /tmp/dyn-ec2-runid 2>/dev/null | sed 's/RUN_ID=//')"
 [ -z "$RUN_ID" ] && { echo "no RUN_ID in /tmp/dyn-ec2-runid" >&2; exit 1; }
 TAG="dyn-run"
