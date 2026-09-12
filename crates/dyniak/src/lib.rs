@@ -138,8 +138,8 @@ pub mod router;
 pub use crate::bucket_props::{BucketProps, BucketPropsRegistry};
 pub use crate::replica_apply::ReplicaApplier;
 pub use crate::replication::{
-    plan_replicas, ReplicationPlan, ReplicationStrategy, ReplicationStrategyError, RingPoint,
-    RingView,
+    plan_replicas, plan_replicas_with_liveness, ReplicaLiveness, ReplicationPlan,
+    ReplicationStrategy, ReplicationStrategyError, RingPoint, RingView,
 };
 pub use crate::router::{BucketRouter, PeerOp, PeerOutbound, RouteDecision, RoutingHooks};
 

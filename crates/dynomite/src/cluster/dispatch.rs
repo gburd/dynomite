@@ -156,6 +156,14 @@ pub struct ReplicaTarget {
     pub rack: String,
     /// True when the target is the local node.
     pub is_local: bool,
+    /// True when this target stands in for a primary owner that is
+    /// known down (Riak's sloppy quorum / hinted-handoff fallback).
+    /// The topology dispatch path has no notion of a preference-list
+    /// fallback -- every entry it produces is a primary owner, so this
+    /// is always `false` here. The Riak walk-N-successors planner
+    /// ([`dyniak`](https://docs.rs/dyniak)'s `replication::plan_successors`)
+    /// is the only producer that can set this to `true`.
+    pub is_fallback: bool,
 }
 
 /// Dispatch plan produced by the cluster dispatcher.
@@ -772,6 +780,9 @@ fn build_target(
         dc: dc_name,
         rack: rack_name,
         is_local,
+        // The topology dispatch preference list has no fallback
+        // concept: every routable target it names is a primary owner.
+        is_fallback: false,
     }
 }
 

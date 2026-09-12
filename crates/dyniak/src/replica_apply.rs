@@ -33,7 +33,7 @@ use dynomite::net::ReplicaApplySink;
 
 use crate::proto::http::object::HttpObject;
 use crate::proto::replica_wire::decode_peer_op;
-use crate::router::PeerOp;
+use crate::router::{PeerOp, ACK_STORED, ACK_STORED_DURABLE};
 
 /// Applies inbound replica ops to a local [`Datastore`].
 ///
@@ -54,6 +54,19 @@ impl ReplicaApplier {
     #[must_use]
     pub fn new(datastore: Arc<dyn Datastore>) -> Self {
         Self { datastore }
+    }
+
+    /// Ack byte a successful [`PeerOp::RepairPut`] apply replies with:
+    /// [`ACK_STORED_DURABLE`] when the local store can confirm the
+    /// write reached durable storage, [`ACK_STORED`] otherwise. See
+    /// [`crate::datastore::write_is_durable`] for which backends can
+    /// make that call.
+    fn durable_ack_byte(&self) -> u8 {
+        if crate::datastore::write_is_durable(self.datastore.as_ref()) {
+            ACK_STORED_DURABLE
+        } else {
+            ACK_STORED
+        }
     }
 
     /// Decode and apply one replica op to the local store.
@@ -194,16 +207,20 @@ impl ReplicaApplySink for ReplicaApplier {
                     }
                 }
                 // A RepairPut stores the canonical SiblingSet verbatim
-                // AND replies with an ack (a single 1 byte) so the
-                // coordinator can count it toward the write quorum W. A
-                // store failure replies empty (not counted).
+                // AND replies with an ack byte so the coordinator can
+                // count it toward the write quorum W (and, when the
+                // reply is `ACK_STORED_DURABLE`, the durable-write
+                // quorum DW too). A store failure replies empty (not
+                // counted).
                 PeerOp::RepairPut {
                     bucket,
                     key,
                     storage,
                     ..
                 } => match self.datastore.riak_put(&bucket, &key, &storage, &[]).await {
-                    Ok(()) | Err(DatastoreError::Unsupported(_)) => Some(vec![1u8]),
+                    Ok(()) | Err(DatastoreError::Unsupported(_)) => {
+                        Some(vec![self.durable_ack_byte()])
+                    }
                     Err(e) => {
                         tracing::warn!(error = %e, "riak replica: repair put (acked) failed");
                         Some(Vec::new())

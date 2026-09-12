@@ -37,3 +37,45 @@ pub use crate::datastore::xa_net::{
     serve_xa_peer, CrossNodeCoordinator, DnodeXaTransport, InDoubtLog, RemoteXaBranch, XaBranch,
     XaPeer, XaTransport, XaTransportError,
 };
+
+/// True when a completed [`dynomite::embed::Datastore::riak_put`] on
+/// `datastore` is known to have reached durable (synced / committed)
+/// storage.
+///
+/// [`NoxuDatastore`] can make an exact call here (probed via
+/// [`dynomite::embed::Datastore::as_any`], the seam the HTTP layer
+/// already uses to reach the transactional store): its committed
+/// auto-commit writes are durable exactly when the environment's sync
+/// policy says so (see [`NoxuDatastore::commits_durably`]). For every
+/// other backend -- a custom [`dynomite::embed::Datastore`] impl, or
+/// any backend when this crate is built without the `noxu` feature --
+/// there is no durability signal to inspect. The honest default in
+/// that case is `true`, not `false`: a [`dynomite::embed::Datastore`]
+/// implementation contracts that `riak_put` either fully applies the
+/// write or returns an `Err`, so a successful return is the same
+/// signal a `commit()` returning `Ok` would be; treating "cannot
+/// inspect" as "assume it did not durably commit" would make the
+/// durable-write quorum DW (whose bucket default is `quorum`, exactly
+/// like R/W, unlike PR/PW's `0`) spuriously fail every write against
+/// every backend this crate does not special-case, which is not an
+/// honest counting path either -- it is a different kind of
+/// dishonesty. Shared by the DW counting on the coordinator side
+/// ([`crate::server`]) and the ack-byte choice on the replica-apply
+/// side ([`crate::replica_apply::ReplicaApplier`]).
+#[cfg(feature = "noxu")]
+#[must_use]
+pub fn write_is_durable(datastore: &dyn dynomite::embed::Datastore) -> bool {
+    datastore
+        .as_any()
+        .and_then(|any| any.downcast_ref::<NoxuDatastore>())
+        .is_none_or(NoxuDatastore::commits_durably)
+}
+
+/// See the `noxu`-feature [`write_is_durable`]: without the `noxu`
+/// feature this crate has no backend that can override the default,
+/// so every successful write counts as durable.
+#[cfg(not(feature = "noxu"))]
+#[must_use]
+pub fn write_is_durable(_datastore: &dyn dynomite::embed::Datastore) -> bool {
+    true
+}

@@ -207,6 +207,15 @@ impl BucketProps {
         }
     }
 
+    /// Resolve the effective durable-write quorum `DW` for `n_val`.
+    /// Unlike PR / PW (which default to `0`, no requirement), DW
+    /// follows R / W precedence: request override, then bucket
+    /// default, then `quorum`. This mirrors Riak, where DW's default
+    /// is `quorum` rather than `0`.
+    #[must_use]
+    pub fn effective_dw(&self, n_val: u8, request: Option<u32>) -> u32 {
+        crate::quorum::resolve(request, n_val, self.dw)
+    }
     /// Convenience: effective [`KeyFun`] using
     /// [`KeyFun::default`] (`Std`) when unset.
     #[must_use]
@@ -457,6 +466,15 @@ mod tests {
         assert_eq!(p.effective_pr(3, None), 0);
         assert_eq!(p.effective_pw(3, None), 0);
         assert_eq!(p.effective_pr(3, Some(QUORUM_ALL)), 3);
+        // DW defaults to quorum, like R/W (not 0 like PR/PW).
+        assert_eq!(p.effective_dw(3, None), 2);
+        assert_eq!(p.effective_dw(3, Some(QUORUM_ALL)), 3);
+        let dw_all = BucketProps {
+            dw: Some(QUORUM_ALL),
+            ..BucketProps::default()
+        };
+        assert_eq!(dw_all.effective_dw(3, None), 3);
+        assert_eq!(dw_all.effective_dw(3, Some(QUORUM_ONE)), 1);
     }
 
     #[test]

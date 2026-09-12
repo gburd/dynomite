@@ -26,11 +26,17 @@
 //! * Fewer peers than `n_val` -- the plan returns whatever peers
 //!   are available; a `tracing::warn!` is emitted at config
 //!   validation time so operators see the under-provision early.
-//! * Down peers -- NOT skipped during planning. They are returned
-//!   as targets so the runtime
+//! * Down peers -- the no-liveness [`plan_replicas`] entry point
+//!   does NOT skip them during planning; they are returned as
+//!   targets so the runtime
 //!   [`dynomite::cluster::peer::PeerState`]-aware filter in the
-//!   dispatcher decides whether to send. This matches the
-//!   topology mode's behaviour.
+//!   dispatcher decides whether to send (this matches the
+//!   topology mode's behaviour). [`plan_replicas_with_liveness`]
+//!   is the liveness-aware variant: a primary-window peer it is
+//!   told is down is dropped from the plan and a successor node
+//!   past the `n_val` window stands in for it, marked
+//!   [`ReplicaTarget::is_fallback`] (Riak's sloppy quorum /
+//!   hinted-handoff preference-list substitution).
 //!
 //! # Examples
 //!
@@ -334,6 +340,7 @@ fn plan_successors(distribution: &RingView, key_hash: u64, n_val: u8) -> Replica
                 dc: String::new(),
                 rack: String::new(),
                 is_local: false,
+                is_fallback: false,
             },
             n: n_val,
             successors: Vec::new(),
@@ -355,9 +362,181 @@ fn plan_successors(distribution: &RingView, key_hash: u64, n_val: u8) -> Replica
             dc: pt.dc.clone(),
             rack: pt.rack.clone(),
             is_local: false,
+            // Walking the ring never emits more than `target_count`
+            // (== n_val) entries, so every entry `plan_successors`
+            // produces is one of the n_val primary owners. Nothing in
+            // this planner's inputs (a `RingView`, which carries no
+            // liveness) can identify a down primary and substitute a
+            // fallback, so `is_fallback` is always `false` here. The
+            // real fallback-substitution planner is
+            // [`plan_successors_with_liveness`] below, which the
+            // dispatcher uses once a `RoutingHooks` liveness source is
+            // wired; see its doc comment for the counting contract PR
+            // relies on.
+            is_fallback: false,
         });
     }
     let mut iter = chosen.into_iter();
+    let primary = iter
+        .next()
+        .expect("primary_index returned Some so len >= 1");
+    let successors: Vec<ReplicaTarget> = iter.collect();
+    ReplicationPlan::Successors {
+        primary,
+        n: n_val,
+        successors,
+    }
+}
+
+/// Liveness oracle consulted by [`plan_replicas_with_liveness`].
+///
+/// Kept minimal (one method, peer index in, bool out) so a caller can
+/// implement it against whatever liveness source it has -- today the
+/// production wiring has none (see [`plan_replicas`]'s doc comment),
+/// but the type exists so the primary-vs-fallback counting path this
+/// module and [`crate::router::RouteDecision`] build on is exercised
+/// by a real implementation in tests, not asserted by inspection.
+pub trait ReplicaLiveness: Send + Sync + std::fmt::Debug {
+    /// True when `peer_idx` is known reachable. A liveness source
+    /// that has no opinion about a peer should return `true`: absence
+    /// of information is not evidence of failure, and treating an
+    /// unknown peer as down would substitute a fallback for a peer
+    /// that may in fact be fine.
+    fn is_up(&self, peer_idx: u32) -> bool;
+}
+
+/// Walk-N-successors planning with sloppy-quorum fallback
+/// substitution.
+///
+/// Identical to [`plan_replicas`] / [`plan_successors`] except that a
+/// primary-window peer (one of the first `n_val` distinct peers
+/// reached walking forward from the key's slot) that `liveness`
+/// reports down is dropped, and the walk continues past the `n_val`
+/// window to find a stand-in. The stand-in is marked
+/// [`ReplicaTarget::is_fallback`] so [`crate::router::RouteDecision`]
+/// and the request handlers can count primary responses separately
+/// from fallback responses, which is what the PR / PW quorum knobs
+/// need to be enforced correctly.
+///
+/// When every peer up to the ring's full distinct-peer count is down,
+/// the returned plan may carry fewer than `n_val` targets (there is
+/// nothing left to hand out); callers see this as
+/// `replica_list().len() < n_val`, exactly as the no-liveness planner
+/// already tolerates an under-provisioned ring.
+///
+/// # Examples
+///
+/// ```
+/// use dyniak::replication::{
+///     plan_replicas_with_liveness, ReplicaLiveness, ReplicationPlan, RingPoint, RingView,
+/// };
+///
+/// #[derive(Debug)]
+/// struct DownPeers(Vec<u32>);
+/// impl ReplicaLiveness for DownPeers {
+///     fn is_up(&self, peer_idx: u32) -> bool {
+///         !self.0.contains(&peer_idx)
+///     }
+/// }
+///
+/// let span = u64::from(u32::MAX);
+/// let points = (0..5u32)
+///     .map(|i| RingPoint::new(u64::from(i) * span / 5, i, "dc1", "r1"))
+///     .collect();
+/// let ring = RingView::new(points);
+///
+/// // n_val=3 from peer 1's slot names peers [1, 2, 3]; peer 2 is down,
+/// // so the walk continues to peer 4 as its fallback stand-in.
+/// let plan = plan_replicas_with_liveness(&ring, 1, 3, &DownPeers(vec![2]));
+/// let ReplicationPlan::Successors { primary, successors, .. } = plan else {
+///     panic!("expected successors plan");
+/// };
+/// assert_eq!(primary.peer_idx, 1);
+/// assert!(!primary.is_fallback);
+/// let idxs: Vec<(u32, bool)> = successors.iter().map(|t| (t.peer_idx, t.is_fallback)).collect();
+/// assert_eq!(idxs, vec![(3, false), (4, true)]);
+/// ```
+#[must_use]
+pub fn plan_replicas_with_liveness(
+    distribution: &RingView,
+    key_hash: u64,
+    n_val: u8,
+    liveness: &dyn ReplicaLiveness,
+) -> ReplicationPlan {
+    plan_successors_with_liveness(distribution, key_hash, n_val, liveness)
+}
+
+fn plan_successors_with_liveness(
+    distribution: &RingView,
+    key_hash: u64,
+    n_val: u8,
+    liveness: &dyn ReplicaLiveness,
+) -> ReplicationPlan {
+    let target_count = (n_val as usize).max(1);
+    let points = distribution.points();
+    let Some(start) = distribution.primary_index(key_hash) else {
+        return ReplicationPlan::Successors {
+            primary: ReplicaTarget {
+                peer_idx: 0,
+                dc: String::new(),
+                rack: String::new(),
+                is_local: false,
+                is_fallback: false,
+            },
+            n: n_val,
+            successors: Vec::new(),
+        };
+    };
+    let len = points.len();
+    // Single pass over the ring's distinct peers: the first
+    // `target_count` LIVE peers walked fill the primary window; a
+    // down peer within the window is dropped (not carried forward),
+    // and every distinct peer walked once the window is full is a
+    // fallback candidate. This is exactly Riak's preference-list
+    // construction: primaries first, then however many fallback
+    // (hinted-handoff) nodes are needed to backfill the ones that were
+    // down.
+    let mut primaries: Vec<ReplicaTarget> = Vec::with_capacity(target_count);
+    let mut fallback_pool: Vec<ReplicaTarget> = Vec::new();
+    let mut seen: Vec<u32> = Vec::new();
+    for step in 0..len {
+        let idx = (start + step) % len;
+        let pt = &points[idx];
+        if seen.contains(&pt.peer_idx) {
+            continue;
+        }
+        seen.push(pt.peer_idx);
+        let target = ReplicaTarget {
+            peer_idx: pt.peer_idx,
+            dc: pt.dc.clone(),
+            rack: pt.rack.clone(),
+            is_local: false,
+            is_fallback: false,
+        };
+        if seen.len() <= target_count {
+            if liveness.is_up(pt.peer_idx) {
+                primaries.push(target);
+            }
+        } else {
+            fallback_pool.push(target);
+        }
+    }
+    while primaries.len() < target_count {
+        let Some(pos) = fallback_pool
+            .iter()
+            .position(|t| liveness.is_up(t.peer_idx))
+        else {
+            // Every peer beyond the window is also down (or the ring
+            // has fewer distinct peers than `n_val`): the plan is
+            // under-provisioned, matching the no-liveness planner's
+            // documented tolerance for a short ring.
+            break;
+        };
+        let mut stand_in = fallback_pool.remove(pos);
+        stand_in.is_fallback = true;
+        primaries.push(stand_in);
+    }
+    let mut iter = primaries.into_iter();
     let primary = iter
         .next()
         .expect("primary_index returned Some so len >= 1");

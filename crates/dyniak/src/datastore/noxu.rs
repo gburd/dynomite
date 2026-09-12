@@ -224,6 +224,37 @@ impl NoxuDatastore {
         Self::open(dir)
     }
 
+    /// Whether a committed write against this datastore reached
+    /// durable (synced) storage.
+    ///
+    /// A noxu [`Transaction::commit`] with the default
+    /// [`noxu::Durability::COMMIT_SYNC`] policy fsyncs the write-ahead
+    /// log before returning, so the write is durable the moment
+    /// `commit()` (or, on the auto-commit path this datastore uses,
+    /// the auto-commit txn's `commit_with_durability`) returns
+    /// successfully -- there is no separate asynchronous flush step to
+    /// wait for. This method reports whether the environment is
+    /// configured with a sync policy that makes that guarantee
+    /// (`Sync` or `WriteNoSync`, both of which reach the OS before the
+    /// commit returns; only `NoSync` defers the write to a later flush
+    /// and can lose it on a process crash). [`Self::open`] /
+    /// [`Self::open_transactional`] do not override the environment's
+    /// durability, so this is `true` for every datastore this crate
+    /// constructs; the method exists so callers do not have to assume
+    /// that -- an embedder that opens a [`noxu::EnvironmentConfig`]
+    /// with `Durability::COMMIT_NO_SYNC` (a choice this crate's own
+    /// constructors do not expose) would correctly see `false` here.
+    #[must_use]
+    pub fn commits_durably(&self) -> bool {
+        let cfg = self.lock_env().config().clone();
+        // Mirrors noxu's own auto-commit `effective_no_sync` decision
+        // (`noxu_db::Environment::effective_no_sync`): the deprecated
+        // boolean flag ORs with the `Durability::local_sync` policy, so
+        // either one relaxing sync is enough to make a commit
+        // non-durable.
+        !cfg.txn_no_sync && cfg.durability.local_sync != noxu::SyncPolicy::NoSync
+    }
+
     /// Look up `key` against the raw keyspace. Returns `Ok(None)`
     /// for a missing key.
     ///

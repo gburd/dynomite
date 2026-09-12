@@ -189,3 +189,247 @@ mod tests {
         );
     }
 }
+
+/// Model of PR / PW / DW: a quorum over a distinguished SUBSET of the
+/// replica responses, layered on top of the plain total-response
+/// quorum (R / W).
+///
+/// Riak's primary-read (PR) and primary-write (PW) quorums require
+/// that at least `subset_quorum` of the responses come from a
+/// PRIMARY-owner replica, not merely that `quorum` total responses
+/// arrived (which may include sloppy-quorum fallback stand-ins). The
+/// durable-write quorum (DW) has the identical shape with "durable
+/// ack" standing in for "primary ack". This model abstracts the
+/// shared decision the production code makes in
+/// `dyniak::server::check_read_quorum` (the `pr_floor` branch) and
+/// `dyniak::server::check_write_quorum` (the `pw` and `dw` branches):
+/// each of those is exactly "count total responses against `quorum`;
+/// separately count SUBSET responses against `subset_quorum`; both
+/// must clear" -- this model is that shared shape once, parameterized
+/// by which counting rule is under test.
+///
+/// # Invariants
+///
+/// * **Sound success** (`always`): a reported success never happens
+///   with fewer than `quorum` total responses OR fewer than
+///   `subset_quorum` SUBSET (primary / durable) responses.
+/// * **Available at or above both quorums** (`always`, correct rule
+///   only): whenever both thresholds are met, the correct rule
+///   succeeds.
+/// * **Reachability** (`sometimes`): a state exists where `quorum` is
+///   met by total responses but `subset_quorum` is NOT met by subset
+///   responses alone (a fallback/non-durable response propped up the
+///   total) -- the scenario PR / PW / DW exists to reject.
+///
+/// # Negative control
+///
+/// [`SubsetQuorumModel::fallback_counts_rule`] uses the broken rule
+/// the brief calls out by name: it counts EVERY response (subset or
+/// not) toward the subset quorum, exactly the bug of "a fallback
+/// response counts toward PR". It violates sound-success whenever a
+/// non-subset response can single-handedly satisfy `subset_quorum`.
+use stateright::{Model as SModel, Property as SProperty};
+
+/// Replica count for the subset-quorum model.
+const SN: u8 = 5;
+/// Total quorum (majority of 5).
+const S_QUORUM: u8 = SN / 2 + 1;
+/// Subset quorum (PR/PW/DW threshold): 2 primaries/durables required.
+const S_SUBSET_QUORUM: u8 = 2;
+
+/// Counting rule under test for the subset-quorum model.
+#[derive(Clone, Copy, Debug)]
+enum SubsetRule {
+    /// Correct: total acks gate `quorum`; SUBSET acks (and only
+    /// subset acks) gate `subset_quorum` -- mirrors
+    /// `check_read_quorum`'s `pr_floor` branch and
+    /// `check_write_quorum`'s `pw` / `dw` branches exactly.
+    Correct,
+    /// Negative control: every ack (subset or not) counts toward
+    /// `subset_quorum`, so a fallback / non-durable response can
+    /// satisfy PR / PW / DW on its own.
+    FallbackCounts,
+}
+
+/// Model of the PR / PW / DW subset-quorum decision.
+#[derive(Clone, Debug)]
+pub struct SubsetQuorumModel {
+    rule: SubsetRule,
+}
+
+impl SubsetQuorumModel {
+    /// The correct counting rule.
+    #[must_use]
+    pub fn correct() -> Self {
+        Self {
+            rule: SubsetRule::Correct,
+        }
+    }
+
+    /// Negative control: a fallback (non-subset) response counts
+    /// toward the subset quorum.
+    #[must_use]
+    pub fn fallback_counts_rule() -> Self {
+        Self {
+            rule: SubsetRule::FallbackCounts,
+        }
+    }
+
+    fn succeeds(&self, total_acked: u8, subset_acked: u8, other_acked: u8) -> bool {
+        if total_acked < S_QUORUM {
+            return false;
+        }
+        match self.rule {
+            SubsetRule::Correct => subset_acked >= S_SUBSET_QUORUM,
+            SubsetRule::FallbackCounts => subset_acked + other_acked >= S_SUBSET_QUORUM,
+        }
+    }
+}
+
+/// State: replicas considered so far, split into subset (primary /
+/// durable) and other (fallback / non-durable) responses.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SubsetState {
+    considered: u8,
+    subset_acked: u8,
+    other_acked: u8,
+    total_acked: u8,
+}
+
+/// Action: the next replica's response.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SubsetAction {
+    /// A subset (primary / durable) replica acks.
+    SubsetAck,
+    /// A non-subset (fallback / non-durable) replica acks.
+    OtherAck,
+    /// The replica does not respond.
+    Silent,
+}
+
+impl SModel for SubsetQuorumModel {
+    type State = SubsetState;
+    type Action = SubsetAction;
+
+    fn init_states(&self) -> Vec<Self::State> {
+        vec![SubsetState {
+            considered: 0,
+            subset_acked: 0,
+            other_acked: 0,
+            total_acked: 0,
+        }]
+    }
+
+    fn actions(&self, state: &Self::State, actions: &mut Vec<Self::Action>) {
+        if state.considered < SN {
+            actions.push(SubsetAction::SubsetAck);
+            actions.push(SubsetAction::OtherAck);
+            actions.push(SubsetAction::Silent);
+        }
+    }
+
+    fn next_state(&self, state: &Self::State, action: Self::Action) -> Option<Self::State> {
+        if state.considered >= SN {
+            return None;
+        }
+        let (subset_acked, other_acked) = match action {
+            SubsetAction::SubsetAck => (state.subset_acked + 1, state.other_acked),
+            SubsetAction::OtherAck => (state.subset_acked, state.other_acked + 1),
+            SubsetAction::Silent => (state.subset_acked, state.other_acked),
+        };
+        Some(SubsetState {
+            considered: state.considered + 1,
+            subset_acked,
+            other_acked,
+            total_acked: subset_acked + other_acked,
+        })
+    }
+
+    fn properties(&self) -> Vec<SProperty<Self>> {
+        vec![
+            SProperty::<Self>::always("success implies both quorums met", |model, state| {
+                if state.considered < SN {
+                    return true;
+                }
+                if model.succeeds(state.total_acked, state.subset_acked, state.other_acked) {
+                    state.total_acked >= S_QUORUM && state.subset_acked >= S_SUBSET_QUORUM
+                } else {
+                    true
+                }
+            }),
+            SProperty::<Self>::always(
+                "both quorums met implies success (correct rule)",
+                |model, state| {
+                    if state.considered < SN {
+                        return true;
+                    }
+                    if matches!(model.rule, SubsetRule::Correct)
+                        && state.total_acked >= S_QUORUM
+                        && state.subset_acked >= S_SUBSET_QUORUM
+                    {
+                        model.succeeds(state.total_acked, state.subset_acked, state.other_acked)
+                    } else {
+                        true
+                    }
+                },
+            ),
+            SProperty::<Self>::sometimes(
+                "total quorum met but subset quorum not met is reachable",
+                |_, state| {
+                    state.considered == SN
+                        && state.total_acked >= S_QUORUM
+                        && state.subset_acked < S_SUBSET_QUORUM
+                },
+            ),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod subset_tests {
+    use super::*;
+    use stateright::Checker;
+
+    #[test]
+    fn correct_rule_is_sound_and_available() {
+        let checker = SubsetQuorumModel::correct().checker().spawn_bfs().join();
+        checker.assert_properties();
+    }
+
+    #[test]
+    fn fallback_counts_control_violates_soundness() {
+        let checker = SubsetQuorumModel::fallback_counts_rule()
+            .checker()
+            .spawn_bfs()
+            .join();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            checker.assert_properties();
+        }));
+        assert!(
+            result.is_err(),
+            "a rule that counts a fallback / non-durable response toward \
+             PR / PW / DW must violate sound-success; if this passes the \
+             model has no teeth"
+        );
+    }
+
+    #[test]
+    fn a_below_subset_quorum_success_is_reachable_under_the_control() {
+        // Demonstrate the exact failure mode: two OTHER (fallback)
+        // acks alone satisfy the broken rule's subset quorum, with
+        // zero subset (primary) acks -- precisely "a fallback response
+        // counts toward PR".
+        let model = SubsetQuorumModel::fallback_counts_rule();
+        let state = SubsetState {
+            considered: SN,
+            subset_acked: 0,
+            other_acked: S_SUBSET_QUORUM,
+            total_acked: S_SUBSET_QUORUM.max(S_QUORUM),
+        };
+        assert!(model.succeeds(state.total_acked, state.subset_acked, state.other_acked));
+        assert_eq!(
+            state.subset_acked, 0,
+            "zero primaries acked, yet the control succeeds"
+        );
+    }
+}

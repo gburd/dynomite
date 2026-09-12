@@ -123,6 +123,19 @@ impl RouteDecision {
             ReplicationPlan::Topology(targets) => targets.first().map(|t| t.peer_idx),
         }
     }
+
+    /// Count of PRIMARY-owner targets in the replica list (excludes
+    /// any [`ReplicaTarget::is_fallback`] stand-in). PR / PW are
+    /// enforced against this count, mirroring how R / W are enforced
+    /// against [`Self::replica_list`]'s full length: a bucket's PR
+    /// can never demand more acks than there are primaries to answer.
+    #[must_use]
+    pub fn primary_replica_count(&self) -> usize {
+        self.replica_list()
+            .iter()
+            .filter(|t| !t.is_fallback)
+            .count()
+    }
 }
 
 /// Bucket-aware request router.
@@ -133,6 +146,19 @@ pub struct BucketRouter {
     registry: Arc<BucketPropsRegistry>,
     ring: Arc<RingView>,
     hash: HashType,
+    /// Optional liveness source consulted when planning a
+    /// [`ReplicationStrategy::Successors`] replica set. `None` (the
+    /// default) means no liveness source is wired: [`Self::try_route`]
+    /// falls back to [`crate::replication::plan_replicas`], which
+    /// marks every planned replica a primary
+    /// ([`dynomite::cluster::ReplicaTarget::is_fallback`] is always
+    /// `false`) -- PR then behaves like R because there is nothing
+    /// for it to distinguish. When set, [`Self::try_route`] instead
+    /// calls [`crate::replication::plan_replicas_with_liveness`],
+    /// which drops a down primary-window peer and backfills a
+    /// fallback stand-in, so PR is enforced against the real
+    /// primary-vs-fallback split.
+    liveness: Option<Arc<dyn crate::replication::ReplicaLiveness>>,
     /// Store of operator-supplied custom-keyfun WASM modules.
     /// `None` when no keyfun store is wired; a
     /// [`crate::datatypes::keyfun::KeyFun::Custom`] route then
@@ -150,9 +176,21 @@ impl BucketRouter {
             registry,
             ring,
             hash,
+            liveness: None,
             #[cfg(feature = "wasm")]
             keyfun_store: None,
         }
+    }
+
+    /// Attach a liveness source. After this call,
+    /// [`Self::try_route`] plans replica sets with sloppy-quorum
+    /// fallback substitution ([`crate::replication::plan_replicas_with_liveness`])
+    /// instead of the no-liveness planner. Consumes and returns
+    /// `self` for builder-style construction.
+    #[must_use]
+    pub fn with_liveness(mut self, liveness: Arc<dyn crate::replication::ReplicaLiveness>) -> Self {
+        self.liveness = Some(liveness);
+        self
     }
 
     /// Attach a custom-keyfun WASM store to the router.
@@ -243,13 +281,23 @@ impl BucketRouter {
         let n_val = props.effective_n_val();
         let route_bytes = self.resolve_route_bytes(&kf, bucket, key)?;
         let key_hash = hash64(self.hash, &route_bytes);
-        let plan = plan_replicas(
-            self.ring.as_ref(),
-            key_hash,
-            n_val,
-            strategy,
-            ConsistencyLevel::DcOne,
-        );
+        let plan = match (&self.liveness, strategy) {
+            (Some(liveness), ReplicationStrategy::Successors) => {
+                crate::replication::plan_replicas_with_liveness(
+                    self.ring.as_ref(),
+                    key_hash,
+                    n_val,
+                    liveness.as_ref(),
+                )
+            }
+            _ => plan_replicas(
+                self.ring.as_ref(),
+                key_hash,
+                n_val,
+                strategy,
+                ConsistencyLevel::DcOne,
+            ),
+        };
         Ok(RouteDecision {
             bucket_type: if bucket_type.is_empty() {
                 b"default".to_vec()
@@ -307,6 +355,17 @@ impl BucketRouter {
         ))
     }
 }
+
+/// Ack byte a [`PeerOp::RepairPut`] reply carries when the write
+/// landed but the replica's storage backend cannot confirm it reached
+/// durable (synced / committed) storage. Counts toward the write
+/// quorum `W` but not the durable-write quorum `DW`.
+pub const ACK_STORED: u8 = 1;
+/// Ack byte a [`PeerOp::RepairPut`] reply carries when the write both
+/// landed AND the replica's storage backend confirms it reached
+/// durable storage (a committed transaction). Counts toward both `W`
+/// and `DW`.
+pub const ACK_STORED_DURABLE: u8 = 2;
 
 /// One operation forwarded by [`PeerOutbound::dispatch`] to a
 /// peer's outbound channel.
@@ -383,6 +442,13 @@ pub enum PeerOp {
     /// sibling set with per-object causal contexts -- so the replica
     /// holds a byte-identical, causally-correct copy. Used by the
     /// object write fan-out and by read-repair.
+    ///
+    /// A [`PeerOutbound::request`] reply for this op is one of
+    /// [`ACK_STORED`] (landed, durability unconfirmed) or
+    /// [`ACK_STORED_DURABLE`] (landed AND confirmed durable); any other
+    /// non-empty byte is treated as [`ACK_STORED`] for backward
+    /// compatibility with a transport that has not been upgraded, and
+    /// an empty reply is not an ack at all.
     RepairPut {
         /// Bucket type (`default` when unset).
         bucket_type: Vec<u8>,

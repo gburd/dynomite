@@ -940,6 +940,129 @@ async fn read_repair_behind(
     let _ = datastore.riak_put(bucket, key, &merged_bytes, &[]).await;
 }
 
+/// Tally produced by [`fan_read_replicas`]: the converged sibling set
+/// plus response counts split by primary-vs-fallback origin so the
+/// caller can enforce R (against [`Self::responses`]) and PR (against
+/// [`Self::primary_responses`]) independently.
+struct ReadTally {
+    merged: crate::proto::http::object::SiblingSet,
+    /// Total responses (local + every replica that answered, primary
+    /// or fallback), counted toward the read quorum R.
+    responses: u32,
+    /// Responses that came from a PRIMARY-owner replica (or the local
+    /// node, when the plan does not mark it a fallback stand-in),
+    /// counted toward the primary-read quorum PR.
+    primary_responses: u32,
+}
+
+/// Fan a `Get` read-coordination query to every OTHER replica in
+/// `decision`'s plan, merging each reply's sibling set into `merged`
+/// and read-repairing replicas that were behind. Counts `responses`
+/// (every reply, primary or fallback) and `primary_responses` (only
+/// replies from a non-fallback target) so the caller can enforce R and
+/// PR separately.
+async fn fan_read_replicas(
+    hooks: &RoutingHooks,
+    decision: &crate::router::RouteDecision,
+    datastore: &dyn Datastore,
+    bucket: &[u8],
+    key: &[u8],
+    mut merged: crate::proto::http::object::SiblingSet,
+    allow_mult: bool,
+) -> ReadTally {
+    use crate::proto::http::object::SiblingSet;
+    let replicas = decision.replica_list();
+    // The local node's own read already happened before this fan; it
+    // counts as one response toward R, and toward PR unless the plan
+    // explicitly marks the local peer a fallback stand-in (it never
+    // does today -- see `crate::replication::plan_replicas`'s doc
+    // comment -- but the check is real so it holds once a liveness
+    // source substitutes fallbacks).
+    let local_is_fallback = replicas
+        .iter()
+        .find(|t| t.peer_idx == hooks.local_peer_idx)
+        .is_some_and(|t| t.is_fallback);
+    let mut responses: u32 = 1;
+    let mut primary_responses: u32 = u32::from(!local_is_fallback);
+    let mut replies: Vec<(u32, SiblingSet)> = Vec::new();
+    for replica in &replicas {
+        if replica.peer_idx == hooks.local_peer_idx {
+            continue;
+        }
+        let reply = hooks
+            .outbound
+            .request(
+                replica.peer_idx,
+                PeerOp::Get {
+                    bucket_type: decision.bucket_type.clone(),
+                    bucket: bucket.to_vec(),
+                    key: key.to_vec(),
+                },
+            )
+            .await;
+        if let Some(bytes) = reply {
+            // A reply (even empty = not-found) is a response toward R,
+            // and toward PR when it came from a primary-owner target.
+            responses = responses.saturating_add(1);
+            if !replica.is_fallback {
+                primary_responses = primary_responses.saturating_add(1);
+            }
+            let remote = SiblingSet::from_storage_bytes(&bytes).unwrap_or_default();
+            if !remote.siblings.is_empty() {
+                merged = merge_sibling_sets(&merged, &remote, allow_mult);
+                replies.push((replica.peer_idx, remote));
+            }
+        }
+    }
+    read_repair_behind(hooks, decision, datastore, bucket, key, &merged, &replies).await;
+    ReadTally {
+        merged,
+        responses,
+        primary_responses,
+    }
+}
+
+/// Enforce the read quorum R (always) and the primary-read quorum PR
+/// (when `pr_floor > 0`) against the counts [`fan_read_replicas`]
+/// gathered. `target_replicas` / `target_primaries` are the reachable
+/// ceilings (a knob above the replica count degrades to "all"
+/// reachable replicas, same as R/W elsewhere).
+///
+/// Availability caveat (mirrors the write path): on a fire-and-forget
+/// transport `request` returns `None` for every replica, so `responses`
+/// never rises above the local read. Enforcement is skipped in that
+/// case (single-node-visible fallback) so a transport without
+/// request/response does not fail every read; anti-entropy is the
+/// backstop.
+fn check_read_quorum(
+    responses: u32,
+    primary_responses: u32,
+    r_floor: u32,
+    pr_floor: u32,
+    target_replicas: u32,
+    target_primaries: u32,
+) -> Result<(), String> {
+    let transport_answered = responses > 1 || target_replicas <= 1;
+    if !transport_answered {
+        return Ok(());
+    }
+    let read_needed = r_floor.min(target_replicas.max(1));
+    if responses < read_needed {
+        return Err(format!(
+            "riak get: read quorum not met ({responses}/{read_needed} responses)"
+        ));
+    }
+    if pr_floor > 0 {
+        let primary_needed = pr_floor.min(target_primaries.max(1));
+        if primary_responses < primary_needed {
+            return Err(format!(
+                "riak get: primary read quorum not met ({primary_responses}/{primary_needed} primary responses)"
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn handle_get(
     body: &[u8],
     datastore: &dyn Datastore,
@@ -952,7 +1075,7 @@ async fn handle_get(
     datastore.dispatch(routing).await?;
 
     // Local sibling set for the key (empty when absent / unsupported).
-    let mut merged = match datastore.riak_get(&req.bucket, &req.key).await {
+    let local = match datastore.riak_get(&req.bucket, &req.key).await {
         Ok(Some(v)) => SiblingSet::from_storage_bytes(&v).unwrap_or_default(),
         Ok(None) | Err(DatastoreError::Unsupported(_)) => SiblingSet::default(),
         Err(e) => return Ok(error_frame(format!("riak get: {e}"))),
@@ -960,89 +1083,56 @@ async fn handle_get(
 
     // Read coordination: fan a Get to every OTHER replica of the key,
     // merge each returned sibling set into the local one (keeping the
-    // causal frontier of the union), and read-repair replicas that were
-    // behind. A read at ANY node -- replica or not -- then returns the
-    // converged value(s), matching Riak's merge-on-read + read-repair.
-    // On a fire-and-forget transport `request` returns `None` and we
-    // fall back to the local value with anti-entropy as the backstop.
-    let mut allow_mult = false;
-    // A read counts responses against the read quorum R. The local
-    // store is one response (a value or a clean not-found). Each
-    // replica that replies (Some, even empty = not-found) adds one.
+    // causal frontier of the union), and read-repair replicas that
+    // were behind. A read at ANY node -- replica or not -- then
+    // returns the converged value(s), matching Riak's merge-on-read +
+    // read-repair. On a fire-and-forget transport `request` returns
+    // `None` and we fall back to the local value with anti-entropy as
+    // the backstop.
+    let mut merged = local;
     let mut responses: u32 = 1;
-    let mut required_r: u32 = 1;
+    let mut primary_responses: u32 = 1;
+    let mut r_floor: u32 = 1;
+    let mut pr_floor: u32 = 0;
     let mut target_replicas: u32 = 1;
+    let mut target_primaries: u32 = 1;
     if let Some(hooks) = hooks {
         let bucket_type = req.r#type.as_deref().unwrap_or(b"");
         if let Ok(decision) = hooks.router.try_route(bucket_type, &req.bucket, &req.key) {
             let props = hooks.router.registry().resolve(bucket_type, &req.bucket);
-            allow_mult = props.effective_allow_mult();
-            required_r = props.effective_r(props.effective_n_val(), req.r);
+            let allow_mult = props.effective_allow_mult();
+            let n_val = props.effective_n_val();
+            r_floor = props.effective_r(n_val, req.r);
+            pr_floor = props.effective_pr(n_val, req.pr);
             let replicas = decision.replica_list();
             target_replicas = u32::try_from(replicas.len().max(1)).unwrap_or(u32::MAX);
-            let mut replies: Vec<(u32, SiblingSet)> = Vec::new();
-            for replica in &replicas {
-                if replica.peer_idx == hooks.local_peer_idx {
-                    continue;
-                }
-                let reply = hooks
-                    .outbound
-                    .request(
-                        replica.peer_idx,
-                        PeerOp::Get {
-                            bucket_type: decision.bucket_type.clone(),
-                            bucket: req.bucket.clone(),
-                            key: req.key.clone(),
-                        },
-                    )
-                    .await;
-                if let Some(bytes) = reply {
-                    // A reply (even empty = not-found) is a response
-                    // toward R.
-                    responses = responses.saturating_add(1);
-                    let remote = SiblingSet::from_storage_bytes(&bytes).unwrap_or_default();
-                    if !remote.siblings.is_empty() {
-                        merged = merge_sibling_sets(&merged, &remote, allow_mult);
-                        replies.push((replica.peer_idx, remote));
-                    }
-                }
-            }
-            // Read-repair: push the converged set to replicas that were
-            // behind, and repair the coordinator's own store.
-            read_repair_behind(
+            target_primaries =
+                u32::try_from(decision.primary_replica_count().max(1)).unwrap_or(u32::MAX);
+            let tally = fan_read_replicas(
                 hooks,
                 &decision,
                 datastore,
                 &req.bucket,
                 &req.key,
-                &merged,
-                &replies,
+                merged,
+                allow_mult,
             )
             .await;
+            merged = tally.merged;
+            responses = tally.responses;
+            primary_responses = tally.primary_responses;
         }
     }
 
-    // Enforce the read quorum R: fewer responses than R means the
-    // reachable replicas cannot satisfy the requested consistency. R is
-    // clamped to the reachable replica count so `all` still succeeds
-    // once every replica responds.
-    //
-    // Availability caveat: on a fire-and-forget transport `request`
-    // returns `None` for every replica, so `responses` stays at 1 (the
-    // local read). We must not fail every read in that case -- R is
-    // only enforced when the transport actually answers (at least one
-    // remote reply, or a single-replica target where local alone
-    // satisfies R). Same behavior as the CRDT read path: a transport
-    // without request/response falls back to the local value with
-    // anti-entropy as the backstop.
-    {
-        let needed = required_r.min(target_replicas.max(1));
-        let transport_answered = responses > 1 || target_replicas <= 1;
-        if transport_answered && responses < needed {
-            return Ok(error_frame(format!(
-                "riak get: read quorum not met ({responses}/{needed} responses)"
-            )));
-        }
+    if let Err(reason) = check_read_quorum(
+        responses,
+        primary_responses,
+        r_floor,
+        pr_floor,
+        target_replicas,
+        target_primaries,
+    ) {
+        return Ok(error_frame(reason));
     }
 
     // Emit the converged sibling set. One value -> one `RpbContent`;
@@ -1064,42 +1154,69 @@ async fn handle_get(
         },
         ..RpbGetResp::default()
     };
-    let _ = allow_mult;
     Ok(Frame::new(
         MessageCode::GetResp.as_u8(),
         resp.encode_to_vec(),
     ))
 }
 
-/// Fan the resolved SiblingSet `storage` to the key's replicas via
-/// `RepairPut` and enforce the write quorum `w`: the local store counts
-/// as one ack, each replica that acks (a request/reply RepairPut)
-/// counts as one more. Returns `Ok(())` once `w` acks are gathered, or
-/// `Err(reason)` if the reachable replicas cannot satisfy `w`. With no
-/// routing hooks the local ack alone satisfies `w <= 1`.
-///
-/// `local_ok` is whether the coordinator's own local store succeeded
-/// (it always attempts the write before fanning).
-async fn fan_repair_put_quorum(
-    hooks: Option<&RoutingHooks>,
-    bucket_type: &[u8],
+/// Tally produced by [`fan_write_replicas`]: ack counts split by
+/// total (W), primary-vs-fallback origin (PW), and durability (DW), so
+/// the caller can enforce all three quorums independently.
+struct WriteTally {
+    /// Total acks (local + every replica ack, primary or fallback),
+    /// counted toward the write quorum W.
+    acks: u32,
+    /// Acks from a PRIMARY-owner target (or the local node, when not a
+    /// fallback stand-in), counted toward the primary-write quorum PW.
+    primary_acks: u32,
+    /// Acks confirmed durable (the local write's own durability, plus
+    /// every [`ACK_STORED_DURABLE`] reply), counted toward the
+    /// durable-write quorum DW.
+    durable_acks: u32,
+    /// Reachable target count = replica set size (the ceiling W is
+    /// clamped against).
+    target: u32,
+    /// Reachable primary target count (the ceiling PW is clamped
+    /// against).
+    target_primaries: u32,
+    /// Non-local targets fanned to; used to detect a fire-and-forget
+    /// transport (no remote targets means the local ack alone is
+    /// authoritative, same as the read path's availability caveat).
+    remote_targets: u32,
+    /// Whether the local write itself succeeded (seeds `acks`). Kept
+    /// alongside `acks` so [`check_write_quorum`] can tell a "no
+    /// remote replies yet" tally from a "local write failed" tally
+    /// without re-deriving it from `acks` (which would be ambiguous
+    /// once remote acks start arriving).
+    local_ack: bool,
+}
+
+/// Fan the resolved SiblingSet `storage` to `decision`'s OTHER
+/// replicas via `RepairPut`, counting acks for W, PW, and DW. Returns
+/// [`WriteTally`]; the caller enforces the three quorums via
+/// [`check_write_quorum`]. `local_ok` / `local_durable` seed the local
+/// node's own contribution (it always writes locally before fanning).
+async fn fan_write_replicas(
+    hooks: &RoutingHooks,
+    decision: &crate::router::RouteDecision,
     bucket: &[u8],
     key: &[u8],
     storage: &[u8],
-    w: u32,
     local_ok: bool,
-) -> Result<(), String> {
-    let mut acks: u32 = u32::from(local_ok);
-    let Some(hooks) = hooks else {
-        return quorum_result(acks, w, 1);
-    };
-    let Ok(decision) = hooks.router.try_route(bucket_type, bucket, key) else {
-        return quorum_result(acks, w, 1);
-    };
+    local_durable: bool,
+) -> WriteTally {
     let replicas = decision.replica_list();
-    // Reachable target count = replica set size (local counted above if
-    // it is a replica; treat the set size as the ceiling for w).
     let target = u32::try_from(replicas.len().max(1)).unwrap_or(u32::MAX);
+    let target_primaries =
+        u32::try_from(decision.primary_replica_count().max(1)).unwrap_or(u32::MAX);
+    let local_is_fallback = replicas
+        .iter()
+        .find(|t| t.peer_idx == hooks.local_peer_idx)
+        .is_some_and(|t| t.is_fallback);
+    let mut acks: u32 = u32::from(local_ok);
+    let mut primary_acks: u32 = u32::from(local_ok && !local_is_fallback);
+    let mut durable_acks: u32 = u32::from(local_ok && local_durable);
     let mut remote_targets = 0u32;
     for replica in &replicas {
         if replica.peer_idx == hooks.local_peer_idx {
@@ -1112,27 +1229,67 @@ async fn fan_repair_put_quorum(
             key: key.to_vec(),
             storage: storage.to_vec(),
         };
-        // Prefer the acked request path (counts toward W). If the
-        // transport does not answer (returns None -- a fire-and-forget
-        // transport that did not deliver), fall back to a plain
-        // dispatch so the write still fans out (delivery is not lost;
-        // W just goes unacked and is treated as best-effort below).
+        // Prefer the acked request path (counts toward W / PW / DW).
+        // If the transport does not answer (returns None -- a
+        // fire-and-forget transport that did not deliver), fall back
+        // to a plain dispatch so the write still fans out (delivery is
+        // not lost; the quorum counts just go unacked and are treated
+        // as best-effort below).
         match hooks.outbound.request(replica.peer_idx, op.clone()).await {
-            Some(ack) if !ack.is_empty() => acks = acks.saturating_add(1),
+            Some(ack) if !ack.is_empty() => {
+                acks = acks.saturating_add(1);
+                if !replica.is_fallback {
+                    primary_acks = primary_acks.saturating_add(1);
+                }
+                if ack.first() == Some(&crate::router::ACK_STORED_DURABLE) {
+                    durable_acks = durable_acks.saturating_add(1);
+                }
+            }
             Some(_) => {}
             None => hooks.outbound.dispatch(replica.peer_idx, op).await,
         }
     }
-    // Availability caveat (mirrors the read path): on a fire-and-forget
-    // transport no acks come back, so only enforce W when the transport
-    // actually answered (some ack, or no remote target so local alone
-    // satisfies W).
-    let transport_answered = acks > u32::from(local_ok) || remote_targets == 0;
-    if transport_answered {
-        quorum_result(acks, w, target)
-    } else {
-        Ok(())
+    WriteTally {
+        acks,
+        primary_acks,
+        durable_acks,
+        target,
+        target_primaries,
+        remote_targets,
+        local_ack: local_ok,
     }
+}
+
+/// Enforce W (always), PW (when `pw > 0`), and DW (always -- DW
+/// defaults to `quorum`, unlike PW/PR's `0` default) against a
+/// [`WriteTally`]. Availability caveat (mirrors the read path): on a
+/// fire-and-forget transport no acks come back beyond the local one,
+/// so enforcement is skipped when there were remote targets but none
+/// answered; a transport that has nothing to fan to (no remote
+/// targets) is fully authoritative from the local ack alone.
+fn check_write_quorum(tally: &WriteTally, w: u32, pw: u32, dw: u32) -> Result<(), String> {
+    let transport_answered = tally.acks > u32::from(tally.local_ack) || tally.remote_targets == 0;
+    if !transport_answered {
+        return Ok(());
+    }
+    quorum_result(tally.acks, w, tally.target)?;
+    if pw > 0 {
+        let needed_pw = pw.min(tally.target_primaries.max(1));
+        if tally.primary_acks < needed_pw {
+            return Err(format!(
+                "riak put: primary write quorum not met ({}/{needed_pw} primary acks)",
+                tally.primary_acks
+            ));
+        }
+    }
+    let needed_dw = dw.min(tally.target.max(1));
+    if tally.durable_acks < needed_dw {
+        return Err(format!(
+            "riak put: durable write quorum not met ({}/{needed_dw} durable acks)",
+            tally.durable_acks
+        ));
+    }
+    Ok(())
 }
 
 /// Decide a quorum outcome: satisfied when `acks >= w`. `w` is clamped
@@ -1147,6 +1304,77 @@ fn quorum_result(acks: u32, w: u32, target: u32) -> Result<(), String> {
             "riak put: write quorum not met ({acks}/{needed} acks)"
         ))
     }
+}
+
+/// Fan the resolved SiblingSet `storage` to the key's replicas and
+/// enforce the write quorum `w`, the primary-write quorum `pw`, and
+/// the durable-write quorum `dw`. With no routing hooks the local ack
+/// alone is all there is: it satisfies `w`/`pw <= 1`, and `dw` if the
+/// local write was durable.
+///
+/// `local_ok` is whether the coordinator's own local store succeeded
+/// (it always attempts the write before fanning); `local_durable` is
+/// whether that local write is known to have reached durable storage
+/// (see [`crate::datastore::write_is_durable`]).
+/// Write-quorum thresholds resolved for one put: `w` (write), `pw`
+/// (primary-write), `dw` (durable-write). Grouped so
+/// [`fan_repair_put_quorum`] stays inside the workspace's per-function
+/// argument budget.
+struct WriteQuorums {
+    w: u32,
+    pw: u32,
+    dw: u32,
+}
+
+/// Replica-fan target for one put: the routing key plus the resolved
+/// storage bytes to ship. Grouped alongside [`WriteQuorums`] so
+/// [`fan_repair_put_quorum`] stays inside the workspace's per-function
+/// argument budget.
+struct PutTarget<'a> {
+    bucket_type: &'a [u8],
+    bucket: &'a [u8],
+    key: &'a [u8],
+    storage: &'a [u8],
+}
+
+async fn fan_repair_put_quorum(
+    hooks: Option<&RoutingHooks>,
+    datastore: &dyn Datastore,
+    target: &PutTarget<'_>,
+    quorums: &WriteQuorums,
+    local_ok: bool,
+) -> Result<(), String> {
+    let WriteQuorums { w, pw, dw } = *quorums;
+    let local_durable = local_ok && crate::datastore::write_is_durable(datastore);
+    let local_only = || WriteTally {
+        acks: u32::from(local_ok),
+        primary_acks: u32::from(local_ok),
+        durable_acks: u32::from(local_durable),
+        target: 1,
+        target_primaries: 1,
+        remote_targets: 0,
+        local_ack: local_ok,
+    };
+    let Some(hooks) = hooks else {
+        return check_write_quorum(&local_only(), w, pw, dw);
+    };
+    let Ok(decision) = hooks
+        .router
+        .try_route(target.bucket_type, target.bucket, target.key)
+    else {
+        return check_write_quorum(&local_only(), w, pw, dw);
+    };
+    let tally = fan_write_replicas(
+        hooks,
+        &decision,
+        target.bucket,
+        target.key,
+        target.storage,
+        local_ok,
+        local_durable,
+    )
+    .await;
+    check_write_quorum(&tally, w, pw, dw)
 }
 
 /// Run the bucket's precommit hook over `value` if one is configured
@@ -1186,29 +1414,90 @@ fn run_precommit(
     }
 }
 
-/// Run the bucket's postcommit hook over the committed `value` if one
-/// is configured and a runner is wired. Fire-and-forget: this never
-/// returns an error a caller can act on, so it can only be called
-/// after the write has already committed successfully. A bucket
-/// without a `postcommit_module`, or hooks without a runner, is a
-/// no-op.
-fn run_postcommit(hooks: Option<&RoutingHooks>, bucket_type: &[u8], bucket: &[u8], value: &[u8]) {
-    let Some(hooks) = hooks else {
-        return;
+/// Build the causal write envelope, resolve it against the stored
+/// sibling set (running the bucket's precommit hook first), persist
+/// the result locally, and report whether the local write landed.
+///
+/// Returns the canonical `SiblingSet` storage bytes and the local-ack
+/// flag, or `Err(message)` when the precommit hook vetoes the write or
+/// the local store reports a hard failure (not `Unsupported`, which is
+/// tolerated exactly like the rest of the Riak K/V path).
+async fn resolve_and_store_put(
+    datastore: &dyn Datastore,
+    hooks: Option<&RoutingHooks>,
+    req: &RpbPutReq,
+    key: &[u8],
+    content: &RpbContent,
+    indexes: &[(Vec<u8>, Vec<u8>)],
+    new_context: Vec<u8>,
+) -> Result<(Vec<u8>, bool), String> {
+    let stored_set = match datastore.riak_get(&req.bucket, key).await {
+        Ok(Some(bytes)) => {
+            crate::proto::http::object::SiblingSet::from_storage_bytes(&bytes).unwrap_or_default()
+        }
+        _ => crate::proto::http::object::SiblingSet::default(),
     };
-    let Some(runner) = hooks.postcommit.as_ref() else {
-        return;
+    let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+    let allow_mult = hooks.is_some_and(|h| {
+        h.router
+            .registry()
+            .resolve(bucket_type, &req.bucket)
+            .effective_allow_mult()
+    });
+    // Precommit hook: if the bucket names a precommit_module and a hook
+    // runner is wired, run the write value through it before storing.
+    // The hook may transform the value (accept) or veto the write
+    // (reject -> error frame, nothing stored).
+    let value = run_precommit(hooks, bucket_type, &req.bucket, content.value.clone())?;
+    let envelope = HttpObject {
+        value,
+        content_type: content
+            .content_type
+            .as_deref()
+            .map(|c| String::from_utf8_lossy(c).into_owned()),
+        indexes: indexes
+            .iter()
+            .map(|(n, v)| HttpIndex {
+                name: String::from_utf8_lossy(n).into_owned(),
+                value: String::from_utf8_lossy(v).into_owned(),
+            })
+            .collect(),
+        links: content.links.iter().map(rpb_link_to_http).collect(),
+        context: new_context,
+        written_at_unix: now_unix(),
     };
-    let Some(module) = hooks
-        .router
-        .registry()
-        .resolve(bucket_type, bucket)
-        .postcommit_module()
-        .map(ToString::to_string)
-    else {
-        return;
+    let resolved = resolve_write(&stored_set, &envelope, allow_mult);
+    let storage = resolved.to_storage_bytes();
+    let local_ok = match datastore
+        .riak_put(&req.bucket, key, &storage, indexes)
+        .await
+    {
+        Ok(()) | Err(DatastoreError::Unsupported(_)) => true,
+        Err(e) => return Err(format!("riak put: {e}")),
     };
-    runner.run(&module, value);
+    Ok((storage, local_ok))
+}
+
+/// Resolve the effective write / primary-write / durable-write quorums
+/// for a put, applying per-request overrides over the bucket defaults.
+/// Without routing hooks the single-node local ack is authoritative,
+/// so W and DW default to `1` (satisfied by the local write alone) and
+/// PW to `0` (no primary requirement, matching the no-hooks R/W path).
+fn effective_write_quorums(
+    hooks: Option<&RoutingHooks>,
+    bucket_type: &[u8],
+    bucket: &[u8],
+    req: &RpbPutReq,
+) -> (u32, u32, u32) {
+    hooks.map_or((1, 0, 1), |h| {
+        let props = h.router.registry().resolve(bucket_type, bucket);
+        let n_val = props.effective_n_val();
+        (
+            props.effective_w(n_val, req.w),
+            props.effective_pw(n_val, req.pw),
+            props.effective_dw(n_val, req.dw),
+        )
+    })
 }
 
 async fn handle_put(
@@ -1238,34 +1527,53 @@ async fn handle_put(
         .iter()
         .filter_map(|p| p.value.as_ref().map(|v| (p.key.clone(), v.clone())))
         .collect();
-    let (storage, new_context, value) =
-        match resolve_put_storage(datastore, hooks, &req, &key, &content, &indexes).await {
-            Ok(v) => v,
-            Err(msg) => return Ok(error_frame(msg)),
-        };
-    let local_ok = match datastore
-        .riak_put(&req.bucket, &key, &storage, &indexes)
-        .await
+    // Sibling-aware causal write. Advance a fresh context from what the
+    // CLIENT read (`req.vclock`); two writes coordinated by different
+    // nodes from the same read context are concurrent, same-node
+    // writes are ordered. The returned context is echoed in
+    // `RpbPutResp.vclock` so the client round-trips it on its next
+    // write.
+    let actor = hooks.map_or_else(
+        || b"local".to_vec(),
+        |h| format!("{}:{}", h.local_actor.dc, h.local_actor.peer).into_bytes(),
+    );
+    let new_context = advance_context(&req.vclock.clone().unwrap_or_default(), &actor);
+    let (storage, local_ok) = match resolve_and_store_put(
+        datastore,
+        hooks,
+        &req,
+        &key,
+        &content,
+        &indexes,
+        new_context.clone(),
+    )
+    .await
     {
-        Ok(()) | Err(DatastoreError::Unsupported(_)) => true,
-        Err(e) => return Ok(error_frame(format!("riak put: {e}"))),
+        Ok(r) => r,
+        Err(msg) => return Ok(error_frame(msg)),
     };
     // Fan the resolved SiblingSet storage to the key's replicas and
-    // enforce the write quorum W (request > bucket default > quorum).
-    // The local store counts as one ack; each acking replica adds one.
+    // enforce W, PW, and DW (request > bucket default > quorum, except
+    // PW which defaults to 0: no primary requirement). The local store
+    // counts as one ack; each acking replica adds one.
     let bucket_type = req.r#type.as_deref().unwrap_or(b"");
-    let w = hooks.map_or(1, |h| {
-        let props = h.router.registry().resolve(bucket_type, &req.bucket);
-        props.effective_w(props.effective_n_val(), req.w)
-    });
-    if let Err(reason) =
-        fan_repair_put_quorum(hooks, bucket_type, &req.bucket, &key, &storage, w, local_ok).await
+    let (w, pw, dw) = effective_write_quorums(hooks, bucket_type, &req.bucket, &req);
+    if let Err(reason) = fan_repair_put_quorum(
+        hooks,
+        datastore,
+        &PutTarget {
+            bucket_type,
+            bucket: &req.bucket,
+            key: &key,
+            storage: &storage,
+        },
+        &WriteQuorums { w, pw, dw },
+        local_ok,
+    )
+    .await
     {
         return Ok(error_frame(reason));
     }
-    // Postcommit hook: fire-and-forget notification over the value
-    // that just committed. Never changes the response below.
-    run_postcommit(hooks, bucket_type, &req.bucket, &value);
     let resp = RpbPutResp {
         vclock: Some(new_context),
         ..RpbPutResp::default()
@@ -1274,82 +1582,6 @@ async fn handle_put(
         MessageCode::PutResp.as_u8(),
         resp.encode_to_vec(),
     ))
-}
-
-/// Resolve a put's storage bytes: read the stored sibling set, run the
-/// precommit hook over the incoming value, build the envelope, and
-/// resolve concurrent siblings per the bucket's `allow_mult`.
-///
-/// Returns `(storage_bytes, new_context, value)` where `value` is the
-/// (possibly precommit-transformed) bytes that were stored -- the
-/// postcommit hook runs over this same `value`. An `Err(message)`
-/// means the write is rejected (a bad precommit veto); nothing is
-/// stored.
-async fn resolve_put_storage(
-    datastore: &dyn Datastore,
-    hooks: Option<&RoutingHooks>,
-    req: &RpbPutReq,
-    key: &[u8],
-    content: &crate::proto::pb::RpbContent,
-    indexes: &[(Vec<u8>, Vec<u8>)],
-) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
-    // Sibling-aware causal write. Read the stored sibling set, advance
-    // a fresh context from what the CLIENT read (`req.vclock`), and
-    // resolve: supersede causally-dominated siblings, retain concurrent
-    // ones when the bucket allows siblings, or collapse to one value
-    // otherwise. The returned context is echoed in `RpbPutResp.vclock`
-    // so the client round-trips it on its next write.
-    let stored_set = match datastore.riak_get(&req.bucket, key).await {
-        Ok(Some(bytes)) => {
-            crate::proto::http::object::SiblingSet::from_storage_bytes(&bytes).unwrap_or_default()
-        }
-        _ => crate::proto::http::object::SiblingSet::default(),
-    };
-    let client_ctx = req.vclock.clone().unwrap_or_default();
-    // The coordinating actor keys this write's dot. Two writes
-    // coordinated by different nodes from the same read context are
-    // concurrent; same-node writes are ordered. Without hooks (embedded
-    // single node) a fixed local actor is used.
-    let actor = hooks.map_or_else(
-        || b"local".to_vec(),
-        |h| format!("{}:{}", h.local_actor.dc, h.local_actor.peer).into_bytes(),
-    );
-    let new_context = advance_context(&client_ctx, &actor);
-    let allow_mult = hooks.is_some_and(|h| {
-        h.router
-            .registry()
-            .resolve(req.r#type.as_deref().unwrap_or(b""), &req.bucket)
-            .effective_allow_mult()
-    });
-    // Precommit hook: if the bucket names a precommit_module and a hook
-    // runner is wired, run the write value through it before storing.
-    // The hook may transform the value (accept) or veto the write
-    // (reject -> error frame, nothing stored).
-    let value = run_precommit(
-        hooks,
-        req.r#type.as_deref().unwrap_or(b""),
-        &req.bucket,
-        content.value.clone(),
-    )?;
-    let envelope = HttpObject {
-        value: value.clone(),
-        content_type: content
-            .content_type
-            .as_deref()
-            .map(|c| String::from_utf8_lossy(c).into_owned()),
-        indexes: indexes
-            .iter()
-            .map(|(n, v)| HttpIndex {
-                name: String::from_utf8_lossy(n).into_owned(),
-                value: String::from_utf8_lossy(v).into_owned(),
-            })
-            .collect(),
-        links: content.links.iter().map(rpb_link_to_http).collect(),
-        context: new_context.clone(),
-        written_at_unix: now_unix(),
-    };
-    let resolved = resolve_write(&stored_set, &envelope, allow_mult);
-    Ok((resolved.to_storage_bytes(), new_context, value))
 }
 
 async fn handle_del(
@@ -1985,6 +2217,7 @@ fn handle_get_bucket(body: &[u8], hooks: Option<&RoutingHooks>) -> Result<Frame,
             w: Some(resolved.effective_w(resolved.effective_n_val(), None)),
             pr: Some(resolved.effective_pr(resolved.effective_n_val(), None)),
             pw: Some(resolved.effective_pw(resolved.effective_n_val(), None)),
+            dw: Some(resolved.effective_dw(resolved.effective_n_val(), None)),
             ..RpbBucketProps::default()
         }
     } else {
