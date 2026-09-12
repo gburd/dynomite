@@ -229,6 +229,31 @@ Near-term correctness parity (highest surprise for a Riak user):
    ships more bytes than a tree diff would. Gated by a DST PushAll
    model + the Elle consistency check (AGENTS.md 6.5).**
 
+11. Storage key drops `bucket_type` (Riak-parity gap; DISCOVERED, NOT
+    FIXED). M. **The `Datastore::riak_get`/`riak_put`/`riak_delete`
+    trait methods (`crates/dynomite/src/embed/hooks.rs`) key storage by
+    `(bucket, key)` only; `bucket_type` participates in routing and
+    props resolution (`try_route`, `registry().resolve`) but NOT in the
+    storage identity. Every call site in `server.rs` passes only
+    `&req.bucket` + `key` (e.g. `riak_put(&req.bucket, key, ...)` in
+    `resolve_and_store_put`). Real Riak's object/CRDT identity is
+    `(bucket_type, bucket, key)`, so two DIFFERENT CRDT types under the
+    same `(bucket, key)` but distinct `bucket_type` (the shape
+    `examples/riak-crdts.toml` uses: counter/set/map all under
+    `bucket="crdts"`) collide on one noxu slot -- the second write's
+    type tag mismatches the stored blob and
+    `CrdtSerialError::TagMismatch` (`datatypes/serial.rs`) fires. This
+    is a genuine defect, not a benchmark artifact: it was surfaced
+    while running the head-to-head bench (which worked around it by
+    giving each CRDT type its own bucket, a fair real-client
+    workaround) and confirmed against the code. FIX: fold `bucket_type`
+    into the storage key in the datastore layer (a `default` sentinel
+    when unset for backward compatibility), and thread it through the
+    `riak_get/put/delete` trait signatures + every call site. Deferred
+    (touches the public `Datastore` trait -- a SemVer surface change --
+    and every stored-object migration path); tracked here so it is not
+    lost.**
+
 Benchmark credibility:
 8. Populate criterion baselines; activate the regression gate. S.
    **DONE (`acd0f3b`): all seven micro benches captured (161 criterion
