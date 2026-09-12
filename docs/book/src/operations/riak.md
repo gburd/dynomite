@@ -268,10 +268,16 @@ clock divergence" ambiguity entry.
 
 Operator-visible behaviour from a typical client's perspective:
 the context blob round-trips verbatim and the `return_body`
-shape on `DtUpdateResp` matches. Note the caveats above: the
-`R` / `W` quorum knobs are accepted but not yet enforced, and
-concurrent conflicts resolve to a single value rather than a
-surfaced sibling set.
+shape on `DtUpdateResp` matches. Note the caveats above: `R`
+and `W` are enforced (a read waits for `R` replica responses and
+a write waits for `W` replica acks, failing below quorum with an
+availability fallback on a fire-and-forget transport); `PR`,
+`PW`, and `DW` are accepted, stored, and echoed on `GetBucket`
+but not yet applied on the read/write path. Concurrent writes
+under `allow_mult` are retained and surfaced as siblings (a PBC
+read returns each sibling as its own `RpbContent`; an HTTP read
+returns `300 Multiple Choices`); without `allow_mult` a
+concurrent write resolves to a single value.
 
 References:
 

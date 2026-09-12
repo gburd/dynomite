@@ -273,9 +273,12 @@ replicas that a real read touched and found stale. Replicas nobody reads
 are healed by anti-entropy instead (see below).</p>
 
 Read repair only heals what reads observe. Keys that are written but rarely
-read, or replicas that were down during the read, are reconciled by the
-background anti-entropy path -- the Merkle-tree repair described in
-[Failure Handling](./failure.md) and, for the Dyniak layer, in
+read, or replicas that were down during the read, are left to the
+background entropy reconciliation channel described in
+[Failure Handling](./failure.md) -- a pluggable snapshot-exchange
+transport whose shipped default is a heartbeat, not a Merkle-tree
+reconciler, unless an embedder wires in a reconciling source. The Dyniak
+layer's own Tictac-tree AAE design is covered in
 [Dyniak AAE](../dyniak/aae.md).
 
 ```admonish note title="Road not taken: consensus instead of quorum"

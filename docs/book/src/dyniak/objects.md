@@ -149,14 +149,21 @@ The properties that matter most day to day:
 * **`last_write_wins`** -- whether conflicts are resolved by timestamp.
 
 ```admonish warning title="Which bucket properties are enforced today"
-`n_val` (the replica count), `allow_mult` (sibling retention), and `ttl`
-(object expiry, via the reaper) change behavior. The quorum knobs (`r`,
-`w`, `pr`, `pw`, `dw`) are accepted for API compatibility but are **not
-yet enforced** on the read/write path: a read returns as soon as it has
-a value rather than waiting for `r` responses. The PBC `GetBucket`
-reflects the stored per-bucket properties; the HTTP `/props` GET still
-echoes Riak's documented defaults. Per-request and per-bucket quorum
-enforcement is tracked follow-up work.
+`n_val` (the replica count) and `allow_mult` (sibling retention) change
+behavior, as does `ttl` (object expiry, swept up by the reaper -- see
+below) and `precommit_module` (a WASM hook run on every write -- see
+below). Of the quorum knobs, `r` and `w` ARE enforced: a `handle_get`
+waits for `r` replica responses and a `handle_put` waits for `w`
+replica acks across the key's replica set before answering, failing
+below quorum, with an availability fallback on a fire-and-forget
+transport. `pr`, `pw`, and `dw` are accepted, stored, and echoed back
+on `GetBucket`, but are **not yet applied** on the read/write path --
+no request handler reads them, and there is no durable-write signal
+from storage to enforce `dw` against. They need the sloppy-quorum /
+fallback-node distinction and a storage durability signal that are not
+yet modelled. The PBC `GetBucket` reflects the stored per-bucket
+properties; the HTTP `/props` GET still echoes Riak's documented
+defaults.
 ```
 
 Set properties with `PUT`:
@@ -175,6 +182,26 @@ Dynomite default, versus walk-N-successors, the Riak default). Both are
 documented with their wire encodings in
 [Riak mode ops](../operations/riak.md#bucket-properties).
 ```
+
+### Precommit hooks
+
+A bucket may name a WASM module via the `precommit_module` property.
+That module runs on every write to the bucket, before the value is
+committed: it may accept the value unchanged, transform it, or veto the
+write outright with a rejection reason. This is the same linear-memory
+WASM ABI used by custom `chash_keyfun` modules and MapReduce phases.
+Postcommit hooks -- Riak's fire-and-forget post-write notification --
+are not implemented.
+
+### The object-TTL reaper
+
+A bucket's `ttl` property (in seconds) marks its objects for expiry.
+Expiry is not instantaneous: a background reaper sweeps on an interval
+(`reap_interval_seconds`, default 300 seconds) and reaps at most a
+bounded number of candidates per sweep (`reap_max_per_cycle`, default
+10,000), so a single cycle cannot stall behind an unbounded scan. An
+expired object may therefore live briefly past its nominal TTL until
+the next sweep visits its partition.
 
 ## Causal context
 

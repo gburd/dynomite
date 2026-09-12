@@ -42,7 +42,9 @@ value back to the stale replicas before answering the client.</dd>
 <dt>Active anti-entropy (AAE)</dt>
 <dd>A continuous background process that compares replicas by exchanging
 merkle-tree summaries and repairs the divergent keys -- catching the
-drift that no read ever touched.</dd>
+drift that no read ever touched. The protocol is designed and unit-
+tested as library code; it is not yet wired into dynomited's running
+AAE task (see below).</dd>
 </dl>
 
 Read repair and hinted handoff are opportunistic: they only fix what a
@@ -55,7 +57,23 @@ Dyniak's AAE is modelled on Riak's continuously-running merkle-tree
 synchroniser (the "Tictac" tree). Each node maintains a rolling merkle
 tree over its `(bucket, key, causal-context)` tuples. Two peers
 periodically exchange tree summaries; where the summaries differ, they
-drill down to the exact divergent keys and repair them.
+drill down to the exact divergent keys and repair them. This is the
+design the library code implements and unit-tests today.
+
+```admonish warning title="Designed and tested, not yet wired into dynomited"
+The Tictac tree, the three-phase exchange protocol below, and the
+repair scheduler are implemented and unit-tested as library code in
+`crates/dyniak/src/aae/`. `dynomited`'s background AAE task
+(`spawn_aae` in `crates/dynomited/src/riak.rs`) currently only ticks
+the configured cadence and logs the tick at `debug` -- it does not run
+the exchange, does not compare trees, and does not enqueue a repair.
+So a running dyniak node today performs no background divergence
+detection or repair; the descriptions of ROOT-SYNC / TREE-SYNC /
+KEY-SYNC and winner selection below describe designed and tested
+behaviour that is not yet live in the binary. Object-level read repair
+(the next chapter section, and covered above) is wired and tested; only
+this background exchange is not.
+```
 
 The tree is two levels deep. The top level splits the keyspace into
 *time buckets*; each time bucket splits into *segments*. A key hashes
@@ -79,9 +97,9 @@ compare roots first, then descend only into the diverging subtree.</p>
 
 ### The three-phase exchange
 
-When two peers compare trees they run a three-phase protocol, each phase
-narrowing the scope, so the amount of data on the wire is proportional
-to the divergence and not to the dataset:
+When two peers compare trees they are designed to run a three-phase
+protocol, each phase narrowing the scope, so the amount of data on the
+wire is proportional to the divergence and not to the dataset:
 
 1. **ROOT-SYNC** exchanges the top-level per-time-bucket root vector.
    Identical roots mean identical data for that time bucket -- no
@@ -91,34 +109,39 @@ to the divergence and not to the dataset:
 3. **KEY-SYNC** enumerates the diverging keys in one (time-bucket,
    segment) pair and hands them to the repair scheduler.
 
-The exchange rides the substrate's entropy channel -- length-prefixed
-framing over an AES-128-CBC reconciliation link -- so the tree summaries
-travel encrypted between peers.
+The exchange is designed to ride the substrate's entropy channel --
+length-prefixed framing over an AES-128-CBC reconciliation link -- so
+the tree summaries would travel encrypted between peers once wired in.
 
 ### Repair: choosing the winner
 
-Once KEY-SYNC surfaces a divergence, the repair scheduler decides which
-side holds the correct value and enqueues a repair task on the
-per-peer outbound channel -- the same channel gossip and hinted handoff
-use. The winner is chosen by causal context: the merkle tree treats
-contexts as opaque bytes, and a pluggable comparator decides the order.
-The default project comparator is the Interval Tree Clock the rest of
-Dyniak uses for per-key causality (see
-[Buckets, Keys, and Objects](./objects.md#causal-context)).
+Once KEY-SYNC surfaces a divergence, the repair scheduler is designed to
+decide which side holds the correct value and enqueue a repair task on
+the per-peer outbound channel -- the same channel gossip and hinted
+handoff use. The winner is chosen by causal context: the merkle tree
+treats contexts as opaque bytes, and a pluggable comparator decides the
+order. The default project comparator is the Interval Tree Clock the
+rest of Dyniak uses for per-key causality (see
+[Buckets, Keys, and Objects](./objects.md#causal-context)). This
+scheduler is implemented and unit-tested; it is not yet invoked by
+dynomited's running AAE task (see the warning above).
 
 ```admonish note title="Ambiguous clocks are not silently dropped"
 If a divergence's only entry has an unparseable causal context, the
 scheduler surfaces an explicit "ambiguous clock" event rather than
 guessing a winner or silently discarding the key. An operator can see
 it; the repair does not quietly lose data. This is a deliberate
-safety choice.
+safety choice in the scheduler's design.
 ```
 
 For CRDT keys the reconciliation is even cleaner: two divergent replicas
 of a CRDT do not need a winner at all -- they *merge*, and the merge is
 the correct converged value by construction (see
-[Convergent Data Types](./crdts.md)). AAE ships the states both ways and
-each side merges.
+[Convergent Data Types](./crdts.md)). The AAE exchange is designed to
+ship CRDT states both ways so each side merges; until the exchange is
+wired into dynomited, CRDT convergence relies on the write-time fan-out
+and read-time merge described in the previous chapter, not on this
+background path.
 
 ## Configuring AAE
 
@@ -139,12 +162,14 @@ dyn_o_mite:
 
 <dl class="dyn-facts">
 <dt>aae_enabled</dt>
-<dd>Spawn the AAE scheduler. Default <code>false</code>.</dd>
+<dd>Spawn the AAE task. Default <code>false</code>. As described above,
+the running task today only ticks the configured cadence and logs at
+<code>debug</code>; it does not yet run the exchange or repair.</dd>
 <dt>aae_full_sweep_interval_seconds</dt>
-<dd>The cadence over which one full sweep across every peer pair
-completes. Default 86400 (24 hours).</dd>
+<dd>The cadence over which one full sweep across every peer pair is
+designed to complete. Default 86400 (24 hours).</dd>
 <dt>aae_segment_interval_seconds</dt>
-<dd>The cadence of one (peer, time-bucket) exchange tick. Default 60.
+<dd>The cadence of one (peer, time-bucket) tick. Default 60.
 Must be less than or equal to the full-sweep interval.</dd>
 </dl>
 
@@ -180,14 +205,16 @@ partition touched a handful of keys, the MST path transfers work for
 those keys and little else.
 
 ```admonish note title="Road not taken -- and taken as an option"
-The MST reconcile does not replace the Tictac tree; it is selected by a
-config knob (<code>reconcile_mode</code>) and defaults to
-<code>Tictac</code>, so a deployment that has not opted in behaves
-byte-for-byte as before. The Tictac path is the compatible default
-(it is what Riak did); the MST path is there for operators whose
-dataset is large enough that fixed-grid comparison cost hurts. Both use
-the same storage fold to build their trees and the same exchange
-plumbing to ship repairs. See
+The MST reconcile does not replace the Tictac tree; it is selected by
+an internal field (<code>reconcile_mode</code> on <code>ConfAae</code>)
+that defaults to <code>Tictac</code>. There is currently no YAML or CLI
+config surface for it in <code>dynomited</code> -- an operator cannot
+set it today, so every running deployment uses the default. The Tictac
+path is the compatible default (it is what Riak did); the MST path is
+there, once a config surface and the exchange wiring land, for
+operators whose dataset is large enough that fixed-grid comparison cost
+hurts. Both use the same storage fold to build their trees and the same
+exchange plumbing to ship repairs. See
 [Roads Not Taken](../reference/roads-not-taken.md).
 ```
 
@@ -206,14 +233,17 @@ Putting the layers together, here is the life of a divergence:
    outlives the outage.
 2. If no hint covered it, a later quorum read that touches replica 3
    sees it disagree with 1 and 2, merges, and writes the winner back
-   (read repair).
-3. If nobody reads the key, the next AAE sweep compares replica 3's
-   merkle tree with a peer's, drills down to the divergent key, and
-   repairs it in the background.
+   (read repair). This layer is wired and tested today.
+3. If nobody reads the key, the background AAE sweep is *designed* to
+   compare replica 3's merkle tree with a peer's, drill down to the
+   divergent key, and repair it. This layer is unit-tested library code
+   that is not yet wired into dynomited's running AAE task, so today a
+   cold, unread key that missed both hinted handoff and read repair is
+   not repaired by this path.
 
-No single layer is sufficient alone; together they guarantee that a key
-written to a quorum is not lost and that replicas converge, whether or
-not anyone reads the data again.
+Until AAE is wired in, hinted handoff and read repair are what actually
+guarantee convergence in a running deployment; the background sweep
+described above is the designed third layer, not yet a live one.
 
 ## Where to next
 

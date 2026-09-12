@@ -53,19 +53,22 @@ in the background.
 
 ## 2. Functional behavior differences
 
-Dimension scoreboard (audit 2):
+Dimension scoreboard (audit 2). NOTE 2026-09-12: several rows below
+were the original audit snapshot; the parenthetical **[now: ...]**
+annotations record what has since landed (see the Work queue at the end
+of this file for the authoritative current status).
 
 | Dim | Area | Status |
 | --- | --- | --- |
-| A | Data model (buckets/types/keys/objects/links/2i) | FULL except server-assigned keys (S) and 2i term enumeration (deferred) |
-| B | Vector clocks / causal context | ITC (not DVV) -- documented; per-object context now flows on get/put and concurrent writes are detected; sibling retention pending |
-| C | Conflict resolution | PARTIAL: siblings not surfaced to clients (see below) |
-| D | Quorum tunables (N/R/W/PR/PW/DW) | PARTIAL: N present; R/W/PR/PW/DW not on the read path; hinted-handoff persistence missing |
-| E | CRDTs | Counter/Set/Register/Flag present; Map/HLL code exists but not exported/handled |
+| A | Data model (buckets/types/keys/objects/links/2i) | FULL except 2i term enumeration (deferred). **[now: server-assigned keys DONE]** |
+| B | Vector clocks / causal context | Per-object VERSION VECTOR (`vclock.rs`, not ITC/DVV) flows on get/put; concurrent writes detected. **[now: sibling retention DONE]** |
+| C | Conflict resolution | **[now: DONE -- siblings retained under allow_mult; PBC multi-content read + HTTP 300]** |
+| D | Quorum tunables (N/R/W/PR/PW/DW) | N/R/W enforced on the read/write path. **[now: R/W enforcement DONE; PR/PW/DW accepted+echoed but not applied]** |
+| E | CRDTs | **[now: DONE -- all six (Counter/Set/Register/Flag/Map/HLL) served over the wire]** |
 | F | Query (MapReduce/2i/search) | FULL; Yokozuna/Solr is a documented non-goal |
-| G | Bucket props | PARTIAL: TTL field ignored; pre/postcommit hooks not executed |
-| H | APIs (PBC/HTTP) | Near-complete; server-assigned keys (POST unnamed) missing |
-| I | Storage backends | noxu (design choice); TTL/expiry missing |
+| G | Bucket props | **[now: `ttl` applied by runtime reaper; precommit hooks DONE; postcommit not implemented]** |
+| H | APIs (PBC/HTTP) | **[now: server-assigned keys DONE]** |
+| I | Storage backends | noxu (design choice). **[now: object TTL/expiry DONE via reaper]** |
 | J | Strong consistency (riak_ensemble) + riak_repl | Documented non-goals |
 | K | Cluster ops (ring/gossip/handoff) | Handoff FSM present; durable handoff queue missing |
 

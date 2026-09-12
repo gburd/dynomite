@@ -210,33 +210,52 @@ that read repair only heals replicas a real read touched. Keys that are
 written but rarely read, and replicas that were down during the read, are
 left for anti-entropy.
 
-## Anti-entropy: Merkle-tree repair
+## Anti-entropy: the entropy reconciliation channel
 
 Anti-entropy is the background reconciliation that does not depend on a
-client reading a key. Replicas periodically compare compact **Merkle-tree**
-digests of their key ranges; where the trees differ, only the divergent
-sub-ranges are exchanged and reconciled, so a full replica comparison
-costs a tree walk rather than a full data transfer.
+client reading a key. The base engine's `entropy` module is a pluggable
+snapshot-exchange transport: a sender periodically ships a
+[`SnapshotSource`](https://docs.rs/dynomite)-produced byte blob to a
+peer's [`SnapshotSink`](https://docs.rs/dynomite) over an
+AES-128-CBC-encrypted, length-prefixed link, and the receiver replays
+it. The transport itself has no notion of a Merkle tree, a key range, or
+a divergent subset -- it ships whatever bytes the plugged-in
+`SnapshotSource` returns and hands whatever bytes it receives to the
+plugged-in `SnapshotSink`. Building a Merkle-tree-aware source (compact
+digests, descend-on-mismatch, ship only the divergent range) is an
+embedder responsibility on top of this transport, not something the
+channel does itself.
+
+`dynomited`'s shipped default wires an empty `StaticSnapshot` as the
+source: when `recon_key_file:` / `recon_iv_file:` are configured, the
+entropy task ticks on its cadence, negotiates with the peer, and ships a
+zero-length snapshot -- in practice a heartbeat that verifies peer
+reachability and exercises the wire framing, not a data reconciliation.
+A deployment that wants real Merkle-tree anti-entropy on this channel
+supplies its own `SnapshotSource` / `SnapshotSink` pair through the
+embedding API.
 
 ```mermaid
 flowchart TD
-  R1["replica r1<br/>Merkle root"] --> CMP{"roots equal?"}
-  R2["replica r2<br/>Merkle root"] --> CMP
-  CMP -->|yes| DONE["ranges agree,<br/>nothing to do"]
-  CMP -->|no| DESC["descend into<br/>differing subtrees"]
-  DESC --> EX["exchange only the<br/>divergent key ranges"]
-  EX --> REC["reconcile, write back"]
+  R1["replica r1<br/>SnapshotSource"] --> SEND["entropy sender:<br/>encrypt, frame, ship"]
+  SEND --> R2["replica r2<br/>SnapshotSink"]
+  R2 --> APPLY["apply() replays the<br/>plugged-in sink"]
 ```
-<p class="dyn-caption">Merkle-tree anti-entropy narrows a whole-range
-comparison to just the sub-ranges that actually differ. Equal roots mean
-the replicas agree and no data moves.</p>
+<p class="dyn-caption">The entropy channel moves an opaque snapshot
+blob from a source to a sink; whether that blob is a Merkle-tree digest,
+a full dataset dump, or (the shipped default) nothing at all is decided
+by which `SnapshotSource` is plugged in.</p>
 
-This is the safety net beneath read repair and hinted handoff: it catches
-divergence that neither of the other two mechanisms reached -- writes that
-were never read back, hints that expired before the peer recovered, or
-data that drifted during a long partition. The full anti-entropy design,
-including the transactional Dyniak layer's reconciliation, is documented in
-[Dyniak AAE](../dyniak/aae.md).
+This channel sits beneath read repair and hinted handoff as the intended
+safety net for divergence that neither of the other two mechanisms
+reached -- writes that were never read back, hints that expired before
+the peer recovered, or data that drifted during a long partition -- but
+only once a Merkle-aware (or otherwise reconciling) source is wired in;
+the shipped heartbeat-only default does not reconcile anything by
+itself. The Dyniak layer's own AAE design (a Tictac merkle tree plus a
+three-phase exchange) is unit-tested library code with the same
+not-yet-wired-into-the-running-binary caveat; see
+[Dyniak AAE](../dyniak/aae.md) for the detail.
 
 ## What happens during a partition
 
@@ -270,8 +289,10 @@ side stalls.</dd>
 <dd>A write that meets its consistency level on the reachable side is not
 lost: it is on that side's replicas, and -- if hinted handoff is enabled
 -- queued for the unreachable replicas. When the partition heals, gossip
-readmits the peers, hints drain, and anti-entropy plus read repair close
-any remaining gap.</dd>
+readmits the peers, hints drain, and read repair closes any gap a
+subsequent read observes. The entropy channel can close a remaining gap
+too, but only once a reconciling `SnapshotSource` is wired in; the
+shipped default is a heartbeat, not a reconciler (see above).</dd>
 <dt>Consistency</dt>
 <dd>Divergent writes on the two sides are reconciled after the heal, not
 prevented during the split. Under the strict consistency levels a request

@@ -71,8 +71,15 @@ What the engine does today:
 * Tunable quorum reads and writes.
 * Hinted handoff (durable, persisted under `hint_dir:`) for writes to
   temporarily unavailable peers.
-* Read repair on divergent replicas.
-* Active anti-entropy (Merkle-tree) reconciliation.
+* Read repair: on a `dyniak` object read the coordinator fans to the
+  key's replica set, merges by causal frontier, and pushes the merged
+  value to replicas that were behind.
+* Anti-entropy: a pluggable encrypted snapshot-exchange transport. A
+  Merkle-tree-aware snapshot source is an embedder responsibility; the
+  default `dynomited` binary ships an empty source (heartbeat only). A
+  `dyniak` TicTac-style segmented merkle tree and a three-phase
+  exchange protocol exist and are unit-tested but are not yet wired
+  into the running background task.
 * For dyniak: cross-node XA transactions, object links and link
   walking, secondary indexes (2i), MapReduce (with optional WASM map /
   reduce phases, gated on the `wasm` feature), and `FT.*` full-text /
@@ -114,14 +121,19 @@ Scope and non-goals worth stating up front:
 Riak-compatibility (`dyniak`) gaps worth knowing before you rely on
 them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
 
-* **Bucket quorum properties are enforced.** `n_val`, `allow_mult`,
-  `ttl`, and the quorum knobs `r` / `w` / `pr` / `pw` / `dw` are honored
-  (symbolic `one` / `quorum` / `all` / `default` or a literal count,
-  with per-request overrides). A read waits for `R` responses and a
-  write for `W` acks across the key's replica set, failing below quorum
-  -- except on a fire-and-forget peer transport, where the operation
-  falls back to local (availability) with anti-entropy as the backstop.
-  The PBC `GetBucket` reflects the stored per-bucket properties; the
+* **Bucket quorum properties: `R` and `W` are enforced.** `n_val`,
+  `allow_mult`, and `ttl` are honored, and the read/write quorums `r`
+  and `w` are enforced on the read/write path (symbolic `one` /
+  `quorum` / `all` / `default` or a literal count, with per-request
+  overrides): a read waits for `R` responses and a write for `W` acks
+  across the key's replica set, failing below quorum -- except on a
+  fire-and-forget peer transport, where the operation falls back to
+  local (availability). The primary-count knobs `pr` / `pw` and the
+  durable-write knob `dw` are accepted, stored, and echoed on
+  `GetBucket` but not yet applied on the read/write path: enforcing
+  them requires the sloppy-quorum / fallback-node distinction and a
+  storage durability signal that are not yet modelled. The PBC
+  `GetBucket` reflects the stored per-bucket properties; the
   HTTP `/props` GET still echoes Riak's documented defaults.
 * **Concurrent writes are retained as siblings.** Opaque objects carry a
   per-object version-vector causal context: a PUT advances it (keyed by

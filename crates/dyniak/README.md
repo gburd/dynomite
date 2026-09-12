@@ -51,29 +51,43 @@ that is the audience for dyniak.
   `/types/<bucket-type>/buckets/<bucket>/keys/<key>` for typed
   buckets, the `/mapred` MapReduce endpoint, and `/buckets/<bucket>/index/<idx>/...`
   for secondary index queries.
-* **CRDTs**: convergent data types on the Riak model. Counter, Set,
-  Register, and Flag are served over the wire today; Map and
-  HyperLogLog are implemented in-crate and tracked to be wired next. See
-  `crates/dyniak/src/datatypes/`.
-* **Per-request quorums**: `R`, `W`, `PR`, `PW`, `DW`, `RW` are accepted
-  for API compatibility. Only `n_val` (the replica count) is enforced
-  today; the quorum knobs are not yet applied on the read/write path.
-* **Conflict resolution**: writes that race are detected via the causal
-  context and resolved to a single deterministic value. Sibling sets
-  are not yet surfaced to clients (no `300 Multiple Choices`), and
-  `allow_mult` does not yet change read behavior; for concurrent-write
-  correctness use a CRDT. Causality is tracked with an interval tree
-  clock (ITC), not a Riak DVV (a documented deviation).
-* **Active anti-entropy**: dyniak's AAE exchange protocol is
-  modelled on Riak's `riak_kv_index_hashtree` (the TicTac-style
-  segmented merkle tree at `crates/hashtree/`).
-* **Hinted handoff**: same shape as `riak_kv_handoff`.
+* **CRDTs**: convergent data types on the Riak model. All six --
+  Counter, Set, Register, Flag, Map (recursive), and HyperLogLog -- are
+  served over the wire. See `crates/dyniak/src/datatypes/`.
+* **Per-request quorums**: `R` and `W` are enforced on the read/write
+  path (per-request override > bucket default > `quorum`; symbolic
+  `one`/`quorum`/`all`/`default` or a literal count). `PR`, `PW`, and
+  `DW` are accepted, stored, and echoed on `GetBucket` but not yet
+  applied -- they need the sloppy-quorum / fallback-node distinction and
+  a storage durability signal that are not yet modelled.
+* **Conflict resolution**: writes that race are detected via a
+  per-object version-vector causal context and, under `allow_mult`,
+  retained as siblings; a PBC read returns each sibling as its own
+  `RpbContent` and an HTTP read returns `300 Multiple Choices`. Without
+  `allow_mult` a concurrent write collapses to one deterministic value.
+  CRDTs remain the recommended path when the merge is well-defined by
+  the data. The context is a version vector, not a Riak DVV (a
+  documented deviation).
+* **Active anti-entropy**: dyniak ships a TicTac-style segmented merkle
+  tree and a three-phase exchange protocol (unit-tested), but the
+  exchange is NOT yet wired into the running `dynomited` binary -- the
+  background AAE task currently only ticks a cadence. Read repair on the
+  object read path (fan to the replica set, merge by causal frontier,
+  push the merged state to replicas that were behind) IS wired and
+  tested.
+* **Hinted handoff**: durable (replay-on-restart) when `hint_dir` is
+  configured; RAM-only otherwise.
+* **Precommit hooks**: a WASM module named per bucket via
+  `precommit_module` runs on every object write and may transform the
+  value or veto the write. Postcommit hooks are not implemented.
+* **Object TTL**: the `ttl` bucket property is applied by a runtime
+  reaper that sweeps the key space and deletes objects past their TTL.
 * **MapReduce**: a JSON pipeline driven by the same
   `inputs / query / timeout` envelope; built-in phases match the
   Erlang module names where possible (`riak_kv_mapreduce`).
-* **Bucket types**: declared, not auto-created. `n_val` is honored;
-  the remaining properties (quorum knobs, `allow_mult`,
-  `last_write_wins`) are accepted but not yet enforced.
+* **Bucket types**: declared, not auto-created. `n_val`, `allow_mult`,
+  `ttl`, `r`, and `w` are enforced; `pr`/`pw`/`dw` and
+  `last_write_wins` are accepted but not yet enforced.
 
 ## How dyniak differs from Riak
 

@@ -180,25 +180,29 @@ lists the full PBC message surface.
 
 ## Step 6: choose your quorum
 
-Riak's per-request quorum knobs are honoured. Ask for a read that
-requires two replicas to agree:
+Riak's `r` and `w` per-request quorum knobs are honoured over PBC: ask
+for a read that requires two replicas to agree:
 
 ```python
 fetched = bucket.get('alice', r=2)
 ```
 
-Or over HTTP with a query parameter:
+Today this override is PBC-only: the HTTP gateway's route parser does
+not read `r`, `w`, `pr`, `pw`, or `dw` query parameters, so an HTTP
+request always runs with the bucket's configured defaults. A plain HTTP
+fetch still works, it just cannot override the quorum per request:
 
 ```sh
-curl -s 'http://127.0.0.1:8098/buckets/users/keys/alice?r=2'
+curl -s 'http://127.0.0.1:8098/buckets/users/keys/alice'
 ```
 
-The knobs are `r`, `w`, `pr`, `pw`, `dw`, and `rw`, with the same
-meaning they carry in Riak: how many replicas (or primary replicas)
-must respond before the request is considered done. On a single-node
-cluster every quorum is trivially satisfied; the knobs earn their keep
-once you have peers, which is the next step. The replication and
-consistency model underneath these knobs is described in
+The knobs are `r`, `w`, `pr`, `pw`, `dw`, and `rw`. `r` and `w` are
+enforced (the request waits for that many replica responses or acks
+before answering); `pr`, `pw`, and `dw` are accepted for wire
+compatibility but not yet applied on the read/write path. On a
+single-node cluster every quorum is trivially satisfied; the knobs earn
+their keep once you have peers, which is the next step. The replication
+and consistency model underneath these knobs is described in
 [Consistency](../architecture/consistency.md).
 
 ## Step 7: grow to a small cluster

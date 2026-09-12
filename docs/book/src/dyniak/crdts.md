@@ -260,8 +260,9 @@ answers with the converged value, also writing the merged state back
 locally (read repair). A fetch to any node therefore returns the full
 value when the transport supports request/response; on a fire-and-forget
 transport it falls back to the local value with anti-entropy as the
-convergence backstop. Full quorum read semantics (R / PR) for opaque
-non-CRDT objects remain tracked follow-up.
+convergence backstop. For opaque non-CRDT objects, `R` (read quorum) is
+enforced on the object read path; `PR` (primary-replica read quorum) is
+accepted but not yet applied.
 ```
 
 ## Choosing a type
@@ -281,7 +282,7 @@ non-CRDT objects remain tracked follow-up.
 <dd>HyperLogLog.</dd>
 <dt>An arbitrary opaque blob with a custom merge</dt>
 <dd>Not a CRDT -- use a plain object with siblings and resolve in the
-application. See <a href="./objects.md#siblings-and-conflict-resolution">siblings</a>.</dd>
+application. See <a href="./objects.md#conflict-resolution-and-siblings">siblings</a>.</dd>
 </dl>
 
 ## Where to next

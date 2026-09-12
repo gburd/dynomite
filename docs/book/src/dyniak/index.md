@@ -77,16 +77,25 @@ What is compatible:
   SetBucket, ListBuckets, ListKeys, Index, MapRed) and the HTTP route
   shapes.
 * Per-request quorum fields (`R`, `W`, `PR`, `PW`, `DW`, `RW`) are
-  accepted on the wire for compatibility but not yet enforced (see the
-  status note below).
-* Conflict handling: racing writes are detected via the causal context
-  and resolved to a single value; sibling sets are not yet surfaced to
-  clients (use a CRDT for concurrent-write correctness).
+  accepted on the wire for compatibility. `R` and `W` are enforced --
+  a read waits for `R` replica responses and a write waits for `W`
+  replica acks across the key's replica set, failing below quorum with
+  an availability fallback on a fire-and-forget transport. `PR`, `PW`,
+  and `DW` are accepted, stored, and echoed but not yet applied on the
+  read/write path.
+* Conflict handling: racing writes are detected via the causal context.
+  Under `allow_mult` (the default off), both concurrent writes are
+  retained as siblings and surfaced to the client -- a PBC read returns
+  each sibling as its own `RpbContent`, an HTTP read returns
+  `300 Multiple Choices`. Without `allow_mult`, a concurrent write
+  collapses to a single deterministic value (use a CRDT for
+  concurrent-write correctness without client-side resolution).
 * Bucket properties (`n_val`, `allow_mult`, `last_write_wins`, and the
-  rest) declared, not auto-created, per Riak semantics. Only `n_val`
-  currently changes behavior.
-* CRDT merge semantics for the implemented data types (counter, set,
-  register, flag; map and HyperLogLog are tracked follow-up).
+  rest) declared, not auto-created, per Riak semantics. `n_val` and
+  `allow_mult` currently change behavior.
+* CRDT merge semantics for all six implemented data types: Counter,
+  Set, Register, Flag, Map (recursive), and HyperLogLog -- all six are
+  reachable over the wire.
 
 Where the byte shape differs:
 
