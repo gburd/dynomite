@@ -363,6 +363,9 @@ async fn serve_pbc_full(
         aae_status.unwrap_or_else(|| Arc::new(NoopAaeStatusProvider));
     loop {
         let (sock, peer) = listener.accept().await?;
+        // Disable Nagle: PBC responses are written as one buffer and
+        // flushed, so Nagle waiting on a delayed ACK only adds latency.
+        let _ = sock.set_nodelay(true);
         let datastore = Arc::clone(&datastore);
         let admin = Arc::clone(&admin);
         let aae = Arc::clone(&aae_status);

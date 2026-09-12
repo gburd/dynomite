@@ -1,0 +1,33 @@
+# CRDT set-add workload. Runs against the `sets` Riak/dyniak CRDT
+# bucket type. See wl-crdt-counter.toml for the rationale on
+# running one CRDT op class per bucket (avoids the dyniak
+# bucket-type storage-key gap documented in the report; real Riak
+# is unaffected by that gap but the same shape keeps the two runs
+# comparable).
+
+[run]
+duration = "90s"
+concurrent = 16
+rate = "max"
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "riak_pbc"
+host = "127.0.0.1"
+port = 8087
+bucket = "crdts_set"
+timeout_ms = 5000
+
+[ops]
+set_add = 1
+
+[keygen]
+kind = "uniform"
+max = 10000
+prefix = "ck_"
+
+[valgen]
+kind = "uniform"
+min = 8
+max = 64

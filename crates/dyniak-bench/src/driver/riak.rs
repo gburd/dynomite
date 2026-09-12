@@ -119,12 +119,15 @@ pub(crate) fn encode_del(bucket: &[u8], key: &[u8]) -> Vec<u8> {
 }
 
 /// Build a counter-increment `RpbDtUpdateReq` body. Wire layout:
-/// `bucket=1, key=2, type=3 (string "counters"), op=4 -> CounterOp { increment=1 }`.
+/// `bucket=1, key=2, type=3 (string "counters"), op=5 -> DtOp{ counter_op=1 -> CounterOp { increment=1 } }`.
+/// Field 4 of `RpbDtUpdateReq` is `context` (not the op); the op
+/// payload is field 5. See the upstream `riak_kv.proto`
+/// `RpbDtUpdateReq` message.
 fn encode_counter_inc(bucket: &[u8], bucket_type: &[u8], key: &[u8], delta: i64) -> Vec<u8> {
     // CounterOp { increment = sint64 } at field 1 of CounterOp.
     let mut counter_op = Vec::new();
     pb_encode_varint_field(1, zigzag_encode(delta), &mut counter_op);
-    let counter_op_packed = {
+    let dt_op = {
         let mut buf = Vec::with_capacity(counter_op.len() + 4);
         // CounterOp wraps inside DtOp at field 1.
         pb_encode_bytes_field(1, &counter_op, &mut buf);
@@ -135,7 +138,7 @@ fn encode_counter_inc(bucket: &[u8], bucket_type: &[u8], key: &[u8], delta: i64)
     pb_encode_bytes_field(1, bucket, &mut out);
     pb_encode_bytes_field(2, key, &mut out);
     pb_encode_bytes_field(3, bucket_type, &mut out);
-    pb_encode_bytes_field(4, &counter_op_packed, &mut out);
+    pb_encode_bytes_field(5, &dt_op, &mut out);
     out
 }
 
@@ -144,7 +147,7 @@ fn encode_set_add(bucket: &[u8], bucket_type: &[u8], key: &[u8], member: &[u8]) 
     let mut set_op = Vec::new();
     // SetOp { adds = repeated bytes } -> tag 1 (length-delimited).
     pb_encode_bytes_field(1, member, &mut set_op);
-    let set_op_packed = {
+    let dt_op = {
         // DtOp wraps SetOp at field 2.
         let mut buf = Vec::with_capacity(set_op.len() + 4);
         pb_encode_bytes_field(2, &set_op, &mut buf);
@@ -155,13 +158,18 @@ fn encode_set_add(bucket: &[u8], bucket_type: &[u8], key: &[u8], member: &[u8]) 
     pb_encode_bytes_field(1, bucket, &mut out);
     pb_encode_bytes_field(2, key, &mut out);
     pb_encode_bytes_field(3, bucket_type, &mut out);
-    pb_encode_bytes_field(4, &set_op_packed, &mut out);
+    pb_encode_bytes_field(5, &dt_op, &mut out);
     out
 }
 
 /// Build a `map_update` DtUpdate body. Keeps the schema deliberately
 /// minimal (one register update) so the workload stays within the
-/// surface our reference servers actually accept.
+/// surface our reference servers actually accept. Wire layout per
+/// the upstream `riak_dt.proto`: `MapField{name=1,type=2}`,
+/// `MapUpdate{field=1,register_op=4}` (a register op is the raw
+/// new value, not wrapped in any envelope), `MapOp{removes=1,
+/// updates=2}`, `DtOp{map_op=3}`, `DtUpdateReq{bucket=1,key=2,
+/// type=3,op=5}`.
 fn encode_map_update(
     bucket: &[u8],
     bucket_type: &[u8],
@@ -169,7 +177,6 @@ fn encode_map_update(
     field_name: &[u8],
     val: &[u8],
 ) -> Vec<u8> {
-    // RegisterOp = bytes (the new value). Wrapped at field 4 of MapUpdate.
     // MapField{ name=1 bytes, type=2 enum REGISTER=3 }.
     let mut map_field = Vec::new();
     pb_encode_bytes_field(1, field_name, &mut map_field);
@@ -177,11 +184,11 @@ fn encode_map_update(
 
     let mut map_update = Vec::new();
     pb_encode_bytes_field(1, &map_field, &mut map_update);
-    pb_encode_bytes_field(4, val, &mut map_update); // RegisterOp
+    pb_encode_bytes_field(4, val, &mut map_update); // register_op (raw value)
 
     let mut map_op = Vec::new();
-    // MapOp { updates = repeated MapUpdate } at tag 3.
-    pb_encode_bytes_field(3, &map_update, &mut map_op);
+    // MapOp { updates = repeated MapUpdate } at tag 2.
+    pb_encode_bytes_field(2, &map_update, &mut map_op);
 
     let mut dt_op = Vec::new();
     // DtOp wraps MapOp at field 3.
@@ -191,7 +198,7 @@ fn encode_map_update(
     pb_encode_bytes_field(1, bucket, &mut out);
     pb_encode_bytes_field(2, key, &mut out);
     pb_encode_bytes_field(3, bucket_type, &mut out);
-    pb_encode_bytes_field(4, &dt_op, &mut out);
+    pb_encode_bytes_field(5, &dt_op, &mut out);
     out
 }
 

@@ -1,0 +1,32 @@
+# CRDT counter-increment workload. One op class per dyniak-bench run
+# (each Driver instance targets a single bucket over PBC); mirrors
+# crates/dyniak-bench/examples/riak-crdts.toml's counter component
+# with a longer duration for the head-to-head comparison. Runs
+# against the `counters` Riak/dyniak CRDT bucket type.
+
+[run]
+duration = "90s"
+concurrent = 16
+rate = "max"
+out_dir = "auto"
+report_interval = "1s"
+
+[driver]
+kind = "riak_pbc"
+host = "127.0.0.1"
+port = 8087
+bucket = "crdts_counter"
+timeout_ms = 5000
+
+[ops]
+counter_inc = 1
+
+[keygen]
+kind = "uniform"
+max = 10000
+prefix = "ck_"
+
+[valgen]
+kind = "uniform"
+min = 8
+max = 64

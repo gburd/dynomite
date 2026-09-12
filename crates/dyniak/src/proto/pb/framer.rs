@@ -115,11 +115,17 @@ where
         });
     }
 
-    w.write_all(&announced.to_be_bytes()).await?;
-    w.write_all(&[frame.code]).await?;
-    if !frame.body.is_empty() {
-        w.write_all(&frame.body).await?;
-    }
+    // Coalesce the length prefix, the message-code byte, and the body
+    // into a single buffer and write it in one syscall. Writing the
+    // three pieces separately lets Nagle's algorithm hold the small
+    // header waiting on a delayed ACK, which put a ~40-50ms floor on
+    // every PBC response; one write plus TCP_NODELAY on the accepted
+    // socket removes it.
+    let mut out = Vec::with_capacity(5 + frame.body.len());
+    out.extend_from_slice(&announced.to_be_bytes());
+    out.push(frame.code);
+    out.extend_from_slice(&frame.body);
+    w.write_all(&out).await?;
     w.flush().await?;
     Ok(())
 }
