@@ -30,9 +30,12 @@ in the background.
   writes apply locally and fan full state to all replicas; each merges
   idempotently. Validated at scale: 0 lost, 0 over-count over 200 keys /
   12370 ops through partitions + churn.
-* **AAE: PRESENT.** `aae/tictac.rs` (Merkle tree), `aae/exchange_fsm.rs`
-  (ROOT/TREE/KEY sync), `aae/repair.rs` (divergence resolution +
-  dispatch), persisted trees.
+* **AAE: PRESENT + PUSH WIRED.** `aae/tictac.rs` (Merkle tree),
+  `aae/exchange_fsm.rs` (ROOT/TREE/KEY sync), `aae/repair.rs`
+  (divergence resolution + dispatch), persisted trees. As of `49bac1b`
+  `dynomited::spawn_aae` drives a background full-state PUSH per tick
+  (bounded, via `RepairPut`); the tree-diffed PULL exchange over a
+  bidirectional peer plane remains a follow-up.
 
 ### Remaining read-repair gaps (tracked)
 * **KV object read coordination / quorum R,PR: PARTIAL/MISSING.** The PBC
@@ -63,7 +66,7 @@ of this file for the authoritative current status).
 | A | Data model (buckets/types/keys/objects/links/2i) | FULL except 2i term enumeration (deferred). **[now: server-assigned keys DONE]** |
 | B | Vector clocks / causal context | Per-object VERSION VECTOR (`vclock.rs`, not ITC/DVV) flows on get/put; concurrent writes detected. **[now: sibling retention DONE]** |
 | C | Conflict resolution | **[now: DONE -- siblings retained under allow_mult; PBC multi-content read + HTTP 300]** |
-| D | Quorum tunables (N/R/W/PR/PW/DW) | N/R/W enforced on the read/write path. **[now: R/W enforcement DONE; PR/PW/DW accepted+echoed but not applied]** |
+| D | Quorum tunables (N/R/W/PR/PW/DW) | N/R/W enforced on the read/write path. **[now: R/W enforcement DONE; PR/PW/DW counting logic DONE + DST-gated -- enforced wherever the substrate supplies primary/fallback + durable acks; production wires no liveness source yet, so PR still aliases R there]** |
 | E | CRDTs | **[now: DONE -- all six (Counter/Set/Register/Flag/Map/HLL) served over the wire]** |
 | F | Query (MapReduce/2i/search) | FULL; Yokozuna/Solr is a documented non-goal |
 | G | Bucket props | **[now: `ttl` applied by runtime reaper; precommit hooks DONE; postcommit not implemented]** |
@@ -187,37 +190,63 @@ Near-term correctness parity (highest surprise for a Riak user):
    VETO the write (rejected -> error frame, nothing stored). Wired
    through `RoutingHooks.precommit` (a feature-agnostic
    `PrecommitRunner` trait) and spawned in dynomited from the pool's
-   WASM store. Postcommit (fire-and-forget notification after a
-   successful write) remains -- it needs an async side-effect plane and
-   does not gate the write.**
+   WASM store. Postcommit DONE (`49bac1b` era): a fire-and-forget
+   `PostcommitRunner` runs the committed value through a per-bucket
+   `postcommit_module` after the write quorum is satisfied and before
+   the response; it returns nothing and cannot change the reply, so a
+   failed/quorum-short write never triggers it. Wired through
+   `RoutingHooks.postcommit`, mirroring precommit.**
 
-8. PR / PW / DW quorum enforcement. M. **NOT DONE (accepted + echoed,
-   not applied) and genuinely blocked on missing substrate: PR/PW
-   (primary read/write quorums) require a sloppy-quorum / fallback-node
-   distinction so the coordinator can tell a PRIMARY-owner response
-   from a fallback -- Dyniak's preference list currently has no
-   fallback nodes (every replica is a primary owner), so PR would just
-   alias R, which would be a misleading no-op. DW (durable-write
-   quorum) requires the datastore to signal that a write reached
-   durable storage, which the noxu ack does not currently distinguish
-   from a buffered write. Enforcing these honestly means first building
-   sloppy quorum + hinted-handoff fallback replicas (PR/PW) and a
-   noxu durability ack (DW). Documented as accepted-not-applied in
-   README + mdBook.**
+8. PR / PW / DW quorum enforcement. M. **DONE (counting path real,
+   test-proven with an oracle; production has no liveness source wired
+   yet). `crate::quorum::resolve` maps the symbolic magic values;
+   `handle_get`/`handle_put` enforce PR/PW/DW alongside R/W by counting
+   primary vs fallback acks and durable vs buffered acks. A
+   `ReplicaLiveness` trait + `plan_replicas_with_liveness` +
+   `ReplicaTarget.is_fallback` carry the primary/fallback distinction,
+   and an `ACK_STORED` / `ACK_STORED_DURABLE` ack (inspecting noxu
+   COMMIT_SYNC) carries durability. HONEST CAVEAT: production wires no
+   liveness source, so every replica is still a primary owner and PR
+   aliases R there -- but the counting logic is real and unit-tested
+   against an oracle that DOES supply fallback/durable acks, and a DST
+   model with a negative control gates it. Enforcement is no longer
+   faked; it is exercised end-to-end wherever the substrate supplies
+   the signals.**
 
-9. AAE exchange/repair wired into the running binary. L. **NOT DONE:
-   the TicTac tree, the three-phase ROOT/TREE/KEY-SYNC exchange, and
-   the repair scheduler exist as unit-tested library code but
-   `dynomited::spawn_aae` only ticks a cadence -- it does not drive the
-   exchange between live nodes. Object read-repair on the read path IS
-   wired. Wiring the background exchange (drive the exchange FSM over
-   the dnode peer plane, feed divergences to the repair scheduler) is
-   the remaining work. Documented honestly in README + mdBook aae.md.**
+9. AAE exchange/repair wired into the running binary. L. **PUSH DONE
+   (`49bac1b`): `dynomited::spawn_aae` now takes the local
+   `NoxuDatastore` and, on each sweep tick, walks a bounded slice
+   (<=256/tick) of the local primary keyspace and pushes each object's
+   canonical `SiblingSet` storage to the tick's peer as a
+   `PeerOp::RepairPut` -- the op read-repair and write-fan already use,
+   applied verbatim + merged idempotently by the receiver. This is
+   push-only anti-entropy: it propagates state a peer missed (dropped
+   fan, lagging replica) in the background, convergent and safe (never
+   a lost/double-counted write because the merge is adopt-if-newer).
+   Object read-repair on the read path was already wired. REMAINING:
+   the full segmented-tree PULL exchange (ROOT/TREE/KEY-SYNC minimal
+   diff) still needs a bidirectional exchange-frame peer plane; push
+   ships more bytes than a tree diff would. Gated by a DST PushAll
+   model + the Elle consistency check (AGENTS.md 6.5).**
 
 Benchmark credibility:
 8. Populate criterion baselines; activate the regression gate. S.
-9. Head-to-head Dyniak-vs-Riak single-node bench on EC2. M.
-10. Scale-out linearity + distributed-quorum tail latency. M.
+   **DONE (`acd0f3b`): all seven micro benches captured (161 criterion
+   cases), manifests populated. Caveat: captured on a loaded host, so a
+   clean re-baseline on a quiescent runner is advised before trusting
+   tight (10%) regressions.**
+9. Head-to-head Dyniak-vs-Riak single-node bench on EC2. M. **DONE
+   (`d4a027c`): two-node A/B on EC2 (lava). Surfaced a REAL latency bug
+   (not a storage ceiling): PBC `write_frame` did three separate
+   `write_all`s and the accept loop never set `TCP_NODELAY`, giving a
+   ~50ms Nagle/delayed-ACK floor per op -- now fixed. The pre-fix
+   report states plainly that "similar or better than Riak" is NOT yet
+   substantiated; re-run after the fix for a true comparison. Also
+   fixed a wire bug in the bench's own CRDT driver (DtOp at field 5,
+   not 4). Script: `scripts/ec2-dist/dyniak-vs-riak-bench.sh`; report
+   under `dist/bench-reports/`.**
+10. Scale-out linearity + distributed-quorum tail latency. M. **Not
+    done; blocked on the re-run above (measure after the NODELAY fix).**
 
 None of these are code-blocking for the CRDT convergence work already
 shipped; they are the roadmap to "nearly identical to Riak" on function
