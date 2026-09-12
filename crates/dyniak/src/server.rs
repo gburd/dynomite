@@ -1186,6 +1186,31 @@ fn run_precommit(
     }
 }
 
+/// Run the bucket's postcommit hook over the committed `value` if one
+/// is configured and a runner is wired. Fire-and-forget: this never
+/// returns an error a caller can act on, so it can only be called
+/// after the write has already committed successfully. A bucket
+/// without a `postcommit_module`, or hooks without a runner, is a
+/// no-op.
+fn run_postcommit(hooks: Option<&RoutingHooks>, bucket_type: &[u8], bucket: &[u8], value: &[u8]) {
+    let Some(hooks) = hooks else {
+        return;
+    };
+    let Some(runner) = hooks.postcommit.as_ref() else {
+        return;
+    };
+    let Some(module) = hooks
+        .router
+        .registry()
+        .resolve(bucket_type, bucket)
+        .postcommit_module()
+        .map(ToString::to_string)
+    else {
+        return;
+    };
+    runner.run(&module, value);
+}
+
 async fn handle_put(
     body: &[u8],
     datastore: &dyn Datastore,
@@ -1213,21 +1238,68 @@ async fn handle_put(
         .iter()
         .filter_map(|p| p.value.as_ref().map(|v| (p.key.clone(), v.clone())))
         .collect();
-    // Persist the PBC value in the same canonical `HttpObject`
-    // storage form the HTTP gateway writes, so a put over one
-    // transport is readable over the other. The links carried in
-    // `RpbContent.links` are mapped onto `HttpObject.links`, so a
-    // PBC put attaches links natively and an HTTP read re-emits them
-    // as `Link:` headers. Index pairs and the content-type are
-    // mirrored onto the envelope so an HTTP read echoes them, matching
-    // the HTTP put path.
+    let (storage, new_context, value) =
+        match resolve_put_storage(datastore, hooks, &req, &key, &content, &indexes).await {
+            Ok(v) => v,
+            Err(msg) => return Ok(error_frame(msg)),
+        };
+    let local_ok = match datastore
+        .riak_put(&req.bucket, &key, &storage, &indexes)
+        .await
+    {
+        Ok(()) | Err(DatastoreError::Unsupported(_)) => true,
+        Err(e) => return Ok(error_frame(format!("riak put: {e}"))),
+    };
+    // Fan the resolved SiblingSet storage to the key's replicas and
+    // enforce the write quorum W (request > bucket default > quorum).
+    // The local store counts as one ack; each acking replica adds one.
+    let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+    let w = hooks.map_or(1, |h| {
+        let props = h.router.registry().resolve(bucket_type, &req.bucket);
+        props.effective_w(props.effective_n_val(), req.w)
+    });
+    if let Err(reason) =
+        fan_repair_put_quorum(hooks, bucket_type, &req.bucket, &key, &storage, w, local_ok).await
+    {
+        return Ok(error_frame(reason));
+    }
+    // Postcommit hook: fire-and-forget notification over the value
+    // that just committed. Never changes the response below.
+    run_postcommit(hooks, bucket_type, &req.bucket, &value);
+    let resp = RpbPutResp {
+        vclock: Some(new_context),
+        ..RpbPutResp::default()
+    };
+    Ok(Frame::new(
+        MessageCode::PutResp.as_u8(),
+        resp.encode_to_vec(),
+    ))
+}
+
+/// Resolve a put's storage bytes: read the stored sibling set, run the
+/// precommit hook over the incoming value, build the envelope, and
+/// resolve concurrent siblings per the bucket's `allow_mult`.
+///
+/// Returns `(storage_bytes, new_context, value)` where `value` is the
+/// (possibly precommit-transformed) bytes that were stored -- the
+/// postcommit hook runs over this same `value`. An `Err(message)`
+/// means the write is rejected (a bad precommit veto); nothing is
+/// stored.
+async fn resolve_put_storage(
+    datastore: &dyn Datastore,
+    hooks: Option<&RoutingHooks>,
+    req: &RpbPutReq,
+    key: &[u8],
+    content: &crate::proto::pb::RpbContent,
+    indexes: &[(Vec<u8>, Vec<u8>)],
+) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), String> {
     // Sibling-aware causal write. Read the stored sibling set, advance
     // a fresh context from what the CLIENT read (`req.vclock`), and
     // resolve: supersede causally-dominated siblings, retain concurrent
     // ones when the bucket allows siblings, or collapse to one value
     // otherwise. The returned context is echoed in `RpbPutResp.vclock`
     // so the client round-trips it on its next write.
-    let stored_set = match datastore.riak_get(&req.bucket, &key).await {
+    let stored_set = match datastore.riak_get(&req.bucket, key).await {
         Ok(Some(bytes)) => {
             crate::proto::http::object::SiblingSet::from_storage_bytes(&bytes).unwrap_or_default()
         }
@@ -1253,15 +1325,12 @@ async fn handle_put(
     // runner is wired, run the write value through it before storing.
     // The hook may transform the value (accept) or veto the write
     // (reject -> error frame, nothing stored).
-    let value = match run_precommit(
+    let value = run_precommit(
         hooks,
         req.r#type.as_deref().unwrap_or(b""),
         &req.bucket,
         content.value.clone(),
-    ) {
-        Ok(v) => v,
-        Err(msg) => return Ok(error_frame(msg)),
-    };
+    )?;
     let envelope = HttpObject {
         value: value.clone(),
         content_type: content
@@ -1280,35 +1349,7 @@ async fn handle_put(
         written_at_unix: now_unix(),
     };
     let resolved = resolve_write(&stored_set, &envelope, allow_mult);
-    let storage = resolved.to_storage_bytes();
-    let local_ok = match datastore
-        .riak_put(&req.bucket, &key, &storage, &indexes)
-        .await
-    {
-        Ok(()) | Err(DatastoreError::Unsupported(_)) => true,
-        Err(e) => return Ok(error_frame(format!("riak put: {e}"))),
-    };
-    // Fan the resolved SiblingSet storage to the key's replicas and
-    // enforce the write quorum W (request > bucket default > quorum).
-    // The local store counts as one ack; each acking replica adds one.
-    let bucket_type = req.r#type.as_deref().unwrap_or(b"");
-    let w = hooks.map_or(1, |h| {
-        let props = h.router.registry().resolve(bucket_type, &req.bucket);
-        props.effective_w(props.effective_n_val(), req.w)
-    });
-    if let Err(reason) =
-        fan_repair_put_quorum(hooks, bucket_type, &req.bucket, &key, &storage, w, local_ok).await
-    {
-        return Ok(error_frame(reason));
-    }
-    let resp = RpbPutResp {
-        vclock: Some(new_context),
-        ..RpbPutResp::default()
-    };
-    Ok(Frame::new(
-        MessageCode::PutResp.as_u8(),
-        resp.encode_to_vec(),
-    ))
+    Ok((resolved.to_storage_bytes(), new_context, value))
 }
 
 async fn handle_del(

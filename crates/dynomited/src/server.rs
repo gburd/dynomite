@@ -941,7 +941,11 @@ impl Server {
                         // module store (the same store keyfuns and
                         // MapReduce phases use), so a bucket that names
                         // a `precommit_module` runs its write through
-                        // that module before committing.
+                        // that module before committing. Postcommit
+                        // hooks share the same store: a bucket that
+                        // names a `postcommit_module` runs the
+                        // committed value through it as a fire-and-
+                        // forget notification.
                         #[cfg(feature = "wasm")]
                         {
                             if let Some(wasm) = h.wasm.as_ref() {
@@ -949,6 +953,10 @@ impl Server {
                                     dyniak::precommit::PrecommitHooks::new(wasm.clone()),
                                 )
                                     as Arc<dyn dyniak::router::PrecommitRunner>);
+                                rh.postcommit = Some(Arc::new(
+                                    dyniak::precommit::PostcommitHooks::new(wasm.clone()),
+                                )
+                                    as Arc<dyn dyniak::router::PostcommitRunner>);
                             }
                         }
                         let _ = &mut rh;

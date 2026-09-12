@@ -77,6 +77,11 @@ pub struct BucketProps {
     /// A write is run through this hook before it commits; the hook may
     /// transform the value or veto the write. `None` means no hook.
     pub precommit_module: Option<String>,
+    /// Id of the WASM postcommit-hook module for this bucket, if any.
+    /// Run once a write has committed, over the committed value. The
+    /// hook's outcome never affects the write's result (fire-and-
+    /// forget notification); `None` means no hook.
+    pub postcommit_module: Option<String>,
     /// Object time-to-live in seconds (Riak's `ttl` bucket
     /// property). `None` or `Some(0)` means no expiry: live
     /// objects are never reaped by age. A non-zero value is
@@ -160,6 +165,12 @@ impl BucketProps {
     #[must_use]
     pub fn precommit_module(&self) -> Option<&str> {
         self.precommit_module.as_deref()
+    }
+
+    /// The postcommit-hook module id for this bucket, if any.
+    #[must_use]
+    pub fn postcommit_module(&self) -> Option<&str> {
+        self.postcommit_module.as_deref()
     }
 
     /// Resolve the effective read quorum `R` for `n_val`, applying a
@@ -321,6 +332,7 @@ impl BucketPropsRegistry {
             custom_keyfun_module: None,
             allow_mult: None,
             precommit_module: None,
+            postcommit_module: None,
             ttl_seconds: None,
             r: None,
             w: None,

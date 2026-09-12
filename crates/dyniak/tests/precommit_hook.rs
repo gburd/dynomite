@@ -93,6 +93,7 @@ async fn precommit_hook_vetoes_the_write() {
         local_actor: dyniak::datatypes::ActorId::new("dc1", "n0"),
         local_peer_idx: 0,
         precommit: Some(Arc::new(precommit) as Arc<dyn PrecommitRunner>),
+        postcommit: None,
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");

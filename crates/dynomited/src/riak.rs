@@ -796,6 +796,7 @@ pub fn build_routing_hooks(
         local_actor,
         local_peer_idx,
         precommit: None,
+        postcommit: None,
     }
 }
 

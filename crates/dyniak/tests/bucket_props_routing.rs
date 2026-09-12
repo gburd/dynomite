@@ -181,6 +181,7 @@ impl Harness {
             local_actor: dyniak::datatypes::ActorId::new("dc1", "local"),
             local_peer_idx: 0,
             precommit: None,
+            postcommit: None,
         };
 
         let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());

@@ -450,6 +450,22 @@ pub enum PrecommitVeto {
     Error(String),
 }
 
+/// Runs a bucket's postcommit hook after a write has committed.
+/// Implemented by the WASM hook engine
+/// ([`crate::precommit::PostcommitHooks`]); kept as a trait here so
+/// [`RoutingHooks`] does not depend on the `wasm` feature.
+///
+/// Unlike [`PrecommitRunner`], the hook's outcome never changes the
+/// write's result: it is a fire-and-forget notification run over the
+/// already-committed value. A failing or vetoing hook is logged by the
+/// implementation and otherwise ignored by the caller.
+pub trait PostcommitRunner: Send + Sync + std::fmt::Debug {
+    /// Run the hook module `module_id` over the committed `value`.
+    /// The return value is informational only; callers do not act on
+    /// it beyond logging.
+    fn run(&self, module_id: &str, value: &[u8]);
+}
+
 /// Routing-hook bundle handed to
 /// [`crate::server::serve_pbc_with_routing`].
 #[derive(Clone, Debug)]
@@ -473,6 +489,11 @@ pub struct RoutingHooks {
     /// `precommit_module`, an object write is run through it before it
     /// commits; the hook may transform the value or veto the write.
     pub precommit: Option<Arc<dyn PrecommitRunner>>,
+    /// Optional postcommit-hook runner. When a bucket names a
+    /// `postcommit_module`, a committed write is run through it as a
+    /// fire-and-forget notification; the hook's outcome never affects
+    /// the write's result.
+    pub postcommit: Option<Arc<dyn PostcommitRunner>>,
 }
 
 #[cfg(test)]

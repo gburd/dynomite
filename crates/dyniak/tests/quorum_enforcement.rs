@@ -122,6 +122,7 @@ async fn spawn(
         local_actor: dyniak::datatypes::ActorId::new("dc1", "n0"),
         local_peer_idx: 0,
         precommit: None,
+        postcommit: None,
     };
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
