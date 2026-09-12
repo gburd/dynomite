@@ -118,6 +118,12 @@ pub struct RiakHandles {
     /// PBC and HTTP loops so request accounting accumulates in
     /// one place.
     pub datastore: Arc<dyn Datastore>,
+    /// Concrete noxu store for a `data_store: dyniak` pool, when
+    /// present. The background AAE push task uses it to walk the
+    /// local primary key space (via `fold_primary`) and push
+    /// objects to peers; `build_handles` leaves it `None` and the
+    /// caller populates it from the shared noxu handle.
+    pub noxu: Option<Arc<dyniak::datastore::NoxuDatastore>>,
     /// Routing hooks for a `data_store: dyniak` pool. When
     /// present, the PBC accept loop serves
     /// [`serve_pbc_with_routing`] so `RpbPutReq` / `RpbDelReq`
@@ -245,6 +251,7 @@ pub async fn build_handles(
         #[cfg(feature = "quic")]
         quic_addr,
         datastore,
+        noxu: None,
         hooks: None,
         #[cfg(feature = "search")]
         search_registry: None,
@@ -539,30 +546,45 @@ fn spawn_quic_listener(
     None
 }
 
-/// Spawn the Riak active anti-entropy scheduler task.
+/// Spawn the Riak active anti-entropy (push) task.
 ///
-/// The scheduler ticks at the configured `segment_interval`
-/// cadence; each tick is logged at `debug` level. This task does
-/// not yet perform divergence detection: it exists so the
-/// configured cadence is observable and the [`PeerChannelRepairSink`]
-/// is referenced (so the dispatcher's per-peer outbound channels
-/// remain the canonical repair sink wiring).
+/// The scheduler ticks at the configured `segment_interval` cadence.
+/// On each tick, if a local `NoxuDatastore` is available, the task
+/// walks a BOUNDED slice of the local primary key space and pushes each
+/// object's canonical `SiblingSet` storage to the tick's peer as a
+/// [`PeerOp::RepairPut`] -- the same op the read-repair and write-fan
+/// paths use, which the receiving peer stores verbatim and merges
+/// idempotently (element-wise / causal-frontier). This is PUSH-only
+/// anti-entropy: it proactively propagates local state a peer may have
+/// missed (a dropped write fan, a lagging replica), converging replicas
+/// in the background without a client read. It does NOT yet run the
+/// full segmented-tree ROOT/TREE/KEY-SYNC exchange (pull + minimal
+/// diff); that needs a bidirectional request/response peer plane for
+/// arbitrary exchange frames. Because the push ships full state and the
+/// receiver merges idempotently, pushing more than strictly diverged is
+/// safe (never a lost or double-counted write), only less efficient
+/// than a tree-diffed exchange.
 ///
-/// `peer_txs` is the same `(peer_idx, pname, sender)` triple
-/// the gossip task and the hint drainer use; the AAE task
-/// holds a reference so real `RepairTask`s can later be routed
-/// without re-plumbing the supervisor.
+/// `peer_txs` is the `(peer_idx, pname, sender)` triple the gossip task
+/// and hint drainer use; the AAE task pushes over the same per-peer
+/// outbound channels. Without a datastore (a non-noxu build) the task
+/// only ticks the cadence.
 pub fn spawn_aae(
     cfg: ConfAae,
     peer_txs: Vec<(u32, String, mpsc::Sender<OutboundRequest>)>,
+    datastore: Option<Arc<dyniak::datastore::NoxuDatastore>>,
     mut cancel_rx: watch::Receiver<bool>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        // Per-tick push ceiling: bound the sweep's blast radius so a
+        // large keyspace does not flood a peer's outbound channel in one
+        // tick. Successive ticks cover more keys.
+        const MAX_PUSH_PER_TICK: usize = 256;
         let clock = Arc::new(SystemClock);
         let scheduler: Scheduler<SystemClock> = Scheduler::new(cfg.clone(), clock);
         let peer_idxs: Vec<u32> = peer_txs.iter().map(|(idx, _, _)| *idx).collect();
         scheduler.install_plan(SweepPlan::new(&peer_idxs, cfg.n_time_buckets, &cfg));
-        let _sink = Arc::new(PeerChannelRepairSink::new(peer_txs));
+        let outbound = PeerChannelOutbound::new(&peer_txs);
         let interval = cfg.segment_interval();
         let mut ticker = tokio::time::interval(interval.max(Duration::from_millis(1)));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -571,12 +593,44 @@ pub fn spawn_aae(
                 biased;
                 () = wait_flag(&mut cancel_rx) => return,
                 _ = ticker.tick() => {
-                    if let Some(tick) = scheduler.poll() {
+                    let Some(tick) = scheduler.poll() else { continue };
+                    tracing::debug!(
+                        target: "dynomite::riak::aae",
+                        peer_idx = tick.peer_idx,
+                        time_bucket = tick.time_bucket,
+                        "riak aae tick"
+                    );
+                    let Some(ds) = datastore.as_ref() else { continue };
+                    // Collect a bounded batch of local objects to push.
+                    // fold_primary walks (bucket, key, value); we cap the
+                    // batch and ship each as a verbatim RepairPut.
+                    let mut batch: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
+                    let _ = ds.fold_primary(|bucket, key, value| {
+                        if batch.len() < MAX_PUSH_PER_TICK {
+                            batch.push((bucket.to_vec(), key.to_vec(), value.to_vec()));
+                        }
+                        Ok(())
+                    });
+                    let pushed = batch.len();
+                    for (bucket, key, storage) in batch {
+                        outbound
+                            .dispatch(
+                                tick.peer_idx,
+                                PeerOp::RepairPut {
+                                    bucket_type: b"default".to_vec(),
+                                    bucket,
+                                    key,
+                                    storage,
+                                },
+                            )
+                            .await;
+                    }
+                    if pushed > 0 {
                         tracing::debug!(
                             target: "dynomite::riak::aae",
                             peer_idx = tick.peer_idx,
-                            time_bucket = tick.time_bucket,
-                            "riak aae tick"
+                            pushed,
+                            "riak aae pushed local objects to peer"
                         );
                     }
                 }

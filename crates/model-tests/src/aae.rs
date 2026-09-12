@@ -97,6 +97,18 @@ pub enum Action {
     /// Run the reconcile in direction `dir`: 0 means "A pulls
     /// from B", 1 means "B pulls from A".
     Reconcile(u8),
+    /// Run a full-state PUSH in direction `dir`: 0 means "A pushes
+    /// its entire keyset to B", 1 means "B pushes to A". This is
+    /// the anti-entropy path wired into `dynomited::riak::spawn_aae`:
+    /// the source walks its local primary keyspace and ships every
+    /// object (bounded per tick) as a verbatim `RepairPut`; the
+    /// receiver adopts-if-newer (the same causal-frontier merge the
+    /// read-repair path uses). It offers a SUPERSET of the pull diff
+    /// -- every source key, not just the divergent ones -- so it must
+    /// converge whenever the pull does, and the idempotent adopt-if-
+    /// newer apply means offering already-agreed keys is a harmless
+    /// no-op (never a lost or double-counted write).
+    PushAll(u8),
 }
 
 /// The pure diff core: keys present-or-differing on the pull
@@ -223,6 +235,36 @@ impl Aae {
                     }
                 }
             }
+            Action::PushAll(dir) => {
+                // Source `dir` pushes its ENTIRE keyset to the other
+                // replica. The offered set is every source key (not
+                // just the diff); the target adopts-if-newer via the
+                // same apply. Push 0 = A -> B (source A, target B),
+                // 1 = B -> A (source B, target A).
+                let (before, source, offer): (Replica, Replica, Vec<Key>) = if dir == 0 {
+                    let src = s.a.clone();
+                    let keys: Vec<Key> = src.keys().copied().collect();
+                    (s.b.clone(), src, keys)
+                } else {
+                    let src = s.b.clone();
+                    let keys: Vec<Key> = src.keys().copied().collect();
+                    (s.a.clone(), src, keys)
+                };
+                if offer.is_empty() {
+                    return None;
+                }
+                if dir == 0 {
+                    apply_pull(&mut s.b, &source, &offer, broken);
+                    if s.b == before {
+                        return None;
+                    }
+                } else {
+                    apply_pull(&mut s.a, &source, &offer, broken);
+                    if s.a == before {
+                        return None;
+                    }
+                }
+            }
         }
         Some(s)
     }
@@ -243,6 +285,10 @@ impl Aae {
         // makes no progress).
         actions.push(Action::Reconcile(0));
         actions.push(Action::Reconcile(1));
+        // Full-state push in either direction (the wired AAE path;
+        // pruned when it makes no progress).
+        actions.push(Action::PushAll(0));
+        actions.push(Action::PushAll(1));
     }
 
     /// Build the property set for a model with the given base

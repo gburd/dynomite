@@ -907,6 +907,14 @@ impl Server {
                         reason: e.to_string(),
                     }
                 })?;
+                // Hand the concrete noxu store to the handles so the
+                // background AAE push task can walk the local primary
+                // key space. Only present for a `data_store: dyniak`
+                // pool; a MemoryDatastore pool leaves it None.
+                let handles = handles.map(|mut h| {
+                    h.noxu.clone_from(&noxu_shared);
+                    h
+                });
                 // Wire the shared vector-index registry into the Riak
                 // HTTP gateway for `data_store: dyniak` pools so the
                 // bucket index-management and search routes resolve
@@ -1464,6 +1472,7 @@ impl Server {
             match riak_handles.as_mut() {
                 Some(h) => {
                     let aae_cfg = h.aae.clone();
+                    let aae_noxu = h.noxu.clone();
                     let (p, http, quic) = crate::riak::spawn_listeners(h, &shutdown_rx);
                     let aae = aae_cfg.map(|cfg| {
                         let txs = gossip_peer_txs.clone();
@@ -1474,7 +1483,7 @@ impl Server {
                             segment_seconds = cfg.segment_interval_seconds,
                             "riak aae scheduler spawned"
                         );
-                        crate::riak::spawn_aae(cfg, txs, cancel)
+                        crate::riak::spawn_aae(cfg, txs, aae_noxu.clone(), cancel)
                     });
                     if let Some(a) = h.pbc_addr {
                         tracing::info!(pool = %pool_name, addr = %a, "riak pbc listener spawned");
