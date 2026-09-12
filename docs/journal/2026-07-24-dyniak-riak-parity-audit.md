@@ -191,6 +191,29 @@ Near-term correctness parity (highest surprise for a Riak user):
    successful write) remains -- it needs an async side-effect plane and
    does not gate the write.**
 
+8. PR / PW / DW quorum enforcement. M. **NOT DONE (accepted + echoed,
+   not applied) and genuinely blocked on missing substrate: PR/PW
+   (primary read/write quorums) require a sloppy-quorum / fallback-node
+   distinction so the coordinator can tell a PRIMARY-owner response
+   from a fallback -- Dyniak's preference list currently has no
+   fallback nodes (every replica is a primary owner), so PR would just
+   alias R, which would be a misleading no-op. DW (durable-write
+   quorum) requires the datastore to signal that a write reached
+   durable storage, which the noxu ack does not currently distinguish
+   from a buffered write. Enforcing these honestly means first building
+   sloppy quorum + hinted-handoff fallback replicas (PR/PW) and a
+   noxu durability ack (DW). Documented as accepted-not-applied in
+   README + mdBook.**
+
+9. AAE exchange/repair wired into the running binary. L. **NOT DONE:
+   the TicTac tree, the three-phase ROOT/TREE/KEY-SYNC exchange, and
+   the repair scheduler exist as unit-tested library code but
+   `dynomited::spawn_aae` only ticks a cadence -- it does not drive the
+   exchange between live nodes. Object read-repair on the read path IS
+   wired. Wiring the background exchange (drive the exchange FSM over
+   the dnode peer plane, feed divergences to the repair scheduler) is
+   the remaining work. Documented honestly in README + mdBook aae.md.**
+
 Benchmark credibility:
 8. Populate criterion baselines; activate the regression gate. S.
 9. Head-to-head Dyniak-vs-Riak single-node bench on EC2. M.
