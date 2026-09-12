@@ -408,7 +408,7 @@ pub trait ReplicaLiveness: Send + Sync + std::fmt::Debug {
 /// Walk-N-successors planning with sloppy-quorum fallback
 /// substitution.
 ///
-/// Identical to [`plan_replicas`] / [`plan_successors`] except that a
+/// Identical to [`plan_replicas`] / `plan_successors` except that a
 /// primary-window peer (one of the first `n_val` distinct peers
 /// reached walking forward from the key's slot) that `liveness`
 /// reports down is dropped, and the walk continues past the `n_val`
