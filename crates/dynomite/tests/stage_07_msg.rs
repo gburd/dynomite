@@ -17,7 +17,7 @@ use dynomite::proto::dnode::{
 };
 
 use hegel::generators as gs;
-use hegel::TestCase;
+use hegel::{Generator, TestCase};
 
 /// Canonical multi-message blob used as the cross-implementation
 /// fixture for Stage 7.
@@ -145,14 +145,17 @@ fn dnode_parser_round_trip_proptest(tc: TestCase) {
     // bytes parse back to the same field set. Originally a
     // hand-rolled `proptest::TestRunner::new` loop with 256 cases.
     let id = tc.draw(gs::integers::<u64>());
-    let ty = tc.draw(gs::sampled_from(&[
-        DmsgType::Req,
-        DmsgType::ReqForward,
-        DmsgType::Res,
-        DmsgType::CryptoHandshake,
-        DmsgType::GossipSyn,
-        DmsgType::GossipShutdown,
-    ]));
+    let ty = tc.draw(
+        gs::sampled_from(&[
+            DmsgType::Req,
+            DmsgType::ReqForward,
+            DmsgType::Res,
+            DmsgType::CryptoHandshake,
+            DmsgType::GossipSyn,
+            DmsgType::GossipShutdown,
+        ])
+        .print_as_debug(),
+    );
     let flags = tc.draw(gs::integers::<u8>().min_value(0).max_value(15));
     let same_dc = tc.draw(gs::booleans());
     let payload = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(0).max_size(200));

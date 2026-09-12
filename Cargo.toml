@@ -152,7 +152,7 @@ bson = { version = "3", features = ["serde"] }
 # multi-engine storage substrate. We depend on the `noxu`
 # umbrella crate (published on crates.io), which re-exports the
 # full engine public API behind a single name + version.
-noxu = "7.5"
+noxu = "7.10"
 
 # Dev / test
 # `hegeltest` (re-exported as `hegel`) is the property-testing crate
@@ -160,7 +160,7 @@ noxu = "7.5"
 # https://github.com/hegeldev/hegel-rust. The `native` feature pulls in
 # the in-process backend (rand + num-bigint + num-traits) so tests do
 # not need an external server.
-hegeltest = { version = "0.25" }
+hegeltest = { version = "0.44" }
 # Loom is a model checker for concurrent Rust. It only ships into
 # the build under `--cfg loom`; production code is unaffected. Tests
 # that depend on it live under `crates/<crate>/tests/loom_*.rs`,

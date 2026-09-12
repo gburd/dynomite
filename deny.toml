@@ -33,6 +33,15 @@ ignore = [
     # only that the standalone crate is archived. Tracked for removal
     # when the TLS stack drops the wrapper. RUSTSEC-2025-0134.
     "RUSTSEC-2025-0134",
+    # lru 0.16.4 (use-after-free in `LruCache::pop()` under a panicking
+    # element Drop; fixed in >= 0.18.2). Pulled transitively by
+    # `noxu-evictor`, which pins `^0.16` -- so we cannot upgrade lru
+    # without a new noxu release that bumps its lru dependency. The
+    # vulnerable path is internal to noxu's LRU cache evictor and is
+    # not reachable or driven by dynomite (dynomite never depends on or
+    # calls `lru` directly). Tracked as a noxu-upstream follow-up to
+    # bump lru to >= 0.18.2. RUSTSEC-2026-0253.
+    "RUSTSEC-2026-0253",
 ]
 
 [bans]

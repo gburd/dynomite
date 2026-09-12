@@ -94,7 +94,8 @@ if command -v cargo-audit >/dev/null 2>&1; then
     --ignore RUSTSEC-2023-0071 \
     --ignore RUSTSEC-2024-0436 \
     --ignore RUSTSEC-2025-0141 \
-    --ignore RUSTSEC-2025-0134
+    --ignore RUSTSEC-2025-0134 \
+    --ignore RUSTSEC-2026-0253
 fi
 
 echo "==> mdbook"

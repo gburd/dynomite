@@ -40,7 +40,7 @@ struct PoolFacts {
 }
 
 #[hegel::composite]
-fn arb_pool_facts(tc: TestCase) -> PoolFacts {
+fn arb_pool_facts(tc: &TestCase) -> PoolFacts {
     let name = tc.draw(
         gs::from_regex("[a-z][a-z0-9_]{0,15}")
             .fullmatch(true)
@@ -68,40 +68,53 @@ fn arb_pool_facts(tc: TestCase) -> PoolFacts {
     let port = tc.draw(gs::integers::<u32>().min_value(1).max_value(65_535));
     let weight = tc.draw(gs::integers::<u32>().min_value(1).max_value(10));
     let server = format!("127.0.0.{host}:{port}:{weight}");
-    let secure = tc.draw(gs::sampled_from(&[
-        SecureServerOption::None,
-        SecureServerOption::Rack,
-        SecureServerOption::Datacenter,
-        SecureServerOption::All,
-    ]));
-    let read_consistency = tc.draw(gs::sampled_from(&[
-        ConsistencyLevel::DcOne,
-        ConsistencyLevel::DcQuorum,
-        ConsistencyLevel::DcSafeQuorum,
-        ConsistencyLevel::DcEachSafeQuorum,
-    ]));
-    let write_consistency = tc.draw(gs::sampled_from(&[
-        ConsistencyLevel::DcOne,
-        ConsistencyLevel::DcQuorum,
-        ConsistencyLevel::DcSafeQuorum,
-        ConsistencyLevel::DcEachSafeQuorum,
-    ]));
-    let hash = tc.draw(gs::sampled_from(&[
-        HashType::OneAtATime,
-        HashType::Md5,
-        HashType::Crc16,
-        HashType::Crc32,
-        HashType::Crc32a,
-        HashType::Fnv1_64,
-        HashType::Fnv1a64,
-        HashType::Fnv1_32,
-        HashType::Fnv1a32,
-        HashType::Hsieh,
-        HashType::Murmur,
-        HashType::Jenkins,
-        HashType::Murmur3,
-    ]));
-    let data_store = tc.draw(gs::sampled_from(&[DataStore::Valkey, DataStore::Memcache]));
+    let secure = tc.draw(
+        gs::sampled_from(&[
+            SecureServerOption::None,
+            SecureServerOption::Rack,
+            SecureServerOption::Datacenter,
+            SecureServerOption::All,
+        ])
+        .print_as_debug(),
+    );
+    let read_consistency = tc.draw(
+        gs::sampled_from(&[
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcQuorum,
+            ConsistencyLevel::DcSafeQuorum,
+            ConsistencyLevel::DcEachSafeQuorum,
+        ])
+        .print_as_debug(),
+    );
+    let write_consistency = tc.draw(
+        gs::sampled_from(&[
+            ConsistencyLevel::DcOne,
+            ConsistencyLevel::DcQuorum,
+            ConsistencyLevel::DcSafeQuorum,
+            ConsistencyLevel::DcEachSafeQuorum,
+        ])
+        .print_as_debug(),
+    );
+    let hash = tc.draw(
+        gs::sampled_from(&[
+            HashType::OneAtATime,
+            HashType::Md5,
+            HashType::Crc16,
+            HashType::Crc32,
+            HashType::Crc32a,
+            HashType::Fnv1_64,
+            HashType::Fnv1a64,
+            HashType::Fnv1_32,
+            HashType::Fnv1a32,
+            HashType::Hsieh,
+            HashType::Murmur,
+            HashType::Jenkins,
+            HashType::Murmur3,
+        ])
+        .print_as_debug(),
+    );
+    let data_store =
+        tc.draw(gs::sampled_from(&[DataStore::Valkey, DataStore::Memcache]).print_as_debug());
     let timeout = tc.draw(gs::integers::<i64>().min_value(1).max_value(60_000));
     let mbuf_size = tc.draw(gs::optional(gs::sampled_from(&[
         512i64, 1024, 4096, 16384, 65536,
@@ -166,7 +179,7 @@ fn render(facts: &PoolFacts) -> String {
 
 #[hegel::test(test_cases = 256)]
 fn parse_finalize_validate_round_trip(tc: TestCase) {
-    let facts = tc.draw(arb_pool_facts());
+    let facts = tc.draw(arb_pool_facts().print_as_debug());
     let yaml = render(&facts);
     let mut cfg = Config::parse_str(&yaml).expect("parse");
     assert_eq!(cfg.pool_name(), &facts.name);
@@ -187,7 +200,7 @@ fn parse_finalize_validate_round_trip(tc: TestCase) {
 
 #[hegel::test(test_cases = 256)]
 fn out_of_range_mbuf_rejected_by_validation(tc: TestCase) {
-    let facts = tc.draw(arb_pool_facts());
+    let facts = tc.draw(arb_pool_facts().print_as_debug());
     let bogus = tc.draw(gs::sampled_from(&[
         -1i64, 0, 100, 200, 511, 700, 99999, 600_000,
     ]));
