@@ -1379,6 +1379,30 @@ async fn fan_repair_put_quorum(
 
 /// Run the bucket's precommit hook over `value` if one is configured
 /// and a runner is wired. Returns the value to store (possibly
+/// Run the bucket's postcommit hook over the committed `value` if one
+/// is configured and a runner is wired. Fire-and-forget: it returns
+/// nothing a caller can act on, so it can only be called after the
+/// write has already committed. A bucket without a `postcommit_module`,
+/// or hooks without a runner, is a no-op.
+fn run_postcommit(hooks: Option<&RoutingHooks>, bucket_type: &[u8], bucket: &[u8], value: &[u8]) {
+    let Some(hooks) = hooks else {
+        return;
+    };
+    let Some(runner) = hooks.postcommit.as_ref() else {
+        return;
+    };
+    let Some(module) = hooks
+        .router
+        .registry()
+        .resolve(bucket_type, bucket)
+        .postcommit_module()
+        .map(ToString::to_string)
+    else {
+        return;
+    };
+    runner.run(&module, value);
+}
+
 /// transformed), or an `Err(message)` to reject the write with an error
 /// frame. A bucket without a `precommit_module`, or hooks without a
 /// runner, passes the value through unchanged.
@@ -1430,7 +1454,7 @@ async fn resolve_and_store_put(
     content: &RpbContent,
     indexes: &[(Vec<u8>, Vec<u8>)],
     new_context: Vec<u8>,
-) -> Result<(Vec<u8>, bool), String> {
+) -> Result<(Vec<u8>, bool, Vec<u8>), String> {
     let stored_set = match datastore.riak_get(&req.bucket, key).await {
         Ok(Some(bytes)) => {
             crate::proto::http::object::SiblingSet::from_storage_bytes(&bytes).unwrap_or_default()
@@ -1449,6 +1473,7 @@ async fn resolve_and_store_put(
     // The hook may transform the value (accept) or veto the write
     // (reject -> error frame, nothing stored).
     let value = run_precommit(hooks, bucket_type, &req.bucket, content.value.clone())?;
+    let committed_value = value.clone();
     let envelope = HttpObject {
         value,
         content_type: content
@@ -1475,7 +1500,7 @@ async fn resolve_and_store_put(
         Ok(()) | Err(DatastoreError::Unsupported(_)) => true,
         Err(e) => return Err(format!("riak put: {e}")),
     };
-    Ok((storage, local_ok))
+    Ok((storage, local_ok, committed_value))
 }
 
 /// Resolve the effective write / primary-write / durable-write quorums
@@ -1538,7 +1563,7 @@ async fn handle_put(
         |h| format!("{}:{}", h.local_actor.dc, h.local_actor.peer).into_bytes(),
     );
     let new_context = advance_context(&req.vclock.clone().unwrap_or_default(), &actor);
-    let (storage, local_ok) = match resolve_and_store_put(
+    let (storage, local_ok, committed_value) = match resolve_and_store_put(
         datastore,
         hooks,
         &req,
@@ -1574,6 +1599,10 @@ async fn handle_put(
     {
         return Ok(error_frame(reason));
     }
+    // Postcommit hook: fire-and-forget notification over the value that
+    // just committed. Runs only after the write quorum is satisfied and
+    // never changes the response.
+    run_postcommit(hooks, bucket_type, &req.bucket, &committed_value);
     let resp = RpbPutResp {
         vclock: Some(new_context),
         ..RpbPutResp::default()
