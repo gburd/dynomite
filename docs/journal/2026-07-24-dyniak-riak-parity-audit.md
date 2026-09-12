@@ -254,6 +254,28 @@ Near-term correctness parity (highest surprise for a Riak user):
     and every stored-object migration path); tracked here so it is not
     lost.**
 
+12. Map CRDT wire schema diverges from upstream `riak_dt.proto`
+    (Riak-parity gap; DISCOVERED, NOT FIXED). M. **Surfaced while
+    validating the bench workloads against real Riak 2.2.3 and
+    confirmed against `crates/dyniak/src/proto/pb/datatypes.rs`. Two
+    divergences: (1) dyniak's `MapOp` is `updates=tag1 / removes=tag2`,
+    but upstream is `removes=tag1 / updates=tag2` (swapped); (2)
+    dyniak's `MapUpdate` is `{ field=tag1, op=ScalarOp@tag2 }`, wrapping
+    the per-type op in a `ScalarOp` message that does NOT exist in the
+    published protocol -- upstream `MapUpdate` is flat: `field=1,
+    counter_op=2, set_op=3, register_op=4 (raw bytes), flag_op=5,
+    map_op=6`. Consequence: dyniak's Map / nested-map path is
+    self-consistent but NOT wire-compatible with any stock Riak PBC
+    client. The Counter/Set/HyperLogLog ops and the `DtOp` envelope
+    (`counter_op=1, set_op=2, map_op=3, hll_op=4, gset_op=5`),
+    `CounterOp.increment=1`, and `SetOp.adds=1/removes=2` DO match
+    upstream, so those types interoperate. FIX: renumber `MapOp` fields
+    and flatten `MapUpdate` to the upstream layout (drop the `ScalarOp`
+    wrapper); a wire-format change needing an on-wire/stored-object
+    migration story. Deferred, tracked. The README over-claim ("all six
+    served over the wire" implying Riak-client compat for Map) was
+    corrected in the same commit.**
+
 Benchmark credibility:
 8. Populate criterion baselines; activate the regression gate. S.
    **DONE (`acd0f3b`): all seven micro benches captured (161 criterion
