@@ -27,13 +27,13 @@ The micro suite covers seven components:
 ### Running
 
 ```
-cargo bench --bench parsers -p dynomite
-cargo bench --bench mbuf    -p dynomite
-cargo bench --bench hashkit -p dynomite
-cargo bench --bench tokens  -p dynomite
-cargo bench --bench dnode   -p dynomite
-cargo bench --bench crypto  -p dynomite
-cargo bench --bench quorum  -p dynomite
+cargo bench --bench parsers -p dynomite-engine
+cargo bench --bench mbuf    -p dynomite-engine
+cargo bench --bench hashkit -p dynomite-engine
+cargo bench --bench tokens  -p dynomite-engine
+cargo bench --bench dnode   -p dynomite-engine
+cargo bench --bench crypto  -p dynomite-engine
+cargo bench --bench quorum  -p dynomite-engine
 ```
 
 `-- --test` smoke-runs each case once; CI uses this mode.
@@ -49,13 +49,13 @@ regression budget (10% by default).
 Capture a baseline on a quiescent host:
 
 ```
-cargo bench --bench parsers -p dynomite -- --save-baseline stage-15
+cargo bench --bench parsers -p dynomite-engine -- --save-baseline stage-15
 ```
 
 Compare a new run against the recorded baseline:
 
 ```
-cargo bench --bench parsers -p dynomite -- --baseline stage-15
+cargo bench --bench parsers -p dynomite-engine -- --baseline stage-15
 ```
 
 The CI gate consumes the criterion `change/` reports under

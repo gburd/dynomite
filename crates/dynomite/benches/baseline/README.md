@@ -17,7 +17,7 @@ gate consumes. Each `<bench>.json` records:
 ## Recording a baseline
 
 ```
-cargo bench --bench <name> -p dynomite -- --save-baseline stage-15
+cargo bench --bench <name> -p dynomite-engine -- --save-baseline stage-15
 ```
 
 then update the matching JSON manifest with the new `captured`,
@@ -26,7 +26,7 @@ then update the matching JSON manifest with the new `captured`,
 ## Gating a new run
 
 ```
-cargo bench --bench <name> -p dynomite -- --baseline stage-15
+cargo bench --bench <name> -p dynomite-engine -- --baseline stage-15
 ```
 
 criterion writes a `change/` report under `target/criterion/<bench>/`
@@ -38,10 +38,31 @@ mechanics are documented in
 
 ## Status on this checkout
 
-The Stage 15 commit lands the bench harness with empty manifests so
-the gate has a stable file layout to load. Capturing the actual
-baselines requires a quiescent host (preferably a CI runner with
-`isolcpus`), so that step is left for the operator to run before the
-release-gate window. CI treats a missing baseline as a non-blocking
-warning so the bench harness still compiles and runs in `--test`
-mode on every PR.
+All seven micro benches (`crypto`, `dnode`, `hashkit`, `mbuf`,
+`parsers`, `quorum`, `tokens`) have a populated manifest: `captured`
+and `git_sha` are set, and the criterion `stage-15` baseline data
+itself lives under `target/criterion/<case>/stage-15/` on whichever
+machine ran the capture. That directory is gitignored (see the
+workspace `.gitignore`, `/target`), so `--save-baseline` must be
+re-run locally before `--baseline stage-15` has anything to compare
+against on a fresh checkout; the manifest's `captured`/`git_sha`
+fields are provenance only, not a substitute for the actual
+criterion data. The `macro_throughput` bench (gated behind the
+`bench-macro` feature; needs a live 3-node cluster and
+`CAP_NET_ADMIN`) and `random_slicing` (not part of the Stage 15
+micro-bench list in `AGENTS.md` Section 7.1) are out of scope for
+this manifest set and have no baseline file here.
+
+The capture host was not quiescent (background load average in the
+10-25 range on an 8-thread machine); several cases show 5-25%
+outlier rates in the raw criterion output. This is expected on a
+developer workstation and is why the gate's `regression_budget_pct`
+(10%) compares a *new* run's median against *this host's own*
+previous median rather than asserting an absolute number: as long as
+re-baselining and gating both happen on hosts with comparable noise
+characteristics, the relative comparison stays meaningful. For a
+tighter gate, re-capture on a quiescent CI runner with `isolcpus` and
+update `captured`/`git_sha` accordingly.
+
+See `dist/bench-reports/` for the full measured numbers from the
+capture run that produced the current manifests.

@@ -1,8 +1,8 @@
 {
   "name": "hashkit",
   "criterion_baseline": "stage-15",
-  "captured": null,
-  "git_sha": null,
+  "captured": "2026-09-12T16:06:51Z",
+  "git_sha": "c062cf71bd7b3be11d846f0246a67b92cd3d2d62",
   "regression_budget_pct": 10,
-  "notes": "Run cargo bench --bench hashkit -p dynomite -- --save-baseline stage-15 on a quiescent host to populate this baseline. The Stage 15 gate compares subsequent runs against the saved baseline and fails on >10% per-case regression. The empty captured slot indicates no baseline has been recorded yet; CI treats a missing baseline as a non-blocking warning."
+  "notes": "Captured on host floki (Intel Core Ultra 7 258V, 8 threads, Linux x86_64), not a quiescent CI runner; other processes were competing for CPU during the run (load average ~9-25). Case-level medians are therefore machine- and load-specific, but the gate compares relative regression (per-case percent change against this same host's own baseline), not absolute time, so that is consistent with the gate's design. All 56 cases (14 hash algorithms from HashType::all x 16/64/256/1024-byte keys) recorded under criterion baseline name stage-15 at target/criterion/hashkit/<algo>/<size>/stage-15/ (gitignored; not committed). To re-baseline: cargo bench --bench hashkit -p dynomite-engine -- --save-baseline stage-15 on a quiescent host, then update captured/git_sha here. To check for regressions: cargo bench --bench hashkit -p dynomite-engine -- --baseline stage-15 and inspect target/criterion/hashkit/<algo>/<size>/change/estimates.json for the mean.point_estimate; fail if it exceeds regression_budget_pct."
 }
