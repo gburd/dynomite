@@ -29,7 +29,7 @@
 # same RUN_ID): provision build distribute mount launch load teardown.
 set -uo pipefail
 
-PROFILE="${PROFILE:-ouch}"
+PROFILE="${PROFILE:-lava}"
 RUN_ID="${RUN_ID:?set RUN_ID}"
 SRC_DIR="${SRC_DIR:-/home/gburd/ws/dynomite}"
 TAG=dyn-run

@@ -32,12 +32,12 @@
 #   RUN_ID=dyn-qual-$(date -u +%Y%m%d-%H%M%S) \
 #     nohup bash run-full-qualification.sh > /tmp/$RUN_ID.orch 2>&1 &
 #
-# Requires: aws cli (profile ouch), the ec2-dist scripts alongside this
+# Requires: aws cli (profile lava), the ec2-dist scripts alongside this
 # one, the dynomite source tree at $SRC_DIR (default: this repo).
 set -uo pipefail
 
 # ----- configuration -----
-PROFILE="${PROFILE:-ouch}"
+PROFILE="${PROFILE:-lava}"
 RUN_ID="${RUN_ID:-dyn-qual-$(date -u +%Y%m%d-%H%M%S)}"
 SRC_DIR="${SRC_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
