@@ -626,7 +626,10 @@ async fn run_link_phase(
             message: "link-phase input is missing bucket/key".into(),
         })?;
         let stored = store
-            .riak_get(in_bucket.as_bytes(), in_key.as_bytes())
+            .riak_get(
+                &crate::router::composite_storage_bucket(b"default", in_bucket.as_bytes()),
+                in_key.as_bytes(),
+            )
             .await
             .map_err(|e| MrError::PhaseFailed {
                 phase: phase_idx,

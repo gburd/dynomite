@@ -85,8 +85,12 @@ impl ReplicaApplier {
         };
         match op {
             PeerOp::Put {
-                bucket, key, value, ..
+                bucket_type,
+                bucket,
+                key,
+                value,
             } => {
+                let sbucket = crate::router::composite_storage_bucket(&bucket_type, &bucket);
                 // Persist in the canonical `HttpObject` storage form
                 // the local put path writes, so a replica write is
                 // readable over PBC / HTTP exactly like a native put.
@@ -104,15 +108,20 @@ impl ReplicaApplier {
                     written_at_unix: 0,
                 };
                 let storage = envelope.to_storage_bytes();
-                match self.datastore.riak_put(&bucket, &key, &storage, &[]).await {
+                match self.datastore.riak_put(&sbucket, &key, &storage, &[]).await {
                     Ok(()) | Err(DatastoreError::Unsupported(_)) => {}
                     Err(e) => {
                         tracing::warn!(error = %e, "riak replica: local put failed");
                     }
                 }
             }
-            PeerOp::Del { bucket, key, .. } => {
-                match self.datastore.riak_delete(&bucket, &key).await {
+            PeerOp::Del {
+                bucket_type,
+                bucket,
+                key,
+            } => {
+                let sbucket = crate::router::composite_storage_bucket(&bucket_type, &bucket);
+                match self.datastore.riak_delete(&sbucket, &key).await {
                     Ok(_) | Err(DatastoreError::Unsupported(_)) => {}
                     Err(e) => {
                         tracing::warn!(error = %e, "riak replica: local delete failed");
@@ -120,16 +129,17 @@ impl ReplicaApplier {
                 }
             }
             PeerOp::RepairPut {
+                bucket_type,
                 bucket,
                 key,
                 storage,
-                ..
             } => {
+                let sbucket = crate::router::composite_storage_bucket(&bucket_type, &bucket);
                 // Store the coordinator's canonical SiblingSet bytes
                 // verbatim: this is a byte-identical, causally-correct
                 // copy (write fan-out or read-repair), not a bare value
                 // to re-wrap.
-                match self.datastore.riak_put(&bucket, &key, &storage, &[]).await {
+                match self.datastore.riak_put(&sbucket, &key, &storage, &[]).await {
                     Ok(()) | Err(DatastoreError::Unsupported(_)) => {}
                     Err(e) => {
                         tracing::warn!(error = %e, "riak replica: repair put failed");
@@ -141,8 +151,12 @@ impl ReplicaApplier {
             // is a write, so the write-apply path is a no-op for both.
             PeerOp::Get { .. } | PeerOp::DtFetch { .. } => {}
             PeerOp::DtUpdate {
-                bucket, key, op, ..
+                bucket_type,
+                bucket,
+                key,
+                op,
             } => {
+                let sbucket = crate::router::composite_storage_bucket(&bucket_type, &bucket);
                 // `op` is discriminated: a leading byte marks whether
                 // the payload is a CRDT STATE (merge idempotently) or a
                 // CRDT OP (apply/accumulate once). A replica fan ships
@@ -151,11 +165,11 @@ impl ReplicaApplier {
                     crate::crdt_store::CrdtStore::new(std::sync::Arc::clone(&self.datastore));
                 let res = match op.split_first() {
                     Some((&crate::crdt_store::DT_WIRE_STATE, body)) => {
-                        store.merge_state(&bucket, &key, body).await
+                        store.merge_state(&sbucket, &key, body).await
                     }
                     Some((&crate::crdt_store::DT_WIRE_OP, body)) => {
                         match crate::crdt_store::CrdtOp::from_bytes(body) {
-                            Ok(parsed) => store.apply(&bucket, &key, &parsed).await.map(|_| ()),
+                            Ok(parsed) => store.apply(&sbucket, &key, &parsed).await.map(|_| ()),
                             Err(e) => {
                                 tracing::warn!(error = %e, "riak replica: undecodable dt op");
                                 return;
@@ -164,7 +178,7 @@ impl ReplicaApplier {
                     }
                     _ => {
                         // Legacy / untagged payload: treat as state.
-                        store.merge_state(&bucket, &key, &op).await
+                        store.merge_state(&sbucket, &key, &op).await
                     }
                 };
                 if let Err(e) = res {
@@ -196,8 +210,19 @@ impl ReplicaApplySink for ReplicaApplier {
                 // replica set: a DtFetch returns the serialized CRDT
                 // state, a Get the serialized SiblingSet. An absent key
                 // replies empty.
-                PeerOp::DtFetch { bucket, key, .. } | PeerOp::Get { bucket, key, .. } => {
-                    match self.datastore.riak_get(&bucket, &key).await {
+                PeerOp::DtFetch {
+                    bucket_type,
+                    bucket,
+                    key,
+                    ..
+                }
+                | PeerOp::Get {
+                    bucket_type,
+                    bucket,
+                    key,
+                } => {
+                    let sbucket = crate::router::composite_storage_bucket(&bucket_type, &bucket);
+                    match self.datastore.riak_get(&sbucket, &key).await {
                         Ok(Some(bytes)) => Some(bytes),
                         Ok(None) => Some(Vec::new()),
                         Err(e) => {
@@ -213,19 +238,22 @@ impl ReplicaApplySink for ReplicaApplier {
                 // quorum DW too). A store failure replies empty (not
                 // counted).
                 PeerOp::RepairPut {
+                    bucket_type,
                     bucket,
                     key,
                     storage,
-                    ..
-                } => match self.datastore.riak_put(&bucket, &key, &storage, &[]).await {
-                    Ok(()) | Err(DatastoreError::Unsupported(_)) => {
-                        Some(vec![self.durable_ack_byte()])
+                } => {
+                    let sbucket = crate::router::composite_storage_bucket(&bucket_type, &bucket);
+                    match self.datastore.riak_put(&sbucket, &key, &storage, &[]).await {
+                        Ok(()) | Err(DatastoreError::Unsupported(_)) => {
+                            Some(vec![self.durable_ack_byte()])
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "riak replica: repair put (acked) failed");
+                            Some(Vec::new())
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "riak replica: repair put (acked) failed");
-                        Some(Vec::new())
-                    }
-                },
+                }
                 // Other ops (Put/Del/DtUpdate) are fire-and-forget:
                 // return None so the receive loop calls `apply`.
                 _ => None,

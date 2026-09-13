@@ -225,8 +225,12 @@ async fn replicated_op_converges_and_is_idempotent() {
         .fetch(b"chaos", b"c", TAG_COUNTER)
         .await
         .expect("a fetch");
+    // The ReplicaApplier folds the bucket type into the storage key
+    // (as the real PBC path does), so node B's converged state lives
+    // under the composite `counters/chaos` key.
+    let b_bucket = dyniak::router::composite_storage_bucket(b"counters", b"chaos");
     let b_val = store_b
-        .fetch(b"chaos", b"c", TAG_COUNTER)
+        .fetch(&b_bucket, b"c", TAG_COUNTER)
         .await
         .expect("b fetch");
     assert_eq!(

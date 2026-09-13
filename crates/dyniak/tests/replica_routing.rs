@@ -163,7 +163,10 @@ async fn receive_apply_put_lands_in_local_noxu() {
     // applier holds no outbound channel: fan-out is impossible by
     // construction).
     let stored = ds
-        .riak_get(b"users", b"alice")
+        .riak_get(
+            &dyniak::router::composite_storage_bucket(b"default", b"users"),
+            b"alice",
+        )
         .await
         .expect("riak_get")
         .expect("object present after replica apply");
@@ -187,7 +190,14 @@ async fn receive_apply_del_removes_from_local_noxu() {
             value: b"bob-value".to_vec(),
         }))
         .await;
-    assert!(ds.riak_get(b"users", b"bob").await.expect("get").is_some());
+    assert!(ds
+        .riak_get(
+            &dyniak::router::composite_storage_bucket(b"default", b"users"),
+            b"bob"
+        )
+        .await
+        .expect("get")
+        .is_some());
 
     applier
         .apply(&encode_peer_op(&PeerOp::Del {
@@ -197,7 +207,13 @@ async fn receive_apply_del_removes_from_local_noxu() {
         }))
         .await;
     assert!(
-        ds.riak_get(b"users", b"bob").await.expect("get").is_none(),
+        ds.riak_get(
+            &dyniak::router::composite_storage_bucket(b"default", b"users"),
+            b"bob"
+        )
+        .await
+        .expect("get")
+        .is_none(),
         "replicated delete removed the object locally"
     );
 }
@@ -249,7 +265,10 @@ async fn outbound_receive_pairing_delivers_write_to_node_b() {
     applier_b.apply(&wire).await;
 
     let stored = ds_b
-        .riak_get(b"carts", b"cart-9")
+        .riak_get(
+            &dyniak::router::composite_storage_bucket(b"default", b"carts"),
+            b"cart-9",
+        )
         .await
         .expect("riak_get")
         .expect("replica landed on node B");

@@ -461,11 +461,84 @@ pub enum PeerOp {
     },
 }
 
+/// Compose the storage-layer bucket key from the bucket type and
+/// bucket name.
+///
+/// Riak's object and CRDT identity is `(bucket_type, bucket, key)`,
+/// but the [`crate::datastore`]-facing storage API keys by
+/// `(bucket, key)` only. Folding the type into the bucket here keeps
+/// distinct bucket types under the same bucket name in separate
+/// keyspaces -- so a counter and a set under the same `(bucket,
+/// key)` no longer collide -- without changing the public storage
+/// trait. An empty or `default` type maps to a stable `default`
+/// prefix, so objects written under the default type keep a single
+/// canonical storage key. The separator byte `0x1f` (ASCII unit
+/// separator) cannot appear in a Riak bucket-type name, so the
+/// composition is unambiguous. Both the coordinator and every
+/// replica compose identically (the [`PeerOp`] variants all carry
+/// `bucket_type`), so replicas store byte-identical keys.
+///
+/// # Examples
+///
+/// ```
+/// use dyniak::router::composite_storage_bucket;
+/// // Distinct types under the same bucket name do not collide.
+/// assert_ne!(
+///     composite_storage_bucket(b"counters", b"crdts"),
+///     composite_storage_bucket(b"sets", b"crdts"),
+/// );
+/// // Empty and "default" normalise to the same storage key.
+/// assert_eq!(
+///     composite_storage_bucket(b"", b"b"),
+///     composite_storage_bucket(b"default", b"b"),
+/// );
+/// ```
+#[must_use]
+pub fn composite_storage_bucket(bucket_type: &[u8], bucket: &[u8]) -> Vec<u8> {
+    let ty: &[u8] = if bucket_type.is_empty() || bucket_type == b"default" {
+        b"default"
+    } else {
+        bucket_type
+    };
+    let mut out = Vec::with_capacity(ty.len() + 1 + bucket.len());
+    out.extend_from_slice(ty);
+    out.push(0x1f);
+    out.extend_from_slice(bucket);
+    out
+}
+
+/// Split a composite storage bucket key back into `(bucket_type,
+/// bucket)`. The inverse of [`composite_storage_bucket`]: it splits on
+/// the first `0x1f` separator. A key with no separator (a legacy
+/// object written before the type fold) is returned as
+/// `(b"default", whole)`, so pre-existing data resolves under the
+/// default type.
+///
+/// # Examples
+///
+/// ```
+/// use dyniak::router::{composite_storage_bucket, split_composite_storage_bucket};
+/// let c = composite_storage_bucket(b"counters", b"crdts");
+/// let (ty, b) = split_composite_storage_bucket(&c);
+/// assert_eq!(ty, b"counters");
+/// assert_eq!(b, b"crdts");
+/// // A legacy (unfolded) key resolves under the default type.
+/// let (ty, b) = split_composite_storage_bucket(b"plainbucket");
+/// assert_eq!(ty, b"default");
+/// assert_eq!(b, b"plainbucket");
+/// ```
+#[must_use]
+pub fn split_composite_storage_bucket(composite: &[u8]) -> (&[u8], &[u8]) {
+    match composite.iter().position(|&b| b == 0x1f) {
+        Some(i) => (&composite[..i], &composite[i + 1..]),
+        None => (b"default", composite),
+    }
+}
+/// strategy is [`ReplicationStrategy::Successors`]; topology
 /// Receiver of replica-peer dispatches.
 ///
-/// The Riak PBC server calls [`Self::dispatch`] once per peer
-/// in a [`RouteDecision`]'s replica list (only when the
-/// strategy is [`ReplicationStrategy::Successors`]; topology
+/// The Riak PBC server calls `dispatch` once per peer in a
+/// [`RouteDecision`]'s replica list (only when the multi-node
 /// mode falls through to the existing dispatcher pipeline).
 /// Implementors route the [`PeerOp`] to the matching peer's
 /// outbound channel.

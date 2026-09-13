@@ -60,14 +60,25 @@ impl InMemPeers {
         }
     }
 
-    /// Seed peer `idx` with a single-actor counter contribution.
-    async fn seed_counter(&self, idx: u32, actor: &ActorId, bucket: &[u8], key: &[u8], delta: i64) {
+    /// Seed peer `idx` with a single-actor counter contribution. The
+    /// storage key folds in the bucket type, matching the real PBC
+    /// path (`ReplicaApplier`), so a later composed read finds it.
+    async fn seed_counter(
+        &self,
+        idx: u32,
+        actor: &ActorId,
+        bucket_type: &[u8],
+        bucket: &[u8],
+        key: &[u8],
+        delta: i64,
+    ) {
         let ds = self.stores.get(&idx).expect("seeded peer exists");
         let op = CrdtOp::Counter {
             actor: actor.clone(),
             delta,
         };
-        CrdtStore::apply_borrowed_with_state(ds.as_ref(), bucket, key, &op)
+        let sbucket = dyniak::router::composite_storage_bucket(bucket_type, bucket);
+        CrdtStore::apply_borrowed_with_state(ds.as_ref(), &sbucket, key, &op)
             .await
             .expect("seed apply");
     }
@@ -77,15 +88,19 @@ impl PeerOutbound for InMemPeers {
     fn dispatch(&self, peer_idx: u32, op: PeerOp) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             if let PeerOp::DtUpdate {
-                bucket, key, op, ..
+                bucket_type,
+                bucket,
+                key,
+                op,
             } = op
             {
                 if let Some(ds) = self.stores.get(&peer_idx) {
+                    let sbucket = dyniak::router::composite_storage_bucket(&bucket_type, &bucket);
                     // The wire is discriminated; a state fan starts
                     // with DT_WIRE_STATE.
                     if let Some((_disc, body)) = op.split_first() {
-                        let _ =
-                            CrdtStore::merge_state_borrowed(ds.as_ref(), &bucket, &key, body).await;
+                        let _ = CrdtStore::merge_state_borrowed(ds.as_ref(), &sbucket, &key, body)
+                            .await;
                     }
                 }
             }
@@ -94,12 +109,19 @@ impl PeerOutbound for InMemPeers {
 
     fn request(&self, peer_idx: u32, op: PeerOp) -> BoxFuture<'_, Option<Vec<u8>>> {
         Box::pin(async move {
-            let PeerOp::DtFetch { bucket, key, .. } = op else {
+            let PeerOp::DtFetch {
+                bucket_type,
+                bucket,
+                key,
+                ..
+            } = op
+            else {
                 return None;
             };
             self.fetches.lock().expect("lock").push(peer_idx);
             let ds = self.stores.get(&peer_idx)?;
-            match ds.riak_get(&bucket, &key).await {
+            let sbucket = dyniak::router::composite_storage_bucket(&bucket_type, &bucket);
+            match ds.riak_get(&sbucket, &key).await {
                 Ok(Some(s)) => Some(s),
                 _ => Some(Vec::new()),
             }
@@ -158,7 +180,7 @@ async fn fetch_at_a_replica_merges_the_replica_set() {
     for (i, &r) in replicas.iter().enumerate() {
         let actor = ActorId::new("dc1", format!("actor{r}"));
         outbound
-            .seed_counter(r, &actor, &bucket, &key, amounts[i])
+            .seed_counter(r, &actor, &btype, &bucket, &key, amounts[i])
             .await;
     }
 

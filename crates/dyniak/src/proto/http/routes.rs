@@ -691,7 +691,10 @@ async fn handle_delete(bucket: &str, key: &str, ctx: &RouteCtx) -> Response<Resp
     #[cfg(feature = "noxu")]
     {
         if let Some(store) = object_store(datastore) {
-            return match store.delete_object(bucket.as_bytes(), key.as_bytes()) {
+            return match store.delete_object(
+                &crate::router::composite_storage_bucket(b"default", bucket.as_bytes()),
+                key.as_bytes(),
+            ) {
                 Ok(_) => no_content_response(),
                 Err(e) => storage_error_response(&e),
             };
@@ -822,6 +825,18 @@ fn transaction_response(
                 StatusCode::BAD_REQUEST,
                 "every operation must target the bucket named in the URL",
             );
+        }
+    }
+    // Fold the default bucket type into each op's storage bucket so a
+    // transaction write lands under the same composite key an HTTP or
+    // PBC default-type read uses. HTTP transactions are always the
+    // default bucket type.
+    let mut batch = batch;
+    for op in &mut batch.ops {
+        match op {
+            crate::txn::TxnOp::Put { bucket, .. } | crate::txn::TxnOp::Delete { bucket, .. } => {
+                *bucket = crate::router::composite_storage_bucket(b"default", bucket);
+            }
         }
     }
     let Some(store) = txn_store(datastore) else {
@@ -1041,7 +1056,10 @@ fn get_object_from_store(
     ct: &'static str,
     head_only: bool,
 ) -> Response<ResponseBody> {
-    let stored = match store.get_object(bucket.as_bytes(), key.as_bytes()) {
+    let stored = match store.get_object(
+        &crate::router::composite_storage_bucket(b"default", bucket.as_bytes()),
+        key.as_bytes(),
+    ) {
         Ok(Some(v)) => v,
         Ok(None) => return text_response(StatusCode::NOT_FOUND, "not found"),
         Err(e) => return storage_error_response(&e),
@@ -1198,7 +1216,10 @@ async fn put_object_into_store(
     obj.context = crate::server::advance_object_context(&client_ctx, &actor);
     obj.written_at_unix = crate::server::now_unix();
     let stored_set = store
-        .get_object(bucket.as_bytes(), key.as_bytes())
+        .get_object(
+            &crate::router::composite_storage_bucket(b"default", bucket.as_bytes()),
+            key.as_bytes(),
+        )
         .ok()
         .flatten()
         .and_then(|b| SiblingSet::from_storage_bytes(&b).ok())
@@ -1242,7 +1263,12 @@ async fn put_object_into_store(
             }
         }
     }
-    match store.put_object(bucket.as_bytes(), key.as_bytes(), &storage, &indexes) {
+    match store.put_object(
+        &crate::router::composite_storage_bucket(b"default", bucket.as_bytes()),
+        key.as_bytes(),
+        &storage,
+        &indexes,
+    ) {
         Ok(()) => {
             // Feed any declared text / vector indexes for this bucket
             // from the object payload. Indexing is best-effort: the

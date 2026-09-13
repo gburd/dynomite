@@ -37,7 +37,12 @@ fn put_with_links(store: &NoxuDatastore, bucket: &[u8], key: &[u8], links: Vec<H
         written_at_unix: 0,
     };
     store
-        .put_object(bucket, key, &obj.to_storage_bytes(), &[])
+        .put_object(
+            &dyniak::router::composite_storage_bucket(b"default", bucket),
+            key,
+            &obj.to_storage_bytes(),
+            &[],
+        )
         .expect("put");
 }
 

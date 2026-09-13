@@ -97,7 +97,11 @@ impl ReaperOrchestrator {
             if expired.len() >= max {
                 return Ok(());
             }
-            let ttl = registry.resolve(b"", bucket).effective_ttl_seconds();
+            // `bucket` from fold_primary is the composite storage key
+            // (type-folded). Resolve TTL props against the real bucket
+            // name + type, but delete against the composite key.
+            let (btype, real_bucket) = crate::router::split_composite_storage_bucket(bucket);
+            let ttl = registry.resolve(btype, real_bucket).effective_ttl_seconds();
             if ttl == 0 {
                 return Ok(());
             }

@@ -95,7 +95,7 @@ use crate::proto::pb::messages::{
     RpbPutReq, RpbPutResp, RpbServerInfoReq, RpbSetBucketReq, RpbSetBucketResp,
     DYN_STAGED_CHANGE_ADD, DYN_STAGED_CHANGE_REMOVE, INDEX_QUERY_TYPE_EQ, INDEX_QUERY_TYPE_RANGE,
 };
-use crate::router::{PeerOp, RoutingHooks};
+use crate::router::{composite_storage_bucket, PeerOp, RoutingHooks};
 
 /// Maximum number of bucket / key entries packed into a single
 /// streaming `RpbListBucketsResp` / `RpbListKeysResp` frame.
@@ -947,7 +947,8 @@ async fn read_repair_behind(
                 .await;
         }
     }
-    let _ = datastore.riak_put(bucket, key, &merged_bytes, &[]).await;
+    let sbucket = crate::router::composite_storage_bucket(&decision.bucket_type, bucket);
+    let _ = datastore.riak_put(&sbucket, key, &merged_bytes, &[]).await;
 }
 
 /// Tally produced by [`fan_read_replicas`]: the converged sibling set
@@ -1084,8 +1085,13 @@ async fn handle_get(
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
 
+    // Storage-layer bucket folds in the bucket type so distinct types
+    // under the same bucket name occupy separate keyspaces.
+    let bucket_type = req.r#type.clone().unwrap_or_default();
+    let sbucket = composite_storage_bucket(&bucket_type, &req.bucket);
+
     // Local sibling set for the key (empty when absent / unsupported).
-    let local = match datastore.riak_get(&req.bucket, &req.key).await {
+    let local = match datastore.riak_get(&sbucket, &req.key).await {
         Ok(Some(v)) => SiblingSet::from_storage_bytes(&v).unwrap_or_default(),
         Ok(None) | Err(DatastoreError::Unsupported(_)) => SiblingSet::default(),
         Err(e) => return Ok(error_frame(format!("riak get: {e}"))),
@@ -1465,13 +1471,16 @@ async fn resolve_and_store_put(
     indexes: &[(Vec<u8>, Vec<u8>)],
     new_context: Vec<u8>,
 ) -> Result<(Vec<u8>, bool, Vec<u8>), String> {
-    let stored_set = match datastore.riak_get(&req.bucket, key).await {
+    let bucket_type = req.r#type.as_deref().unwrap_or(b"");
+    // Storage-layer bucket folds in the bucket type so distinct types
+    // under the same bucket name occupy separate keyspaces.
+    let sbucket = composite_storage_bucket(bucket_type, &req.bucket);
+    let stored_set = match datastore.riak_get(&sbucket, key).await {
         Ok(Some(bytes)) => {
             crate::proto::http::object::SiblingSet::from_storage_bytes(&bytes).unwrap_or_default()
         }
         _ => crate::proto::http::object::SiblingSet::default(),
     };
-    let bucket_type = req.r#type.as_deref().unwrap_or(b"");
     let allow_mult = hooks.is_some_and(|h| {
         h.router
             .registry()
@@ -1503,10 +1512,7 @@ async fn resolve_and_store_put(
     };
     let resolved = resolve_write(&stored_set, &envelope, allow_mult);
     let storage = resolved.to_storage_bytes();
-    let local_ok = match datastore
-        .riak_put(&req.bucket, key, &storage, indexes)
-        .await
-    {
+    let local_ok = match datastore.riak_put(&sbucket, key, &storage, indexes).await {
         Ok(()) | Err(DatastoreError::Unsupported(_)) => true,
         Err(e) => return Err(format!("riak put: {e}")),
     };
@@ -1651,7 +1657,8 @@ async fn handle_del(
     }
     let routing = Msg::new(0, MsgType::Unknown, true);
     datastore.dispatch(routing).await?;
-    match datastore.riak_delete(&req.bucket, &req.key).await {
+    let sbucket = composite_storage_bucket(req.r#type.as_deref().unwrap_or(b""), &req.bucket);
+    match datastore.riak_delete(&sbucket, &req.key).await {
         Ok(_) | Err(DatastoreError::Unsupported(_)) => {
             Ok(Frame::new(MessageCode::DelResp.as_u8(), Vec::new()))
         }
@@ -1706,11 +1713,17 @@ async fn handle_dt_update(
     // the fan carries full state (not a delta), every replica that
     // receives it converges, and anti-entropy fills any replica a
     // fire-and-forget fan missed.
-    let (value, state_bytes) =
-        match CrdtStore::apply_borrowed_with_state(datastore, &req.bucket, &key, &op).await {
-            Ok(r) => r,
-            Err(e) => return Ok(error_frame(format!("riak dt_update: {e}"))),
-        };
+    let (value, state_bytes) = match CrdtStore::apply_borrowed_with_state(
+        datastore,
+        &composite_storage_bucket(&req.r#type, &req.bucket),
+        &key,
+        &op,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return Ok(error_frame(format!("riak dt_update: {e}"))),
+    };
     if let Some(hooks) = hooks {
         let bucket_type = req.r#type.as_slice();
         if let Ok(decision) = hooks.router.try_route(bucket_type, &req.bucket, &key) {
@@ -1801,7 +1814,8 @@ async fn handle_dt_fetch(
     // merge-on-read for data types. On a transport without request/
     // response (fire-and-forget only) `request` returns `None` and we
     // fall back to the local value; anti-entropy is the backstop.
-    let mut merged_state: Vec<u8> = match datastore.riak_get(&req.bucket, &req.key).await {
+    let sbucket = composite_storage_bucket(&req.r#type, &req.bucket);
+    let mut merged_state: Vec<u8> = match datastore.riak_get(&sbucket, &req.key).await {
         Ok(Some(s)) => s,
         _ => Vec::new(),
     };
@@ -1845,8 +1859,7 @@ async fn handle_dt_fetch(
     // already converged (read repair for the coordinating node). Best
     // effort: a failure just means the next fetch re-merges.
     if !matches!(value, CrdtValue::Missing) {
-        let _ =
-            CrdtStore::merge_state_borrowed(datastore, &req.bucket, &req.key, &merged_state).await;
+        let _ = CrdtStore::merge_state_borrowed(datastore, &sbucket, &req.key, &merged_state).await;
     }
     let mut resp = DtFetchResp {
         r#type: dtype,
@@ -1952,10 +1965,10 @@ fn dt_op_to_crdt(
 /// consumes one at a time.
 ///
 /// A field-level `SetOp` batch (multiple adds/removes in one
-/// [`crate::proto::pb::ScalarOp`]) expands into one internal op per
+/// [`crate::proto::pb::MapUpdate`]) expands into one internal op per
 /// element, since [`crate::datatypes::NestedOp::SetAdd`] /
 /// [`crate::datatypes::NestedOp::SetRemove`] are each singular. A
-/// field or update whose `field`/`op` is absent, or whose
+/// field or update whose `field` is absent, or whose
 /// `field_type` is not a recognized [`crate::datatypes::FieldType`]
 /// wire code, is dropped rather than rejecting the whole batch.
 fn pbc_map_op_to_internal(op: &crate::proto::pb::MapOp) -> Vec<crate::datatypes::MapOp> {
@@ -1969,11 +1982,8 @@ fn pbc_map_op_to_internal(op: &crate::proto::pb::MapOp) -> Vec<crate::datatypes:
         let Some(field_type) = FieldType::from_wire(field.field_type) else {
             continue;
         };
-        let Some(scalar) = update.op.as_ref() else {
-            continue;
-        };
         let key = FieldKey::new(field.name.clone(), field_type);
-        for nested in pbc_scalar_op_to_nested(scalar) {
+        for nested in pbc_map_update_to_nested(update) {
             ops.push(MapOp::Update {
                 field: key.clone(),
                 op: nested,
@@ -1990,18 +2000,21 @@ fn pbc_map_op_to_internal(op: &crate::proto::pb::MapOp) -> Vec<crate::datatypes:
     ops
 }
 
-/// Translate one PBC [`crate::proto::pb::ScalarOp`] into zero or more
-/// [`crate::datatypes::NestedOp`]s applied to the same field. A
-/// register op without an explicit `ts_micros` is stamped with the
-/// current wall clock, matching [`crate::datatypes::LwwRegister::assign_now`]'s
-/// policy for the top-level `DtOp::register_op` path.
-fn pbc_scalar_op_to_nested(op: &crate::proto::pb::ScalarOp) -> Vec<crate::datatypes::NestedOp> {
+/// Translate one PBC [`crate::proto::pb::MapUpdate`]'s flat per-type
+/// op fields into zero or more [`crate::datatypes::NestedOp`]s
+/// applied to the same field. A register op (the raw new value
+/// bytes) is stamped with the current wall clock, matching
+/// [`crate::datatypes::LwwRegister::assign_now`]'s policy for the
+/// top-level `DtOp::register_op` path.
+fn pbc_map_update_to_nested(
+    update: &crate::proto::pb::MapUpdate,
+) -> Vec<crate::datatypes::NestedOp> {
     use crate::datatypes::NestedOp;
 
-    if let Some(c) = op.counter_op.as_ref() {
+    if let Some(c) = update.counter_op.as_ref() {
         return vec![NestedOp::Counter(c.increment.unwrap_or(0))];
     }
-    if let Some(s) = op.set_op.as_ref() {
+    if let Some(s) = update.set_op.as_ref() {
         let mut nested = Vec::with_capacity(s.adds.len() + s.removes.len());
         for a in &s.adds {
             nested.push(NestedOp::SetAdd(a.clone()));
@@ -2011,17 +2024,16 @@ fn pbc_scalar_op_to_nested(op: &crate::proto::pb::ScalarOp) -> Vec<crate::dataty
         }
         return nested;
     }
-    if let Some(r) = op.register_op.as_ref() {
-        let ts_micros = r.ts_micros.unwrap_or_else(now_micros);
+    if let Some(value) = update.register_op.as_ref() {
         return vec![NestedOp::RegisterAssign {
-            value: r.value.clone(),
-            ts_micros,
+            value: value.clone(),
+            ts_micros: now_micros(),
         }];
     }
-    if let Some(f) = op.flag_op.as_ref() {
+    if let Some(f) = update.flag_op.as_ref() {
         return vec![NestedOp::Flag(f.enable)];
     }
-    if let Some(m) = op.map_op.as_ref() {
+    if let Some(m) = update.map_op.as_ref() {
         return pbc_map_op_to_internal(m)
             .into_iter()
             .map(|inner| NestedOp::Map(Box::new(inner)))
@@ -2118,18 +2130,19 @@ fn field_value_to_wire(value: &crate::datatypes::FieldValue) -> crate::proto::pb
 /// is reserved for K/V operations.
 async fn handle_index(body: &[u8], datastore: &dyn Datastore) -> Result<FrameStream, RiakError> {
     let req = RpbIndexReq::decode(body)?;
+    // The 2i index is keyed by the same storage bucket as the object,
+    // which folds in the bucket type, so the query must compose too.
+    let sbucket = composite_storage_bucket(req.r#type.as_deref().unwrap_or(b""), &req.bucket);
     let result = match req.qtype {
         INDEX_QUERY_TYPE_EQ => {
             let value = req.key.as_deref().unwrap_or(b"");
-            datastore
-                .riak_index_eq(&req.bucket, &req.index, value)
-                .await
+            datastore.riak_index_eq(&sbucket, &req.index, value).await
         }
         INDEX_QUERY_TYPE_RANGE => {
             let min = req.range_min.as_deref().unwrap_or(b"");
             let max = req.range_max.as_deref().unwrap_or(b"");
             datastore
-                .riak_index_range(&req.bucket, &req.index, min, max)
+                .riak_index_range(&sbucket, &req.index, min, max)
                 .await
         }
         other => {

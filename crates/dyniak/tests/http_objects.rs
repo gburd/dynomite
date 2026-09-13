@@ -229,7 +229,12 @@ async fn put_json_then_get_cbor_and_protobuf_cross_encode() {
 
     // The 2i entry fanned out from the envelope indexes.
     assert_eq!(
-        ds.index_eq(b"u", b"age_int", b"42").unwrap(),
+        ds.index_eq(
+            &dyniak::router::composite_storage_bucket(b"default", b"u"),
+            b"age_int",
+            b"42"
+        )
+        .unwrap(),
         vec![b"k".to_vec()],
         "index entry must land in the 2i layer"
     );
@@ -453,11 +458,21 @@ async fn x_riak_index_header_fans_out_and_round_trips() {
 
     // Both comma-separated values fanned into the 2i layer.
     assert_eq!(
-        ds.index_eq(b"u", b"tag_bin", b"alpha").unwrap(),
+        ds.index_eq(
+            &dyniak::router::composite_storage_bucket(b"default", b"u"),
+            b"tag_bin",
+            b"alpha"
+        )
+        .unwrap(),
         vec![b"h".to_vec()]
     );
     assert_eq!(
-        ds.index_eq(b"u", b"tag_bin", b"beta").unwrap(),
+        ds.index_eq(
+            &dyniak::router::composite_storage_bucket(b"default", b"u"),
+            b"tag_bin",
+            b"beta"
+        )
+        .unwrap(),
         vec![b"h".to_vec()]
     );
 

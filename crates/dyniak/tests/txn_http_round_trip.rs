@@ -97,7 +97,8 @@ fn get(path: &str) -> String {
 /// back through HTTP GET and PBC RpbGet alike. Returns `None` when
 /// the key is absent.
 fn stored_value(ds: &NoxuDatastore, bucket: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    let raw = ds.get_object(bucket, key).unwrap()?;
+    let sbucket = dyniak::router::composite_storage_bucket(b"default", bucket);
+    let raw = ds.get_object(&sbucket, key).unwrap()?;
     let obj = dyniak::proto::http::object::HttpObject::from_storage_bytes(&raw)
         .expect("transaction-written object decodes as an HttpObject envelope");
     Some(obj.value)
@@ -147,7 +148,12 @@ async fn http_transaction_commit_abort_and_bucket_scope() {
         Some(&b"c"[..])
     );
     assert_eq!(
-        ds.index_eq(b"users", b"age_int", b"30").unwrap(),
+        ds.index_eq(
+            &dyniak::router::composite_storage_bucket(b"default", b"users"),
+            b"age_int",
+            b"30"
+        )
+        .unwrap(),
         vec![b"alice".to_vec()]
     );
 
@@ -185,7 +191,14 @@ async fn http_transaction_commit_abort_and_bucket_scope() {
 
     // Nothing from the aborted batch landed.
     assert!(stored_value(&ds, b"users", b"dave").is_none());
-    assert!(ds.index_eq(b"users", b"age_int", b"40").unwrap().is_empty());
+    assert!(ds
+        .index_eq(
+            &dyniak::router::composite_storage_bucket(b"default", b"users"),
+            b"age_int",
+            b"40"
+        )
+        .unwrap()
+        .is_empty());
 
     // --- Bucket-scoped route rejects a cross-bucket op -----------
     let mismatch_body = r#"{"operations":[
@@ -193,7 +206,13 @@ async fn http_transaction_commit_abort_and_bucket_scope() {
     ]}"#;
     let resp = send_request(addr, &post("/buckets/users/transactions", mismatch_body)).await;
     assert_eq!(status_code(&resp), 400, "bucket-scope status: {resp}");
-    assert!(ds.get_object(b"other", b"k").unwrap().is_none());
+    assert!(ds
+        .get_object(
+            &dyniak::router::composite_storage_bucket(b"default", b"other"),
+            b"k"
+        )
+        .unwrap()
+        .is_none());
 
     server.abort();
     let _ = server.await;

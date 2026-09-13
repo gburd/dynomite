@@ -177,7 +177,10 @@ async fn http_link_headers_round_trip() {
 
     // The stored envelope carries both links.
     let stored = ds
-        .get_object(b"people", b"alice")
+        .get_object(
+            &dyniak::router::composite_storage_bucket(b"default", b"people"),
+            b"alice",
+        )
         .expect("get_object")
         .expect("present");
     let obj = SiblingSet::from_storage_bytes(&stored)
@@ -327,7 +330,10 @@ async fn pbc_link_put_is_visible_over_http() {
 
     // The stored envelope carries the link mapped from the PBC put.
     let stored = ds
-        .get_object(b"people", b"grace")
+        .get_object(
+            &dyniak::router::composite_storage_bucket(b"default", b"people"),
+            b"grace",
+        )
         .expect("get_object")
         .expect("present");
     let obj = SiblingSet::from_storage_bytes(&stored)
