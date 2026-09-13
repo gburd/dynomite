@@ -13,6 +13,66 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [1.8.0] - 2026-09-13
+
+Minor release. Distributed-write completeness and a real PBC
+performance fix. Backward compatible: all new behaviour is additive
+(new bucket properties and routing hooks default to the prior
+behaviour when unset).
+
+### Added
+
+- Postcommit hooks: a fire-and-forget WASM notification runs the
+  committed value through a per-bucket `postcommit_module` after the
+  write quorum is satisfied, mirroring the precommit hook. It cannot
+  change the response, so a failed or quorum-short write never fires
+  it.
+- PR / PW / DW quorum enforcement: `handle_get` / `handle_put` now
+  count primary-vs-fallback and durable-vs-buffered acknowledgements
+  and enforce the primary and durable quorums alongside R / W. A
+  `ReplicaLiveness` trait carries the primary/fallback distinction and
+  a durability acknowledgement (inspecting the noxu commit sync policy)
+  carries durability. Note: production does not yet wire a liveness
+  source, so every replica is still a primary owner and PR behaves like
+  R there; the counting path is real and is exercised end-to-end where
+  the substrate supplies the signals.
+- Background active anti-entropy (push): the AAE scheduler now walks a
+  bounded slice of the local primary keyspace each tick and pushes each
+  object's canonical sibling-set storage to the tick's peer as a
+  repair, converging replicas in the background without a client read.
+  The full segmented-tree pull exchange remains a follow-up.
+- Criterion micro-benchmark baselines populated (seven benches, 161
+  cases); the 10 percent regression gate is now active.
+- TCP-vs-QUIC benchmark harness (`scripts/ec2-dist/`), plus the
+  re-measurement report under `dist/bench-reports/`.
+
+### Fixed
+
+- PBC response latency: `write_frame` coalesces the length prefix,
+  message code, and body into a single write, and the TCP accept loop
+  sets `TCP_NODELAY`. This removes a Nagle / delayed-ACK stall that had
+  put a roughly 50 ms floor on every PBC response. A re-measurement on
+  EC2 confirmed the floor is gone (a raw serial ping now round-trips in
+  about 21 microseconds server-side; mixed-workload throughput rose
+  from 610 to 2,798 ops/s).
+- The PBC read half is now buffered, coalescing the per-request
+  length/code/body reads into fewer syscalls.
+
+### Known gaps (documented, not fixed)
+
+- The Map CRDT wire schema diverges from upstream `riak_dt.proto`, so
+  the Map type is self-consistent but not yet compatible with a stock
+  Riak client; Counter, Set, and HyperLogLog do interoperate.
+- Object storage is keyed by `(bucket, key)` and does not fold in the
+  bucket type, so two different data types under the same bucket and
+  key collide.
+- Enabling a QUIC listener terminates TLS on the plain TCP PBC and
+  HTTP listeners too, because they share one certificate pair.
+- Single-node PBC throughput over TCP is bounded by the blocking load
+  driver in `dyniak-bench`, not by the server (which serves about 47k
+  serial ops/s on one connection); a non-blocking driver is needed for
+  a clean client-side comparison.
+
 ## [1.7.0] - 2026-07-24
 
 Minor release. Full Dyniak CRDT coverage (all six data types served
