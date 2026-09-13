@@ -276,6 +276,29 @@ Near-term correctness parity (highest surprise for a Riak user):
     served over the wire" implying Riak-client compat for Map) was
     corrected in the same commit.**
 
+13. QUIC listener forces TLS onto the plain TCP PBC port (design sharp
+    edge; DISCOVERED, NOT FIXED). S. **QUIC mandates TLS, so
+    `quic_listen` requires `tls_cert`/`tls_key`. But that same cert
+    pair drives the shared `RiakHandles.tls` acceptor, which
+    `serve_pbc_full` applies to EVERY accepted TCP socket -- so a
+    config with both `quic_listen` and `pbc_listen` serves TLS on the
+    "plain" TCP port too, and a plain-TCP PBC client gets a TLS
+    handshake instead of a PBC response (observed during the
+    2026-09-13 bench: a raw `ping` came back starting `15 03 03`, a TLS
+    alert). Defensible (setting certs asks for TLS) but the
+    QUIC-forces-TLS-everywhere coupling is a trap. FIX: a separate
+    `quic_tls_*` cert knob, or let the TCP listener stay plain when
+    only QUIC needs the cert. Deferred (config-surface change). The
+    bench worked around it by running two dyniak configs.**
+
+14. QUIC bench driver flaky at low worker counts (bench-tooling bug;
+    DISCOVERED, NOT FIXED). S. **`dyniak-bench`'s `riak_quic.rs`
+    multi-worker path served a clean c=32 run (1.36M ops, 0 errors) but
+    a c=4 run failed immediately with "quic driver shut down" / "early
+    eof". A robustness bug in the bench QUIC driver's shared-runtime /
+    connection handling, NOT a dyniak server defect (the server served
+    the c=32 run cleanly). Flagged for the bench tooling.**
+
 Benchmark credibility:
 8. Populate criterion baselines; activate the regression gate. S.
    **DONE (`acd0f3b`): all seven micro benches captured (161 criterion
@@ -293,7 +316,20 @@ Benchmark credibility:
    not 4). Script: `scripts/ec2-dist/dyniak-vs-riak-bench.sh`; report
    under `dist/bench-reports/`.**
 10. Scale-out linearity + distributed-quorum tail latency. M. **Not
-    done; blocked on the re-run above (measure after the NODELAY fix).**
+    done. The re-run (item 9) showed the single-node TCP throughput is
+    bounded by the BLOCKING bench TCP driver (~2,800 ops/s flat from
+    c=4 to c=32; server serves 47K serial ops/s on one connection), so
+    a meaningful scale-out / tail-latency study first needs a
+    non-blocking TCP load driver in `dyniak-bench`. Tracked.**
+
+Re-run result (2026-09-13, `dist/bench-reports/dyniak-tcp-vs-quic-2026-09-13.md`):
+the NODELAY fix removed the 50ms floor (mixed 610 -> 2,798 ops/s, p50
+50 -> 11ms; a raw serial ping measured ~21us/op server-side). QUIC
+reached 15,056 ops/s p50 2ms (beats Riak's TCP throughput), though
+part of that ratio is the async-vs-blocking bench driver, not just the
+transport. "Similar or better than Riak" is now defensible at the
+SERVER level; a clean client-side apples-to-apples still needs a
+non-blocking TCP driver. Two new defects (items 13, 14) surfaced.
 
 None of these are code-blocking for the CRDT convergence work already
 shipped; they are the roadmap to "nearly identical to Riak" on function
