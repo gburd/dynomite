@@ -206,13 +206,16 @@ YML
   log "up complete: dyniak=$dyniak_pub riak=$riak_pub"
 }
 
-# Run one workload file on one node, pull the CSVs.
+# Run one workload file on one node, pull the CSVs. `label` may
+# contain a `/` for the local results tree; the on-node paths use a
+# flattened form so the --out dir and log redirect target exist.
 run_one() {
   local pub=$1 wl=$2 label=$3
-  nsh "$pub" "cd ~ && ./dyniak-bench --config ${wl}.toml --out /tmp/run-${label} > /tmp/run-${label}.log 2>&1"
+  local flat=${label//\//-}
+  nsh "$pub" "cd ~ && mkdir -p /tmp/run-${flat} && ./dyniak-bench --config ${wl}.toml --out /tmp/run-${flat} > /tmp/run-${flat}.log 2>&1"
   mkdir -p "$STATE_DIR/results/${label}"
   SSH_AUTH_SOCK="" scp -i "$KEY" -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -o IdentityAgent=none \
-    ec2-user@"$pub":"/tmp/run-${label}/*.csv" "$STATE_DIR/results/${label}/" >/dev/null 2>&1
+    ec2-user@"$pub":"/tmp/run-${flat}/*.csv" "$STATE_DIR/results/${label}/" >/dev/null 2>&1
   log "$label done"
 }
 
