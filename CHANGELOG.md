@@ -13,6 +13,59 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [2.0.0] - 2026-09-13
+
+Major release. Riak wire and storage parity, and a benchmark that now
+substantiates similar-or-better-than-Riak performance. Contains one
+breaking on-disk storage-format change (see below).
+
+### Breaking
+
+- **Object storage key now folds in the bucket type.** Storage is keyed
+  by `(bucket_type, bucket, key)` (composed as `type` + `0x1f` +
+  `bucket`) instead of `(bucket, key)`, so two different data types
+  under the same bucket and key no longer collide. Objects written by
+  1.x under the old `(bucket, key)` layout are NOT found by 2.0 (a 1.x
+  default-type object was stored under the bare bucket; a 2.0 read
+  composes `default` + `0x1f` + bucket). A store populated by 1.x must
+  be re-populated, or migrated by rewriting each key with the composite
+  prefix. New deployments are unaffected.
+
+### Fixed
+
+- **Map CRDT wire schema now matches upstream `riak_dt.proto`.** `MapOp`
+  is `removes=1 / updates=2` and `MapUpdate` carries the per-type op
+  flat (`field=1, counter_op=2, set_op=3, register_op=4 raw bytes,
+  flag_op=5, map_op=6`), dropping the non-standard `ScalarOp` wrapper.
+  A stock Riak PBC client's Map operations now interoperate; all six
+  CRDT types are wire-compatible.
+- **`bucket_type` is enforced in storage identity** (the breaking change
+  above), fixing the type-tag-mismatch collision between distinct CRDT
+  types sharing a bucket and key.
+
+### Added
+
+- **QUIC-only TLS certificate.** New `quic_tls_cert` / `quic_tls_key`
+  pool options let the QUIC PBC listener terminate TLS while the TCP
+  PBC and HTTP listeners stay plaintext. Previously QUIC's mandatory
+  TLS cert (the shared `tls_cert` / `tls_key`) forced TLS onto the TCP
+  and HTTP listeners too. QUIC falls back to the shared pair when the
+  QUIC-only pair is unset.
+- **Async `dyniak-bench` TCP driver.** The load driver's TCP path is now
+  async (per-worker tokio runtime, buffered socket), removing a
+  blocking-client ceiling that had capped measured throughput far below
+  the server's real capacity.
+
+### Benchmarks
+
+- Single-node head-to-head on EC2 (loopback) with the async driver:
+  dyniak beats real Riak 2.2.3 on every workload -- PBC mixed 18,186 vs
+  4,261 ops/s (p99 3.73ms vs 29.44ms), counter 7,245 vs 2,943, set
+  5,833 vs 2,588 ops/s, zero dyniak errors. "Similar or better than
+  Riak" is substantiated for the single-node loopback case; a
+  cross-node / lossy-link study remains. Report under
+  `dist/bench-reports/dyniak-async-tcp-vs-quic-vs-riak-2026-09-13.md`.
+
 ## [1.8.0] - 2026-09-13
 
 Minor release. Distributed-write completeness and a real PBC
