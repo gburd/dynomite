@@ -5,13 +5,16 @@
 //! `RpbPutReq`, `RpbDelReq`, plus a minimal `RpbDtUpdateReq`
 //! variant for counter increments.
 
-use std::io::{self, Read, Write};
-use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::io;
+use std::net::ToSocketAddrs;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use rand::rngs::SmallRng;
 use rand::Rng;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
+use tokio::net::TcpStream;
+use tokio::runtime::Runtime;
 
 use crate::config::DriverConfig;
 use crate::driver::{Driver, DriverOutcome};
@@ -264,87 +267,95 @@ pub(crate) fn decode_error_resp(body: &[u8]) -> String {
     format!("RpbErrorResp(code={errcode}): {errmsg}")
 }
 
-/// The Riak PBC driver. Owns one TCP socket per worker.
+/// Split, buffered halves of a connected async [`TcpStream`].
+/// Buffering the read half coalesces the three per-response reads
+/// (length prefix, code byte, body) into one syscall against the
+/// kernel buffer; buffering the write half coalesces the request.
+type Halves = (
+    BufReader<ReadHalf<TcpStream>>,
+    BufWriter<WriteHalf<TcpStream>>,
+);
+
+/// The Riak PBC driver. Owns one async TCP connection and a
+/// single-worker tokio runtime per worker.
+///
+/// The driver is async internally (mirroring the QUIC driver): each
+/// blocking [`Driver::run`] op is driven through `Runtime::block_on`
+/// on a per-worker current-thread runtime. This keeps socket I/O off
+/// a blocking OS thread -- a fleet of blocking client threads on a
+/// small core count oversubscribes the scheduler and inflates per-op
+/// latency, which is what capped the earlier blocking driver's
+/// throughput well below the server's real capacity.
 pub struct RiakPbcDriver {
     host: String,
     port: u16,
     bucket: Vec<u8>,
     timeout: Duration,
-    sock: Option<TcpStream>,
+    rt: Runtime,
+    conn: Option<Halves>,
 }
 
 impl RiakPbcDriver {
-    /// Construct from configuration. The TCP socket is opened
+    /// Construct from configuration. The TCP connection is opened
     /// lazily on the first op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BenchError::Engine`] when the per-worker tokio
+    /// runtime cannot be built.
     pub fn new(cfg: &DriverConfig) -> Result<Self, BenchError> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| BenchError::Engine(e.to_string()))?;
         Ok(Self {
             host: cfg.host.clone(),
             port: cfg.port,
             bucket: cfg.bucket.as_bytes().to_vec(),
             timeout: Duration::from_millis(cfg.timeout_ms),
-            sock: None,
+            rt,
+            conn: None,
         })
     }
 
     fn ensure_connected(&mut self) -> io::Result<()> {
-        if self.sock.is_some() {
+        if self.conn.is_some() {
             return Ok(());
         }
         let addr = (self.host.as_str(), self.port)
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no addrs"))?;
-        let s = TcpStream::connect_timeout(&addr, self.timeout)?;
-        s.set_read_timeout(Some(self.timeout))?;
-        s.set_write_timeout(Some(self.timeout))?;
-        s.set_nodelay(true)?;
-        self.sock = Some(s);
+        let timeout = self.timeout;
+        let halves = self.rt.block_on(async move {
+            let stream = tokio::time::timeout(timeout, TcpStream::connect(addr))
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tcp connect timed out"))??;
+            stream.set_nodelay(true)?;
+            let (r, w) = tokio::io::split(stream);
+            Ok::<Halves, io::Error>((BufReader::new(r), BufWriter::new(w)))
+        })?;
+        self.conn = Some(halves);
         Ok(())
     }
 
-    fn drop_socket(&mut self) {
-        if let Some(s) = self.sock.take() {
-            let _ = s.shutdown(Shutdown::Both);
-        }
+    fn drop_conn(&mut self) {
+        self.conn = None;
     }
 
-    fn read_n(&mut self, n: usize) -> io::Result<Vec<u8>> {
-        let s = self
-            .sock
-            .as_mut()
-            .ok_or_else(|| io::Error::other("not connected"))?;
-        let mut buf = vec![0u8; n];
-        s.read_exact(&mut buf)?;
-        Ok(buf)
-    }
-
-    /// Send one `(code, body)` frame and read back one frame.
+    /// Send one `(code, body)` frame and read back one frame,
+    /// bounded by the configured timeout.
     pub fn call(&mut self, code: u8, body: &[u8]) -> io::Result<(u8, Vec<u8>)> {
         self.ensure_connected()?;
-        let len = u32::try_from(1 + body.len()).map_err(|_| io::Error::other("frame too large"))?;
-        let mut frame = Vec::with_capacity(5 + body.len());
-        frame.extend_from_slice(&len.to_be_bytes());
-        frame.push(code);
-        frame.extend_from_slice(body);
-        match self.sock.as_mut() {
-            Some(s) => s.write_all(&frame)?,
-            None => return Err(io::Error::other("socket missing")),
-        }
-
-        let head = self.read_n(4)?;
-        let mut len_buf = [0u8; 4];
-        len_buf.copy_from_slice(&head);
-        let total = u32::from_be_bytes(len_buf) as usize;
-        if total < 1 {
-            return Err(io::Error::other("zero-length frame"));
-        }
-        let code_byte = self.read_n(1)?[0];
-        let body = if total > 1 {
-            self.read_n(total - 1)?
-        } else {
-            Vec::new()
+        let timeout = self.timeout;
+        let Some((reader, writer)) = self.conn.as_mut() else {
+            return Err(io::Error::other("tcp connection missing"));
         };
-        Ok((code_byte, body))
+        self.rt.block_on(async move {
+            tokio::time::timeout(timeout, call_async(reader, writer, code, body))
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tcp call timed out"))?
+        })
     }
 
     fn call_check(&mut self, code: u8, body: &[u8], expected: u8) -> Result<Vec<u8>, String> {
@@ -354,15 +365,50 @@ impl RiakPbcDriver {
                 Err(format!("riak error: {}", decode_error_resp(&b)))
             }
             Ok((c, _)) => {
-                self.drop_socket();
+                self.drop_conn();
                 Err(format!("unexpected reply code {c}"))
             }
             Err(e) => {
-                self.drop_socket();
+                self.drop_conn();
                 Err(format!("io error: {e}"))
             }
         }
     }
+}
+
+/// Frame one PBC request onto the buffered TCP stream and read one
+/// frame back. Frame layout: a 4-byte big-endian length (covering
+/// the code byte plus the body), the code byte, then the body.
+async fn call_async(
+    reader: &mut BufReader<ReadHalf<TcpStream>>,
+    writer: &mut BufWriter<WriteHalf<TcpStream>>,
+    code: u8,
+    body: &[u8],
+) -> io::Result<(u8, Vec<u8>)> {
+    let len = u32::try_from(1 + body.len()).map_err(|_| io::Error::other("frame too large"))?;
+    let mut frame = Vec::with_capacity(5 + body.len());
+    frame.extend_from_slice(&len.to_be_bytes());
+    frame.push(code);
+    frame.extend_from_slice(body);
+    writer.write_all(&frame).await?;
+    writer.flush().await?;
+
+    let mut head = [0u8; 4];
+    reader.read_exact(&mut head).await?;
+    let total = u32::from_be_bytes(head) as usize;
+    if total < 1 {
+        return Err(io::Error::other("zero-length frame"));
+    }
+    let mut code_buf = [0u8; 1];
+    reader.read_exact(&mut code_buf).await?;
+    let body = if total > 1 {
+        let mut b = vec![0u8; total - 1];
+        reader.read_exact(&mut b).await?;
+        b
+    } else {
+        Vec::new()
+    };
+    Ok((code_buf[0], body))
 }
 
 impl Driver for RiakPbcDriver {
