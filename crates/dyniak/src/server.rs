@@ -493,7 +493,14 @@ async fn handle_conn_full<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let (mut reader, mut writer) = tokio::io::split(stream);
+    let (reader, mut writer) = tokio::io::split(stream);
+    // Buffer the read half: read_frame issues three small reads (length
+    // prefix, code byte, body) per request. On a raw TCP socket that is
+    // three syscalls per op; a BufReader coalesces them into one kernel
+    // read of whatever is already buffered, which is the bulk of the
+    // remaining TCP-vs-QUIC latency gap (QUIC reads from quiche's
+    // in-memory recv buffer, so its small reads are already cheap).
+    let mut reader = tokio::io::BufReader::new(reader);
     loop {
         let frame = match read_frame(&mut reader).await {
             Ok(f) => f,
