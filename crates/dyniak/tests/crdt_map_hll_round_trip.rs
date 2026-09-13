@@ -24,8 +24,8 @@ use tokio::net::{TcpListener, TcpStream};
 use dyniak::datastore::NoxuDatastore;
 use dyniak::proto::pb::{
     read_frame, write_frame, CounterOp, DtFetchReq, DtFetchResp, DtOp, DtUpdateReq, DtUpdateResp,
-    DtValue, Frame, HllOp, MapField, MapOp, MapUpdate, MessageCode, RegisterOp, ScalarOp,
-    MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_REGISTER,
+    DtValue, Frame, HllOp, MapField, MapOp, MapUpdate, MessageCode, MAP_FIELD_TYPE_COUNTER,
+    MAP_FIELD_TYPE_REGISTER,
 };
 use dyniak::serve_pbc;
 use dynomite::embed::Datastore;
@@ -166,23 +166,16 @@ async fn map_register_and_counter_fields_read_back_after_update() {
                     name: b"name".to_vec(),
                     field_type: MAP_FIELD_TYPE_REGISTER,
                 }),
-                op: Some(ScalarOp {
-                    register_op: Some(RegisterOp {
-                        value: b"alice".to_vec(),
-                        ts_micros: Some(1),
-                    }),
-                    ..ScalarOp::default()
-                }),
+                register_op: Some(b"alice".to_vec()),
+                ..MapUpdate::default()
             },
             MapUpdate {
                 field: Some(MapField {
                     name: b"hits".to_vec(),
                     field_type: MAP_FIELD_TYPE_COUNTER,
                 }),
-                op: Some(ScalarOp {
-                    counter_op: Some(CounterOp { increment: Some(3) }),
-                    ..ScalarOp::default()
-                }),
+                counter_op: Some(CounterOp { increment: Some(3) }),
+                ..MapUpdate::default()
             },
         ],
         removes: vec![],
@@ -235,12 +228,10 @@ async fn map_counter_field_accumulates_across_updates() {
                 name: b"hits".to_vec(),
                 field_type: MAP_FIELD_TYPE_COUNTER,
             }),
-            op: Some(ScalarOp {
-                counter_op: Some(CounterOp {
-                    increment: Some(delta),
-                }),
-                ..ScalarOp::default()
+            counter_op: Some(CounterOp {
+                increment: Some(delta),
             }),
+            ..MapUpdate::default()
         }],
         removes: vec![],
     };

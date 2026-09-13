@@ -325,8 +325,7 @@ use dyniak::datatypes::{
 };
 use dyniak::proto::pb::{
     FlagOp, HllOp, HllValue, MapEntry, MapField, MapOp as MapWireOp, MapUpdate, MapValue,
-    RegisterOp, ScalarOp, ScalarValue, MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_FLAG,
-    MAP_FIELD_TYPE_REGISTER,
+    ScalarValue, MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_FLAG, MAP_FIELD_TYPE_REGISTER,
 };
 
 #[test]
@@ -457,10 +456,8 @@ fn dt_op_with_map_payload_round_trips_via_prost() {
                     name: b"hits".to_vec(),
                     field_type: MAP_FIELD_TYPE_COUNTER,
                 }),
-                op: Some(ScalarOp {
-                    counter_op: Some(CounterOp { increment: Some(7) }),
-                    ..ScalarOp::default()
-                }),
+                counter_op: Some(CounterOp { increment: Some(7) }),
+                ..MapUpdate::default()
             }],
             removes: vec![MapField {
                 name: b"old".to_vec(),
@@ -542,26 +539,31 @@ fn hll_value_message_round_trips() {
 }
 
 #[test]
-fn scalar_op_register_assign_round_trips() {
-    let op = ScalarOp {
-        register_op: Some(RegisterOp {
-            value: b"hello".to_vec(),
-            ts_micros: Some(99),
+fn map_update_register_assign_round_trips() {
+    let op = MapUpdate {
+        field: Some(MapField {
+            name: b"r".to_vec(),
+            field_type: MAP_FIELD_TYPE_REGISTER,
         }),
-        ..ScalarOp::default()
+        register_op: Some(b"hello".to_vec()),
+        ..MapUpdate::default()
     };
     let bytes = op.encode_to_vec();
-    let back = ScalarOp::decode(bytes.as_slice()).expect("decode");
+    let back = MapUpdate::decode(bytes.as_slice()).expect("decode");
     assert_eq!(back, op);
 }
 
 #[test]
-fn scalar_op_flag_round_trips() {
-    let op = ScalarOp {
+fn map_update_flag_round_trips() {
+    let op = MapUpdate {
+        field: Some(MapField {
+            name: b"f".to_vec(),
+            field_type: MAP_FIELD_TYPE_FLAG,
+        }),
         flag_op: Some(FlagOp { enable: true }),
-        ..ScalarOp::default()
+        ..MapUpdate::default()
     };
     let bytes = op.encode_to_vec();
-    let back = ScalarOp::decode(bytes.as_slice()).expect("decode");
+    let back = MapUpdate::decode(bytes.as_slice()).expect("decode");
     assert_eq!(back, op);
 }

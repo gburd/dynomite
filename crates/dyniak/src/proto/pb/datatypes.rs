@@ -212,46 +212,36 @@ impl WireValue for FlagOp {
     }
 }
 
-/// `ScalarOp` -- per-type op carried by a [`MapUpdate`].
-///
-/// At most one of the optional fields is present; the field
-/// that is set names the datatype the update targets. The
-/// nested-map case carries a boxed [`MapOp`] so the surface
-/// type stays `Sized` while the schema remains recursive.
-#[derive(Clone, Eq, PartialEq, Message)]
-pub struct ScalarOp {
-    /// Counter increment (signed delta).
-    #[prost(message, optional, tag = "1")]
-    pub counter_op: Option<CounterOp>,
-    /// OR-Set add/remove batch.
-    #[prost(message, optional, tag = "2")]
-    pub set_op: Option<SetOp>,
-    /// LWW-register assignment.
-    #[prost(message, optional, tag = "3")]
-    pub register_op: Option<RegisterOp>,
-    /// EW-flag toggle.
-    #[prost(message, optional, tag = "4")]
-    pub flag_op: Option<FlagOp>,
-    /// Nested map op. Boxed because [`MapOp`] is recursive.
-    #[prost(message, optional, boxed, tag = "5")]
-    pub map_op: Option<Box<MapOp>>,
-}
-
-impl WireValue for ScalarOp {
-    fn wire_type_id() -> WireTypeId {
-        WireTypeId::new("riak.ScalarOp")
-    }
-}
-
 /// `MapUpdate` -- one field-level update carried by [`MapOp`].
+///
+/// The per-type operation fields are flat (not wrapped in a
+/// separate message), matching the upstream `riak_dt.proto`
+/// `MapUpdate`: `field=1`, `counter_op=2`, `set_op=3`,
+/// `register_op=4` (the raw new register bytes), `flag_op=5`,
+/// `map_op=6`. At most one of the op fields is set; the one set
+/// names the datatype the update targets. `map_op` is boxed so the
+/// surface type stays `Sized` while the schema remains recursive.
 #[derive(Clone, Eq, PartialEq, Message)]
 pub struct MapUpdate {
     /// Field to update.
     #[prost(message, optional, tag = "1")]
     pub field: Option<MapField>,
-    /// Per-type operation.
+    /// Counter increment (signed delta).
     #[prost(message, optional, tag = "2")]
-    pub op: Option<ScalarOp>,
+    pub counter_op: Option<CounterOp>,
+    /// OR-Set add/remove batch.
+    #[prost(message, optional, tag = "3")]
+    pub set_op: Option<SetOp>,
+    /// LWW-register assignment: the raw new value bytes (upstream
+    /// carries the register op as bare `bytes`, not a message).
+    #[prost(bytes = "vec", optional, tag = "4")]
+    pub register_op: Option<Vec<u8>>,
+    /// EW-flag toggle.
+    #[prost(message, optional, tag = "5")]
+    pub flag_op: Option<FlagOp>,
+    /// Nested map op. Boxed because [`MapOp`] is recursive.
+    #[prost(message, optional, boxed, tag = "6")]
+    pub map_op: Option<Box<MapOp>>,
 }
 
 impl WireValue for MapUpdate {
@@ -262,19 +252,20 @@ impl WireValue for MapUpdate {
 
 /// `MapOp` -- batch of updates and removes against a map.
 ///
-/// Each entry in `updates` modifies one field; each entry in
-/// `removes` tombstones the field's currently-observed add
-/// tags. Server-side semantics are observed-remove with the
-/// add-wins tie-break: a concurrent update against a removed
-/// field survives the merge.
+/// Field numbering matches the upstream `riak_dt.proto`:
+/// `removes=1`, `updates=2`. Each entry in `updates` modifies one
+/// field; each entry in `removes` tombstones the field's
+/// currently-observed add tags. Server-side semantics are
+/// observed-remove with the add-wins tie-break: a concurrent update
+/// against a removed field survives the merge.
 #[derive(Clone, Eq, PartialEq, Message)]
 pub struct MapOp {
-    /// Field updates.
-    #[prost(message, repeated, tag = "1")]
-    pub updates: Vec<MapUpdate>,
     /// Field removals.
-    #[prost(message, repeated, tag = "2")]
+    #[prost(message, repeated, tag = "1")]
     pub removes: Vec<MapField>,
+    /// Field updates.
+    #[prost(message, repeated, tag = "2")]
+    pub updates: Vec<MapUpdate>,
 }
 
 impl WireValue for MapOp {
@@ -840,32 +831,45 @@ mod tests {
     }
 
     #[test]
-    fn scalar_op_round_trips_for_each_arm() {
-        let counter = ScalarOp {
+    fn map_update_round_trips_for_each_arm() {
+        let counter = MapUpdate {
+            field: Some(MapField {
+                name: b"c".to_vec(),
+                field_type: MAP_FIELD_TYPE_COUNTER,
+            }),
             counter_op: Some(CounterOp { increment: Some(3) }),
-            ..ScalarOp::default()
+            ..MapUpdate::default()
         };
-        let set = ScalarOp {
+        let set = MapUpdate {
+            field: Some(MapField {
+                name: b"s".to_vec(),
+                field_type: MAP_FIELD_TYPE_SET,
+            }),
             set_op: Some(SetOp {
                 adds: vec![b"a".to_vec()],
                 removes: vec![],
             }),
-            ..ScalarOp::default()
+            ..MapUpdate::default()
         };
-        let register = ScalarOp {
-            register_op: Some(RegisterOp {
-                value: b"v".to_vec(),
-                ts_micros: Some(42),
+        let register = MapUpdate {
+            field: Some(MapField {
+                name: b"r".to_vec(),
+                field_type: MAP_FIELD_TYPE_REGISTER,
             }),
-            ..ScalarOp::default()
+            register_op: Some(b"v".to_vec()),
+            ..MapUpdate::default()
         };
-        let flag = ScalarOp {
+        let flag = MapUpdate {
+            field: Some(MapField {
+                name: b"f".to_vec(),
+                field_type: MAP_FIELD_TYPE_FLAG,
+            }),
             flag_op: Some(FlagOp { enable: true }),
-            ..ScalarOp::default()
+            ..MapUpdate::default()
         };
         for op in [counter, set, register, flag] {
             let bytes = op.encode_to_vec();
-            let back = ScalarOp::decode(bytes.as_slice()).expect("decode");
+            let back = MapUpdate::decode(bytes.as_slice()).expect("decode");
             assert_eq!(back, op);
         }
     }
@@ -878,10 +882,8 @@ mod tests {
                     name: b"hits".to_vec(),
                     field_type: MAP_FIELD_TYPE_COUNTER,
                 }),
-                op: Some(ScalarOp {
-                    counter_op: Some(CounterOp { increment: Some(7) }),
-                    ..ScalarOp::default()
-                }),
+                counter_op: Some(CounterOp { increment: Some(7) }),
+                ..MapUpdate::default()
             }],
             removes: vec![MapField {
                 name: b"old".to_vec(),
@@ -901,10 +903,8 @@ mod tests {
                     name: b"inner".to_vec(),
                     field_type: MAP_FIELD_TYPE_COUNTER,
                 }),
-                op: Some(ScalarOp {
-                    counter_op: Some(CounterOp { increment: Some(1) }),
-                    ..ScalarOp::default()
-                }),
+                counter_op: Some(CounterOp { increment: Some(1) }),
+                ..MapUpdate::default()
             }],
             removes: vec![],
         };
@@ -914,10 +914,8 @@ mod tests {
                     name: b"outer".to_vec(),
                     field_type: MAP_FIELD_TYPE_MAP,
                 }),
-                op: Some(ScalarOp {
-                    map_op: Some(Box::new(inner)),
-                    ..ScalarOp::default()
-                }),
+                map_op: Some(Box::new(inner)),
+                ..MapUpdate::default()
             }],
             removes: vec![],
         };
@@ -966,10 +964,8 @@ mod tests {
                         name: b"hits".to_vec(),
                         field_type: MAP_FIELD_TYPE_COUNTER,
                     }),
-                    op: Some(ScalarOp {
-                        counter_op: Some(CounterOp { increment: Some(2) }),
-                        ..ScalarOp::default()
-                    }),
+                    counter_op: Some(CounterOp { increment: Some(2) }),
+                    ..MapUpdate::default()
                 }],
                 removes: vec![],
             })),

@@ -13,8 +13,8 @@ use prost::Message;
 
 use dyniak::proto::pb::datatypes::{
     CounterOp, DtFetchReq, DtFetchResp, DtOp, DtUpdateReq, DtUpdateResp, DtValue, FlagOp, GSetOp,
-    HllOp, HllValue, MapEntry, MapField, MapOp, MapUpdate, MapValue, RegisterOp, ScalarOp,
-    ScalarValue, SetOp, MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_REGISTER,
+    HllOp, HllValue, MapEntry, MapField, MapOp, MapUpdate, MapValue, RegisterOp, ScalarValue,
+    SetOp, MAP_FIELD_TYPE_COUNTER, MAP_FIELD_TYPE_REGISTER,
 };
 
 /// Every message type reports its canonical `riak.<Type>`
@@ -29,7 +29,7 @@ fn wire_type_ids_are_canonical() {
     assert_eq!(MapField::wire_type_id().as_str(), "riak.MapField");
     assert_eq!(RegisterOp::wire_type_id().as_str(), "riak.RegisterOp");
     assert_eq!(FlagOp::wire_type_id().as_str(), "riak.FlagOp");
-    assert_eq!(ScalarOp::wire_type_id().as_str(), "riak.ScalarOp");
+    assert_eq!(MapUpdate::wire_type_id().as_str(), "riak.MapUpdate");
     assert_eq!(MapUpdate::wire_type_id().as_str(), "riak.MapUpdate");
     assert_eq!(MapOp::wire_type_id().as_str(), "riak.MapOp");
     assert_eq!(ScalarValue::wire_type_id().as_str(), "riak.ScalarValue");
@@ -85,16 +85,10 @@ fn datatype_messages_round_trip() {
         name: b"reg".to_vec(),
         field_type: MAP_FIELD_TYPE_REGISTER,
     };
-    let scalar = ScalarOp {
-        register_op: Some(RegisterOp {
-            value: b"hello".to_vec(),
-            ts_micros: None,
-        }),
-        ..ScalarOp::default()
-    };
     let update = MapUpdate {
         field: Some(register_field.clone()),
-        op: Some(scalar),
+        register_op: Some(b"hello".to_vec()),
+        ..MapUpdate::default()
     };
     let map_op = MapOp {
         updates: vec![update],
