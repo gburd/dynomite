@@ -159,8 +159,8 @@ dyn_o_mite:
     pbc_listen: 0.0.0.0:8087
     http_listen: 0.0.0.0:8098
     quic_listen: 0.0.0.0:8103
-    tls_cert: /home/ec2-user/quic.crt
-    tls_key: /home/ec2-user/quic.key
+    quic_tls_cert: /home/ec2-user/quic.crt
+    quic_tls_key: /home/ec2-user/quic.key
 YML
   nscp "$STATE_DIR/dyniak.yml" "$dyniak_pub" '~/dyniak.yml'
   nsh "$dyniak_pub" '

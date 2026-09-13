@@ -161,11 +161,9 @@ listeners. Operators who want process isolation can run separate
 * HTTP gateway (axum-based) for the `/buckets/...`, `/types/...`,
   `/mapred`, and `/buckets/<bucket>/index/...` paths.
 * CRDT types: all six served over the wire -- Counter, Set, Register,
-  Flag, Map (recursive), and HyperLogLog. Counter/Set/HyperLogLog use
-  the upstream `riak_dt.proto` field numbering (a stock Riak client
-  interoperates); the Map internals currently diverge from upstream and
-  are self-consistent but not yet Riak-client wire-compatible (parity
-  ledger item 12).
+  Flag, Map (recursive), and HyperLogLog, using the upstream
+  `riak_dt.proto` field numbering so a stock Riak client interoperates
+  for every type.
 * MapReduce pipeline: 9 built-in phases + Wasm-hosted user phases
   (gated under `--features wasm`).
 * Tictac-style AAE (segmented merkle tree, persisted across

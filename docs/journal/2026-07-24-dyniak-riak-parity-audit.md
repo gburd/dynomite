@@ -229,10 +229,8 @@ Near-term correctness parity (highest surprise for a Riak user):
    ships more bytes than a tree diff would. Gated by a DST PushAll
    model + the Elle consistency check (AGENTS.md 6.5).**
 
-11. Storage key drops `bucket_type` (Riak-parity gap; DISCOVERED, NOT
-    FIXED). M. **The `Datastore::riak_get`/`riak_put`/`riak_delete`
-    trait methods (`crates/dynomite/src/embed/hooks.rs`) key storage by
-    `(bucket, key)` only; `bucket_type` participates in routing and
+11. Storage key drops `bucket_type` (Riak-parity gap; FIXED
+    `d733f6f`). M. **Was: the storage API keyed by `(bucket, key)`
     props resolution (`try_route`, `registry().resolve`) but NOT in the
     storage identity. Every call site in `server.rs` passes only
     `&req.bucket` + `key` (e.g. `riak_put(&req.bucket, key, ...)` in
@@ -246,16 +244,23 @@ Near-term correctness parity (highest surprise for a Riak user):
     is a genuine defect, not a benchmark artifact: it was surfaced
     while running the head-to-head bench (which worked around it by
     giving each CRDT type its own bucket, a fair real-client
-    workaround) and confirmed against the code. FIX: fold `bucket_type`
-    into the storage key in the datastore layer (a `default` sentinel
-    when unset for backward compatibility), and thread it through the
-    `riak_get/put/delete` trait signatures + every call site. Deferred
-    (touches the public `Datastore` trait -- a SemVer surface change --
-    and every stored-object migration path); tracked here so it is not
-    lost.**
+    workaround) and confirmed against the code. FIXED `d733f6f`: rather
+    than change the public `Datastore` trait signature, a
+    `router::composite_storage_bucket` helper folds the type into the
+    bucket (`type` + `0x1f` + `bucket`, empty/`default` normalised) at
+    every storage entry point -- PBC get/put/del/dt-update/dt-fetch,
+    the 2i index-query handler, the replica-apply path, HTTP object
+    get/put/del, the HTTP transaction batch, the object-TTL reaper
+    (which splits the composite back to resolve per-bucket props via
+    `split_composite_storage_bucket`), and the MapReduce link read.
+    Coordinator and every replica compose identically (each `PeerOp`
+    already carries `bucket_type`), so replicas store byte-identical
+    keys; a legacy unfolded key resolves under the default type.
+    DST (53) + Elle both pass -- a deterministic key transform applied
+    identically on both sides, convergence logic unchanged.**
 
 12. Map CRDT wire schema diverges from upstream `riak_dt.proto`
-    (Riak-parity gap; DISCOVERED, NOT FIXED). M. **Surfaced while
+    (Riak-parity gap; FIXED `dbaaf36`). M. **Was: surfaced while
     validating the bench workloads against real Riak 2.2.3 and
     confirmed against `crates/dyniak/src/proto/pb/datatypes.rs`. Two
     divergences: (1) dyniak's `MapOp` is `updates=tag1 / removes=tag2`,
@@ -269,15 +274,15 @@ Near-term correctness parity (highest surprise for a Riak user):
     client. The Counter/Set/HyperLogLog ops and the `DtOp` envelope
     (`counter_op=1, set_op=2, map_op=3, hll_op=4, gset_op=5`),
     `CounterOp.increment=1`, and `SetOp.adds=1/removes=2` DO match
-    upstream, so those types interoperate. FIX: renumber `MapOp` fields
-    and flatten `MapUpdate` to the upstream layout (drop the `ScalarOp`
-    wrapper); a wire-format change needing an on-wire/stored-object
-    migration story. Deferred, tracked. The README over-claim ("all six
-    served over the wire" implying Riak-client compat for Map) was
-    corrected in the same commit.**
+    upstream, so those types interoperate. FIXED `dbaaf36`: `MapOp`
+    renumbered to `removes=1 / updates=2` and `MapUpdate` flattened to
+    the upstream layout (`ScalarOp` wrapper dropped; `register_op` is
+    now raw bytes). The README over-claim ("all six served over the
+    wire" implying Riak-client compat for Map) was corrected. A stock
+    Riak PBC client's Map ops now interoperate.**
 
 13. QUIC listener forces TLS onto the plain TCP PBC port (design sharp
-    edge; DISCOVERED, NOT FIXED). S. **QUIC mandates TLS, so
+    edge; FIXED `367e999`). S. **Was: QUIC mandates TLS, so
     `quic_listen` requires `tls_cert`/`tls_key`. But that same cert
     pair drives the shared `RiakHandles.tls` acceptor, which
     `serve_pbc_full` applies to EVERY accepted TCP socket -- so a
@@ -286,10 +291,13 @@ Near-term correctness parity (highest surprise for a Riak user):
     handshake instead of a PBC response (observed during the
     2026-09-13 bench: a raw `ping` came back starting `15 03 03`, a TLS
     alert). Defensible (setting certs asks for TLS) but the
-    QUIC-forces-TLS-everywhere coupling is a trap. FIX: a separate
-    `quic_tls_*` cert knob, or let the TCP listener stay plain when
-    only QUIC needs the cert. Deferred (config-surface change). The
-    bench worked around it by running two dyniak configs.**
+    QUIC-forces-TLS-everywhere coupling is a trap. FIXED `367e999`: an
+    optional QUIC-only `quic_tls_cert` / `quic_tls_key` pair lets the
+    QUIC listener terminate TLS while the TCP PBC / HTTP listeners stay
+    plaintext; QUIC falls back to the shared pair when the QUIC-only
+    pair is unset. Validated end-to-end on EC2 (2026-09-13 run 2): with
+    the QUIC-only pair set, a raw TCP ping returned `00 00 00 01 02`
+    (plaintext) while QUIC served TLS on UDP 8103.**
 
 14. QUIC bench driver flaky at low worker counts (bench-tooling bug;
     DISCOVERED, NOT FIXED). S. **`dyniak-bench`'s `riak_quic.rs`
@@ -316,20 +324,25 @@ Benchmark credibility:
    not 4). Script: `scripts/ec2-dist/dyniak-vs-riak-bench.sh`; report
    under `dist/bench-reports/`.**
 10. Scale-out linearity + distributed-quorum tail latency. M. **Not
-    done. The re-run (item 9) showed the single-node TCP throughput is
-    bounded by the BLOCKING bench TCP driver (~2,800 ops/s flat from
-    c=4 to c=32; server serves 47K serial ops/s on one connection), so
-    a meaningful scale-out / tail-latency study first needs a
-    non-blocking TCP load driver in `dyniak-bench`. Tracked.**
+    done; now UNBLOCKED. The blocking-driver ceiling (item 9 first run)
+    is fixed: `dyniak-bench`'s TCP driver is now async (`ad4c2c0`) and
+    pushes a single node to 18,186 ops/s. A multi-node scale-out study
+    can now use a driver that is not the bottleneck. Still to run.**
 
-Re-run result (2026-09-13, `dist/bench-reports/dyniak-tcp-vs-quic-2026-09-13.md`):
-the NODELAY fix removed the 50ms floor (mixed 610 -> 2,798 ops/s, p50
-50 -> 11ms; a raw serial ping measured ~21us/op server-side). QUIC
-reached 15,056 ops/s p50 2ms (beats Riak's TCP throughput), though
-part of that ratio is the async-vs-blocking bench driver, not just the
-transport. "Similar or better than Riak" is now defensible at the
-SERVER level; a clean client-side apples-to-apples still needs a
-non-blocking TCP driver. Two new defects (items 13, 14) surfaced.
+Re-run results (2026-09-13):
+Run 1 (`dyniak-tcp-vs-quic-2026-09-13.md`): the NODELAY fix removed the
+50ms floor (mixed 610 -> 2,798 ops/s), but the TCP number was capped by
+the BLOCKING bench driver (flat ~2,800 ops/s c=4..c=32; a raw serial
+ping measured ~21us/op server-side), while QUIC reached 15K.
+Run 2 (`dyniak-async-tcp-vs-quic-vs-riak-2026-09-13.md`), after the
+async driver + Map-schema + bucket_type + QUIC-TLS-split fixes: dyniak
+TCP reached 18,186 ops/s p50 1.72ms (QUIC 13,800; TCP slightly ahead on
+loopback where QUIC's userspace overhead is not amortised by real
+RTT/loss). Head-to-head vs real Riak 2.2.3: dyniak beats Riak on every
+workload -- PBC mixed 18,186 vs 4,261 ops/s (p99 3.73ms vs 29.44ms),
+counter 7,245 vs 2,943, set 5,833 vs 2,588; zero dyniak errors. "Similar
+or better than Riak" is now SUBSTANTIATED (single node, loopback); a
+cross-node / lossy-link study is the natural next step.
 
 None of these are code-blocking for the CRDT convergence work already
 shipped; they are the roadmap to "nearly identical to Riak" on function

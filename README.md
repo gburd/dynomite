@@ -148,14 +148,10 @@ them (tracked in `docs/journal/2026-07-24-dyniak-riak-parity-audit.md`):
   merge rather than client-side sibling resolution.
 * **All six CRDTs are served over the wire.** Counter, Set, Register,
   Flag, Map (recursive, composing the others), and HyperLogLog are all
-  reachable via PBC / HTTP `DtUpdate` / `DtFetch`. Counter, Set,
-  HyperLogLog, and the `DtOp` envelope use the upstream `riak_dt.proto`
-  field numbering, so a real Riak PBC client interoperates for those
-  types. The Map internals currently DIVERGE from upstream
-  (`MapOp`/`MapUpdate` field layout differs -- see the parity ledger,
-  item 12): dyniak's Map path is self-consistent but not yet wire-
-  compatible with a stock Riak client. Fixing the Map schema to match
-  `riak_dt.proto` is a tracked follow-up.
+  reachable via PBC / HTTP `DtUpdate` / `DtFetch`, using the upstream
+  `riak_dt.proto` field numbering, so a real Riak PBC client
+  interoperates for every type (the Map wire schema was aligned with
+  upstream in v1.8.0).
 * **Object TTL / auto-expiry works.** The `ttl` bucket property (PBC
   settable/readable) is applied by a runtime reaper spawned in
   `dynomited`: it sweeps the primary key space on an interval and
