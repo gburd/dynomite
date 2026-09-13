@@ -571,14 +571,21 @@ pub struct ConfRiak {
     /// differs (a single QUIC bidirectional stream per accepted
     /// connection).
     ///
-    /// QUIC mandates TLS, so a QUIC listener reuses the
-    /// [`Self::tls_cert`] / [`Self::tls_key`] pair: setting
-    /// `quic_listen` without both is rejected at validation
-    /// time. Serving QUIC also requires `dynomited` to be built
-    /// with the `quic` Cargo feature; when the knob is set but
-    /// the feature is absent the binary fails fast at startup
-    /// with a clean configuration error rather than silently
-    /// ignoring the directive.
+    /// QUIC mandates TLS. By default a QUIC listener reuses the
+    /// [`Self::tls_cert`] / [`Self::tls_key`] pair; but that same
+    /// pair also drives the TCP PBC and HTTP listeners, so setting it
+    /// to satisfy QUIC would force TLS onto those plaintext listeners
+    /// too. To run a QUIC listener alongside plaintext TCP / HTTP,
+    /// set a QUIC-only pair via [`Self::quic_tls_cert`] /
+    /// [`Self::quic_tls_key`]; the QUIC listener then uses that pair
+    /// and the TCP / HTTP listeners stay plaintext (unless the shared
+    /// `tls_cert` / `tls_key` are also set). Setting `quic_listen`
+    /// without a QUIC-only pair AND without the shared pair is
+    /// rejected at validation time. Serving QUIC also requires
+    /// `dynomited` to be built with the `quic` Cargo feature; when
+    /// the knob is set but the feature is absent the binary fails
+    /// fast at startup with a clean configuration error rather than
+    /// silently ignoring the directive.
     pub quic_listen: Option<String>,
     /// When `true`, the Riak active anti-entropy scheduler is
     /// spawned alongside the listeners. Default: `false`.
@@ -610,6 +617,20 @@ pub struct ConfRiak {
     /// requesting a client certificate.
     #[serde(default)]
     pub tls_ca: Option<PathBuf>,
+    /// `quic_tls_cert:` - PEM certificate path used ONLY by the QUIC
+    /// PBC listener. When set (with [`Self::quic_tls_key`]), the QUIC
+    /// listener uses this pair and the TCP PBC / HTTP listeners are
+    /// unaffected -- so QUIC can be TLS-secured while TCP / HTTP stay
+    /// plaintext. When unset, the QUIC listener falls back to the
+    /// shared [`Self::tls_cert`] / [`Self::tls_key`] pair. Setting one
+    /// of the QUIC-only pair without the other is rejected at
+    /// validation time.
+    #[serde(default)]
+    pub quic_tls_cert: Option<PathBuf>,
+    /// `quic_tls_key:` - PEM private-key path matching
+    /// [`Self::quic_tls_cert`].
+    #[serde(default)]
+    pub quic_tls_key: Option<PathBuf>,
     /// `wasm_modules:` - optional list of Wasm modules to
     /// register with the MapReduce executor at startup. Each
     /// entry pairs a logical `id` with the on-disk `path` of a
@@ -786,14 +807,20 @@ impl ConfRiak {
         }
         if let Some(addr) = self.quic_listen.as_deref() {
             validate_riak_addr("quic_listen", addr)?;
-            // QUIC mandates TLS; the listener reuses the
-            // `tls_cert` / `tls_key` pair, so both must be set
-            // when a QUIC address is configured.
-            if self.tls_cert.is_none() || self.tls_key.is_none() {
+            // QUIC mandates TLS. It accepts either a QUIC-only pair
+            // (quic_tls_cert / quic_tls_key), which leaves the TCP /
+            // HTTP listeners plaintext, or the shared tls_cert /
+            // tls_key pair. At least one complete pair must be set.
+            let has_quic_pair = self.quic_tls_cert.is_some() && self.quic_tls_key.is_some();
+            let has_shared_pair = self.tls_cert.is_some() && self.tls_key.is_some();
+            if !has_quic_pair && !has_shared_pair {
                 return Err(ConfError::BadServer {
                     field: "quic_listen",
                     value: addr.to_string(),
-                    reason: "quic_listen requires tls_cert and tls_key to also be set".into(),
+                    reason: "quic_listen requires a TLS cert/key pair: set quic_tls_cert + \
+                             quic_tls_key (QUIC-only, TCP/HTTP stay plaintext) or tls_cert + \
+                             tls_key (shared)"
+                        .into(),
                 });
             }
         }
@@ -832,6 +859,12 @@ impl ConfRiak {
             "tls_key",
             self.tls_cert.as_deref(),
             self.tls_key.as_deref(),
+        )?;
+        validate_tls_pair(
+            "quic_tls_cert",
+            "quic_tls_key",
+            self.quic_tls_cert.as_deref(),
+            self.quic_tls_key.as_deref(),
         )?;
         if self.tls_ca.is_some() && self.tls_cert.is_none() {
             return Err(ConfError::BadServer {
@@ -2388,6 +2421,42 @@ p:
         });
         p.apply_defaults();
         assert!(p.validate("p").is_ok());
+    }
+
+    #[test]
+    fn riak_quic_listen_with_quic_only_pair_is_ok_and_tcp_stays_plaintext() {
+        // A QUIC-only cert pair satisfies quic_listen while leaving the
+        // TCP PBC listener plaintext (no shared tls_cert / tls_key).
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            pbc_listen: Some("127.0.0.1:8087".into()),
+            quic_listen: Some("127.0.0.1:8089".into()),
+            quic_tls_cert: Some(std::path::PathBuf::from("/q.crt")),
+            quic_tls_key: Some(std::path::PathBuf::from("/q.key")),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        assert!(p.validate("p").is_ok());
+        let r = p.riak.as_ref().unwrap();
+        assert!(r.tls_cert.is_none(), "TCP listener must stay plaintext");
+    }
+
+    #[test]
+    fn riak_quic_only_pair_half_set_is_rejected() {
+        let mut p = pool();
+        p.riak = Some(ConfRiak {
+            quic_listen: Some("127.0.0.1:8089".into()),
+            quic_tls_cert: Some(std::path::PathBuf::from("/q.crt")),
+            ..ConfRiak::default()
+        });
+        p.apply_defaults();
+        let Err(ConfError::BadServer { field, .. }) = p.validate("p") else {
+            panic!("a half-set quic_tls pair must be rejected");
+        };
+        // The quic_listen "needs a complete TLS pair" check fires first
+        // (a lone quic_tls_cert is not a complete pair), so the reported
+        // field is quic_listen; the point is that it is rejected.
+        assert_eq!(field, "quic_listen");
     }
 
     #[test]

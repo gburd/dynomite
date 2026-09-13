@@ -322,22 +322,50 @@ async fn bind_quic_listener(
             value: addr_str.to_string(),
             reason: e.to_string(),
         })?;
-    let (Some(cert), Some(key)) = (riak.tls_cert.as_deref(), riak.tls_key.as_deref()) else {
-        return Err(RiakWireError::BadAddr {
-            field: "quic_listen",
-            value: addr_str.to_string(),
-            reason: "quic_listen requires tls_cert and tls_key to also be set".into(),
-        });
+    // Prefer the QUIC-only cert pair; fall back to the shared pair.
+    // A QUIC-only pair lets QUIC terminate TLS while the TCP PBC /
+    // HTTP listeners stay plaintext (they only get TLS from the
+    // shared tls_cert / tls_key pair, which is not consulted here).
+    let (cert_path, key_path) = match (riak.quic_tls_cert.as_deref(), riak.quic_tls_key.as_deref())
+    {
+        (Some(c), Some(k)) => (c, k),
+        (Some(_), None) => {
+            return Err(RiakWireError::BadAddr {
+                field: "quic_tls_key",
+                value: addr_str.to_string(),
+                reason: "quic_tls_cert is set but quic_tls_key is not".into(),
+            });
+        }
+        (None, Some(_)) => {
+            return Err(RiakWireError::BadAddr {
+                field: "quic_tls_cert",
+                value: addr_str.to_string(),
+                reason: "quic_tls_key is set but quic_tls_cert is not".into(),
+            });
+        }
+        (None, None) => match (riak.tls_cert.as_deref(), riak.tls_key.as_deref()) {
+            (Some(c), Some(k)) => (c, k),
+            _ => {
+                return Err(RiakWireError::BadAddr {
+                    field: "quic_listen",
+                    value: addr_str.to_string(),
+                    reason: "quic_listen requires a TLS cert/key pair: set quic_tls_cert + \
+                             quic_tls_key (QUIC-only) or tls_cert + tls_key (shared with \
+                             the TCP/HTTP listeners)"
+                        .into(),
+                });
+            }
+        },
     };
-    let cert = cert.to_str().ok_or_else(|| RiakWireError::BadAddr {
-        field: "tls_cert",
-        value: cert.display().to_string(),
-        reason: "quic_listen requires a UTF-8 tls_cert path".into(),
+    let cert = cert_path.to_str().ok_or_else(|| RiakWireError::BadAddr {
+        field: "quic_tls_cert",
+        value: cert_path.display().to_string(),
+        reason: "quic_listen requires a UTF-8 cert path".into(),
     })?;
-    let key = key.to_str().ok_or_else(|| RiakWireError::BadAddr {
-        field: "tls_key",
-        value: key.display().to_string(),
-        reason: "quic_listen requires a UTF-8 tls_key path".into(),
+    let key = key_path.to_str().ok_or_else(|| RiakWireError::BadAddr {
+        field: "quic_tls_key",
+        value: key_path.display().to_string(),
+        reason: "quic_listen requires a UTF-8 key path".into(),
     })?;
     let cfg = QuicConfig::server_with_cert_paths(cert, key);
     let listener = QuicListener::bind(addr, cfg).await?;
