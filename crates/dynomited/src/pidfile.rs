@@ -322,9 +322,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("d.pid");
         let path_a = path.clone();
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel::<()>();
         let (released_tx, released_rx) = std::sync::mpsc::channel::<()>();
         let holder = std::thread::spawn(move || {
             let g = PidFile::create_with_pid(&path_a, 1).unwrap();
+            // Signal that the lock is held BEFORE the contender starts,
+            // so the contender is guaranteed to observe a held lock and
+            // retry. A fixed head-start sleep raced the holder under
+            // heavy parallel load and occasionally let the contender
+            // win on its first attempt (F9-style flake).
+            let _ = acquired_tx.send(());
             std::thread::sleep(Duration::from_millis(HOLD_MS));
             drop(g);
             // Signal post-release so the assertion below can verify
@@ -332,9 +339,11 @@ mod tests {
             // still active.
             let _ = released_tx.send(());
         });
-        // Give the holder thread a head start so the contender's
-        // first attempt observes a held lock.
-        std::thread::sleep(Duration::from_millis(5));
+        // Wait until the holder actually owns the lock before the
+        // contender attempts, removing the scheduling race entirely.
+        acquired_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("holder acquired the lock");
         let path_b = path.clone();
         let started = std::time::Instant::now();
         let g = PidFile::create_with_retry(&path_b, 2, MAX_RETRY_BUDGET, RETRY_DELAY).unwrap();
