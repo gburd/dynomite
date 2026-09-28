@@ -58,12 +58,13 @@ phase_up() {
   echo "$sg" > "$STATE_DIR/sg"
   log "sg=$sg vpc=$vpc"
 
-  # A 60 GiB gp3 root volume: the workspace build + all-features target
-  # dir is large; the Debian AMI's default root is small.
+  # A 120 GiB gp3 root volume: the workspace all-features all-targets
+  # target dir plus the incremental cache is large; the Debian AMI's
+  # default root is small and a 60 GiB volume filled mid-build.
   local iid
   iid=$(aws ec2 run-instances --region "$REGION" --image-id "$AMI" \
     --instance-type "$ITYPE" --count 1 --key-name "${RUN_ID}-key" --security-group-ids "$sg" \
-    --block-device-mappings 'DeviceName=/dev/xvda,Ebs={VolumeSize=60,VolumeType=gp3}' \
+    --block-device-mappings 'DeviceName=/dev/xvda,Ebs={VolumeSize=120,VolumeType=gp3}' \
     --tag-specifications "ResourceType=instance,Tags=[{Key=$TAG,Value=$RUN_ID},{Key=Name,Value=${RUN_ID}}]" \
     --query 'Instances[0].InstanceId' --output text)
   echo "$iid" > "$STATE_DIR/iid"
@@ -103,31 +104,36 @@ phase_up() {
 
 phase_qualify() {
   local pub; pub=$(cat "$STATE_DIR/pub")
-  # cargo update, then the CI gate's core: build all-targets/all-features,
-  # workspace tests, doctests, DST models, clippy, fmt. libopenblas is at
-  # the standard apt path so no LD_LIBRARY_PATH juggling is needed.
+  # The CI gate's core against the COMMITTED lock (noxu 7.11.0 + the
+  # refreshed deps): build all-targets/all-features, workspace tests,
+  # doctests, DST models, clippy, fmt. libopenblas is at the standard
+  # apt path so no LD_LIBRARY_PATH juggling is needed.
   log "running cargo update + build + test on $pub (this takes a while)"
   nsh "$pub" '
     set -o pipefail
     . ~/.cargo/env
     cd ~/dynomite
+    # Debug info dominates the target-dir size for an all-features
+    # all-targets build; drop it so the disk holds the full build.
+    export CARGO_PROFILE_DEV_DEBUG=0
+    export CARGO_PROFILE_TEST_DEBUG=0
     echo "=== rustc / cargo ==="; rustc --version; cargo --version
-    echo "=== cargo update ==="
-    cargo update 2>&1 | tail -60
+    echo "=== noxu version resolved ==="; grep -A1 '"'"'name = "noxu"'"'"' Cargo.lock | grep version | head -1
     echo "=== fmt check ==="
     cargo fmt --all -- --check && echo FMT_OK
-    echo "=== build workspace all-targets all-features (locked to updated lock) ==="
+    echo "=== build workspace all-targets all-features ==="
     cargo build --workspace --all-targets --all-features 2>&1 | tail -5
     echo "=== clippy ==="
     cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 | tail -5
     echo "=== nextest (install if missing) ==="
     command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --locked >/dev/null 2>&1
-    cargo nextest run --workspace --all-features 2>&1 | tail -8
+    cargo nextest run --workspace --all-features --no-fail-fast 2>&1 | tail -12
     echo "=== doctests (dyniak + engine) ==="
     cargo test --doc -p dyniak --features noxu,wasm 2>&1 | tail -2
     cargo test --doc -p dynomite-engine --all-features 2>&1 | tail -2
     echo "=== DST models ==="
     ( ulimit -v 8388608; cargo test -p model-tests 2>&1 | tail -2 )
+    echo "=== df after build ==="; df -h / | tail -1
     echo "=== QUALIFY_DONE ==="
   '
 }
