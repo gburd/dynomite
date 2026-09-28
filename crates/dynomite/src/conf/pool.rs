@@ -544,12 +544,7 @@ pub struct ConfPool {
 ///     http_listen: Some("127.0.0.1:8098".into()),
 ///     quic_listen: None,
 ///     aae_enabled: Some(false),
-///     aae_full_sweep_interval_seconds: None,
-///     aae_segment_interval_seconds: None,
-///     tls_cert: None,
-///     tls_key: None,
-///     tls_ca: None,
-///     wasm_modules: None,
+///     ..ConfRiak::default()
 /// };
 /// assert!(r.validate().is_ok());
 /// ```

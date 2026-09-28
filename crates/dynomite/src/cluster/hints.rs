@@ -858,10 +858,21 @@ mod tests {
     }
 
     fn scratch_dir() -> tempfile::TempDir {
-        tempfile::Builder::new()
-            .prefix("hints-")
-            .tempdir_in("/scratch")
-            .expect("create scratch tempdir")
+        // Scratch root (AGENTS.md: prefer /scratch), falling back to the
+        // platform temp dir when /scratch is absent (a stock CI host
+        // without it still runs the test).
+        let base = std::path::Path::new("/scratch");
+        if base.is_dir() {
+            tempfile::Builder::new()
+                .prefix("hints-")
+                .tempdir_in(base)
+                .expect("create scratch tempdir")
+        } else {
+            tempfile::Builder::new()
+                .prefix("hints-")
+                .tempdir()
+                .expect("create scratch tempdir")
+        }
     }
 
     #[test]
