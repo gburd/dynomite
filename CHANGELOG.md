@@ -13,6 +13,37 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [2.0.1] - 2026-09-28
+
+Patch release. Dependency currency and test-portability fixes; no
+dynomite API or behaviour change. Qualified end-to-end on a clean
+non-Nix Debian 12 host.
+
+### Changed
+
+- Bumped to noxu 7.11.0 (`noxu = "7.11"`), which brings datastore
+  correctness fixes (abort/recovery data-loss cases, cursor
+  secondary-index maintenance) and a backward-compatible on-disk
+  `TREE_MAX_EMBEDDED_LN` change. dynomite uses only unchanged noxu
+  surface, so no code change was required.
+- Refreshed the rest of the lockfile (cc, clap, hyper-util, quinn,
+  rustls, thiserror, tokio-rustls, wasm-bindgen, zerocopy, ... -- all
+  patch/minor within existing requirements).
+- noxu-evictor 7.11.0 bumps its `lru` to 0.18.5, clearing
+  RUSTSEC-2026-0253; the audit ignore for it was removed.
+
+### Fixed
+
+- The hint-store tests hardcoded a `/scratch` tempdir path; they now
+  prefer `/scratch` and fall back to the platform temp dir, matching
+  the XA tests' convention (they failed on a host without `/scratch`).
+- The `ConfRiak` doctest was not updated when `quic_tls_cert` /
+  `quic_tls_key` were added in 2.0.0; it now uses
+  `..ConfRiak::default()` so it is robust to future field additions.
+- Removed a scheduling race in the flock-retry pidfile test (an
+  explicit lock-acquired signal replaces a head-start sleep that could
+  be starved under heavy parallel load).
+
 ## [2.0.0] - 2026-09-13
 
 Major release. Riak wire and storage parity, and a benchmark that now
