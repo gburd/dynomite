@@ -96,7 +96,10 @@
 
           shellHook = ''
             export RUST_BACKTRACE=1
-            export DYNOMITE_C_REF="$PWD/_/dynomite"
+            # The C reference is not vendored (removed in 2561d13). Keep a
+            # caller-provided DYNOMITE_C_REF; otherwise use the conventional
+            # checkout at ~/src/dynomite.
+            export DYNOMITE_C_REF="''${DYNOMITE_C_REF:-$HOME/src/dynomite}"
             echo "dynomite dev shell ready"
             echo "  C reference at: $DYNOMITE_C_REF"
             echo "  run: scripts/check.sh"
