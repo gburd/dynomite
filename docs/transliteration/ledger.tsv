@@ -1652,20 +1652,20 @@ fn	event_wait	src/event/dyn_kqueue.c	232	todo
 fn	event_loop_stats	src/event/dyn_kqueue.c	340	todo				
 fn	event_loop_entropy	src/event/dyn_kqueue.c	402	todo				
 var	crc16tab	src/hashkit/dyn_crc16.c	26	todo				
-fn	hash_crc16	src/hashkit/dyn_crc16.c	58	todo				
+fn	hash_crc16	src/hashkit/dyn_crc16.c	58	ported	crates/dynomite/src/hashkit/crc16.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 var	crc32tab	src/hashkit/dyn_crc32.c	35	todo				
-fn	hash_crc32	src/hashkit/dyn_crc32.c	85	todo				
-fn	hash_crc32a	src/hashkit/dyn_crc32.c	101	todo				
+fn	hash_crc32	src/hashkit/dyn_crc32.c	85	ported	crates/dynomite/src/hashkit/crc32.rs::hash_libmemcached	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+fn	hash_crc32a	src/hashkit/dyn_crc32.c	101	ported	crates/dynomite/src/hashkit/crc32.rs::hash_standard	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 macro	_CRC32_	src/hashkit/dyn_crc32.c	120	todo				
-fn	crc32_sz	src/hashkit/dyn_crc32.c	122	todo				
+fn	crc32_sz	src/hashkit/dyn_crc32.c	122	ported	crates/dynomite/src/hashkit/mod.rs::crc32_sz	crates/c-oracle/tests/hashkit_oracle.rs::crc32_sz_matches_c		
 var	FNV_64_INIT	src/hashkit/dyn_fnv.c	26	todo				
 var	FNV_64_PRIME	src/hashkit/dyn_fnv.c	27	todo				
 var	FNV_32_INIT	src/hashkit/dyn_fnv.c	28	todo				
 var	FNV_32_PRIME	src/hashkit/dyn_fnv.c	29	todo				
-fn	hash_fnv1_64	src/hashkit/dyn_fnv.c	31	todo				
-fn	hash_fnv1a_64	src/hashkit/dyn_fnv.c	49	todo				
-fn	hash_fnv1_32	src/hashkit/dyn_fnv.c	66	todo				
-fn	hash_fnv1a_32	src/hashkit/dyn_fnv.c	83	todo				
+fn	hash_fnv1_64	src/hashkit/dyn_fnv.c	31	ported	crates/dynomite/src/hashkit/fnv.rs::hash_fnv1_64	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+fn	hash_fnv1a_64	src/hashkit/dyn_fnv.c	49	ported	crates/dynomite/src/hashkit/fnv.rs::hash_fnv1a_64	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+fn	hash_fnv1_32	src/hashkit/dyn_fnv.c	66	ported	crates/dynomite/src/hashkit/fnv.rs::hash_fnv1_32	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+fn	hash_fnv1a_32	src/hashkit/dyn_fnv.c	83	ported	crates/dynomite/src/hashkit/fnv.rs::hash_fnv1a_32	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.c	5	todo				
 macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.c	5	todo				
 macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.c	5	todo				
@@ -1681,19 +1681,19 @@ enumerator	HASH_CODEC	src/hashkit/dyn_hashkit.h	56	todo
 typedef	hash_type_t	src/hashkit/dyn_hashkit.h	56	todo				
 macro	get16bits	src/hashkit/dyn_hsieh.c	40	todo				
 macro	get16bits	src/hashkit/dyn_hsieh.c	40	todo				
-fn	hash_hsieh	src/hashkit/dyn_hsieh.c	45	todo				
+fn	hash_hsieh	src/hashkit/dyn_hsieh.c	45	ported	crates/dynomite/src/hashkit/hsieh.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 macro	hashsize	src/hashkit/dyn_jenkins.c	38	todo				
 macro	hashmask	src/hashkit/dyn_jenkins.c	39	todo				
 macro	rot	src/hashkit/dyn_jenkins.c	40	todo				
 macro	mix	src/hashkit/dyn_jenkins.c	42	todo				
 macro	final	src/hashkit/dyn_jenkins.c	64	todo				
 macro	JENKINS_INITVAL	src/hashkit/dyn_jenkins.c	82	todo				
-fn	hash_jenkins	src/hashkit/dyn_jenkins.c	100	todo				
-macro	KETAMA_CONTINUUM_ADDITION	src/hashkit/dyn_ketama.c	31	todo				
-macro	KETAMA_POINTS_PER_SERVER	src/hashkit/dyn_ketama.c	33	todo				
-macro	KETAMA_MAX_HOSTLEN	src/hashkit/dyn_ketama.c	34	todo				
-fn	ketama_update	src/hashkit/dyn_ketama.c	63	todo				
-fn	ketama_dispatch	src/hashkit/dyn_ketama.c	226	todo				
+fn	hash_jenkins	src/hashkit/dyn_jenkins.c	100	ported	crates/dynomite/src/hashkit/jenkins.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+macro	KETAMA_CONTINUUM_ADDITION	src/hashkit/dyn_ketama.c	31	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+macro	KETAMA_POINTS_PER_SERVER	src/hashkit/dyn_ketama.c	33	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+macro	KETAMA_MAX_HOSTLEN	src/hashkit/dyn_ketama.c	34	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+fn	ketama_update	src/hashkit/dyn_ketama.c	63	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+fn	ketama_dispatch	src/hashkit/dyn_ketama.c	226	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 typedef	MD5_u32plus	src/hashkit/dyn_md5.c	38	todo				
 typedef	MD5_CTX	src/hashkit/dyn_md5.c	45	todo				
 macro	F	src/hashkit/dyn_md5.c	54	todo				
@@ -1709,20 +1709,20 @@ fn	body	src/hashkit/dyn_md5.c	91	todo
 fn	MD5_Init	src/hashkit/dyn_md5.c	197	todo				
 fn	MD5_Update	src/hashkit/dyn_md5.c	207	todo				
 fn	MD5_Final	src/hashkit/dyn_md5.c	241	todo				
-fn	md5_signature	src/hashkit/dyn_md5.c	295	todo				
-fn	hash_md5	src/hashkit/dyn_md5.c	304	todo				
-macro	MODULA_CONTINUUM_ADDITION	src/hashkit/dyn_modula.c	30	todo				
-macro	MODULA_POINTS_PER_SERVER	src/hashkit/dyn_modula.c	32	todo				
-fn	modula_update	src/hashkit/dyn_modula.c	34	todo				
-fn	modula_dispatch	src/hashkit/dyn_modula.c	155	todo				
-fn	hash_murmur	src/hashkit/dyn_murmur.c	43	todo				
+fn	md5_signature	src/hashkit/dyn_md5.c	295	ported	crates/dynomite/src/hashkit/mod.rs::md5_signature	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+fn	hash_md5	src/hashkit/dyn_md5.c	304	ported	crates/dynomite/src/hashkit/md5.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+macro	MODULA_CONTINUUM_ADDITION	src/hashkit/dyn_modula.c	30	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+macro	MODULA_POINTS_PER_SERVER	src/hashkit/dyn_modula.c	32	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+fn	modula_update	src/hashkit/dyn_modula.c	34	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+fn	modula_dispatch	src/hashkit/dyn_modula.c	155	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+fn	hash_murmur	src/hashkit/dyn_murmur.c	43	ported	crates/dynomite/src/hashkit/murmur.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 macro	MURMUR3_SEED	src/hashkit/dyn_murmur3.c	27	todo				
-fn	hash_murmur3	src/hashkit/dyn_murmur3.c	29	todo				
-fn	hash_one_at_a_time	src/hashkit/dyn_one_at_a_time.c	40	todo				
-macro	RANDOM_CONTINUUM_ADDITION	src/hashkit/dyn_random.c	30	todo				
-macro	RANDOM_POINTS_PER_SERVER	src/hashkit/dyn_random.c	32	todo				
-fn	random_update	src/hashkit/dyn_random.c	34	todo				
-fn	random_dispatch	src/hashkit/dyn_random.c	144	todo				
+fn	hash_murmur3	src/hashkit/dyn_murmur3.c	29	pending:DEV-H1	crates/dynomite/src/hashkit/murmur3.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::c_murmur3_is_constant_zero		
+fn	hash_one_at_a_time	src/hashkit/dyn_one_at_a_time.c	40	pending:DEV-H2	crates/dynomite/src/hashkit/one_at_a_time.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::one_at_a_time_matches_c_on_ascii_keys		
+macro	RANDOM_CONTINUUM_ADDITION	src/hashkit/dyn_random.c	30	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+macro	RANDOM_POINTS_PER_SERVER	src/hashkit/dyn_random.c	32	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+fn	random_update	src/hashkit/dyn_random.c	34	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
+fn	random_dispatch	src/hashkit/dyn_random.c	144	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 macro	BITS_PER_DIGIT	src/hashkit/dyn_token.c	33	todo				
 macro	DIGITS_PER_INT	src/hashkit/dyn_token.c	36	todo				
 fn	init_dyn_token	src/hashkit/dyn_token.c	38	todo				

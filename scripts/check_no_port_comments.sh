@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Reject comments that advertise this code as a port of the C source.
 # Acknowledgement of the C origin lives only in README.md / NOTICE / LICENSE.
+# Exempt by design: docs/transliteration/ (the C-to-Rust ledger) and
+# crates/c-oracle/ (the test-only crate that compiles and calls the C), whose
+# purpose is to name C files and functions.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,6 +28,7 @@ HITS=$(grep -RInE -i "$PATTERN" \
   --exclude='LICENSE' \
   --exclude-dir='journal' \
   --exclude-dir='transliteration' \
+  --exclude-dir='c-oracle' \
   crates docs 2>/dev/null || true)
 
 if [ -n "$HITS" ]; then

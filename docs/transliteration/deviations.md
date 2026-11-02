@@ -275,6 +275,63 @@ re-evaluated against the C behaviour with evidence before a decision.
 * Authorized-by: Greg Burd, 2026-11-02 ("Transform the config into
   something more Rust native if there is a better pattern").
 
+## F. Findings awaiting an owner decision
+
+Found by the C oracle (`crates/c-oracle`). The C behaviour is reproduced
+exactly in the oracle tests so the finding cannot drift; the Rust side is
+held at its current behaviour until the owner decides.
+
+### DEV-H1: C `murmur3` is a constant hash
+
+* C: `src/hashkit/dyn_murmur3.c` sizes the token to 4 words and returns
+  without hashing; the `MurmurHash3_x86_128(...)` call has been commented
+  out since 2013-12-10 (upstream `9eb54c1`). Every key yields the zero
+  token, so with `hash: murmur3` every key routes to the same vnode.
+  `hash: murmur` (MurmurHash2) is the C default and is unaffected.
+* Rust: computes real MurmurHash3 x86_128 (seed `0xc0a1e5ce`). Also uses it
+  internally (dyniak HyperLogLog, random slicing via `murmur3_x64_64`).
+* Pinned by: `c-oracle/tests/hashkit_oracle.rs::c_murmur3_is_constant_zero`.
+* Options: (a) transliterate the C (constant zero; selecting murmur3
+  collapses a cluster onto one node); (b) keep the real MurmurHash3 as an
+  authorised deviation; (c) reject `murmur3` as a client-key hash and keep
+  it for internal use only.
+* Agent recommendation: (b). The C behaviour is a latent bug no operator
+  would want; the function's name, token size, and seed all show the intent
+  was MurmurHash3 x86_128.
+* Status: PROPOSED
+
+### DEV-H2: C `one_at_a_time` sign-extends bytes >= 0x80
+
+* C: `src/hashkit/dyn_one_at_a_time.c` reads the key through
+  `const char *` and widens each byte with `(uint32_t)*ptr`. Where `char`
+  is signed (x86-64 and the common Linux targets the C is built for), bytes
+  0x80..0xff are sign-extended to 0xffffff80..0xffffffff before the add.
+  On a target with unsigned `char` (Linux aarch64) the C result differs, so
+  the C hash is not even portable across C builds.
+* Rust: reads `u8`, which is the unsigned (and Jenkins-reference) result.
+* ASCII-only keys (every byte < 0x80) agree; pinned by
+  `one_at_a_time_matches_c_on_ascii_keys`.
+* Options: (a) transliterate the x86-64 C result (sign extension) for byte
+  parity with the C reference; (b) keep unsigned, matching the published
+  algorithm and the C on unsigned-`char` targets.
+* Agent recommendation: (b), given P1 (no C cluster ever shares a ring with
+  a Rust one, so no key placement must match a running C node).
+* Status: PROPOSED
+
+### DEV-H3: ketama, modula, and random distributions are dead code in C
+
+* C: `src/hashkit/dyn_ketama.c`, `dyn_modula.c`, and `dyn_random.c` exist
+  but are not in `libhashkit_a_SOURCES` (`src/hashkit/Makefile.am`), so they
+  are not compiled into `dynomite`. The `distribution:` config key is
+  accepted and ignored (`conf_set_deprecated`, `src/dyn_conf.c:1091`); the
+  C always uses vnode distribution (`CONF_DEFAULT_DIST DIST_VNODE`).
+* Consequence for the ledger: their symbols are `dead`, not `todo`. The
+  Rust engine's random-slicing distribution is the authorised addition
+  DEV-A9 and is unaffected.
+* This is a ledger classification, not a behaviour change; no decision is
+  needed unless the owner wants ketama/modula/random as additions.
+* Status: RECORDED
+
 ## E. Decisions log
 
 Owner decisions are appended here with date and the exact instruction.

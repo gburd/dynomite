@@ -13,6 +13,8 @@ status is one of:
   ported               Rust function exists, oracle-tested
   replaced             authorised substrate replacement (DEV-S*)
   deviation:<DEV-id>   authorised behavioural deviation
+  pending:<DEV-id>     C and Rust differ; held for an owner decision on a
+                       PROPOSED deviations.md entry (counts as not done)
   dead                 unreachable in C itself (notes cite the evidence)
 
 Subcommands:
@@ -77,6 +79,21 @@ def write_ledger(rows):
         f.write("\t".join(COLS) + "\n")
         for r in rows:
             f.write("\t".join(r.get(c, "") for c in COLS) + "\n")
+
+
+def proposed_ids():
+    """IDs whose heading is followed by an `* Status: PROPOSED` line."""
+    ids = set()
+    if not os.path.exists(DEVIATIONS):
+        return ids
+    current = None
+    for line in open(DEVIATIONS).read().splitlines():
+        m = re.match(r"^#{2,4} (DEV-[A-Z0-9]+)", line)
+        if m:
+            current = m.group(1)
+        elif current and line.startswith("* Status: PROPOSED"):
+            ids.add(current)
+    return ids
 
 
 def authorized_ids():
@@ -145,6 +162,7 @@ def cmd_check(closed_files):
     if not rows:
         sys.exit("ledger: missing or empty; run scripts/check_parity.sh --sync")
     auth = authorized_ids()
+    proposed = proposed_ids()
     errors = []
     for r in rows:
         where = f"{r['c_file']}:{r['c_line']} {r['kind']} {r['c_symbol']}"
@@ -155,9 +173,15 @@ def cmd_check(closed_files):
             dev = st.split(":", 1)[1]
             if dev not in auth:
                 errors.append(f"{where}: {dev} is not AUTHORIZED in deviations.md")
+        elif st.startswith("pending:"):
+            dev = st.split(":", 1)[1]
+            if dev not in proposed:
+                errors.append(f"{where}: {dev} is not a PROPOSED entry in deviations.md")
+            if r["c_file"] in closed_files:
+                errors.append(f"{where}: pending decision in a closed file")
         elif st not in STATUSES:
             errors.append(f"{where}: unknown status '{st}'")
-        if st in ("ported", "replaced") or st.startswith("deviation:"):
+        if st in ("ported", "replaced") or st.startswith(("deviation:", "pending:")):
             if not r["rust_path"] or not resolve_rust_path(r["rust_path"]):
                 errors.append(f"{where}: rust_path '{r['rust_path']}' does not resolve")
         if st == "ported" and r["kind"] == "fn" and not r["oracle_test"]:
@@ -179,7 +203,7 @@ def cmd_summary():
         st = r["status"].split(":")[0]
         per.setdefault(r["c_file"], {}).setdefault(st, 0)
         per[r["c_file"]][st] += 1
-    cols = ["todo", "ported", "replaced", "deviation", "dead"]
+    cols = ["todo", "pending", "ported", "replaced", "deviation", "dead"]
     tot = {c: 0 for c in cols}
     print(f"{'c_file':42s} " + " ".join(f"{c:>9s}" for c in cols))
     for f in sorted(per):
@@ -190,8 +214,9 @@ def cmd_summary():
             line += f"{n:9d} "
         print(line)
     print(f"{'TOTAL':42s} " + " ".join(f"{tot[c]:9d}" for c in cols))
-    done = sum(tot.values()) - tot["todo"]
-    print(f"progress: {done}/{sum(tot.values())} rows not todo")
+    done = sum(tot.values()) - tot["todo"] - tot["pending"]
+    print(f"progress: {done}/{sum(tot.values())} rows done "
+          f"({tot['pending']} pending an owner decision)")
 
 
 def cmd_file(cfile):
