@@ -57,8 +57,18 @@ Rust with the C logic, checked against the C binary, and ledgered.
 
 ## 3. Deviation catalogue
 
-The full ledger with evidence lives in `deviations.md`. Summary of the
-owner's 2026-10 authorisations:
+The full ledger with evidence lives in `deviations.md`. It opens with three
+owner rulings (2026-11-02) that bound the whole effort:
+
+* **P1, no C interop or migration.** Rust nodes never talk to C nodes and
+  no C cluster is migrated. Wire and file encodings are chosen on merit; the
+  C logic behind them is still transliterated.
+* **P2, Rust-native configuration.** The config schema is redesigned for
+  Rust; every C capability, default, and effect survives.
+* **P3, no Lua.** Dynomite authors no Lua and embeds no interpreter; Lua
+  logic in the C (the read-repair scripts) is transliterated into Rust.
+
+Summary of the authorisations:
 
 **Substrate (authorised, structural):** the C event loop
 (`event/dyn_epoll.c`, `dyn_kqueue.c`, `dyn_evport.c`, `dyn_core.c`'s
@@ -71,10 +81,10 @@ timeouts, eviction, iteration order where the C exposes it).
 **Additions (authorised, must stay strictly additive):** dyniak (noxu), the
 noxu datastore, QUIC, vector/text search, CRDTs, cross-node transactions,
 hinted handoff, anti-entropy, random slicing, the embedding API. "Strictly
-additive" means: with the C configuration (no Rust-only keys), the binary
-behaves as the C binary. Each addition is off by default or reachable only
+additive" means: with the addition left unconfigured, the binary behaves
+as the C binary. Each addition is off by default or reachable only
 through a Rust-only config key, verified by the differential suite running
-the C configs unchanged.
+each scenario with the addition off.
 
 **Behavioural deviations (pending review, section 8):** about 40 entries in
 `docs/parity.md` "Deviations" were agent-recorded. Each is re-examined:
@@ -153,8 +163,9 @@ performance gate green (section 6), check.sh green.
     describe-stats output.
 * `DIFFERENTIAL_STRICT=1` becomes the default. A divergence fails the gate
   unless it matches a normaliser tied to an authorised deviation.
-* Mixed clusters (C and Rust nodes in one ring) for wire compatibility of
-  the DNODE plane, gossip, and entropy.
+* Each scenario carries a C YAML config and the equivalent Rust config
+  (P2); both clusters are driven only through the client-facing protocols
+  (RESP, memcache, admin HTTP). C and Rust nodes are never mixed (P1).
 
 ### 5.4 C tests ported
 
@@ -203,18 +214,18 @@ transliterate, write oracle tests, port C tests, run the gates, review
 | T1 | `dyn_types`, `dyn_string`, `dyn_util`, `dyn_log`, `dyn_signal`, `dyn_setting`, `dyn_histogram`, `dyn_cbuf.h`, `dyn_queue.h` | logging levels incl. SIGUSR1/2 log-level and SIGTTIN/TTOU, SIGSEGV stacktrace |
 | T2 | `hashkit/*` | oracle-pinned every algorithm; replaces the hand-walked vectors |
 | T3 | `dyn_mbuf`, `dyn_array`, `dyn_dict*`, `dyn_rbtree`, `dyn_ring_queue`, `dyn_task` | substrate rows: replaced, with behavioural tests |
-| T4 | `dyn_conf` | every key, every validation branch, `-t` output, oracle on YAML |
-| T5 | `dyn_crypto`, `entropy/*` | C wire formats first; Rust-only formats only via authorised deviations |
+| T4 | `dyn_conf` | Rust-native schema (DEV-K1, design reviewed by owner first); every C capability mapped; every validation branch |
+| T5 | `dyn_crypto`, `entropy/*` | AES-256-GCM peer plane (DEV-C1); AEAD entropy frames (DEV-E1); throttle (DEV-E2); C CBC kept as the byte-pinned oracle of `dyn_crypto.c` |
 | T6 | `dyn_message`, `dyn_request`, `dyn_response`, `dyn_response_mgr` | `msg_clone`, `msg_tmo_*`, `craft_ok_rsp`, `simulate_ok_rsp`, `msg_payload_crc32`, `g_timeout_factor` |
 | T7 | `proto/dyn_redis`, `proto/dyn_memcache` | parsers oracle-pinned; `redis_copy_bulk`, `memcache_copy_bulk`, coalesce chain paths |
-| T8 | `proto/dyn_redis_repair`, `dyn_proto_repair.h` | timestamp read repair, Lua add/rem-set scripts, all 13 repairable commands |
+| T8 | `proto/dyn_redis_repair`, `dyn_proto_repair.h` | timestamp read repair (DEV-R1), Lua script logic in Rust under `MULTI`/`WATCH`, all 13 repairable commands |
 | T9 | `dyn_connection*`, `dyn_client`, `dyn_server`, `dyn_proxy` | local node state gating, `admin_opt`, `auto_eject`, `read_repairs_enabled` gate incl. the `> DC_ONE` condition |
 | T10 | `dyn_dnode_*`, `dyn_vnode`, `dyn_node_snitch` | dnode plane, peer timeouts, throttles |
-| T11 | `dyn_gossip`, `seedsprovider/*` | C gossip and timestamp failure detection as the default; SWIM/phi via deviation review |
+| T11 | `dyn_gossip`, `seedsprovider/*` | C gossip and timestamp failure detection as the default (DEV-F1); phi/SWIM opt-in |
 | T12 | `dyn_stats` | every metric, every admin HTTP command, `cluster_describe` |
 | T13 | `dyn_core`, `dynomite.c` | init/teardown order, CLI flags, daemonize, pidfile, signals |
 | T14 | `dyn_test.c`, `test/*.py`, `scripts/dynomite/*` | C tests ported in full |
-| T15 | differential strict + mixed clusters | system-level oracle green |
+| T15 | differential strict | system-level oracle green (side-by-side clusters, never mixed) |
 | T16 | performance gate on chef | section 6 |
 | T17 | deviation review closeout | every deviation authorised or reverted |
 | T18 | additions re-integration | dyniak, search, QUIC, etc. rebased on the transliterated core; strictly additive check |
@@ -226,21 +237,19 @@ dependency order above is the merge order.
 ## 8. Decisions the owner must make
 
 Agents bring each item to the owner with evidence and a recommendation
-before committing to it. Open items as of plan creation:
+before committing to it.
 
-1. **Read repair**: C timestamp/Lua add-set scheme vs the Rust vote-count
-   scheme. Default recommendation: transliterate the C scheme as the default
-   (it is the C behaviour and is causally stronger), keep vote-count only if
-   the owner authorises it as an alternative mode.
-2. **Failure detection**: C gossip timestamp liveness vs phi-accrual / SWIM.
-3. **Entropy wire formats**: the Rust length-prefixed / unified framing vs
-   the C fixed `cipher_size` framing (C-node interop depends on this).
-4. **Crypto**: AES-256-GCM addition and PKCS#7 padding vs C zero padding.
-5. **Config strictness**: about a dozen Stage-4 entries where Rust rejects
-   input C accepts.
-6. **Each remaining entry** in `docs/parity.md` "Deviations" (section 3).
-7. **Existing Rust-only behaviour** that changes C-config behaviour, found
-   while running the C configs unchanged.
+Decided 2026-11-02 (`deviations.md` section D): read repair (DEV-R1),
+failure detection (DEV-F1), AES-256-GCM (DEV-C1), entropy format and
+throttle (DEV-E1, DEV-E2), config direction (DEV-K1).
+
+Still open:
+
+1. **Config schema design** (DEV-K1): the concrete Rust-native schema, shown
+   to the owner before T4 lands.
+2. **Each remaining entry** in `deviations.md` section C.
+3. **Rust-only behaviour that leaks into the C-equivalent path**, found when
+   the differential suite runs scenarios with the additions off.
 
 Decisions are recorded in `deviations.md` with the owner's sign-off line.
 
