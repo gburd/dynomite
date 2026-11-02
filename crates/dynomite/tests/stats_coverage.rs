@@ -146,17 +146,22 @@ async fn aggregator_publishes_one_snapshot_then_cancels() {
     );
     let cancel = token.clone();
     let handle = tokio::spawn(async move { agg.run(cancel).await });
-    // Give the loop time to tick and publish at least once.
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    // Wait for the first publish rather than a fixed sleep: under a
+    // loaded test run the spawned task may not be scheduled for a while.
+    let published = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let snap = sink.lock().clone();
+            if snap.pool.metrics[PoolField::StatsCount.index()] == 1 {
+                return snap;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("aggregator should have published the recorded counter");
     token.cancel();
     handle.await.expect("aggregator task joins cleanly");
-    // The sink received a snapshot reflecting the counter write.
-    let published = sink.lock().clone();
-    assert_eq!(
-        published.pool.metrics[PoolField::StatsCount.index()],
-        1,
-        "aggregator should have published the recorded counter"
-    );
+    assert_eq!(published.pool.metrics[PoolField::StatsCount.index()], 1);
 }
 
 #[tokio::test]
