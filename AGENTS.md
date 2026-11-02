@@ -22,6 +22,13 @@ when a decision genuinely requires human input.
 Netflix Dynomite (C). Library + binary. TCP and QUIC transports. IPv4 and
 IPv6. Full test, fuzz, bench, and docs coverage.
 
+**Active plan: `docs/transliteration/PLAN.md`.** "Functionally identical"
+means a transliteration: every C function, operational feature, and C test
+reproduced in Rust with the C logic, verified against the C reference
+(`~/src/dynomite`, `DYNOMITE_C_REF`), tracked in
+`docs/transliteration/ledger.tsv`, and at least as fast as C on every
+measured dimension. Read that plan before touching the engine core.
+
 **Non-negotiables**:
 
 1. **No stubs, no `unimplemented!()`, no `todo!()`, no `panic!("TODO")`.**
@@ -41,9 +48,11 @@ IPv6. Full test, fuzz, bench, and docs coverage.
    logs, .pi state, `.aider*`, `.history`, `*.swp`, `*.bak`,
    `*.orig`, etc. are gitignored and must never appear in commits.
 6. **No reimagining.** When you find yourself "improving" the C design,
-   stop, re-read the C, and reproduce its behavior. Improvements that we
-   choose to make are recorded as a `Deviation:` entry in
-   `docs/parity.md` with rationale.
+   stop, re-read the C, and reproduce its behavior. A deviation exists only
+   as an `AUTHORIZED` entry in `docs/transliteration/deviations.md`, signed
+   by the owner. Agents propose deviations as `PROPOSED` entries with
+   evidence and ask the owner directly; code relying on a `PROPOSED` entry
+   does not merge.
 7. **Every public item is documented**, every documented example is a
    doctest, and every doctest builds.
 8. **Every commit must build, lint, format, and test cleanly.** Bisect must
@@ -297,23 +306,20 @@ Both must produce identical observable behavior. Tests cover both.
 
 ### Skill activation
 
-The following skills are active for this project. Read each at session
-start the first time you touch the relevant area:
+Read each skill the first time you touch its area in a session:
 
-* `c-to-rust` - on first port of any C file.
-* `rust-idiomatic` - whenever shaping new public API.
-* `rust-error-handling` - when defining a new error type.
-* `rust-async` - when wiring tokio, channels, select, shutdown.
-* `rust-ownership` - when modeling shared mutable state (`Arc<Mutex<...>>`,
-  `tokio::sync::*`).
-* `rust-traits` - when designing the embedding hooks (Datastore, Transport,
-  ...).
-* `rust-testing` - when designing a stage's test plan.
+* `transliterate-c` (project skill, `.agents/skills/transliterate-c/`) -
+  before porting, re-porting, or reviewing any engine code that has a C
+  counterpart.
+* `hegel` - when writing property tests, including C-vs-Rust oracle
+  properties.
 * `review-diff` - on every self-review (Section 9).
 * `think-hard` - before any non-trivial design decision.
+* `pg-benchmark-rigor` and `benchmark` - before any C-vs-Rust performance
+  measurement.
 * `checkpoint` - at the end of every working session.
-* `maintain-docs` - whenever PLAN.md, AGENTS.md, parity.md, or the mdBook
-  changes.
+* `maintain-docs` - whenever PLAN.md, AGENTS.md, the transliteration docs,
+  or the mdBook changes.
 
 ---
 
@@ -739,7 +745,7 @@ scripts/quickfuzz.sh 60       # 60s smoke fuzz on every parser
 scripts/check_no_todos.sh     # greps for unimplemented!/todo!/TODO/FIXME in src/
 scripts/check_no_port_comments.sh  # greps for "ported from", "matches dyn_"
 scripts/check_ascii.sh        # rejects non-ASCII in src/, docs/, tests/
-scripts/check_parity.sh       # validates docs/parity.md against C and Rust
+scripts/check_parity.sh       # validates docs/transliteration/ledger.tsv against the C tree and Rust tree
 scripts/model.sh              # DST: stateright models of the distributed protocols (Section 6.5)
 scripts/consistency/check.sh  # Elle-style consistency check of a recorded history (Section 6.5)
 ```

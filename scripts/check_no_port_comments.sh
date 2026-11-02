@@ -24,6 +24,7 @@ HITS=$(grep -RInE -i "$PATTERN" \
   --exclude='NOTICE' \
   --exclude='LICENSE' \
   --exclude-dir='journal' \
+  --exclude-dir='transliteration' \
   crates docs 2>/dev/null || true)
 
 if [ -n "$HITS" ]; then

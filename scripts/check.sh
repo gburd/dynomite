@@ -109,6 +109,7 @@ echo "==> repo hygiene"
 "$ROOT/scripts/check_no_todos.sh"
 "$ROOT/scripts/check_no_port_comments.sh"
 "$ROOT/scripts/check_ascii.sh"
+"$ROOT/scripts/check_parity.sh"
 
 echo "==> conformance suite (Stage 14, --features integration)"
 # AGENTS.md Section 14b lists the conformance suite as one of

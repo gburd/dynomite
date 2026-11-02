@@ -30,3 +30,4 @@ dump.rdb
 .envrc
 .mcp.json
 .local-scratch/
+.zvec-grep/

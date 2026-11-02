@@ -1,5 +1,11 @@
 # Dynomite -> Rust Port: Staged Plan
 
+> **Superseded for the engine core by `docs/transliteration/PLAN.md`**
+> (2026-10). The stages below describe how the current code was first
+> built; the transliteration plan is the authority for what the engine
+> must become. Deviations are authorised only in
+> `docs/transliteration/deviations.md`.
+
 This is the authoritative, end-to-end plan for porting the Netflix Dynomite C
 codebase into a single Rust workspace. The result must be:
 
