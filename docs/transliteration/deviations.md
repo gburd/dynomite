@@ -332,6 +332,33 @@ held at its current behaviour until the owner decides.
   needed unless the owner wants ketama/modula/random as additions.
 * Status: RECORDED
 
+### DEV-H4: multiple tokens per node crash the C engine
+
+* C: the README states one token per node ("Currently, we don't support
+  vnode yet so this only works with one token"; `README.md:70`). The code
+  accepts a comma list anyway: `derive_tokens` (`dyn_token.c:185`) parses
+  every component, and `vnode_update` (`dyn_vnode.c:91-110`) then calls
+  `array_push(&rack->continuums)` once but writes `token_cnt` entries via
+  `array_get(orig_cnt + j)`. With `tokens: '101,2147483648,3000000000'`:
+  * the debug build aborts on `assert 'idx < a->nelem' failed`
+    (`dyn_array.c:135`) in `vnode_update`;
+  * the release build (`--enable-debug=no`, asserts compiled out) writes
+    past the continuum buffer and dies with SIGSEGV moments later in
+    `gossip_pool_init` (heap corruption).
+  Reproduced 2026-11-02 against both builds of `2046b05`.
+* Rust: `Rack::add_peer_tokens` (`cluster/datacenter.rs`) pushes one
+  continuum entry per token, so multiple tokens per node work and every
+  token routes.
+* Options: (a) transliterate the C contract: accept exactly one token per
+  node and reject a list with a clear config error (the C has no working
+  multi-token behaviour to copy; its observable behaviour is a crash);
+  (b) keep multi-token support as an authorised addition (vnodes).
+* Agent recommendation: (a) for the transliterated core, matching the
+  documented C contract; multi-token support can come back later as a
+  separately authorised addition if wanted. The parse path itself
+  (`parse_dyn_token`, `cmp_dyn_token`) is oracle-verified either way.
+* Status: PROPOSED
+
 ## E. Decisions log
 
 Owner decisions are appended here with date and the exact instruction.

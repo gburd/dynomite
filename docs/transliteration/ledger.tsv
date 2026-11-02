@@ -1528,10 +1528,10 @@ macro	str15icmp	src/dyn_util.h	338	todo
 macro	str16icmp	src/dyn_util.h	343	todo				
 macro	str17icmp	src/dyn_util.h	349	todo				
 struct	sockinfo	src/dyn_util.h	368	todo				
-fn	vnode_item_cmp	src/dyn_vnode.c	34	todo				
+fn	vnode_item_cmp	src/dyn_vnode.c	34	ported	crates/dynomite/src/hashkit/token.rs::cmp	crates/c-oracle/tests/token_oracle.rs::cmp_dyn_token_matches_c		qsort comparator == cmp_dyn_token; Rust sorts by DynToken Ord
 fn	vnode_rack_verify_continuum	src/dyn_vnode.c	41	todo				
 fn	vnode_update	src/dyn_vnode.c	61	todo				
-fn	vnode_dispatch	src/dyn_vnode.c	124	todo				
+fn	vnode_dispatch	src/dyn_vnode.c	124	ported	crates/dynomite/src/cluster/vnode.rs::dispatch	crates/c-oracle/tests/vnode_oracle.rs::vnode_dispatch_matches_c_random_key		
 macro	DN_CONF_PATH	src/dynomite.c	43	todo				
 macro	DN_CONF_PATH	src/dynomite.c	43	todo				
 macro	DN_LOG_DEFAULT	src/dynomite.c	46	todo				
@@ -1724,17 +1724,17 @@ macro	RANDOM_POINTS_PER_SERVER	src/hashkit/dyn_random.c	32	dead				DEV-H3: file 
 fn	random_update	src/hashkit/dyn_random.c	34	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 fn	random_dispatch	src/hashkit/dyn_random.c	144	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 macro	BITS_PER_DIGIT	src/hashkit/dyn_token.c	33	todo				
-macro	DIGITS_PER_INT	src/hashkit/dyn_token.c	36	todo				
+macro	DIGITS_PER_INT	src/hashkit/dyn_token.c	36	ported	crates/dynomite/src/hashkit/token.rs::DIGITS_PER_INT			
 fn	init_dyn_token	src/hashkit/dyn_token.c	38	todo				
 fn	deinit_dyn_token	src/hashkit/dyn_token.c	43	todo				
 fn	size_dyn_token	src/hashkit/dyn_token.c	50	todo				
 fn	copy_dyn_token	src/hashkit/dyn_token.c	60	todo				
 fn	set_int_dyn_token	src/hashkit/dyn_token.c	68	todo				
 fn	print_dyn_token	src/hashkit/dyn_token.c	74	todo				
-fn	add_next_word	src/hashkit/dyn_token.c	83	todo				
-fn	parse_dyn_token	src/hashkit/dyn_token.c	106	todo				
-fn	cmp_dyn_token	src/hashkit/dyn_token.c	154	todo				
-fn	derive_tokens	src/hashkit/dyn_token.c	185	todo				
+fn	add_next_word	src/hashkit/dyn_token.c	83	ported	crates/dynomite/src/hashkit/token.rs::add_next_word	crates/c-oracle/tests/token_oracle.rs::parse_dyn_token_matches_c		exercised by >10-digit inputs
+fn	parse_dyn_token	src/hashkit/dyn_token.c	106	ported	crates/dynomite/src/hashkit/token.rs::parse_token	crates/c-oracle/tests/token_oracle.rs::parse_dyn_token_matches_c		
+fn	cmp_dyn_token	src/hashkit/dyn_token.c	154	ported	crates/dynomite/src/hashkit/token.rs::cmp	crates/c-oracle/tests/token_oracle.rs::cmp_dyn_token_matches_c		Rust impl Ord for DynToken
+fn	derive_tokens	src/hashkit/dyn_token.c	185	pending:DEV-H4	crates/dynomite/src/hashkit/token.rs::parse_token			C crashes on >1 token; see DEV-H4
 fn	derive_token	src/hashkit/dyn_token.c	219	todo				
 macro	_DYN_TOKEN_H_	src/hashkit/dyn_token.h	7	todo				
 struct	dyn_token	src/hashkit/dyn_token.h	14	todo				

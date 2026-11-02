@@ -31,6 +31,7 @@ const UNITS: &[&str] = &[
     "src/hashkit/dyn_murmur3.c",
     "src/hashkit/dyn_one_at_a_time.c",
     "src/hashkit/dyn_token.c",
+    "src/dyn_vnode.c",
     "contrib/murmur3/murmur3.c",
 ];
 
@@ -84,6 +85,11 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
         build.file(path);
     }
+    // Link-only stand-ins for symbols the compiled units reference but the
+    // oracled functions never call (see csrc/link_stubs.c).
+    let stubs = manifest.join("csrc/link_stubs.c");
+    println!("cargo:rerun-if-changed={}", stubs.display());
+    build.file(stubs);
     build.compile("dynomite_c_oracle");
     println!("cargo:rustc-link-lib=m");
 }
