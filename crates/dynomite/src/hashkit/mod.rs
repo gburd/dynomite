@@ -11,7 +11,7 @@
 //! use dynomite::hashkit::{hash, HashType};
 //!
 //! let token = hash(HashType::Murmur3, b"dynomite");
-//! assert_eq!(token.len(), 4);
+//! assert_eq!(token.len(), 1);
 //! ```
 
 // Hashing primitives reinterpret bytes across signed/unsigned
@@ -167,9 +167,8 @@ impl HashType {
 
 /// Hash `key` with the requested algorithm and return the resulting token.
 ///
-/// The returned token has `len == 1` for every 32-bit algorithm and
-/// `len == 4` for `Murmur3`. The contract is identical to the C
-/// `hash_func_t` it replaces: dispatch is total over [`HashType::all`].
+/// The returned ring token has `len == 1` for every algorithm, the width
+/// of a node token. Dispatch is total over [`HashType::all`].
 ///
 /// # Examples
 ///
@@ -196,53 +195,53 @@ pub fn hash(ty: HashType, key: &[u8]) -> DynToken {
         HashType::Murmur => murmur::hash(key),
         HashType::Jenkins => jenkins::hash(key),
         HashType::Murmur3 => murmur3::hash(key),
+        // The vnode ring holds 32-bit node tokens, so the 64-bit hash is
+        // folded to its high word; a wider token would sort above every
+        // node and route every key to the first one.
         HashType::Murmur3X64_64 => {
-            // Pack the 64-bit fingerprint into the low two
-            // words of a `DynToken` so callers that compare
-            // against the existing 32-bit ring math observe the
-            // canonical low-half ordering. The random-slicing
-            // dispatcher does not consume tokens directly; it
-            // calls [`hash64`] for its u64 ring lookup.
-            let h = murmur3::murmur3_x64_64(0xc0a1_e5ce, key);
-            let mut token = DynToken::default();
-            token.size(2).expect("len 2 fits");
-            let mag = token.mag_mut();
-            mag[0] = h as u32;
-            mag[1] = (h >> 32) as u32;
-            token
+            DynToken::from_u32((murmur3::murmur3_x64_64(0xc0a1_e5ce, key) >> 32) as u32)
         }
     }
 }
 
-/// Hash `key` and return a 64-bit value used by the
-/// random-slicing distribution table.
-///
-/// Every algorithm has a deterministic 64-bit projection: the
-/// 64-bit and 128-bit families return their natural width
-/// (truncated to 64 bits where applicable), and the legacy
-/// 32-bit families lift their result into the low half of the
-/// returned `u64`. The function is total over
-/// [`HashType::all`].
+/// The 128-bit `MurmurHash3_x86_128` fingerprint of `key` (seed
+/// `0xc0a1e5ce`) as four words. A wide fingerprint for sketches such as
+/// HyperLogLog; not a ring token (use [`hash`] for routing).
 ///
 /// # Examples
 ///
 /// ```
-/// use dynomite::hashkit::{hash64, HashType};
+/// use dynomite::hashkit::murmur3_x86_128;
+/// assert_eq!(murmur3_x86_128(b"a").len(), 4);
+/// ```
+#[must_use]
+pub fn murmur3_x86_128(key: &[u8]) -> DynToken {
+    murmur3::hash_x86_128(key)
+}
+
+/// Hash `key` and return a 64-bit value used by the
+/// random-slicing distribution table, which partitions the full 64-bit
+/// space.
 ///
-/// let a = hash64(HashType::Murmur3X64_64, b"alice");
-/// let b = hash64(HashType::Murmur3X64_64, b"alice");
-/// assert_eq!(a, b);
+/// `Murmur3X64_64` returns its natural 64-bit value. Every other
+/// algorithm yields a 32-bit ring token, which is placed in the high half
+/// of the returned `u64` so it spans the whole table; left in the low half
+/// it would always fall in the first slice.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::hashkit::{hash, hash64, HashType};
+///
+/// let t = hash(HashType::Murmur, b"alice").get_int();
+/// assert_eq!(hash64(HashType::Murmur, b"alice"), u64::from(t) << 32);
 /// ```
 #[must_use]
 pub fn hash64(ty: HashType, key: &[u8]) -> u64 {
     if matches!(ty, HashType::Murmur3X64_64) {
         return murmur3::murmur3_x64_64(0xc0a1_e5ce, key);
     }
-    let token = hash(ty, key);
-    let mag = token.mag();
-    let lo = u64::from(mag[0]);
-    let hi = if mag.len() > 1 { u64::from(mag[1]) } else { 0 };
-    (hi << 32) | lo
+    u64::from(hash(ty, key).get_int()) << 32
 }
 
 /// Compute the raw 128-byte MD5 digest of `key`.
@@ -303,20 +302,11 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_lengths_match_c_codec() {
+    fn every_ring_token_is_one_word() {
+        // Node tokens are one word and token order compares length first,
+        // so a wider key token would route every key to the first node.
         for ty in HashType::all().iter().copied() {
-            let token = hash(ty, b"k");
-            let expected = match ty {
-                HashType::Murmur3 => 4,
-                HashType::Murmur3X64_64 => 2,
-                _ => 1,
-            };
-            assert_eq!(
-                token.len(),
-                expected,
-                "wrong token length for {ty:?}: got {}",
-                token.len()
-            );
+            assert_eq!(hash(ty, b"k").len(), 1, "{ty:?}");
         }
     }
 }

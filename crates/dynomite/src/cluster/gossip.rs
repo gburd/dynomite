@@ -35,7 +35,7 @@ use crate::cluster::failure_detector::DEFAULT_THRESHOLD;
 use crate::cluster::peer::PeerState;
 use crate::cluster::pool::ServerPool;
 use crate::events::{ClusterEvent, EventManager};
-use crate::hashkit::{token::parse_token, DynToken};
+use crate::hashkit::DynToken;
 
 /// Default gossip period (ms) - mirrors `CONF_DEFAULT_GOS_INTERVAL`
 /// (1000 ms).
@@ -284,7 +284,8 @@ pub enum GossipStep {
 ///
 /// ```
 /// use dynomite::cluster::gossip::parse_seed_node;
-/// assert!(parse_seed_node("h:1:r:d:1,2,3").is_ok());
+/// assert!(parse_seed_node("h:1:r:d:7").is_ok());
+/// assert!(parse_seed_node("h:1:r:d:1,2,3").is_err());
 /// assert!(parse_seed_node("h:1:r:d").is_err());
 /// ```
 pub fn parse_seed_node(raw: &str) -> Result<SeedRecord, String> {
@@ -317,14 +318,11 @@ pub fn parse_seed_node(raw: &str) -> Result<SeedRecord, String> {
     if port == 0 {
         return Err(format!("zero port in '{raw}'"));
     }
-    if tokens_str.is_empty() {
-        return Err(format!("empty tokens in '{raw}'"));
-    }
-    let mut tokens = Vec::new();
-    for t in tokens_str.split(',') {
-        let parsed = parse_token(t.as_bytes()).map_err(|e| format!("bad token '{t}': {e}"))?;
-        tokens.push(parsed);
-    }
+    // One token per node, in 0..=u32::MAX: the same rule `tokens:` and
+    // `dyn_seeds` follow (see `conf::TokenList`).
+    let token = crate::conf::TokenList::parse(tokens_str)
+        .map_err(|e| format!("bad token in '{raw}': {e}"))?;
+    let tokens = vec![DynToken::from_u32(token.value())];
     Ok(SeedRecord {
         host: host.to_string(),
         port,
@@ -734,9 +732,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_multi_token_seed() {
-        let r = parse_seed_node("h:1:r:d:1,2,3").unwrap();
-        assert_eq!(r.tokens.len(), 3);
+    fn regression_multi_token_seed_rejected() {
+        // DEV-H4: one token per node; a list is rejected, as is a token
+        // outside 0..=u32::MAX.
+        assert!(parse_seed_node("h:1:r:d:1,2,3").is_err());
+        assert!(parse_seed_node("h:1:r:d:-7").is_err());
+        assert!(parse_seed_node("h:1:r:d:4294967296").is_err());
+        let r = parse_seed_node("h:1:r:d:4294967295").unwrap();
+        assert_eq!(r.tokens, vec![DynToken::from_u32(u32::MAX)]);
     }
 
     #[test]

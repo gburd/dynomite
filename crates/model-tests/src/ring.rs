@@ -25,6 +25,15 @@
 //!   re-routes keys in the affected token range -- keys whose primary
 //!   was neither the joined/left owner nor in the immediately
 //!   preceding arc keep their primary.
+//!
+//! [`TokenOrderModel`] covers the comparison the dispatcher actually runs
+//! (`DynToken`'s `Ord`, the C `cmp_dyn_token`): tokens compare by sign,
+//! then by word count, then word by word. It checks **placement reach**:
+//! when every ring token (node and key) is one word, every node owns some
+//! key. Its negative control is the defect where a hash produced a
+//! multi-word key token: such a token sorts above every one-word node
+//! token, so every key wraps to the first node, and the checker must
+//! report that.
 
 use std::collections::BTreeSet;
 
@@ -270,6 +279,93 @@ fn primary_token(ring: &Ring, key: Token) -> Option<Token> {
     Some(ring.points[idx].0)
 }
 
+/// A ring token as the dispatcher compares it: `(word count, words)`,
+/// all positive (the sign rule never applies, since negative tokens are
+/// rejected at parse time). `cmp_dyn_token` compares word count first,
+/// then the words; deriving `Ord` on `(len, words)` is exactly that.
+pub type WideToken = (u8, Vec<u8>);
+
+/// Primary owner of `key` on a sorted ring of `(token, owner)` points,
+/// using the token order above. Same selection as [`Ring::primary`].
+fn primary_wide(points: &[(WideToken, Owner)], key: &WideToken) -> Option<Owner> {
+    let (first, last) = (points.first()?, points.last()?);
+    if &last.0 < key || &first.0 >= key {
+        return Some(first.1);
+    }
+    let idx = points.partition_point(|(t, _)| t < key);
+    Some(points[idx].1)
+}
+
+/// Placement reach under the dispatcher's token order. The state is the
+/// set of node tokens placed so far; actions place one more node at a
+/// one-word token. Every reachable ring is checked: each node must own at
+/// least one key token from `key_width`-word hash outputs.
+pub struct TokenOrderModel {
+    /// Candidate one-word node tokens (small domain).
+    pub node_tokens: Vec<u8>,
+    /// Width, in words, of the key tokens the hash emits. `1` is the
+    /// fixed behaviour; anything wider is the regression.
+    pub key_width: u8,
+}
+
+impl TokenOrderModel {
+    fn keys(&self) -> Vec<WideToken> {
+        // Every value of the low word, at the configured width: a wide key
+        // keeps the hash's high words (here: a fixed non-zero word) ahead
+        // of the low word, as the four-word murmur3 token did.
+        (0..=u8::MAX)
+            .map(|lo| {
+                let mut words = vec![1u8; usize::from(self.key_width) - 1];
+                words.push(lo);
+                (self.key_width, words)
+            })
+            .collect()
+    }
+}
+
+impl Model for TokenOrderModel {
+    type State = Vec<u8>;
+    type Action = u8;
+
+    fn init_states(&self) -> Vec<Self::State> {
+        vec![Vec::new()]
+    }
+
+    fn actions(&self, state: &Self::State, actions: &mut Vec<Self::Action>) {
+        for t in &self.node_tokens {
+            if !state.contains(t) {
+                actions.push(*t);
+            }
+        }
+    }
+
+    fn next_state(&self, last: &Self::State, action: Self::Action) -> Option<Self::State> {
+        let mut next = last.clone();
+        next.push(action);
+        next.sort_unstable();
+        Some(next)
+    }
+
+    fn properties(&self) -> Vec<Property<Self>> {
+        vec![Property::<Self>::always(
+            "every node owns a key",
+            |model, s| {
+                if s.len() < 2 {
+                    return true;
+                }
+                let points: Vec<(WideToken, Owner)> =
+                    s.iter().map(|t| ((1, vec![*t]), *t)).collect();
+                let owners: BTreeSet<Owner> = model
+                    .keys()
+                    .iter()
+                    .filter_map(|k| primary_wide(&points, k))
+                    .collect();
+                owners.len() == s.len()
+            },
+        )]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,5 +424,38 @@ mod tests {
         .join();
         checker.assert_properties();
         assert!(checker.unique_state_count() > 1);
+    }
+
+    /// Fixed behaviour: one-word key tokens reach every node on every
+    /// reachable ring of one-word node tokens.
+    #[test]
+    fn one_word_key_tokens_reach_every_node() {
+        let checker = TokenOrderModel {
+            node_tokens: vec![0, 40, 90, 160, 230],
+            key_width: 1,
+        }
+        .checker()
+        .spawn_bfs()
+        .join();
+        checker.assert_properties();
+        assert!(checker.unique_state_count() > 10);
+    }
+
+    /// Negative control: four-word key tokens (the old `murmur3`) sort
+    /// above every node token, so every key lands on the first node. The
+    /// checker must find the violation.
+    #[test]
+    fn negative_control_wide_key_tokens_collapse_onto_one_node() {
+        let checker = TokenOrderModel {
+            node_tokens: vec![0, 40, 90, 160, 230],
+            key_width: 4,
+        }
+        .checker()
+        .spawn_bfs()
+        .join();
+        assert!(
+            checker.discovery("every node owns a key").is_some(),
+            "the checker must catch multi-word key tokens collapsing placement"
+        );
     }
 }

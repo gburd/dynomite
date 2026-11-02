@@ -8,7 +8,7 @@
 //! specifics that have no canonical test vectors (CRC-16/CCITT,
 //! libmemcached CRC-32, MurmurHash 2 with the C seed of `0xdeadbeef *
 //! length`, Bob Jenkins lookup3 in byte-by-byte mode, and MurmurHash3
-//! x86_128 with the seed `0xc0a1e5ce` chosen by the C source).
+//! x86_32 with the seed `0xc0a1e5ce`).
 //!
 //! # Self-anchoring
 //!
@@ -23,17 +23,13 @@
 //!   and [`fnv1a_32_canonical_vectors`]).
 //! * The standard CRC-32 vector `123456789 -> 0xCBF43926`
 //!   (`crc32::tests::crc32a_known_vectors`).
-//! * MurmurHash3 x86_128 of the empty string with seed 0 = `[0;4]`
-//!   (algorithmic property).
+//! * Published MurmurHash3 x86_32 vectors
+//!   (`murmur3::tests::x86_32_golden_vectors`).
 //!
-//! PLAN.md Stage 3 also suggested anchoring against the C
-//! `dyn_hash_tool` as an oracle. That tool only supports the
-//! `murmur` algorithm, so it can anchor only one of the thirteen
-//! columns. Once a host with the C build environment is available,
-//! piping a small key set through it and diffing against
-//! `dyn-hash-tool --c-compat -H murmur` is the intended next step.
-//! For now, the murmur column shares the self-anchored treatment
-//! described above.
+//! Every column except `murmur3` and `one_at_a_time` is also checked
+//! against the compiled C reference by the `c-oracle` crate; those two
+//! are owner-authorised deviations (DEV-H1, DEV-H2), each pinned there
+//! by its own test.
 //!
 //! Once committed, the fixture is the regression contract: any change
 //! that breaks even one row blocks merge.

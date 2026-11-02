@@ -750,26 +750,18 @@ fn build_local_peer(pool: &ConfPool, cfg: &PoolConfig) -> Peer {
         || ("127.0.0.1".to_string(), 0u16),
         |l| (l.name().to_string(), l.port()),
     );
-    let tokens = pool
+    // A parsed TokenList holds exactly one in-range token; the builder
+    // defaults `tokens:` to "0" when unset.
+    let token = pool
         .tokens
         .as_ref()
-        .map(|tl| {
-            tl.components()
-                .iter()
-                .map(|c| DynToken::from_u32(c.digits.parse::<u32>().unwrap_or(0)))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        .map_or(0, crate::conf::TokenList::value);
     let mut peer = Peer::new(
         0,
         PeerEndpoint::tcp(dyn_listen.0, dyn_listen.1),
         cfg.rack.clone(),
         cfg.dc.clone(),
-        if tokens.is_empty() {
-            vec![DynToken::from_u32(0)]
-        } else {
-            tokens
-        },
+        vec![DynToken::from_u32(token)],
         true,
         true,
         false,
@@ -789,12 +781,7 @@ fn peers_from_seeds(cfg: &PoolConfig, seeds: &[ConfDynSeed], start_idx: u32) -> 
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let tokens: Vec<DynToken> = s
-                .tokens()
-                .components()
-                .iter()
-                .map(|c| DynToken::from_u32(c.digits.parse::<u32>().unwrap_or(0)))
-                .collect();
+            let tokens = vec![DynToken::from_u32(s.tokens().value())];
             let idx_off = u32::try_from(i).unwrap_or(0);
             let mut p = Peer::new(
                 start_idx + idx_off,
@@ -1047,12 +1034,7 @@ async fn gossip_loop(inner: Arc<ServerInner>, interval: Duration) {
                             continue;
                         }
                         let next_idx = u32::try_from(peers.len()).unwrap_or(u32::MAX);
-                        let tokens: Vec<DynToken> = seed
-                            .tokens()
-                            .components()
-                            .iter()
-                            .map(|c| DynToken::from_u32(c.digits.parse::<u32>().unwrap_or(0)))
-                            .collect();
+                        let tokens = vec![DynToken::from_u32(seed.tokens().value())];
                         let mut p = Peer::new(
                             next_idx,
                             PeerEndpoint::tcp(seed.host().to_string(), seed.port()),

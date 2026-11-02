@@ -1717,8 +1717,8 @@ fn	modula_update	src/hashkit/dyn_modula.c	34	dead				DEV-H3: file not in libhash
 fn	modula_dispatch	src/hashkit/dyn_modula.c	155	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 fn	hash_murmur	src/hashkit/dyn_murmur.c	43	ported	crates/dynomite/src/hashkit/murmur.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 macro	MURMUR3_SEED	src/hashkit/dyn_murmur3.c	27	todo				
-fn	hash_murmur3	src/hashkit/dyn_murmur3.c	29	pending:DEV-H1	crates/dynomite/src/hashkit/murmur3.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::c_murmur3_is_constant_zero		
-fn	hash_one_at_a_time	src/hashkit/dyn_one_at_a_time.c	40	pending:DEV-H2	crates/dynomite/src/hashkit/one_at_a_time.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::one_at_a_time_matches_c_on_ascii_keys		
+fn	hash_murmur3	src/hashkit/dyn_murmur3.c	29	deviation:DEV-H1	crates/dynomite/src/hashkit/murmur3.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::murmur3_ring_token_is_c_contrib_x86_32		
+fn	hash_one_at_a_time	src/hashkit/dyn_one_at_a_time.c	40	deviation:DEV-H2	crates/dynomite/src/hashkit/one_at_a_time.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::one_at_a_time_reads_bytes_unsigned		
 macro	RANDOM_CONTINUUM_ADDITION	src/hashkit/dyn_random.c	30	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 macro	RANDOM_POINTS_PER_SERVER	src/hashkit/dyn_random.c	32	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 fn	random_update	src/hashkit/dyn_random.c	34	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
@@ -1734,8 +1734,8 @@ fn	print_dyn_token	src/hashkit/dyn_token.c	74	todo
 fn	add_next_word	src/hashkit/dyn_token.c	83	ported	crates/dynomite/src/hashkit/token.rs::add_next_word	crates/c-oracle/tests/token_oracle.rs::parse_dyn_token_matches_c		exercised by >10-digit inputs
 fn	parse_dyn_token	src/hashkit/dyn_token.c	106	ported	crates/dynomite/src/hashkit/token.rs::parse_token	crates/c-oracle/tests/token_oracle.rs::parse_dyn_token_matches_c		
 fn	cmp_dyn_token	src/hashkit/dyn_token.c	154	ported	crates/dynomite/src/hashkit/token.rs::cmp	crates/c-oracle/tests/token_oracle.rs::cmp_dyn_token_matches_c		Rust impl Ord for DynToken
-fn	derive_tokens	src/hashkit/dyn_token.c	185	pending:DEV-H4	crates/dynomite/src/hashkit/token.rs::parse_token			C crashes on >1 token; see DEV-H4
-fn	derive_token	src/hashkit/dyn_token.c	219	todo				
+fn	derive_tokens	src/hashkit/dyn_token.c	185	deviation:DEV-H4	crates/dynomite/src/conf/tokens.rs::parse			single token only; see DEV-H4
+fn	derive_token	src/hashkit/dyn_token.c	219	deviation:DEV-H4	crates/dynomite/src/cluster/gossip.rs::parse_seed_node			seed token; single in-range token via TokenList::parse (DEV-H4)
 macro	_DYN_TOKEN_H_	src/hashkit/dyn_token.h	7	todo				
 struct	dyn_token	src/hashkit/dyn_token.h	14	todo				
 macro	MEMCACHE_MAX_KEY_LENGTH	src/proto/dyn_memcache.c	39	todo				

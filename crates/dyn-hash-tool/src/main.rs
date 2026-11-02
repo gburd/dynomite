@@ -19,7 +19,7 @@
 //!
 //! ```text
 //! one_at_a_time:hello:01b78c00
-//! murmur3:hello:6a85af6f1bd6efee9b4c9bf2c2eaa2ce
+//! murmur3:hello:c94b6da9
 //! ```
 //!
 //! # C-compatible mode (`--c-compat`)

@@ -36,7 +36,7 @@ use dyniak::mapreduce::{
 use dyniak::replication::{ReplicationStrategy, RingPoint, RingView};
 use dyniak::router::BucketRouter;
 use dyniak::{BucketProps, BucketPropsRegistry};
-use dynomite::hashkit::{hash64, HashType};
+use dynomite::hashkit::{hash, HashType};
 
 /// Workspace-relative path to a fixture crate's manifest.
 fn fixture_manifest(name: &str) -> PathBuf {
@@ -151,8 +151,8 @@ fn real_rust_wasm_custom_keyfun_routes_live_keys() {
         },
     );
 
-    let hash = HashType::Murmur;
-    let router = BucketRouter::new(registry, five_peer_ring(), hash).with_keyfun_store(store);
+    let hash_ty = HashType::Murmur;
+    let router = BucketRouter::new(registry, five_peer_ring(), hash_ty).with_keyfun_store(store);
 
     // The fixture rule is `<bucket>:<reversed key>`. Assert the
     // route bytes exactly for several keys, and that the chosen
@@ -171,7 +171,7 @@ fn real_rust_wasm_custom_keyfun_routes_live_keys() {
         );
         // The decision's primary peer is the ring lookup of the
         // hash of those exact route bytes.
-        let want_hash = hash64(hash, expected);
+        let want_hash = u64::from(hash(hash_ty, expected).get_int());
         assert_eq!(decision.key_hash, want_hash, "hash of route bytes");
     }
 

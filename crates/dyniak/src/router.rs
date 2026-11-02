@@ -62,7 +62,7 @@ use std::sync::Arc;
 
 use dynomite::cluster::ReplicaTarget;
 use dynomite::embed::hooks::BoxFuture;
-use dynomite::hashkit::{hash64, HashType};
+use dynomite::hashkit::{hash, HashType};
 use dynomite::msg::ConsistencyLevel;
 
 use crate::bucket_props::{BucketProps, BucketPropsRegistry};
@@ -83,7 +83,8 @@ pub struct RouteDecision {
     pub props: BucketProps,
     /// Bytes fed to the hash function (after [`KeyFun`]).
     pub route_bytes: Vec<u8>,
-    /// 64-bit hash of [`Self::route_bytes`].
+    /// Ring position of [`Self::route_bytes`]: the 32-bit ring token of the
+    /// configured hash, widened to `u64` to match the ring's point type.
     pub key_hash: u64,
     /// Replica plan produced by [`plan_replicas`]. For
     /// [`ReplicationStrategy::Topology`] the plan carries an
@@ -280,7 +281,10 @@ impl BucketRouter {
         let strategy = props.effective_strategy();
         let n_val = props.effective_n_val();
         let route_bytes = self.resolve_route_bytes(&kf, bucket, key)?;
-        let key_hash = hash64(self.hash, &route_bytes);
+        // The ring holds 32-bit node tokens, so look up the 32-bit ring
+        // token (what the vnode dispatcher uses), not a 64-bit hash that
+        // could exceed every node.
+        let key_hash = u64::from(hash(self.hash, &route_bytes).get_int());
         let plan = match (&self.liveness, strategy) {
             (Some(liveness), ReplicationStrategy::Successors) => {
                 crate::replication::plan_replicas_with_liveness(
@@ -752,5 +756,27 @@ mod tests {
         let d = router.route(b"", b"users", b"alice");
         assert_eq!(d.bucket_type, b"default");
         assert_eq!(d.keyfun(), KeyFun::BucketOnly);
+    }
+
+    /// Regression: the router looked keys up with a 64-bit hash against a
+    /// ring of 32-bit node tokens, so `murmur3` and `murmur3_x64_64` sent
+    /// every key past the last node to the first one.
+    #[test]
+    fn regression_every_hash_spreads_over_the_node_token_ring() {
+        let reg = Arc::new(BucketPropsRegistry::new_riak_defaults());
+        for ty in HashType::all().iter().copied() {
+            if ty == HashType::Crc32 {
+                // A 15-bit hash by definition; it only reaches node 0.
+                continue;
+            }
+            let router = BucketRouter::new(Arc::clone(&reg), five_peer_ring(), ty);
+            let mut seen = std::collections::BTreeSet::new();
+            for i in 0..2_000u32 {
+                let key = format!("key:{i}");
+                let d = router.route(b"default", b"users", key.as_bytes());
+                seen.insert(d.replica_list()[0].peer_idx);
+            }
+            assert!(seen.len() > 1, "{ty:?} routed every key to one node");
+        }
     }
 }

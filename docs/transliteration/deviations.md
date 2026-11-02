@@ -286,19 +286,28 @@ held at its current behaviour until the owner decides.
 * C: `src/hashkit/dyn_murmur3.c` sizes the token to 4 words and returns
   without hashing; the `MurmurHash3_x86_128(...)` call has been commented
   out since 2013-12-10 (upstream `9eb54c1`). Every key yields the zero
-  token, so with `hash: murmur3` every key routes to the same vnode.
+  token, so with `hash: murmur3` every key routes to the same node.
   `hash: murmur` (MurmurHash2) is the C default and is unaffected.
-* Rust: computes real MurmurHash3 x86_128 (seed `0xc0a1e5ce`). Also uses it
-  internally (dyniak HyperLogLog, random slicing via `murmur3_x64_64`).
-* Pinned by: `c-oracle/tests/hashkit_oracle.rs::c_murmur3_is_constant_zero`.
-* Options: (a) transliterate the C (constant zero; selecting murmur3
-  collapses a cluster onto one node); (b) keep the real MurmurHash3 as an
-  authorised deviation; (c) reject `murmur3` as a client-key hash and keep
-  it for internal use only.
-* Agent recommendation: (b). The C behaviour is a latent bug no operator
-  would want; the function's name, token size, and seed all show the intent
-  was MurmurHash3 x86_128.
-* Status: PROPOSED
+* Rust, before this decision: real `MurmurHash3_x86_128`, as a 4-word
+  token. That was also broken: node tokens are one word, and
+  `cmp_dyn_token` compares length before magnitude, so every 4-word key
+  token sorted above every node and routed to the first node. Measured on
+  a 3-node `dynomited` cluster: 300 of 300 keys on one node.
+* Decision: `hash: murmur3` is `MurmurHash3_x86_32` with the C seed
+  `0xc0a1e5ce`, emitted as a one-word ring token like every other hash.
+  The owner asked for the real MurmurHash3 unless a better hash is known
+  for this purpose. For 32-bit ring placement, MurmurHash3_x86_32 has full
+  avalanche and passes SMHasher; faster modern hashes (xxHash3, wyhash)
+  buy throughput, not placement quality, at key lengths where hashing is
+  a negligible share of a proxied request. It is also the hash the
+  Netflix `dyno` client's `Murmur3HashPartitioner` computes.
+  `MurmurHash3_x86_128` stays available as `hashkit::murmur3_x86_128` for
+  internal wide fingerprints (HyperLogLog), unchanged.
+* Pinned by: `c-oracle/tests/hashkit_oracle.rs::c_murmur3_is_constant_zero`
+  (C side) and `::murmur3_ring_token_is_c_contrib_x86_32` (Rust equals the
+  C tree's own contrib `MurmurHash3_x86_32`), plus
+  `dynomite/tests/regression_hash_placement.rs`.
+* Status: AUTHORIZED (owner, 2026-11-02)
 
 ### DEV-H2: C `one_at_a_time` sign-extends bytes >= 0x80
 
@@ -316,7 +325,10 @@ held at its current behaviour until the owner decides.
   algorithm and the C on unsigned-`char` targets.
 * Agent recommendation: (b), given P1 (no C cluster ever shares a ring with
   a Rust one, so no key placement must match a running C node).
-* Status: PROPOSED
+* Decision: read bytes unsigned.
+* Pinned by: `c-oracle/tests/hashkit_oracle.rs::one_at_a_time_matches_c_on_ascii_keys`
+  (exact C agreement below 0x80) and `::one_at_a_time_reads_bytes_unsigned`.
+* Status: AUTHORIZED (owner, 2026-11-02)
 
 ### DEV-H3: ketama, modula, and random distributions are dead code in C
 
@@ -357,7 +369,19 @@ held at its current behaviour until the owner decides.
   documented C contract; multi-token support can come back later as a
   separately authorised addition if wanted. The parse path itself
   (`parse_dyn_token`, `cmp_dyn_token`) is oracle-verified either way.
-* Status: PROPOSED
+* Decision (owner, 2026-11-02): reject multi-token lists and close the
+  hole. `conf::TokenList::parse` admits exactly one token in
+  `0..=4294967295`; `tokens:`, `dyn_seeds`, and seeds-provider records all
+  go through it. Also rejected, same rationale: negative tokens (C stores
+  signum `-1` as `0xffffffff`, so they sort above every positive token)
+  and tokens above `u32::MAX` (C `parse_dyn_token` keeps one word and
+  wraps modulo 2^32; the embed path silently mapped them to 0).
+* Pinned by: `conf/tokens.rs::regression_multi_token_list_rejected`,
+  `::regression_negative_token_rejected`,
+  `::regression_out_of_range_token_rejected`,
+  `cluster/gossip.rs::regression_multi_token_seed_rejected`,
+  `conf/server.rs::regression_dyn_seed_multi_token_rejected`.
+* Status: AUTHORIZED
 
 ## E. Decisions log
 
@@ -370,3 +394,20 @@ Owner decisions are appended here with date and the exact instruction.
   DEV-F1 (failure detection), DEV-C1 (AES-256-GCM, keep), DEV-E1 and
   DEV-E2 (entropy format, padding, throttle), DEV-K1 (config direction;
   schema design still to be reviewed).
+* 2026-11-02: DEV-H1 AUTHORIZED ("use the real MurmurHash3 unless there is
+  an even better hash function known for this purpose"), implemented as
+  `MurmurHash3_x86_32`, one-word ring token. DEV-H2 AUTHORIZED
+  ("unsigned"). DEV-H4 AUTHORIZED ("reject multi-token lists, close that
+  bug/loop-hole"); the same single parser also rejects negative and
+  above-`u32::MAX` tokens. Token width stays 32-bit (owner question on
+  `u64` answered in the journal: no placement benefit at any plausible
+  node count; widening is a separate change if ever wanted).
+* 2026-11-02: defects found in authorised additions while implementing the
+  above, fixed without changing their contracts: random slicing (DEV-A9)
+  received 32-bit hashes in the low half of a `u64` and put every key in
+  the first slice (`hashkit::hash64` now lifts them to the high half); the
+  dyniak replica router (DEV-A1) looked a 64-bit hash up in a ring of
+  32-bit node tokens (`router.rs` now uses the 32-bit ring token).
+  `murmur3_x64_64` as a vnode ring token is folded to its high word.
+  Pinned by `dynomite/tests/regression_hash_placement.rs` and
+  `dyniak/src/router.rs::regression_every_hash_spreads_over_the_node_token_ring`.

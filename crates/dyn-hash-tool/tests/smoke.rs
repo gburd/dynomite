@@ -82,7 +82,9 @@ fn hashes_multiple_keys_in_order() {
 }
 
 #[test]
-fn murmur3_emits_four_words() {
+fn murmur3_emits_one_ring_word() {
+    // `murmur3` is MurmurHash3_x86_32: a one-word ring token like every
+    // other ring hash.
     let assertion = Command::cargo_bin("dyn-hash-tool")
         .unwrap()
         .args(["-H", "murmur3", "--key", "hello"])
@@ -90,6 +92,5 @@ fn murmur3_emits_four_words() {
         .success();
     let out = String::from_utf8(assertion.get_output().stdout.clone()).unwrap();
     let line = out.lines().next().unwrap();
-    let token_hex = line.rsplit(':').next().unwrap();
-    assert_eq!(token_hex.len(), 32, "murmur3 token must be 4*8 hex chars");
+    assert_eq!(line, "murmur3:hello:c94b6da9");
 }

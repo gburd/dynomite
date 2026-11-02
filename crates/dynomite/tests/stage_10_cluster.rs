@@ -252,8 +252,9 @@ fn gossip_converges_within_n_rounds() {
 
 #[test]
 fn gossip_seed_node_parser_round_trips() {
-    let r = parse_seed_node("h:1:r:d:7,8,9").unwrap();
-    assert_eq!(r.tokens.len(), 3);
+    let r = parse_seed_node("h:1:r:d:7").unwrap();
+    assert_eq!(r.tokens.len(), 1);
+    assert!(parse_seed_node("h:1:r:d:7,8,9").is_err());
     assert!(parse_seed_node("h:1:r:d").is_err());
     assert!(parse_seed_node("h:0:r:d:1").is_err());
 }

@@ -45,10 +45,56 @@ fn fmix32(mut h: u32) -> u32 {
     h
 }
 
-/// MurmurHash3 x86 128-bit. Produces a four-word [`DynToken`] in the
-/// same order as `MurmurHash3_x86_128` writes its output buffer.
+/// The ring token for `hash: murmur3`: `MurmurHash3_x86_32` with seed
+/// `0xc0a1e5ce`, as a one-word [`DynToken`].
+///
+/// Node tokens are one word, and token order compares length before
+/// magnitude, so a key token must also be one word; a wider token would
+/// sort above every node and route every key to the first one.
 pub(super) fn hash(key: &[u8]) -> DynToken {
+    DynToken::from_u32(murmur3_x86_32(key, MURMUR3_SEED))
+}
+
+/// The full 128-bit `MurmurHash3_x86_128` fingerprint as four words, in
+/// the order the reference writes its output buffer. Not a ring token
+/// (see [`hash`]); used where a wide fingerprint is wanted.
+pub(super) fn hash_x86_128(key: &[u8]) -> DynToken {
     murmur3_x86_128(key, MURMUR3_SEED)
+}
+
+/// MurmurHash3 x86 32-bit (Austin Appleby's `MurmurHash3_x86_32`).
+fn murmur3_x86_32(key: &[u8], seed: u32) -> u32 {
+    const M1: u32 = 0xcc9e_2d51;
+    const M2: u32 = 0x1b87_3593;
+    let mut h1 = seed;
+    let mut blocks = key.chunks_exact(4);
+    for b in &mut blocks {
+        let mut k1 = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        k1 = k1.wrapping_mul(M1);
+        k1 = rotl32(k1, 15);
+        k1 = k1.wrapping_mul(M2);
+        h1 ^= k1;
+        h1 = rotl32(h1, 13);
+        h1 = h1.wrapping_mul(5).wrapping_add(0xe654_6b64);
+    }
+    let tail = blocks.remainder();
+    let mut k1: u32 = 0;
+    if tail.len() == 3 {
+        k1 ^= u32::from(tail[2]) << 16;
+    }
+    if tail.len() >= 2 {
+        k1 ^= u32::from(tail[1]) << 8;
+    }
+    if !tail.is_empty() {
+        k1 ^= u32::from(tail[0]);
+        k1 = k1.wrapping_mul(M1);
+        k1 = rotl32(k1, 15);
+        k1 = k1.wrapping_mul(M2);
+        h1 ^= k1;
+    }
+    // The reference mixes in the length as a C `int`.
+    h1 ^= key.len() as u32;
+    fmix32(h1)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -386,7 +432,7 @@ mod tests {
     use super::*;
 
     fn h(key: &[u8]) -> [u32; 4] {
-        let t = hash(key);
+        let t = hash_x86_128(key);
         let m = t.mag();
         [m[0], m[1], m[2], m[3]]
     }
@@ -400,9 +446,27 @@ mod tests {
     }
 
     #[test]
-    fn produces_four_words() {
-        let t = hash(b"abc");
-        assert_eq!(t.len(), 4);
+    fn ring_token_is_one_word_and_x86_128_is_four() {
+        assert_eq!(hash(b"abc").len(), 1);
+        assert_eq!(hash_x86_128(b"abc").len(), 4);
+    }
+
+    /// Published `MurmurHash3_x86_32` vectors (SMHasher reference).
+    #[test]
+    fn x86_32_golden_vectors() {
+        assert_eq!(murmur3_x86_32(b"", 0), 0);
+        assert_eq!(murmur3_x86_32(b"", 1), 0x514e_28b7);
+        assert_eq!(murmur3_x86_32(b"", 0xffff_ffff), 0x81f1_6f39);
+        assert_eq!(murmur3_x86_32(&[0xff, 0xff, 0xff, 0xff], 0), 0x7629_3b50);
+        assert_eq!(murmur3_x86_32(&[0x21, 0x43, 0x65, 0x87], 0), 0xf55b_516b);
+        assert_eq!(murmur3_x86_32(&[0x21, 0x43, 0x65], 0), 0x7e4a_8634);
+        assert_eq!(murmur3_x86_32(&[0x21, 0x43], 0), 0xa0f7_b07a);
+        assert_eq!(murmur3_x86_32(&[0x21], 0), 0x7266_1cf4);
+        assert_eq!(murmur3_x86_32(b"Hello, world!", 1234), 0xfaf6_cdb3);
+        assert_eq!(
+            murmur3_x86_32(b"The quick brown fox jumps over the lazy dog", 0x9747_b28c),
+            0x2fa8_26cd
+        );
     }
 
     #[test]

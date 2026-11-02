@@ -466,7 +466,7 @@ impl Server {
                     })?,
                     seed,
                     &pool_config,
-                )?);
+                ));
             }
         }
         let server_pool = Arc::new(ServerPool::new(pool_config.clone(), peers));
@@ -2989,17 +2989,8 @@ fn build_local_peer(
         .tokens
         .as_ref()
         .ok_or(ServerError::MissingConfig("tokens"))?;
-    let dyn_tokens: Vec<DynToken> = tokens
-        .components()
-        .iter()
-        .map(token_component_to_dyn)
-        .collect::<Result<Vec<_>, ServerError>>()?;
-    if dyn_tokens.is_empty() {
-        return Err(ServerError::BadConfig {
-            field: "tokens",
-            reason: "expected at least one token".into(),
-        });
-    }
+    // `TokenList::parse` admits exactly one token in 0..=u32::MAX.
+    let dyn_tokens = vec![DynToken::from_u32(tokens.value())];
     // Reuse the configured peer-listen address as this node's
     // own peer endpoint; with no dyn_listen we still need an
     // endpoint for the topology tables, so fall back to the
@@ -3020,20 +3011,11 @@ fn build_local_peer(
     ))
 }
 
-fn seed_to_peer(
-    idx: u32,
-    seed: &ConfDynSeed,
-    pool_config: &PoolConfig,
-) -> Result<Peer, ServerError> {
-    let dyn_tokens: Vec<DynToken> = seed
-        .tokens()
-        .components()
-        .iter()
-        .map(token_component_to_dyn)
-        .collect::<Result<Vec<_>, ServerError>>()?;
+fn seed_to_peer(idx: u32, seed: &ConfDynSeed, pool_config: &PoolConfig) -> Peer {
+    let dyn_tokens = vec![DynToken::from_u32(seed.tokens().value())];
     let is_same_dc = seed.dc() == pool_config.dc;
     let endpoint = PeerEndpoint::tcp(seed.host().to_string(), seed.port());
-    Ok(Peer::new(
+    Peer::new(
         idx,
         endpoint,
         seed.rack().to_string(),
@@ -3042,39 +3024,7 @@ fn seed_to_peer(
         false,
         is_same_dc,
         false,
-    ))
-}
-
-fn token_component_to_dyn(
-    component: &dynomite::conf::TokenComponent,
-) -> Result<DynToken, ServerError> {
-    // `DynToken` carries a four-byte big-endian integer. A token whose
-    // decimal value exceeds `u32::MAX` cannot be represented and would
-    // land at a DIFFERENT ring position than the operator configured --
-    // a silent correctness hazard for a drop-in replacement (a live C
-    // cluster with Cassandra-style random tokens over the murmur space
-    // routinely exceeds u32). Refuse to start rather than saturate: a
-    // wrong ring placement is worse than a clear configuration error.
-    // Full arbitrary-precision token support is tracked as a parity row
-    // in `docs/parity.md`; until it lands, an oversized token is a hard
-    // error, never a saturation.
-    let digits = &component.digits;
-    let value = digits.parse::<u128>().map_err(|e| ServerError::BadConfig {
-        field: "tokens",
-        reason: format!("'{digits}': {e}"),
-    })?;
-    let trimmed = u32::try_from(value).map_err(|_| ServerError::BadConfig {
-        field: "tokens",
-        reason: format!(
-            "'{digits}' exceeds the u32 ring token space ({}); tokens above u32::MAX are \
-             not yet representable and would place the node at a different ring position \
-             than configured. Use a token in 0..={} or file for arbitrary-precision \
-             token support.",
-            u32::MAX,
-            u32::MAX
-        ),
-    })?;
-    Ok(DynToken::from_u32(trimmed))
+    )
 }
 
 #[cfg(test)]
@@ -3177,49 +3127,6 @@ mod tests {
             }
         }
         panic!("could not find a free port distinct from {other}");
-    }
-
-    #[test]
-    fn token_component_round_trip() {
-        let cmp = dynomite::conf::TokenComponent {
-            signum: 1,
-            digits: "42".to_string(),
-        };
-        let tok = token_component_to_dyn(&cmp).unwrap();
-        assert_eq!(tok.get_int(), 42);
-    }
-
-    #[test]
-    fn token_component_above_u32_is_rejected() {
-        // An oversized token must be a hard configuration error, not a
-        // silent saturation that would place the node at a different
-        // ring position than the operator configured.
-        let cmp = dynomite::conf::TokenComponent {
-            signum: 1,
-            digits: "99999999999".to_string(),
-        };
-        let err = token_component_to_dyn(&cmp).unwrap_err();
-        match err {
-            ServerError::BadConfig { field, reason } => {
-                assert_eq!(field, "tokens");
-                assert!(
-                    reason.contains("exceeds the u32 ring token space"),
-                    "unexpected reason: {reason}"
-                );
-            }
-            other => panic!("expected BadConfig, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn token_component_at_u32_max_is_accepted() {
-        // The boundary value is representable and must be accepted.
-        let cmp = dynomite::conf::TokenComponent {
-            signum: 1,
-            digits: u32::MAX.to_string(),
-        };
-        let tok = token_component_to_dyn(&cmp).unwrap();
-        assert_eq!(tok.get_int(), u32::MAX);
     }
 
     /// Build a tiny RESP server that:
@@ -3486,7 +3393,7 @@ mod tests {
     fn seed_to_peer_same_dc_flag() {
         let seed = dynomite::conf::ConfDynSeed::parse("10.0.0.2:8101:rack-b:localdc:200").unwrap();
         let pool_config = PoolConfig::default(); // dc == "localdc"
-        let peer = seed_to_peer(3, &seed, &pool_config).unwrap();
+        let peer = seed_to_peer(3, &seed, &pool_config);
         assert_eq!(peer.idx(), 3);
         assert!(peer.is_same_dc());
         assert_eq!(peer.endpoint().port(), 8101);
@@ -3496,7 +3403,7 @@ mod tests {
     fn seed_to_peer_cross_dc_flag() {
         let seed = dynomite::conf::ConfDynSeed::parse("10.0.1.2:8101:rack-c:remotedc:300").unwrap();
         let pool_config = PoolConfig::default(); // dc == "localdc"
-        let peer = seed_to_peer(4, &seed, &pool_config).unwrap();
+        let peer = seed_to_peer(4, &seed, &pool_config);
         assert!(!peer.is_same_dc());
     }
 

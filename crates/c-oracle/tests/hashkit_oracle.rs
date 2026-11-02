@@ -48,29 +48,23 @@ fn assert_same(h: CHash, key: &[u8], c: &CToken, r: &DynToken) {
     );
 }
 
-/// The hash functions whose C behaviour is pending an owner decision and is
-/// therefore not yet a transliteration target. Each entry names its
-/// `deviations.md` record. A function leaves this list only when the
-/// decision lands and the Rust side matches it.
+/// Hash functions whose Rust behaviour is an owner-authorised deviation
+/// from C, and so are excluded from the byte-for-byte comparison. Each is
+/// pinned by its own test below.
 ///
-/// * `Murmur3`: the C `hash_murmur3` has its `MurmurHash3_x86_128` call
-///   commented out (since 2013-12-10, upstream 9eb54c1), so it returns a
-///   zero token for every key. See DEV-H1.
-/// * `OneAtATime`: the C reads the key through `const char *`, so on
-///   targets where `char` is signed (x86-64, where the C reference is built)
-///   bytes >= 0x80 are sign-extended before being added. The Rust reads
-///   `u8`. See DEV-H2.
-const PENDING_DECISION: &[CHash] = &[CHash::Murmur3, CHash::OneAtATime];
+/// * `Murmur3` (DEV-H1): C `hash_murmur3` has its `MurmurHash3_x86_128`
+///   call commented out (since 2013-12-10, upstream 9eb54c1) and returns a
+///   zero token for every key. Rust computes `MurmurHash3_x86_32`.
+/// * `OneAtATime` (DEV-H2): C reads the key through `const char *`, so on
+///   x86-64 bytes >= 0x80 are sign-extended. Rust reads bytes unsigned.
+const DEVIATES: &[CHash] = &[CHash::Murmur3, CHash::OneAtATime];
 
 fn decided() -> impl Iterator<Item = CHash> {
-    CHash::ALL
-        .into_iter()
-        .filter(|h| !PENDING_DECISION.contains(h))
+    CHash::ALL.into_iter().filter(|h| !DEVIATES.contains(h))
 }
 
-/// Pins the C behaviour behind DEV-H2: for ASCII-only keys (every byte below
-/// 0x80) the sign extension is a no-op and C and Rust agree, so the
-/// divergence is confined to keys with high bytes.
+/// DEV-H2 scope: on ASCII-only keys (every byte below 0x80) sign extension
+/// is a no-op, so C and Rust agree exactly.
 #[hegel::test(test_cases = 2000)]
 fn one_at_a_time_matches_c_on_ascii_keys(tc: TestCase) {
     let key: Vec<u8> = tc.draw(
@@ -83,13 +77,48 @@ fn one_at_a_time_matches_c_on_ascii_keys(tc: TestCase) {
     assert_same(CHash::OneAtATime, &key, &c, &r);
 }
 
-/// Pins the C behaviour behind DEV-H1 so the oracle notices if the C pin
-/// ever changes: C murmur3 returns the zero token for every key.
+/// Jenkins one-at-a-time over unsigned bytes: the authorised DEV-H2
+/// behaviour, written out independently of the engine.
+fn one_at_a_time_unsigned(key: &[u8]) -> u32 {
+    let mut v: u32 = 0;
+    for &b in key {
+        v = v.wrapping_add(u32::from(b));
+        v = v.wrapping_add(v << 10);
+        v ^= v >> 6;
+    }
+    v = v.wrapping_add(v << 3);
+    v ^= v >> 11;
+    v.wrapping_add(v << 15)
+}
+
+/// DEV-H2: Rust reads every byte unsigned, including bytes >= 0x80.
+#[hegel::test(test_cases = 2000)]
+fn one_at_a_time_reads_bytes_unsigned(tc: TestCase) {
+    let key: Vec<u8> = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(1).max_size(512));
+    let r = rs::hash(HashType::OneAtATime, &key);
+    assert_eq!(r.mag(), &[one_at_a_time_unsigned(&key)], "key {key:?}");
+}
+
+/// Pins the C side of DEV-H1 so the oracle notices if upstream ever
+/// changes: C murmur3 returns the zero token for every key.
 #[hegel::test(test_cases = 200)]
 fn c_murmur3_is_constant_zero(tc: TestCase) {
     let key: Vec<u8> = tc.draw(gs::vecs(gs::integers::<u8>()).min_size(1).max_size(256));
     let c = hashkit::hash(CHash::Murmur3, &key).expect("non-empty key");
     assert_eq!((c.signum, c.mag), (0, [0; 4]), "key {key:?}");
+}
+
+/// DEV-H1: the Rust `murmur3` ring token is the C contrib
+/// `MurmurHash3_x86_32` (the reference implementation shipped in the C
+/// tree) with the C `MURMUR3_SEED`, as a one-word token like every other
+/// ring hash.
+#[hegel::test(test_cases = 2000)]
+fn murmur3_ring_token_is_c_contrib_x86_32(tc: TestCase) {
+    let key: Vec<u8> = tc.draw(gs::vecs(gs::integers::<u8>()).max_size(512));
+    let want = hashkit::murmur3_x86_32(&key, 0xc0a1_e5ce);
+    let r = rs::hash(HashType::Murmur3, &key);
+    assert_eq!(r.len(), 1, "ring tokens are one word");
+    assert_eq!(r.get_int(), want, "key {key:?}");
 }
 
 #[hegel::test(test_cases = 2000)]

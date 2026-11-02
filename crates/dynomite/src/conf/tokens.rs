@@ -1,11 +1,17 @@
-//! Token list parsing.
+//! Token parsing.
 //!
-//! `tokens:` and `dyn_seeds[*].tokens` are comma-separated big-int
-//! strings. Each component accepts an optional leading `-` and any
-//! number of decimal digits; the actual ring math is in
-//! `hashkit::token`. At configuration time we only validate the
-//! syntax and remember the original components so they can be
-//! re-emitted.
+//! `tokens:` and the token field of each `dyn_seeds` entry name the one
+//! ring token a node owns: a decimal integer in `0..=4294967295`.
+//!
+//! A comma list of several tokens is rejected. One token per node is the
+//! supported contract; a multi-token list never worked (it overran the
+//! continuum and crashed the node).
+//!
+//! Negative tokens are rejected because they sort above every positive
+//! token, the reverse of their numeric value. Tokens above `u32::MAX` are
+//! rejected because they would silently wrap to a different ring
+//! position. The type keeps a list shape (`components`) so the wire and
+//! display forms are unchanged.
 
 use std::fmt;
 
@@ -99,9 +105,9 @@ impl fmt::Display for TokenComponent {
 ///
 /// ```
 /// use dynomite::conf::TokenList;
-/// let t = TokenList::parse("0,1,2").unwrap();
-/// assert_eq!(t.len(), 3);
-/// assert_eq!(t.to_string(), "0,1,2");
+/// let t = TokenList::parse("101134286").unwrap();
+/// assert_eq!(t.len(), 1);
+/// assert_eq!(t.to_string(), "101134286");
 /// ```
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct TokenList {
@@ -110,32 +116,67 @@ pub struct TokenList {
 }
 
 impl TokenList {
-    /// Parse a comma-separated list. Leading or trailing whitespace
-    /// inside each component is rejected.
+    /// Parse a node's token: exactly one decimal integer in
+    /// `0..=u32::MAX`, with no sign, no whitespace, and no comma list.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfError::BadToken`] for an empty string, a comma list of more
+    /// than one token, a negative token, a non-digit character, or a
+    /// value above `u32::MAX`.
     ///
     /// # Examples
     ///
     /// ```
     /// use dynomite::conf::TokenList;
-    /// assert_eq!(TokenList::parse("-7,0,9").unwrap().len(), 3);
+    /// assert_eq!(TokenList::parse("4294967295").unwrap().value(), u32::MAX);
     /// assert!(TokenList::parse("").is_err());
-    /// assert!(TokenList::parse("1,,2").is_err());
+    /// assert!(TokenList::parse("1,2").is_err());
+    /// assert!(TokenList::parse("-7").is_err());
+    /// assert!(TokenList::parse("4294967296").is_err());
     /// ```
     pub fn parse(raw: &str) -> Result<Self, ConfError> {
+        let bad = |reason: &str| ConfError::BadToken {
+            value: raw.to_string(),
+            reason: reason.to_string(),
+        };
         if raw.is_empty() {
-            return Err(ConfError::BadToken {
-                value: raw.to_string(),
-                reason: "empty token list".to_string(),
-            });
+            return Err(bad("empty token"));
         }
-        let mut components = Vec::new();
-        for piece in raw.split(',') {
-            components.push(TokenComponent::parse(piece)?);
+        if raw.contains(',') {
+            return Err(bad(
+                "only one token per node is supported; a comma list of tokens is rejected",
+            ));
+        }
+        let component = TokenComponent::parse(raw)?;
+        if component.signum < 0 {
+            return Err(bad("negative tokens are not supported; use 0..=4294967295"));
+        }
+        if component.digits.parse::<u32>().is_err() {
+            return Err(bad("token exceeds the 32-bit ring (0..=4294967295)"));
         }
         Ok(Self {
-            components,
+            components: vec![component],
             raw: raw.to_string(),
         })
+    }
+
+    /// The token value. Only meaningful on a parsed list, which holds
+    /// exactly one in-range token; `0` for the empty `Default` value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::conf::TokenList;
+    /// assert_eq!(TokenList::parse("101134286").unwrap().value(), 101_134_286);
+    /// assert_eq!(TokenList::default().value(), 0);
+    /// ```
+    #[must_use]
+    pub fn value(&self) -> u32 {
+        self.components
+            .first()
+            .and_then(|c| c.digits.parse::<u32>().ok())
+            .unwrap_or(0)
     }
 
     /// Borrow the parsed components.
@@ -144,8 +185,8 @@ impl TokenList {
     ///
     /// ```
     /// use dynomite::conf::TokenList;
-    /// let t = TokenList::parse("1,2,3").unwrap();
-    /// assert_eq!(t.components().len(), 3);
+    /// let t = TokenList::parse("7").unwrap();
+    /// assert_eq!(t.components().len(), 1);
     /// ```
     pub fn components(&self) -> &[TokenComponent] {
         &self.components
@@ -183,7 +224,7 @@ impl TokenList {
     ///
     /// ```
     /// use dynomite::conf::TokenList;
-    /// assert_eq!(TokenList::parse("1,2").unwrap().raw(), "1,2");
+    /// assert_eq!(TokenList::parse("12").unwrap().raw(), "12");
     /// ```
     pub fn raw(&self) -> &str {
         &self.raw
@@ -214,7 +255,7 @@ impl<'de> Deserialize<'de> for TokenList {
         impl Visitor<'_> for V {
             type Value = TokenList;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a comma-separated big-integer token list")
+                f.write_str("a single ring token in 0..=4294967295")
             }
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
                 TokenList::parse(v).map_err(|e| E::custom(e.to_string()))
@@ -246,18 +287,36 @@ mod tests {
     }
 
     #[test]
-    fn comma_separated() {
-        let t = TokenList::parse("0,1,2,4294967295").unwrap();
-        assert_eq!(t.len(), 4);
-        assert_eq!(t.to_string(), "0,1,2,4294967295");
+    fn regression_multi_token_list_rejected() {
+        // DEV-H4: a multi-token list overran the C continuum and crashed
+        // the node; it is rejected at parse time.
+        for raw in [
+            "0,1",
+            "0,1,2,4294967295",
+            "101,2147483648,3000000000",
+            "7,7",
+        ] {
+            assert!(TokenList::parse(raw).is_err(), "{raw}");
+        }
     }
 
     #[test]
-    fn negative_token() {
-        let t = TokenList::parse("-7").unwrap();
-        assert_eq!(t.components()[0].signum, -1);
-        assert_eq!(t.components()[0].digits, "7");
-        assert_eq!(t.to_string(), "-7");
+    fn regression_negative_token_rejected() {
+        // A negative token sorts above every positive one.
+        assert!(TokenList::parse("-7").is_err());
+        assert!(TokenList::parse("-0").is_err());
+    }
+
+    #[test]
+    fn regression_out_of_range_token_rejected() {
+        assert_eq!(TokenList::parse("4294967295").unwrap().value(), u32::MAX);
+        assert!(TokenList::parse("4294967296").is_err());
+        assert!(TokenList::parse("99999999999999999999").is_err());
+    }
+
+    #[test]
+    fn leading_zeros_parse_to_their_value() {
+        assert_eq!(TokenList::parse("007").unwrap().value(), 7);
     }
 
     #[test]
@@ -284,5 +343,6 @@ mod tests {
     #[test]
     fn empty_component_rejected() {
         assert!(TokenList::parse("1,,2").is_err());
+        assert!(TokenList::parse(",").is_err());
     }
 }

@@ -4,7 +4,7 @@
 //! hand the C an exact-layout token, then return its fields as a
 //! [`CToken`] so tests can compare them with the Rust transliteration.
 
-use std::os::raw::{c_int, c_uchar, c_ulong};
+use std::os::raw::{c_int, c_uchar, c_ulong, c_void};
 
 /// Mirrors `struct dyn_token` in `src/hashkit/dyn_token.h`:
 /// `{ uint32_t signum; uint32_t mag[4]; uint32_t len; }`.
@@ -51,6 +51,7 @@ extern "C" {
     fn crc32_sz(buf: *const c_uchar, len: usize, in_crc32: u32) -> u32;
     fn cmp_dyn_token(t1: *const CToken, t2: *const CToken) -> i32;
     fn parse_dyn_token(start: *mut u8, len: u32, token: *mut CToken) -> RStatus;
+    fn MurmurHash3_x86_32(key: *const c_void, len: c_int, seed: u32, out: *mut c_void);
 }
 
 /// The C hash functions selectable by `hash:` in the C config
@@ -188,4 +189,19 @@ pub fn parse_token(text: &[u8]) -> Option<CToken> {
     // live token the C fills.
     let rc = unsafe { parse_dyn_token(buf.as_mut_ptr(), len, &raw mut token) };
     (rc == 0).then_some(token)
+}
+
+/// C contrib `MurmurHash3_x86_32` (`contrib/murmur3/murmur3.c`), the
+/// reference the Rust `hash: murmur3` ring hash is checked against.
+///
+/// # Panics
+///
+/// Panics if `key` is longer than `i32::MAX` bytes (the C takes `int`).
+pub fn murmur3_x86_32(key: &[u8], seed: u32) -> u32 {
+    let len = c_int::try_from(key.len()).expect("key fits a C int");
+    let mut out: u32 = 0;
+    // SAFETY: `key` is valid for `len` bytes; `out` is a live, aligned u32,
+    // the 4 bytes the C writes.
+    unsafe { MurmurHash3_x86_32(key.as_ptr().cast(), len, seed, (&raw mut out).cast()) };
+    out
 }

@@ -22,9 +22,8 @@
 //!
 //! # Hash
 //!
-//! Inputs are hashed through the project's
-//! [`dynomite::hashkit::hash`] entry point with
-//! [`HashType::Murmur3`]. Murmur3 is a 128-bit hash; we combine
+//! Inputs are hashed with
+//! [`dynomite::hashkit::murmur3_x86_128`], a 128-bit hash; we combine
 //! the low two `u32` words into the 64-bit value used by HLL.
 //! The function is deterministic across replicas, which is what
 //! lets `merge` collapse to element-wise max on the register
@@ -37,7 +36,7 @@
 //! commutative), and idempotent (max of a value with itself is
 //! the same value).
 
-use dynomite::hashkit::{hash, HashType};
+use dynomite::hashkit::murmur3_x86_128;
 
 use crate::datatypes::Crdt;
 
@@ -97,7 +96,7 @@ impl HyperLogLog {
     /// gives a near-uniform 64-bit distribution adequate for
     /// HLL.
     fn hash64(item: &[u8]) -> u64 {
-        let token = hash(HashType::Murmur3, item);
+        let token = murmur3_x86_128(item);
         let words = token.mag();
         // Murmur3 always emits 4 words; defensive against shorter
         // tokens by zero-extending.
@@ -230,6 +229,16 @@ fn f64_to_u64_saturating(x: f64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    /// Register state is persisted and merged across replicas, so the item
+    /// hash must never change. Values recorded before the ring-hash change
+    /// that moved `hash: murmur3` to `MurmurHash3_x86_32`.
+    #[test]
+    fn regression_hll_item_hash_is_stable() {
+        assert_eq!(super::HyperLogLog::hash64(b""), 0xf929_8f47_5d53_4e04);
+        assert_eq!(super::HyperLogLog::hash64(b"a"), 0x2b35_89aa_07dd_e0a4);
+        assert_eq!(super::HyperLogLog::hash64(b"alice"), 0x162a_9fe1_fbe7_f6a7);
+    }
+
     use super::*;
 
     #[test]

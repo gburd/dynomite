@@ -248,9 +248,10 @@ impl ConfDynSeed {
     ///
     /// ```
     /// use dynomite::conf::ConfDynSeed;
-    /// let s = ConfDynSeed::parse("h:1:r:d:1,2,3 friendly").unwrap();
-    /// assert_eq!(s.tokens().len(), 3);
+    /// let s = ConfDynSeed::parse("h:1:r:d:7 friendly").unwrap();
+    /// assert_eq!(s.tokens().value(), 7);
     /// assert_eq!(s.name(), "friendly");
+    /// assert!(ConfDynSeed::parse("h:1:r:d:1,2,3").is_err());
     /// assert!(ConfDynSeed::parse("a:b:c:d").is_err());
     /// ```
     pub fn parse(raw: &str) -> Result<Self, ConfError> {
@@ -396,7 +397,7 @@ impl ConfDynSeed {
     ///
     /// ```
     /// use dynomite::conf::ConfDynSeed;
-    /// assert_eq!(ConfDynSeed::parse("h:1:r:d:1,2,3").unwrap().tokens().len(), 3);
+    /// assert_eq!(ConfDynSeed::parse("h:1:r:d:3").unwrap().tokens().value(), 3);
     /// ```
     pub fn tokens(&self) -> &TokenList {
         &self.tokens
@@ -520,9 +521,11 @@ mod tests {
     }
 
     #[test]
-    fn dyn_seed_multi_tokens() {
-        let s = ConfDynSeed::parse("h:1:r:d:1,2,3 friendly").unwrap();
-        assert_eq!(s.tokens().len(), 3);
+    fn regression_dyn_seed_multi_token_rejected() {
+        // DEV-H4: one token per node.
+        assert!(ConfDynSeed::parse("h:1:r:d:1,2,3 friendly").is_err());
+        let s = ConfDynSeed::parse("h:1:r:d:3 friendly").unwrap();
+        assert_eq!(s.tokens().value(), 3);
         assert_eq!(s.name(), "friendly");
     }
 
