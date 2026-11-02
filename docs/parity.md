@@ -414,7 +414,7 @@ next to its only consumer.
 | `hash_hsieh` | `dynomite::hashkit::hsieh::hash` | done |
 | `hash_murmur` | `dynomite::hashkit::murmur::hash` | done |
 | `hash_jenkins` | `dynomite::hashkit::jenkins::hash` | done |
-| `hash_murmur3` (+ `MurmurHash3_x86_128` from contrib/) | `dynomite::hashkit::murmur3::hash` | done; deviation: the C call is commented out, the Rust impl produces the bytes the contrib code would produce |
+| `hash_murmur3` | `dynomite::hashkit::murmur3::hash` | deviation DEV-H1 (`docs/transliteration/deviations.md`): C returns a constant zero token; Rust emits `MurmurHash3_x86_32` (seed `0xc0a1e5ce`) as a one-word ring token. `MurmurHash3_x86_128` is `hashkit::murmur3_x86_128`, used by HLL only |
 | `init_dyn_token` / `deinit_dyn_token` | `dynomite::hashkit::DynToken::default` | done |
 | `size_dyn_token` | `dynomite::hashkit::DynToken::size` | done |
 | `set_int_dyn_token` | `dynomite::hashkit::DynToken::set_int` | done |
@@ -2169,13 +2169,12 @@ Documented design choices that downstream stages must respect.
   Rust callers (Stage 12) wire tokio `signal::unix` streams to
   `dispatch`; the table is the single source of truth and runs the same
   per-signal action.
-* `hashkit::murmur3` produces a real 128-bit hash. The C
-  `hash_murmur3` is a no-op (the call to `MurmurHash3_x86_128` is
-  commented out in `dyn_murmur3.c`), so the C binary effectively writes
-  uninitialized memory into the token. The Rust port implements the
-  contrib MurmurHash3 x86_128 function directly with seed `0xc0a1e5ce`
-  so the algorithm produces reproducible bytes; this matches the
-  obvious upstream intent.
+* `hashkit::murmur3` emits `MurmurHash3_x86_32` (seed `0xc0a1e5ce`) as
+  a one-word ring token. The C `hash_murmur3` is a no-op that returns a
+  zero token (the `MurmurHash3_x86_128` call is commented out in
+  `dyn_murmur3.c`). A four-word token cannot be a ring token: token order
+  compares word count first, so it would sort above every one-word node
+  token. See DEV-H1 in `docs/transliteration/deviations.md`.
 * `hashkit::fnv::hash_fnv1a_64` keeps the C reference's 32-bit
   accumulator and 32-bit prime even though the canonical FNV-1a-64
   algorithm uses a 64-bit accumulator. This is a faithful reproduction
