@@ -72,6 +72,13 @@ fn main() {
         .flag_if_supported("-Wno-implicit-function-declaration")
         .warnings(false)
         .opt_level(2);
+    // The C reference defines its own `MD5_Init`, `MD5_Update`, and
+    // `MD5_Final` (src/hashkit/dyn_md5.c), which collide with OpenSSL's
+    // libcrypto when a workspace build links both. Rename the C copies to
+    // private symbols; only dyn_md5.c defines or calls them.
+    for sym in ["MD5_Init", "MD5_Update", "MD5_Final"] {
+        build.define(sym, Some(format!("c_oracle_{sym}").as_str()));
+    }
     for unit in UNITS {
         let path = src_root.join(unit);
         println!("cargo:rerun-if-changed={}", path.display());

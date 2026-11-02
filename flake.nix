@@ -69,6 +69,8 @@
             libtool
             openssl
             openssl.dev
+            # dynomite-vec links turbovec / ndarray, which need -lopenblas.
+            openblas
 
             # Networking + failure-injection tooling
             iproute2
@@ -96,6 +98,10 @@
 
           shellHook = ''
             export RUST_BACKTRACE=1
+            # crates/dynomite-vec/build.rs reads this to find libopenblas;
+            # the nix store path is not on any of its default search dirs.
+            export OPENBLAS_LIB_DIR="${pkgs.openblas}/lib"
+            export LD_LIBRARY_PATH="${pkgs.openblas}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             # The C reference is not vendored (removed in 2561d13). Keep a
             # caller-provided DYNOMITE_C_REF; otherwise use the conventional
             # checkout at ~/src/dynomite.
