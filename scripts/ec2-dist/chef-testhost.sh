@@ -112,6 +112,22 @@ F=$HOME/fault; mkdir -p "$F/src" "$F/prefix"; cd "$F/src"
 ( cd libdirectio && make -s >/dev/null && cp libdirectio.so.* "$F/prefix/lib/" )
 ( cd libumem && [ -f "$F/prefix/lib/libumem_malloc.so" ] || { ./autogen.sh >/dev/null 2>&1; \
   ./configure -q --prefix="$F/prefix" >/dev/null; make -s -j"$(nproc)" >/dev/null; make -s install >/dev/null; } )
+# FAINT: upstream bundles a 32-bit injector; build the 64-bit one only.
+( cd faint && [ -x "$F/prefix/bin/faint" ] || { \
+  sed -i -e 's/ -Wl,--format=binary -Wl,fault_inject32.so//' \
+         -e 's#\$(OBJDIR)/map.o \$(OBJDIR)/map32.o#$(OBJDIR)/map.o#' \
+         -e '/-m32/d' Makefile; \
+  python3 - <<'FAINTPY'
+p = "src/faint.c"
+s = open(p).read()
+s = s.replace(
+    "fault_lib_size = (size_t) ((char*) fault_lib32_end - (char*) fault_lib32);",
+    "log(\"32-bit targets unsupported\"); exit(1);")
+s = s.replace("write_ret = fwrite(fault_lib32, fault_lib_size, 1, so);",
+              "write_ret = fwrite(fault_lib, fault_lib_size, 1, so);")
+open(p, "w").write(s)
+FAINTPY
+  make -s >/dev/null 2>&1 && mkdir -p "$F/prefix/bin" && cp bin/faint "$F/prefix/bin/"; } )
 echo "fault prefix: $(ls "$F/prefix/lib" | tr '\n' ' ')"
 export PATH="$PATH:/usr/sbin:/sbin"
 unshare -rn sh -c 'ip link set lo up && tc qdisc add dev lo root netem delay 5ms && echo NETNS_NETEM_OK'

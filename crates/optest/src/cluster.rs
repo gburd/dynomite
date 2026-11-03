@@ -98,15 +98,44 @@ impl ClusterSpec {
     /// assert!(s.nodes.iter().all(|n| n.token == 0));
     /// ```
     pub fn grid(dcs: usize, racks: usize, per_rack: usize) -> Self {
+        let layout: Vec<(String, Vec<(String, usize)>)> = (0..dcs)
+            .map(|d| {
+                (
+                    format!("dc{}", d + 1),
+                    (0..racks)
+                        .map(|r| (format!("rack{}", r + 1), per_rack))
+                        .collect(),
+                )
+            })
+            .collect();
+        Self::layout(&layout)
+    }
+
+    /// An explicit topology: `(dc, [(rack, node count)])`, as the C test
+    /// request files describe it (`cluster_desc`). Tokens within a rack of
+    /// `n` nodes are `i * (2^32 / n)`, the C `tokens_for_rack`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let s = optest::ClusterSpec::layout(&[
+    ///     ("dc1".into(), vec![("rack1".into(), 1)]),
+    ///     ("dc2".into(), vec![("rack1".into(), 1), ("rack2".into(), 2)]),
+    /// ]);
+    /// assert_eq!(s.nodes.len(), 4);
+    /// assert_eq!(s.nodes[3].token, 1 << 31);
+    /// ```
+    pub fn layout(dcs: &[(String, Vec<(String, usize)>)]) -> Self {
         let mut nodes = Vec::new();
-        for d in 0..dcs {
-            for r in 0..racks {
-                for k in 0..per_rack {
-                    let step = u32::MAX / u32::try_from(per_rack).expect("rack size fits u32");
+        for (dc, racks) in dcs {
+            for (rack, count) in racks {
+                let stride = (1u64 << 32) / u64::try_from(*count).expect("count fits u64");
+                for k in 0..*count {
+                    let t = (u64::try_from(k).expect("index fits u64") * stride) % (1u64 << 32);
                     nodes.push(NodeSpec {
-                        dc: format!("dc{}", d + 1),
-                        rack: format!("rack{}", r + 1),
-                        token: step * u32::try_from(k).expect("node index fits u32"),
+                        dc: dc.clone(),
+                        rack: rack.clone(),
+                        token: u32::try_from(t).expect("token below 2^32"),
                         extra: Vec::new(),
                         faults: Faults::default(),
                     });
@@ -327,8 +356,21 @@ impl Node {
             std::net::TcpStream::connect_timeout(&self.stats_addr(), Duration::from_secs(3))?;
         s.set_read_timeout(Some(Duration::from_secs(3)))?;
         write!(s, "GET {path} HTTP/1.0\r\nHost: x\r\n\r\n")?;
-        let mut body = String::new();
-        s.read_to_string(&mut body)?;
+        // The C stats server closes with a reset when it has not read the
+        // whole request; whatever arrived before the reset is the reply.
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            match s.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => raw.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset && !raw.is_empty() => {
+                    break
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let body = String::from_utf8_lossy(&raw).into_owned();
         Ok(body
             .split_once("\r\n\r\n")
             .map_or(body.clone(), |(_, b)| b.to_string()))

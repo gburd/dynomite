@@ -378,7 +378,7 @@ fn crashed_node_rejoins_the_mesh() {
         c.launch(0).expect("relaunch");
         c.wait_ready(0, Duration::from_secs(30))
             .expect("node 0 ready");
-        let meshed = c.wait_meshed(Duration::from_secs(60));
+        let meshed = c.wait_meshed(Duration::from_mins(1));
         eprintln!(
             "[{engine:?}] mesh after restart: {meshed:?} in {:?}",
             t0.elapsed()
