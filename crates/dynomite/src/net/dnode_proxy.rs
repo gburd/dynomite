@@ -107,6 +107,11 @@ impl DnodeProxy {
                 () = &mut cancel => break,
                 res = self.listener.accept() => {
                     let (sock, peer) = res?;
+                    // Peer requests are small and latency-bound; without
+                    // TCP_NODELAY a replica's reply waits out the sender's
+                    // delayed ACK (~40 ms) behind Nagle. Failure is
+                    // non-fatal, like the client proxy's.
+                    let _ = sock.set_nodelay(true);
                     let role = ConnRole::DnodePeerClient;
                     let transport: Box<dyn Transport> = if let Some(acc) = tls_acceptor.as_ref() {
                         match acc.accept(sock).await {
