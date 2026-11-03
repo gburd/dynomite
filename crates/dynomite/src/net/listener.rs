@@ -37,7 +37,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpListener;
 
 /// Configuration knobs for [`bind_dual_stack`].
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug)]
 pub struct BindOptions {
     /// When the bind address is a v6 wildcard (`[::]`), set the
     /// `IPV6_V6ONLY` flag instead of accepting v4-mapped clients.
@@ -75,6 +75,23 @@ impl BindOptions {
             reuseaddr: true,
             backlog: 1024,
         }
+    }
+}
+
+impl Default for BindOptions {
+    /// `SO_REUSEADDR` on, dual-stack, backlog 1024. Every listener sets
+    /// `SO_REUSEADDR` so a restarted node can rebind its ports while
+    /// connections from its previous run sit in `TIME_WAIT`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::net::listener::BindOptions;
+    /// let o = BindOptions::default();
+    /// assert!(o.reuseaddr && !o.v6_only && o.backlog == 1024);
+    /// ```
+    fn default() -> Self {
+        Self::default_filled()
     }
 }
 
@@ -142,5 +159,27 @@ mod tests {
         let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let l = bind_dual_stack(addr, BindOptions::default()).unwrap();
         assert!(l.local_addr().unwrap().is_ipv4());
+    }
+
+    /// Regression: `BindOptions` derived `Default`, so the default had
+    /// `reuseaddr: false` and no listener set `SO_REUSEADDR`. A node
+    /// restarted while connections it had accepted sat in `TIME_WAIT` on
+    /// its listening port failed to bind (EADDRINUSE) and exited.
+    #[test]
+    fn regression_default_sets_so_reuseaddr() {
+        let o = BindOptions::default();
+        assert!(o.reuseaddr && !o.v6_only && o.backlog == 1024);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let l = bind_dual_stack(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0), o).unwrap();
+            let sock = socket2::SockRef::from(&l);
+            assert!(
+                sock.reuse_address().unwrap(),
+                "SO_REUSEADDR not set on the listener"
+            );
+        });
     }
 }
