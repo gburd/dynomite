@@ -61,3 +61,38 @@ fn a_reply_without_its_target_index_does_not_vote() {
         CoalesceOutcome::Pending
     ));
 }
+
+/// Regression: a peer reply arrived as raw bytes with `is_error` unset
+/// while the local reply was parsed (`is_error` set). The equivalence key
+/// includes `is_error`, so three identical `-NOSCRIPT` replies looked
+/// divergent and `DC_SAFE_QUORUM` failed. Replies must be compared after
+/// classification; this pins that identical classified errors agree.
+#[test]
+fn identical_error_replies_agree_under_safe_quorum() {
+    fn err(id: u64) -> Msg {
+        let mut m = Msg::new(id, MsgType::Unknown, false);
+        let pool = MbufPool::default();
+        m.append_bytes(&pool, b"-NOSCRIPT No matching script.\r\n");
+        m.set_type(MsgType::RspRedisErrorNoscript);
+        m.set_is_error(true);
+        m
+    }
+    let targets = vec![
+        (0, "dc1".to_string()),
+        (1, "dc1".to_string()),
+        (2, "dc1".to_string()),
+    ];
+    let mut t = CoalesceTracker::new(9, ConsistencyLevel::DcSafeQuorum, targets, "dc1");
+    assert!(matches!(
+        t.record_reply(0, err(9)),
+        CoalesceOutcome::Pending
+    ));
+    assert!(matches!(
+        t.record_reply(1, err(9)),
+        CoalesceOutcome::Pending
+    ));
+    assert!(matches!(
+        t.record_reply(2, err(9)),
+        CoalesceOutcome::Ready { .. }
+    ));
+}

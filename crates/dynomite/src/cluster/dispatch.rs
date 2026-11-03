@@ -584,6 +584,35 @@ impl ClusterDispatcher {
         if matches!(req.routing(), MsgRouting::LocalNodeOnly) {
             return DispatchPlan::LocalDatastore;
         }
+        if matches!(req.routing(), MsgRouting::AllNodesAllRacksAllDcs) {
+            // SCRIPT LOAD / FLUSH / KILL / EXISTS: every node in every rack
+            // and DC, regardless of key or token. Quorum makes no sense
+            // here, so the level is DC_ONE: the first reply answers and
+            // the rest are swallowed (C `req_forward` for
+            // ROUTING_ALL_NODES_ALL_RACKS_ALL_DCS).
+            let dcs = self.pool.datacenters().read();
+            let mut targets = Vec::with_capacity(peers.len());
+            for p in peers.iter() {
+                let Some(dc_idx) = dcs.iter().position(|d| d.name() == p.dc()) else {
+                    continue;
+                };
+                let Some(rack_idx) = dcs[dc_idx]
+                    .racks()
+                    .iter()
+                    .position(|r| r.name() == p.rack())
+                else {
+                    continue;
+                };
+                targets.push(build_target(&dcs, &peers, dc_idx, rack_idx, p.idx()));
+            }
+            if targets.is_empty() {
+                return DispatchPlan::NoTargets;
+            }
+            return DispatchPlan::Replicas {
+                targets,
+                consistency: ConsistencyLevel::DcOne,
+            };
+        }
         if key.is_empty() {
             return DispatchPlan::LocalDatastore;
         }
@@ -927,11 +956,7 @@ impl Dispatcher for ClusterDispatcher {
         match plan {
             DispatchPlan::Drop => DispatchOutcome::Drop,
             DispatchPlan::NoTargets => {
-                let err_type = if matches!(req.ty(), MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
-                    MsgType::RspRedisError
-                } else {
-                    MsgType::RspMcServerError
-                };
+                let err_type = error_rsp_type(self.pool.config().data_store);
                 let rsp = crate::msg::response::make_error(
                     &req,
                     err_type,
@@ -1161,9 +1186,11 @@ impl ClusterDispatcher {
         let req_ty = req.ty();
         let mbuf_pool = self.mbuf_pool.clone();
         let failure_metrics = self.failure_metrics.clone();
+        let data_store = cfg.data_store;
         tokio::spawn(coalesce_actor(
             req_id,
             req_ty,
+            data_store,
             consistency,
             target_pairs,
             local_dc,
@@ -1452,11 +1479,7 @@ impl ClusterDispatcher {
     }
 
     fn no_quorum_error(&self, req: &Msg) -> Msg {
-        let err_type = if matches!(req.ty(), MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
-            MsgType::RspRedisError
-        } else {
-            MsgType::RspMcServerError
-        };
+        let err_type = error_rsp_type(self.pool.config().data_store);
         crate::msg::response::make_error(
             req,
             err_type,
@@ -1663,9 +1686,54 @@ struct ReadRepairContext {
     clippy::too_many_arguments,
     reason = "actor task captures the entire dispatch context; bundling into a struct adds churn for no callsite gain"
 )]
+/// Give a replica reply its type and error flag before it votes.
+///
+/// The local datastore's reply arrives already parsed; a peer's arrives as
+/// the raw payload of a dnode frame (`MsgType::Unknown`, `is_error`
+/// unset). The coalescer's equivalence key includes `is_error`, so without
+/// this, identical error replies (e.g. `-NOSCRIPT` from every replica)
+/// looked divergent and a `DC_SAFE_QUORUM` request failed. In C every
+/// response, local or peer, passes through the datastore's response
+/// parser before `rspmgr_submit_response` reads `rsp->is_error`.
+fn classify_reply(rsp: &mut Msg, data_store: crate::conf::DataStore) {
+    if !matches!(rsp.ty(), MsgType::Unknown) {
+        return;
+    }
+    let bytes: Vec<u8> = rsp
+        .mbufs()
+        .iter()
+        .flat_map(|b| b.readable().to_vec())
+        .collect();
+    let mut probe = Msg::new(rsp.id(), MsgType::Unknown, false);
+    let parsed = match data_store {
+        crate::conf::DataStore::Memcache => {
+            crate::proto::memcache::memcache_parse_rsp(&mut probe, &bytes)
+        }
+        _ => crate::proto::redis::redis_parse_rsp(&mut probe, &bytes),
+    };
+    if matches!(parsed, crate::msg::MsgParseResult::Ok) {
+        rsp.set_type(probe.ty());
+        rsp.set_is_error(probe.flags().is_error);
+    }
+}
+
+/// The error reply type for the pool's datastore: a Redis error for
+/// Redis-protocol pools, `SERVER_ERROR` for memcache. The protocol is the
+/// pool's, not the command's: C `msg_get_error` keys on `g_data_store`.
+/// Keying on the command (as an earlier version did, Redis only for GET
+/// and SET) sent memcache-style `SERVER_ERROR` text to Redis clients for
+/// every other command, which they cannot parse.
+fn error_rsp_type(data_store: crate::conf::DataStore) -> MsgType {
+    match data_store {
+        crate::conf::DataStore::Memcache => MsgType::RspMcServerError,
+        _ => MsgType::RspRedisError,
+    }
+}
+
 async fn coalesce_actor(
     req_id: crate::core::types::MsgId,
     req_ty: MsgType,
+    data_store: crate::conf::DataStore,
     consistency: ConsistencyLevel,
     targets: Vec<(u32, String)>,
     local_dc: String,
@@ -1681,7 +1749,9 @@ async fn coalesce_actor(
     while let Some(env) = intermediate_rx.recv().await {
         let source = env.source_peer_idx.unwrap_or(u32::MAX);
         let span = env.span.clone();
-        let outcome = tracker.record_reply(source, env.rsp);
+        let mut rsp = env.rsp;
+        classify_reply(&mut rsp, data_store);
+        let outcome = tracker.record_reply(source, rsp);
         match outcome {
             CoalesceOutcome::Pending => {}
             CoalesceOutcome::Ready {
@@ -1711,12 +1781,7 @@ async fn coalesce_actor(
             }
             CoalesceOutcome::Error(reason) => {
                 if !emitted {
-                    let err_type = if matches!(req_ty, MsgType::ReqRedisGet | MsgType::ReqRedisSet)
-                    {
-                        MsgType::RspRedisError
-                    } else {
-                        MsgType::RspMcServerError
-                    };
+                    let err_type = error_rsp_type(data_store);
                     let anchor = Msg::new(req_id, req_ty, true);
                     let rsp = crate::msg::response::make_error(
                         &anchor,
@@ -1749,11 +1814,7 @@ async fn coalesce_actor(
         if let Some(m) = failure_metrics.as_ref() {
             m.record_response_timeout(consistency);
         }
-        let err_type = if matches!(req_ty, MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
-            MsgType::RspRedisError
-        } else {
-            MsgType::RspMcServerError
-        };
+        let err_type = error_rsp_type(data_store);
         let anchor = Msg::new(req_id, req_ty, true);
         let rsp = crate::msg::response::make_error(
             &anchor,
