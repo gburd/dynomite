@@ -3220,6 +3220,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "optest"
+version = "0.0.1"
+dependencies = [
+ "hegeltest",
+ "nix",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "ordered-float"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,22 @@
+[package]
+name = "optest"
+description = "Operational test harness: multi-node clusters on one host in an unprivileged network namespace, with tc netem network faults, libfiu I/O faults, libumem/FAINT allocation faults, and libdirectio page-cache bypass."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+nix = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+hegeltest = { workspace = true }

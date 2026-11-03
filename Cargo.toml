@@ -19,6 +19,7 @@ members = [
     "crates/throttle-core",
     "crates/dyniak-bench",
     "crates/c-oracle",
+    "crates/optest",
 ]
 exclude = [
     "crates/fuzz",
