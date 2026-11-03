@@ -23,7 +23,24 @@ use dynomited::server::Server;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// A panic on any thread is fatal to the whole process.
+///
+/// Without this a panic unwinds only the thread it hit. When that thread
+/// is a tokio worker or the I/O driver, the process keeps running with
+/// its listeners open but no longer serves: clients connect and hang,
+/// and health checks that only test the port see a live node. A node
+/// that cannot serve must exit so its supervisor restarts it and its
+/// peers mark it down, as the C engine does (`dn_assert` aborts).
+fn install_fatal_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        std::process::abort();
+    }));
+}
+
 fn main() -> ExitCode {
+    install_fatal_panic_hook();
     // Toggle the engine's `data_store: dyniak` build-time gate on
     // when this binary was compiled with `--features riak`. The
     // gate's default is off; when off, the configuration
