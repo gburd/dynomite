@@ -264,10 +264,7 @@ async fn drive_dnode_parser(
                 match parse_result {
                     MsgParseResult::Ok | MsgParseResult::Noop => {
                         let pool = conn.mbuf_pool().clone();
-                        let mut buf = pool.get();
-                        buf.recv(&decoded);
-                        msg.mbufs_mut().push_back(buf);
-                        msg.recompute_mlen();
+                        msg.append_bytes(&pool, &decoded);
                         conn.outstanding_mut().insert(msg.id(), msg.id());
                         conn.enqueue_out(Msg::new(msg.id(), msg.ty(), true))?;
                         // Hand the parsed peer request to the

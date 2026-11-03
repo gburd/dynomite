@@ -254,10 +254,7 @@ impl DnodeServerConn {
                     let env = parse_span.in_scope(|| {
                         let mut rsp = Msg::new(req_id, MsgType::Unknown, false);
                         let pool = self.conn.mbuf_pool().clone();
-                        let mut buf = pool.get();
-                        buf.recv(&payload);
-                        rsp.mbufs_mut().push_back(buf);
-                        rsp.recompute_mlen();
+                        rsp.append_bytes(&pool, &payload);
                         rsp.set_dmsg(dmsg);
                         // Mark parse outcome so consumers can branch
                         // on a successful peer round-trip.

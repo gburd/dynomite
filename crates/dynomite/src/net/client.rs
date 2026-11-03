@@ -361,10 +361,7 @@ async fn drive_parser(
                     // live on the msg's own mbuf chain across
                     // recv -> filter -> forward.
                     let pool = conn.mbuf_pool().clone();
-                    let mut buf = pool.get();
-                    buf.recv(&accumulated[..consumed]);
-                    msg.mbufs_mut().push_back(buf);
-                    msg.recompute_mlen();
+                    msg.append_bytes(&pool, &accumulated[..consumed]);
                     accumulated.drain(0..consumed);
                     let _ = consumed_before;
                     conn.outstanding_mut().insert(msg.id(), msg.id());
@@ -420,10 +417,14 @@ async fn drive_parser(
                     return Ok(());
                 }
             }
-            MsgParseResult::Again
-            | MsgParseResult::Repair
-            | MsgParseResult::Fragment
-            | MsgParseResult::Noop => {
+            // An incomplete request: keep every byte and wait for the next
+            // read. The parser restarts from the frame's first byte each
+            // call, so the bytes it has already looked at must stay in the
+            // buffer. Draining them (as this arm did) cut every request
+            // larger than one read in two and closed the connection on the
+            // garbage that followed.
+            MsgParseResult::Again => return Ok(()),
+            MsgParseResult::Repair | MsgParseResult::Fragment | MsgParseResult::Noop => {
                 let consumed = msg.parser_pos();
                 if consumed > 0 {
                     accumulated.drain(0..consumed);

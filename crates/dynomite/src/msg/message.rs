@@ -558,6 +558,36 @@ impl Msg {
         self.mlen
     }
 
+    /// Append `bytes` to this message's mbuf chain, drawing as many
+    /// buffers from `pool` as the payload needs, then refresh `mlen`. One
+    /// mbuf holds at most its chunk size, so a single `Mbuf::recv` keeps
+    /// only the first chunk of a large payload; every copy of wire bytes
+    /// into a message goes through here.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::io::mbuf::MbufPool;
+    /// use dynomite::msg::{Msg, MsgType};
+    /// let pool = MbufPool::default();
+    /// let mut m = Msg::new(1, MsgType::Unknown, true);
+    /// let big = vec![b'x'; 100_000];
+    /// m.append_bytes(&pool, &big);
+    /// assert_eq!(m.mlen() as usize, big.len());
+    /// assert!(m.mbufs().len() > 1);
+    /// ```
+    pub fn append_bytes(&mut self, pool: &crate::io::mbuf::MbufPool, bytes: &[u8]) {
+        let mut written = 0usize;
+        while written < bytes.len() {
+            let mut buf = pool.get();
+            let n = buf.recv(&bytes[written..]);
+            assert!(n > 0, "invariant: a pooled mbuf has writable capacity");
+            self.mbufs_mut().push_back(buf);
+            written += n;
+        }
+        self.recompute_mlen();
+    }
+
     /// Refresh `mlen` from the current chain.
     ///
     /// The parser updates the length as it consumes bytes; callers

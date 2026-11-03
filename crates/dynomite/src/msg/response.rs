@@ -189,10 +189,7 @@ pub fn make_error(
 pub fn make_simple_redis(req: &Msg, pool: &MbufPool, payload: &[u8]) -> Msg {
     let mut rsp = Msg::new(req.id(), MsgType::RspRedisStatus, false);
     rsp.set_parent_id(req.id());
-    let mut buf = pool.get();
-    buf.recv(payload);
-    rsp.mbufs_mut().push_back(buf);
-    rsp.recompute_mlen();
+    rsp.append_bytes(pool, payload);
     rsp
 }
 

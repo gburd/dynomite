@@ -230,10 +230,7 @@ impl ServerConn {
                     let env = parse_span.in_scope(|| {
                         let mut rsp = msg;
                         let pool = self.conn.mbuf_pool().clone();
-                        let mut buf = pool.get();
-                        buf.recv(&bytes);
-                        rsp.mbufs_mut().push_back(buf);
-                        rsp.recompute_mlen();
+                        rsp.append_bytes(&pool, &bytes);
                         OutboundEnvelope {
                             req_id,
                             rsp,

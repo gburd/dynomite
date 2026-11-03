@@ -2235,10 +2235,7 @@ async fn run_one_backend_conn(
                                 );
                                 let env = parse_span.in_scope(|| {
                                     let pool = conn.mbuf_pool().clone();
-                                    let mut buf = pool.get();
-                                    buf.recv(&bytes);
-                                    msg.mbufs_mut().push_back(buf);
-                                    msg.recompute_mlen();
+                                    msg.append_bytes(&pool, &bytes);
                                     OutboundEnvelope {
                                         req_id,
                                         rsp: msg,
