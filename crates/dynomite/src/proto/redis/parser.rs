@@ -1212,8 +1212,9 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
     let mut rlen = r.rlen();
     let mut rntokens = r.rntokens();
     let mut ty = r.ty();
-    let mut integer = r.integer();
-    let mut int_negative = false;
+    // The reply integer is an unsigned 32-bit accumulator: '-' bytes are
+    // skipped and overflow wraps.
+    let mut integer = u32::try_from(r.integer()).unwrap_or(0);
     let mut ntoken_start: Option<usize> = r.ntoken_start();
     let mut ntoken_end: Option<usize> = r.ntoken_end();
 
@@ -1236,7 +1237,6 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                         ty = MsgType::RspRedisInteger;
                         state = RspState::IntegerStart;
                         integer = 0;
-                        int_negative = false;
                         p += 1;
                     }
                     b'$' => {
@@ -1306,22 +1306,15 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                 // Resume-from-state entry: see RspState::Status.
                 state = RspState::IntegerStart;
                 integer = 0;
-                int_negative = false;
             }
             RspState::IntegerStart => {
                 if ch == CR {
-                    if int_negative {
-                        integer = -integer;
-                    }
                     state = RspState::AlmostDone;
                     p += 1;
                 } else if ch == b'-' {
-                    int_negative = true;
                     p += 1;
                 } else if ch.is_ascii_digit() {
-                    integer = integer
-                        .saturating_mul(10)
-                        .saturating_add(i64::from(ch - b'0'));
+                    integer = integer.wrapping_mul(10).wrapping_add(u32::from(ch - b'0'));
                     p += 1;
                 } else {
                     return finish_rsp_error(
@@ -1340,8 +1333,15 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
             }
             RspState::Simple => {
                 if ch == CR {
+                    // The element starts at the nearest type byte before
+                    // the CR, which the argument keeps.
+                    let start = input[..p]
+                        .iter()
+                        .rposition(|&b| matches!(b, b':' | b'+' | b'-'))
+                        .unwrap_or(0);
+                    r.push_arg(ArgPos::new(input[start..p].to_vec()));
                     state = RspState::MultibulkArgnLf;
-                    rntokens = rntokens.saturating_sub(1);
+                    rntokens = rntokens.wrapping_sub(1);
                 }
                 p += 1;
             }
@@ -1394,7 +1394,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     state = RspState::RuntoCrlf;
                     p += 1;
                 } else if ch.is_ascii_digit() {
-                    rlen = rlen.saturating_mul(10).saturating_add(u32::from(ch - b'0'));
+                    rlen = rlen.wrapping_mul(10).wrapping_add(u32::from(ch - b'0'));
                     p += 1;
                 } else if ch == CR {
                     let start = token.expect("token recorded");
@@ -1468,6 +1468,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     }
                 };
                 if needed >= input.len() {
+                    rlen -= u32::try_from(input.len() - p).expect("bounded by rlen");
                     p = input.len();
                     break;
                 }
@@ -1490,7 +1491,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                 state = RspState::BulkArgLf;
             }
             RspState::BulkArgLf => {
-                if ch != CR && ch != LF {
+                if ch != LF {
                     return finish_rsp_error(
                         r,
                         state,
@@ -1503,10 +1504,6 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                         ntoken_start,
                         ntoken_end,
                     );
-                }
-                if ch == CR {
-                    p += 1;
-                    continue;
                 }
                 p += 1;
                 return finish_rsp_ok(r, p, ty, integer, ntoken_start, ntoken_end);
@@ -1535,9 +1532,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     state = RspState::RuntoCrlf;
                     p += 1;
                 } else if ch.is_ascii_digit() {
-                    rntokens = rntokens
-                        .saturating_mul(10)
-                        .saturating_add(u32::from(ch - b'0'));
+                    rntokens = rntokens.wrapping_mul(10).wrapping_add(u32::from(ch - b'0'));
                     p += 1;
                 } else if ch == CR {
                     let start = token.expect("token recorded");
@@ -1555,6 +1550,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                             ntoken_end,
                         );
                     }
+                    r.set_ntokens(rntokens);
                     ntoken_end = Some(p);
                     token = None;
                     state = RspState::MultibulkNargLf;
@@ -1625,7 +1621,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     rlen = 0;
                     p += 1;
                 } else if ch.is_ascii_digit() {
-                    rlen = rlen.saturating_mul(10).saturating_add(u32::from(ch - b'0'));
+                    rlen = rlen.wrapping_mul(10).wrapping_add(u32::from(ch - b'0'));
                     p += 1;
                 } else if ch == b'-' {
                     p += 1;
@@ -1651,7 +1647,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     } else {
                         state = RspState::MultibulkArgnLenLf;
                     }
-                    rntokens = rntokens.saturating_sub(1);
+                    rntokens = rntokens.wrapping_sub(1);
                     token = None;
                     p += 1;
                 } else {
@@ -1707,6 +1703,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                     }
                 };
                 if needed >= input.len() {
+                    rlen -= u32::try_from(input.len() - p).expect("bounded by rlen");
                     p = input.len();
                     break;
                 }
@@ -1724,9 +1721,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
                         ntoken_end,
                     );
                 }
-                if rlen > 0 {
-                    r.push_arg(ArgPos::new(input[p..needed].to_vec()));
-                }
+                r.push_arg(ArgPos::new(input[p..needed].to_vec()));
                 p = needed + 1;
                 rlen = 0;
                 state = RspState::MultibulkArgnLf;
@@ -1760,7 +1755,7 @@ pub fn redis_parse_rsp(r: &mut Msg, input: &[u8]) -> MsgParseResult {
     r.set_parser_token(token);
     r.set_rlen(rlen);
     r.set_rntokens(rntokens);
-    r.set_integer(integer);
+    r.set_integer(i64::from(integer));
     r.set_ntoken_span(ntoken_start, ntoken_end);
     if ty != MsgType::Unknown {
         r.set_type(ty);
@@ -1774,7 +1769,7 @@ fn finish_rsp_ok(
     r: &mut Msg,
     pos: usize,
     ty: MsgType,
-    integer: i64,
+    integer: u32,
     ntoken_start: Option<usize>,
     ntoken_end: Option<usize>,
 ) -> MsgParseResult {
@@ -1783,7 +1778,7 @@ fn finish_rsp_ok(
         return MsgParseResult::Error;
     }
     r.set_type(ty);
-    r.set_integer(integer);
+    r.set_integer(i64::from(integer));
     r.set_ntoken_span(ntoken_start, ntoken_end);
     r.set_parser_state(0);
     r.set_parser_pos(pos);
@@ -1802,7 +1797,7 @@ fn finish_rsp_error(
     rlen: u32,
     rntokens: u32,
     ty: MsgType,
-    integer: i64,
+    integer: u32,
     ntoken_start: Option<usize>,
     ntoken_end: Option<usize>,
 ) -> MsgParseResult {
@@ -1811,7 +1806,7 @@ fn finish_rsp_error(
     r.set_parser_token(token);
     r.set_rlen(rlen);
     r.set_rntokens(rntokens);
-    r.set_integer(integer);
+    r.set_integer(i64::from(integer));
     r.set_ntoken_span(ntoken_start, ntoken_end);
     if ty != MsgType::Unknown {
         r.set_type(ty);

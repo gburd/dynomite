@@ -553,9 +553,34 @@ fn rsp_multibulk_element_value_missing_lf_errors() {
 
 #[test]
 fn rsp_bulk_value_with_extra_cr_before_lf() {
-    // BulkArgLf: a CR immediately after the value's framing CR is
-    // consumed by the CR-continue branch before the terminating LF.
+    // BulkArgLf: only LF may follow the value's framing CR.
     let m = rsp(b"$3\r\nfoo\r\r\n");
-    assert_eq!(m.parse_result(), MsgParseResult::Ok);
+    assert_eq!(m.parse_result(), MsgParseResult::Error);
     assert_eq!(m.ty(), MsgType::RspRedisBulk);
+}
+
+/// A multibulk reply records its element count in `ntokens`, which the
+/// MGET coalescer reads.
+#[test]
+fn regression_rsp_multibulk_records_ntokens() {
+    let m = rsp(b"*2\r\n$1\r\na\r\n$1\r\nb\r\n");
+    assert_eq!(m.parse_result(), MsgParseResult::Ok);
+    assert_eq!(m.ntokens(), 2);
+}
+
+/// A bulk value split across reads: the bytes seen before the split count
+/// toward the value, so the resumed parse finds the CR at the right place.
+#[test]
+fn regression_rsp_bulk_value_resumed_mid_value() {
+    let input = b"$3\r\nfoo\r\n";
+    let mut m = Msg::new(0, MsgType::Unknown, false);
+    assert_eq!(redis_parse_rsp(&mut m, &input[..5]), MsgParseResult::Again);
+    assert_eq!(redis_parse_rsp(&mut m, input), MsgParseResult::Ok);
+    assert_eq!(m.parser_pos(), input.len());
+
+    let input = b"*1\r\n$3\r\nfoo\r\n";
+    let mut m = Msg::new(0, MsgType::Unknown, false);
+    assert_eq!(redis_parse_rsp(&mut m, &input[..10]), MsgParseResult::Again);
+    assert_eq!(redis_parse_rsp(&mut m, input), MsgParseResult::Ok);
+    assert_eq!(m.parser_pos(), input.len());
 }

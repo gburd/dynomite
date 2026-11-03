@@ -627,9 +627,13 @@ fn rsp_integer_positive_and_negative() {
     let pos = rsp(b":42\r\n");
     assert_eq!(pos.parse_result(), MsgParseResult::Ok);
     assert_eq!(pos.integer(), 42);
+    // The reply integer is an unsigned 32-bit accumulator that skips '-'
+    // bytes wherever they appear and wraps on overflow.
     let neg = rsp(b":-7\r\n");
     assert_eq!(neg.parse_result(), MsgParseResult::Ok);
-    assert_eq!(neg.integer(), -7);
+    assert_eq!(neg.integer(), 7);
+    assert_eq!(rsp(b":1-2\r\n").integer(), 12);
+    assert_eq!(rsp(b":4294967296\r\n").integer(), 0);
 }
 
 #[test]
