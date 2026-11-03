@@ -18,15 +18,15 @@
 //!
 //! Each scenario runs the C reference first, then `dynomited`.
 //!
-//! Known Rust gaps (tracked, not masked; the tests fail until they land):
-//! * multi-key MGET/MSET/DEL across a rack of several nodes need request
-//!   fragmentation and reply coalescing (`redis_fragment`,
-//!   `redis_post_coalesce` and the client request path that calls them;
-//!   plan T7/T9).
-//!   `run_multikey_test` fails on the Rust engine in the no-quorum topology
-//!   (dc2/rack3 has four nodes).
-//! * C timestamp read repair (`._add-set` metadata, DEV-R1, plan T8).
-//!   `run_read_repair_test` fails on the Rust engine.
+//! Known Rust gap (tracked, not masked; the test fails until it lands):
+//! C timestamp read repair (`._add-set` metadata, DEV-R1, plan T8), so
+//! `run_read_repair_test` fails `func_test_safe_quorum_request` on the
+//! Rust engine.
+//!
+//! Not exercised here: multi-key fragmentation inside a multi-node rack.
+//! Both C topologies enter through a one-node rack, so MGET/MSET never
+//! split; the Rust engine does not wire `redis_fragment` into the request
+//! path yet (plan T7/T9).
 
 #[macro_use]
 mod common;
@@ -131,6 +131,22 @@ impl Dual<'_> {
         } else {
             (r, d)
         };
+        if r != d {
+            // Which replicas actually hold the data: the same command
+            // straight at every node's datastore.
+            for n in &self.cluster.nodes {
+                let direct = n.store_client().and_then(|mut s| s.cmd(args));
+                let dbsize = n.store_client().and_then(|mut s| s.cmd(&["DBSIZE"]));
+                eprintln!(
+                    "[{:?}] {} {}/{}: dbsize {dbsize:?}, direct reply matches standalone: {}",
+                    self.engine,
+                    n.ip(),
+                    n.spec.dc,
+                    n.spec.rack,
+                    direct.as_ref().is_ok_and(|v| *v == r)
+                );
+            }
+        }
         assert_eq!(
             r, d,
             "[{:?}] result mismatch for {:?}: standalone {:?} vs dynomite {:?}",
@@ -383,9 +399,17 @@ fn standalone_client(cluster: &Cluster) -> Client {
         .expect("standalone valkey");
     std::mem::forget(child); // reaped with the sandbox
     let addr = std::net::SocketAddr::from((ip, port));
-    common::eventually("standalone datastore", Duration::from_secs(10), || {
+    let mut c = common::eventually("standalone datastore", Duration::from_secs(10), || {
         Client::connect(addr, T).ok()
-    })
+    });
+    // The standalone outlives one engine's cluster (a second spawn on the
+    // same port fails and this connects to the first), so the previous
+    // engine's keys must go, or they read as data the next engine lost.
+    assert_eq!(
+        c.cmd(&["FLUSHALL"]).expect("FLUSHALL"),
+        Value::Simple("OK".into())
+    );
+    c
 }
 
 fn no_quorum_topology() -> ClusterSpec {
