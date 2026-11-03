@@ -66,7 +66,17 @@ pub fn in_sandbox(test_name: &str) -> Sandbox {
         return skip_or_fail("unprivileged user+net namespaces are disabled".into());
     }
     let exe = std::env::current_exe().expect("current test executable");
-    let out = Command::new(unshare)
+    // A scenario must never hang the suite: bound the whole sandboxed run.
+    // `--kill-child` makes the kernel tear down every process in the
+    // namespace when `unshare` itself is killed.
+    let limit = std::env::var("OPTEST_SCENARIO_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(600);
+    let timeout = crate::tools::which("timeout").expect("coreutils timeout");
+    let out = Command::new(timeout)
+        .args(["--kill-after=10", &format!("{limit}s")])
+        .arg(unshare)
         .args([
             "--user",
             "--map-root-user",
@@ -87,9 +97,11 @@ pub fn in_sandbox(test_name: &str) -> Sandbox {
     // The child is a libtest run filtered to exactly this test: it must
     // report one passed test, or the filter did not match.
     let ran = stdout.contains("1 passed") || stdout.contains("test result: ok. 1 passed");
+    let timed_out = out.status.code() == Some(124) || out.status.code() == Some(137);
     assert!(
         out.status.success() && ran,
-        "sandboxed scenario `{test_name}` failed ({}):\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        "sandboxed scenario `{test_name}` {} ({}):\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        if timed_out { format!("HUNG past {limit}s and was killed") } else { "failed".to_string() },
         out.status
     );
     if std::env::var_os("OPTEST_VERBOSE").is_some() {

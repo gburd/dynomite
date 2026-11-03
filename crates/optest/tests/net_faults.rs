@@ -356,3 +356,52 @@ fn paused_replica_is_tolerated_and_rejoins() {
         assert_history(&format!("paused_replica_{engine:?}"), &h, Guarantee::Quorum);
     }
 }
+
+/// A crashed node restarts and every peer reconnects to it: the full mesh
+/// is back and the node takes replicated writes again. Regression: a Rust
+/// peer whose link saw the clean close ended its supervisor (`Ok` from the
+/// driver meant "stop"), and a peer whose link held in-flight requests
+/// never noticed the close at all, so the mesh never healed. C redials in
+/// about two seconds.
+#[test]
+fn crashed_node_rejoins_the_mesh() {
+    sandboxed!("crashed_node_rejoins_the_mesh");
+    for engine in engines() {
+        let Some(mut c) = start_or_skip(ClusterSpec::grid(1, 3, 1).engine(engine)) else {
+            return;
+        };
+        let mut cl = c.nodes[1].client(T).expect("connect");
+        assert!(cl.cmd(&["SET", "before", "v"]).expect("set").is_ok());
+        c.nodes[0].crash();
+        std::thread::sleep(Duration::from_secs(1));
+        let t0 = std::time::Instant::now();
+        c.launch(0).expect("relaunch");
+        c.wait_ready(0, Duration::from_secs(30))
+            .expect("node 0 ready");
+        let meshed = c.wait_meshed(Duration::from_secs(60));
+        eprintln!(
+            "[{engine:?}] mesh after restart: {meshed:?} in {:?}",
+            t0.elapsed()
+        );
+        meshed.expect("peers reconnect to the restarted node");
+        assert!(
+            t0.elapsed() < Duration::from_secs(10),
+            "{engine:?}: slow rejoin {:?}",
+            t0.elapsed()
+        );
+        let mut cl = c.nodes[1].client(T).expect("connect");
+        assert!(cl.cmd(&["SET", "after", "v"]).expect("set").is_ok());
+        eventually(
+            "write replicated to restarted node",
+            Duration::from_secs(10),
+            || {
+                let mut s = c.nodes[0].store_client().ok()?;
+                matches!(
+                    s.cmd(&["EXISTS", "after"]).ok()?,
+                    optest::resp::Value::Int(1)
+                )
+                .then_some(())
+            },
+        );
+    }
+}
