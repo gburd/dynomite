@@ -21,7 +21,8 @@
 //! Known Rust gaps (tracked, not masked; the tests fail until they land):
 //! * multi-key MGET/MSET/DEL across a rack of several nodes need request
 //!   fragmentation and reply coalescing (`redis_fragment`,
-//!   `redis_post_coalesce` and their `dyn_client.c` callers; plan T7/T9).
+//!   `redis_post_coalesce` and the client request path that calls them;
+//!   plan T7/T9).
 //!   `run_multikey_test` fails on the Rust engine in the no-quorum topology
 //!   (dc2/rack3 has four nodes).
 //! * C timestamp read repair (`._add-set` metadata, DEV-R1, plan T8).
