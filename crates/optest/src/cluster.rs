@@ -490,11 +490,15 @@ impl Cluster {
 
     fn binary(&self) -> Result<PathBuf> {
         match self.spec.engine {
-            Engine::Rust => self
-                .tools
-                .dynomited
-                .clone()
-                .ok_or(Error::MissingTool("dynomited")),
+            Engine::Rust => {
+                let bin = self
+                    .tools
+                    .dynomited
+                    .clone()
+                    .ok_or(Error::MissingTool("dynomited"))?;
+                crate::tools::check_fresh(&bin)?;
+                Ok(bin)
+            }
             Engine::C => self
                 .tools
                 .c_dynomite

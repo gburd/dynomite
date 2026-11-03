@@ -127,6 +127,44 @@ fn env_path(var: &str) -> Option<PathBuf> {
         .filter(|p| p.is_file())
 }
 
+/// Refuse a `dynomited` older than the engine sources it is built from.
+///
+/// `cargo test -p optest` does not rebuild the server, so a stale binary
+/// silently tests old code (a chef run did exactly that). Skipped when
+/// `OPTEST_DYNOMITED` names the binary explicitly or no source tree is
+/// found next to it.
+pub fn check_fresh(bin: &Path) -> Result<(), crate::Error> {
+    if std::env::var_os("OPTEST_DYNOMITED").is_some() {
+        return Ok(());
+    }
+    let Ok(built) = bin.metadata().and_then(|m| m.modified()) else {
+        return Ok(());
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let newest = ["crates/dynomite/src", "crates/dynomited/src"]
+        .iter()
+        .filter_map(|d| newest_mtime(&root.join(d)))
+        .max();
+    match newest {
+        Some(src) if src > built => Err(crate::Error::StaleBinary(bin.to_path_buf())),
+        _ => Ok(()),
+    }
+}
+
+fn newest_mtime(dir: &Path) -> Option<std::time::SystemTime> {
+    let mut newest = None;
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        let t = if p.is_dir() {
+            newest_mtime(&p)
+        } else {
+            e.metadata().and_then(|m| m.modified()).ok()
+        };
+        newest = newest.max(t);
+    }
+    newest
+}
+
 /// `target/<profile>/dynomited` next to the running test binary, which
 /// cargo places in `target/<profile>/deps/`.
 fn sibling_dynomited() -> Option<PathBuf> {

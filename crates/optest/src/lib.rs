@@ -51,6 +51,10 @@ pub enum Error {
     /// A required external tool is missing.
     #[error("missing tool: {0}")]
     MissingTool(&'static str),
+    /// The `dynomited` found is older than the engine sources; rebuild it
+    /// (`cargo build -p dynomited`) or name one with `OPTEST_DYNOMITED`.
+    #[error("stale {}: older than the engine sources; run `cargo build -p dynomited`", .0.display())]
+    StaleBinary(std::path::PathBuf),
     /// A command the harness ran (tc, ip, a datastore) failed.
     #[error("command `{cmd}` failed: {stderr}")]
     Command {

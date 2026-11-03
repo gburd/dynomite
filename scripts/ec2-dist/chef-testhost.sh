@@ -143,7 +143,9 @@ phase_sync() {
   log "synced $(git -C "$SRC_DIR" rev-parse --short HEAD)"
 }
 
-phase_run() { nsh "export PATH=\$PATH:/usr/sbin:/sbin:\$HOME/fault/prefix/bin; cd ~/dynomite && . ~/.cargo/env && $*"; }
+# Rebuild the server first: `cargo test -p optest` does not, and a stale
+# dynomited silently tests old code.
+phase_run() { nsh "export PATH=\$PATH:/usr/sbin:/sbin:\$HOME/fault/prefix/bin; cd ~/dynomite && . ~/.cargo/env && cargo build -q -p dynomited && $*"; }
 
 phase_down() {
   local ids
