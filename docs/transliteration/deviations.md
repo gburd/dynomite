@@ -383,6 +383,46 @@ held at its current behaviour until the owner decides.
   `conf/server.rs::regression_dyn_seed_multi_token_rejected`.
 * Status: AUTHORIZED
 
+### DEV-P1: C swallows the reply after a bare Redis error word
+
+* C: `redis_parse_rsp` (`src/proto/dyn_redis.c:2418`), state `SW_ERROR`,
+  classifies the error word when it reaches a space or a CR, sets
+  `SW_RUNTO_CRLF`, and `break`s, so the loop's `p++` consumes the
+  byte. When that byte is the CR of a reply with no message text
+  (`-ERR\r\n`, `-MYERR\r\n`, as a script's `{err="MYERR"}` returns),
+  `SW_RUNTO_CRLF` then skips the LF and runs to the next CR: the reply
+  does not complete. With nothing behind it the parse stays
+  `MSG_PARSE_AGAIN` until the request times out; with a pipelined reply
+  behind it, C reports one reply covering both (`-ERR\r\n+OK\r\n` is
+  consumed whole, 11 bytes) and every later reply on the connection is
+  matched to the wrong request.
+* Rust: `redis_parse_rsp` does not advance at that byte, so the CR goes
+  to `RuntoCrlf` and the error completes at its own CR LF (6 bytes).
+  Replies with message text (`-ERR msg\r\n`) parse identically in both.
+* Evidence: `c-oracle/tests/redis_rsp_oracle.rs::c_bare_error_word_runs_to_next_crlf`
+  pins the C behaviour; the oracle properties compare every other input
+  byte for byte and compare this class against C with a space inserted.
+* Recommendation: keep the Rust behaviour. Matching C would stall or
+  desynchronise a client on a valid RESP reply.
+* Status: PROPOSED
+
+### DEV-P2: nested multibulk replies end at the inner count (finding)
+
+* C: `redis_parse_rsp` handles a nested multibulk element by re-entering
+  `SW_MULTIBULK`, which overwrites `rntokens` with the inner count. The
+  outer count is lost, so the reply ends after the inner array; this is
+  only correct when the nested array is the last element (the
+  `SCAN`/`SSCAN` cursor shape the C comment names). For
+  `*2\r\n*1\r\n$1\r\na\r\n$1\r\nb\r\n` C completes at byte 15 and
+  `$1\r\nb\r\n` is parsed as the next reply. Replies with a nested
+  array before the last element (`EXEC`, `CLUSTER SLOTS`, `COMMAND`,
+  `XRANGE`, `GEOPOS`) desynchronise the server connection.
+* Rust: identical to C (oracle-verified); no code change.
+* Evidence: `c-oracle/tests/redis_rsp_oracle.rs::nested_multibulk_ends_at_inner_count`.
+* Recommendation: owner ruling on whether to parse nested arrays with a
+  depth stack as an authorised fix. Until then Rust stays equal to C.
+* Status: PROPOSED
+
 ## E. Decisions log
 
 Owner decisions are appended here with date and the exact instruction.

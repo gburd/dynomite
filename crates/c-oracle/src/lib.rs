@@ -23,4 +23,6 @@ pub const fn available() -> bool {
 #[cfg(not(c_oracle_absent))]
 pub mod hashkit;
 #[cfg(not(c_oracle_absent))]
+pub mod redis;
+#[cfg(not(c_oracle_absent))]
 pub mod vnode;
