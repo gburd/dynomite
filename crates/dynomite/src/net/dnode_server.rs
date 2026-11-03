@@ -96,7 +96,13 @@ impl DnodeServerConn {
         let mut parser = DnodeParser::new();
 
         loop {
-            if self.conn.is_eof() && self.pending.is_empty() {
+            if self.conn.is_eof() {
+                // The peer closed the link. A reply can no longer arrive for
+                // anything still in flight, so fail each such request now
+                // (as the C `dnode_peer_close` does with
+                // `dnode_peer_ack_err`) instead of leaving its caller to
+                // time out, and return so the supervisor redials.
+                self.fail_pending().await;
                 self.conn.set_done();
                 return Ok(());
             }
@@ -174,6 +180,29 @@ impl DnodeServerConn {
                     self.drive_response(&mut accumulated, &mut parser).await?;
                 }
             }
+        }
+    }
+
+    /// Answer every in-flight request with an error reply, in order.
+    async fn fail_pending(&mut self) {
+        let pool = self.conn.mbuf_pool().clone();
+        while let Some((req_id, span, source_peer_idx, reply_to)) = self.pending.pop_front() {
+            let anchor = Msg::new(req_id, MsgType::Unknown, true);
+            let rsp = crate::msg::response::make_error(
+                &anchor,
+                MsgType::RspRedisError,
+                0,
+                crate::msg::DynErrorCode::PeerHostDown,
+                &pool,
+            );
+            let _ = reply_to
+                .send(OutboundEnvelope {
+                    req_id,
+                    rsp,
+                    span,
+                    source_peer_idx,
+                })
+                .await;
         }
     }
 

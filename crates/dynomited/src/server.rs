@@ -2399,14 +2399,16 @@ async fn peer_supervisor(
             tokio::sync::mpsc::channel::<OutboundRequest>(1).1,
         );
         let driver_res = driver.run_with(&mut rx).await;
-        if let Err(e) = driver_res {
-            tracing::warn!(
-                peer = %addr,
-                error = %e,
-                "peer connection ended; reconnecting"
-            );
-        } else {
-            return Ok(());
+        // The driver returns Ok on a clean close (the peer sent FIN, e.g.
+        // it restarted) and Err on an I/O failure. Either way the link is
+        // gone and the peer must be redialed; only a closed request
+        // channel (the pool is shutting down) ends the supervisor, which
+        // the loop head checks.
+        match driver_res {
+            Ok(()) => tracing::info!(peer = %addr, "peer closed the connection; reconnecting"),
+            Err(e) => {
+                tracing::warn!(peer = %addr, error = %e, "peer connection ended; reconnecting")
+            }
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
