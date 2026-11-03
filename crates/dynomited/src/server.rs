@@ -2152,10 +2152,14 @@ async fn run_one_backend_conn(
     use tracing::Instrument as _;
     let mut accumulated: Vec<u8> = Vec::new();
     let mut read_buf = vec![0u8; 4096];
+    // (req_id, responder, span, target peer index). The target index is
+    // carried through to the reply so the replica coalescer counts the
+    // local datastore's vote.
     let mut pending: std::collections::VecDeque<(
         u64,
         tokio::sync::mpsc::Sender<OutboundEnvelope>,
         tracing::Span,
+        Option<u32>,
     )> = std::collections::VecDeque::new();
     loop {
         tokio::select! {
@@ -2182,7 +2186,7 @@ async fn run_one_backend_conn(
                     return Err(NetError::Io(e));
                 }
                 conn.record_send(req_bytes.len());
-                pending.push_back((req.req_id, req.responder, req_span));
+                pending.push_back((req.req_id, req.responder, req_span, req.target_peer_idx));
             }
             res = async {
                 if let Some(t) = conn.transport_mut() {
@@ -2220,7 +2224,9 @@ async fn run_one_backend_conn(
                             let bytes = accumulated[..consumed].to_vec();
                             accumulated.drain(0..consumed);
                             *frames_ok = frames_ok.saturating_add(1);
-                            if let Some((req_id, responder, req_span)) = pending.pop_front() {
+                            if let Some((req_id, responder, req_span, source_peer_idx)) =
+                                pending.pop_front()
+                            {
                                 let parse_span = tracing::info_span!(
                                     parent: &req_span,
                                     "backend.parse",
@@ -2237,7 +2243,7 @@ async fn run_one_backend_conn(
                                         req_id,
                                         rsp: msg,
                                         span: req_span,
-                                        source_peer_idx: None,
+                                        source_peer_idx,
                                     }
                                 });
                                 let _ = responder.send(env).await;
