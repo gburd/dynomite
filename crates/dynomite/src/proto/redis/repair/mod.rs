@@ -15,6 +15,8 @@
 //!   cleanup script after a delete completes.
 //! * [`logic`] - the timestamp bookkeeping each repair script
 //!   performs, evaluated by the engine over a [`logic::RepairStore`].
+//! * [`request`] - the internal repair-script request replicas run on
+//!   their datastore connection.
 //! * [`reconcile::redis_reconcile_responses`] - pick a single
 //!   response from the per-replica set, optionally producing a
 //!   read-repair side effect.
@@ -26,6 +28,7 @@ pub mod clear;
 pub mod logic;
 pub mod make;
 pub mod reconcile;
+pub mod request;
 pub mod rewrite;
 pub mod scripts;
 
