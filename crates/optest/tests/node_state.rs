@@ -68,13 +68,27 @@ fn admin_state_gates_the_local_datastore() {
         };
 
         // STANDBY: every request for node 0's own datastore is refused.
-        assert!(c.nodes[0].stats("/state/standby").expect("standby").contains("OK"));
+        assert!(c.nodes[0]
+            .stats("/state/standby")
+            .expect("standby")
+            .contains("OK"));
         assert_eq!(err(reply(0, &["GET", &mine])), INVALID_STATE, "{engine:?}");
-        assert_eq!(err(reply(0, &["SET", &mine, "v1"])), INVALID_STATE, "{engine:?}");
+        assert_eq!(
+            err(reply(0, &["SET", &mine, "v1"])),
+            INVALID_STATE,
+            "{engine:?}"
+        );
         assert_eq!(err(reply(0, &["PING"])), INVALID_STATE, "{engine:?}");
-        assert_eq!(err(reply(1, &["GET", &mine])), INVALID_STATE, "{engine:?} relayed");
+        assert_eq!(
+            err(reply(1, &["GET", &mine])),
+            INVALID_STATE,
+            "{engine:?} relayed"
+        );
         // Keys another node owns are served as usual.
-        assert_eq!(reply(0, &["GET", &theirs]), Value::Bulk(Some(b"v0".to_vec())));
+        assert_eq!(
+            reply(0, &["GET", &theirs]),
+            Value::Bulk(Some(b"v0".to_vec()))
+        );
         assert!(reply(0, &["SET", &theirs, "v1"]).is_ok(), "{engine:?}");
 
         // WRITES_ONLY and RESUMING refuse reads.
@@ -88,13 +102,22 @@ fn admin_state_gates_the_local_datastore() {
                 INVALID_STATE,
                 "{engine:?} {state}"
             );
-            assert_eq!(reply(0, &["GET", &theirs]), Value::Bulk(Some(b"v1".to_vec())));
+            assert_eq!(
+                reply(0, &["GET", &theirs]),
+                Value::Bulk(Some(b"v1".to_vec()))
+            );
         }
         // RESUMING sends writes.
-        assert!(reply(0, &["SET", &mine, "v2"]).is_ok(), "{engine:?} resuming write");
+        assert!(
+            reply(0, &["SET", &mine, "v2"]).is_ok(),
+            "{engine:?} resuming write"
+        );
 
         // NORMAL serves everything.
-        assert!(c.nodes[0].stats("/state/normal").expect("normal").contains("OK"));
+        assert!(c.nodes[0]
+            .stats("/state/normal")
+            .expect("normal")
+            .contains("OK"));
         assert_eq!(
             reply(0, &["GET", &mine]),
             Value::Bulk(Some(b"v2".to_vec())),
