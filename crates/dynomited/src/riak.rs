@@ -744,6 +744,7 @@ impl RepairSink for PeerChannelRepairSink {
             span: tracing::Span::none(),
             ty: dynomite::proto::dnode::DmsgType::ReqForward,
             target_peer_idx: Some(task.peer_idx),
+            deadline: None,
         };
         match tx.try_send(req) {
             Ok(()) => Ok(()),
@@ -806,6 +807,7 @@ impl PeerChannelOutbound {
             span: tracing::Span::none(),
             ty: DmsgType::RiakReplica,
             target_peer_idx: Some(peer_idx),
+            deadline: None,
         };
         if tx.try_send(req).is_err() {
             tracing::debug!(

@@ -87,6 +87,45 @@ pub struct OutboundRequest {
     /// `None` is used for single-target paths where the responder
     /// already implies the source.
     pub target_peer_idx: Option<u32>,
+    /// Instant after which the driver gives up on the reply, closes
+    /// the connection and fails every request outstanding on it.
+    /// `None` for requests that expect no reply (gossip, best-effort
+    /// cleanups) and when the configured timeout is zero; those never
+    /// time out.
+    pub deadline: Option<tokio::time::Instant>,
+}
+
+/// Wait until `deadline`, or forever when there is none. A driver
+/// selects on this next to its socket so a request whose reply is
+/// overdue ends the connection.
+///
+/// # Examples
+///
+/// ```
+/// # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+/// let soon = tokio::time::Instant::now() + std::time::Duration::from_millis(1);
+/// dynomite::net::server::request_timer(Some(soon)).await;
+/// # });
+/// ```
+pub async fn request_timer(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(d) => tokio::time::sleep_until(d).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The error a driver returns when a request's deadline passed: the
+/// connection is closed with `ETIMEDOUT`.
+///
+/// # Examples
+///
+/// ```
+/// let e = dynomite::net::server::request_timed_out();
+/// assert!(matches!(e, dynomite::net::NetError::Io(ref io) if io.kind() == std::io::ErrorKind::TimedOut));
+/// ```
+#[must_use]
+pub fn request_timed_out() -> NetError {
+    NetError::Io(std::io::ErrorKind::TimedOut.into())
 }
 
 impl ServerConn {

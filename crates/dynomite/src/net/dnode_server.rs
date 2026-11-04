@@ -371,6 +371,7 @@ mod tests {
                 span: tracing::Span::current(),
                 ty: DmsgType::Req,
                 target_peer_idx: None,
+                deadline: None,
             })
             .await
             .unwrap();
@@ -382,6 +383,7 @@ mod tests {
                 span: tracing::Span::current(),
                 ty: DmsgType::Req,
                 target_peer_idx: None,
+                deadline: None,
             })
             .await
             .unwrap();

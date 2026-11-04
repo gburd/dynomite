@@ -154,6 +154,7 @@ async fn unix_backend_round_trip() {
         span: tracing::Span::none(),
         ty: DmsgType::Req,
         target_peer_idx: None,
+        deadline: None,
     };
     tx.send(req).await.expect("queue request");
 
@@ -206,6 +207,7 @@ async fn unix_backend_auth_round_trip() {
         span: tracing::Span::none(),
         ty: DmsgType::Req,
         target_peer_idx: None,
+        deadline: None,
     };
     tx.send(req).await.expect("queue request");
 

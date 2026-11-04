@@ -234,6 +234,7 @@ async fn dc_quorum_set_with_one_down_replica_stores_and_drains_hint() {
             span: tracing::Span::none(),
             ty: DmsgType::ReqForward,
             target_peer_idx: Some(2),
+            deadline: None,
         };
         peer2_tx.try_send(req).expect("hint replay channel full");
     }

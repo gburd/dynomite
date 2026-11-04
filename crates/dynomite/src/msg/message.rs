@@ -875,9 +875,49 @@ impl Msg {
     }
 }
 
+/// Deadline of a request whose timer starts `now`: `timeout_ms` scaled
+/// by the runtime timeout factor. A zero timeout means the request never
+/// times out.
+///
+/// The factor is read when the request is dispatched, so changing it
+/// affects only requests dispatched afterwards.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use dynomite::msg::message::msg_tmo_insert;
+/// let now = tokio::time::Instant::now();
+/// assert_eq!(msg_tmo_insert(100, 3, now), Some(now + Duration::from_millis(300)));
+/// assert_eq!(msg_tmo_insert(0, 3, now), None);
+/// ```
+#[must_use]
+pub fn msg_tmo_insert(
+    timeout_ms: u64,
+    timeout_factor: u8,
+    now: tokio::time::Instant,
+) -> Option<tokio::time::Instant> {
+    if timeout_ms == 0 {
+        return None;
+    }
+    let timeout = timeout_ms.saturating_mul(u64::from(timeout_factor));
+    Some(now + std::time::Duration::from_millis(timeout))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn msg_tmo_insert_scales_by_factor_and_skips_zero() {
+        let now = tokio::time::Instant::now();
+        let ms = std::time::Duration::from_millis;
+        assert_eq!(msg_tmo_insert(1000, 1, now), Some(now + ms(1000)));
+        assert_eq!(msg_tmo_insert(1000, 3, now), Some(now + ms(3000)));
+        assert_eq!(msg_tmo_insert(1200, 3, now), Some(now + ms(3600)));
+        assert_eq!(msg_tmo_insert(0, 1, now), None);
+        assert_eq!(msg_tmo_insert(0, 3, now), None);
+    }
 
     #[test]
     fn defaults_match_reference() {

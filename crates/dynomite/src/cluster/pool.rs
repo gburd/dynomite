@@ -603,6 +603,79 @@ impl ServerPool {
         f
     }
 
+    /// Timeout, in milliseconds, of a request written to the local
+    /// datastore: the pool's `timeout:`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// let cfg = PoolConfig { timeout_ms: 1000, ..PoolConfig::default() };
+    /// assert_eq!(ServerPool::new(cfg, Vec::new()).server_timeout(), 1000);
+    /// ```
+    #[must_use]
+    pub fn server_timeout(&self) -> u64 {
+        self.config.timeout_ms
+    }
+
+    /// Timeout, in milliseconds, of a request forwarded to a peer: the
+    /// pool's `timeout:` plus 200 ms for a peer in this datacenter or
+    /// 5000 ms for a remote one, plus 20000 ms more for a write so a
+    /// write is almost never dropped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// let cfg = PoolConfig { timeout_ms: 1000, ..PoolConfig::default() };
+    /// let pool = ServerPool::new(cfg, Vec::new());
+    /// assert_eq!(pool.dnode_peer_timeout(true, true), 1200);
+    /// assert_eq!(pool.dnode_peer_timeout(false, false), 26000);
+    /// ```
+    #[must_use]
+    pub fn dnode_peer_timeout(&self, is_same_dc: bool, is_read: bool) -> u64 {
+        let mut additional_timeout = if is_same_dc { 200 } else { 5000 };
+        if !is_read {
+            additional_timeout += 20000;
+        }
+        self.config.timeout_ms.saturating_add(additional_timeout)
+    }
+
+    /// Deadline of `req` dispatched now: to the local datastore when
+    /// `peer_dc` is `None`, else to a peer in datacenter `peer_dc`.
+    /// `None` when the request expects no reply or the timeout is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// use dynomite::msg::{Msg, MsgType};
+    /// let cfg = PoolConfig { dc: "dc1".into(), timeout_ms: 0, ..PoolConfig::default() };
+    /// let pool = ServerPool::new(cfg, Vec::new());
+    /// let req = Msg::new(1, MsgType::ReqRedisGet, true);
+    /// assert!(pool.request_deadline(&req, None).is_none());
+    /// assert!(pool.request_deadline(&req, Some("dc1")).is_some());
+    /// ```
+    #[must_use]
+    pub fn request_deadline(
+        &self,
+        req: &crate::msg::Msg,
+        peer_dc: Option<&str>,
+    ) -> Option<tokio::time::Instant> {
+        if !req.flags().expect_datastore_reply {
+            return None;
+        }
+        let timeout = match peer_dc {
+            None => self.server_timeout(),
+            Some(dc) => self.dnode_peer_timeout(dc == self.config.dc, req.flags().is_read),
+        };
+        crate::msg::message::msg_tmo_insert(
+            timeout,
+            self.timeout_factor(),
+            tokio::time::Instant::now(),
+        )
+    }
+
     /// Request timeout in milliseconds: `timeout:` multiplied by the
     /// current timeout factor. A zero `timeout:` means no timeout and
     /// stays zero.
@@ -860,6 +933,32 @@ mod tests {
             is_same,
             false,
         )
+    }
+
+    #[test]
+    fn request_timeouts_follow_target_dc_and_read_write() {
+        let pool = ServerPool::new(
+            PoolConfig {
+                timeout_ms: 1000,
+                ..cfg("dc1", "r1")
+            },
+            Vec::new(),
+        );
+        assert_eq!(pool.server_timeout(), 1000);
+        assert_eq!(pool.dnode_peer_timeout(true, true), 1200);
+        assert_eq!(pool.dnode_peer_timeout(true, false), 21200);
+        assert_eq!(pool.dnode_peer_timeout(false, true), 6000);
+        assert_eq!(pool.dnode_peer_timeout(false, false), 26000);
+        // A zero `timeout:` still leaves the peer allowance.
+        let zero = ServerPool::new(
+            PoolConfig {
+                timeout_ms: 0,
+                ..cfg("dc1", "r1")
+            },
+            Vec::new(),
+        );
+        assert_eq!(zero.server_timeout(), 0);
+        assert_eq!(zero.dnode_peer_timeout(true, true), 200);
     }
 
     #[test]

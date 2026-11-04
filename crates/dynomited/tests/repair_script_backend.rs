@@ -77,6 +77,7 @@ async fn send(tx: &mpsc::Sender<OutboundRequest>, id: u64, bytes: Vec<u8>) -> Ve
         span: tracing::Span::none(),
         ty: DmsgType::Req,
         target_peer_idx: Some(7),
+        deadline: None,
     })
     .await
     .expect("backend channel");

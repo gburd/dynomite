@@ -112,6 +112,7 @@ fn outbound_request_carries_span_field() {
         span: tracing::Span::none(),
         ty: dynomite::proto::dnode::DmsgType::Req,
         target_peer_idx: None,
+        deadline: None,
     };
     assert_eq!(req.req_id, 7);
     let _ = format!("{:?}", req.span);

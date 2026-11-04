@@ -2047,7 +2047,7 @@ async fn serve_errors_while(
             req = rx.recv() => {
                 let Some(req) = req else { return };
                 let mut one = BackendPending::new();
-                one.push_back((req.req_id, req.responder, req.span, req.target_peer_idx));
+                one.push_back((req.req_id, req.responder, req.span, req.target_peer_idx, None));
                 fail_backend_requests(&mut one, rx, data_store).await;
             }
         }
@@ -2194,16 +2194,18 @@ pub fn spawn_backend_supervisor_unix_for_testing(
     ))
 }
 
-/// A request written to the datastore and awaiting its reply:
-/// (req_id, responder, span, target peer index). The target index is
-/// carried through to the reply so the replica coalescer counts the local
-/// datastore's vote.
-type BackendPending = std::collections::VecDeque<(
-    u64,
-    tokio::sync::mpsc::Sender<dynomite::net::OutboundEnvelope>,
-    tracing::Span,
-    Option<u32>,
-)>;
+/// Requests written to the datastore and awaiting their replies, oldest
+/// first.
+type BackendPending = std::collections::VecDeque<PendingReply>;
+
+/// Earliest deadline among `pending` and `extra`: the instant the
+/// connection times out.
+fn earliest_deadline(
+    pending: &BackendPending,
+    extra: Option<tokio::time::Instant>,
+) -> Option<tokio::time::Instant> {
+    pending.iter().filter_map(|p| p.4).chain(extra).min()
+}
 
 /// Answer every request the datastore can no longer answer with
 /// `Storage: Datastore refused connection`: those written to a connection
@@ -2230,7 +2232,7 @@ async fn fail_backend_requests(
             &pool,
         )
     };
-    while let Some((req_id, responder, span, source_peer_idx)) = pending.pop_front() {
+    while let Some((req_id, responder, span, source_peer_idx, _)) = pending.pop_front() {
         let rsp = reply(req_id);
         let _ = responder
             .send(OutboundEnvelope {
@@ -2282,7 +2284,12 @@ async fn run_one_backend_conn(
     let mut accumulated: Vec<u8> = Vec::new();
     let mut read_buf = vec![0u8; 4096];
     loop {
+        let next_deadline = earliest_deadline(pending, None);
         tokio::select! {
+            () = dynomite::net::server::request_timer(next_deadline) => {
+                tracing::warn!(pending = pending.len(), "datastore request timed out; closing the connection");
+                return Err(dynomite::net::server::request_timed_out());
+            }
             req = rx.recv() => {
                 let Some(req) = req else { return Ok(()); };
                 // Build the `backend.send` span as a child of
@@ -2309,7 +2316,16 @@ async fn run_one_backend_conn(
                             data_store,
                             frames_ok,
                         };
-                        let reply = run_repair_script(sc, script).instrument(send_span).await?;
+                        let timer = dynomite::net::server::request_timer(
+                            earliest_deadline(sc.pending, req.deadline),
+                        );
+                        let reply = tokio::select! {
+                            r = run_repair_script(sc, script).instrument(send_span) => r?,
+                            () = timer => {
+                                pending.push_back((req.req_id, req.responder, req_span, req.target_peer_idx, req.deadline));
+                                return Err(dynomite::net::server::request_timed_out());
+                            }
+                        };
                         let mut msg = Msg::new(req.req_id, MsgType::Unknown, false);
                         let _ = dynomite::proto::redis::redis_parse_rsp(&mut msg, &reply);
                         msg.append_bytes(&conn.mbuf_pool().clone(), &reply);
@@ -2326,15 +2342,19 @@ async fn run_one_backend_conn(
                     }
                 }
                 let req_bytes = req.bytes;
+                // Queued before the write so a write that fails or stalls
+                // past a deadline still answers this request.
+                pending.push_back((req.req_id, req.responder, req_span, req.target_peer_idx, req.deadline));
+                let timer = dynomite::net::server::request_timer(earliest_deadline(pending, None));
                 let transport = conn.transport_mut().ok_or(NetError::Closed)?;
-                let write_res = async { transport.write_all(&req_bytes).await }
-                    .instrument(send_span)
-                    .await;
+                let write_res = tokio::select! {
+                    r = async { transport.write_all(&req_bytes).await }.instrument(send_span) => r,
+                    () = timer => return Err(dynomite::net::server::request_timed_out()),
+                };
                 if let Err(e) = write_res {
                     return Err(NetError::Io(e));
                 }
                 conn.record_send(req_bytes.len());
-                pending.push_back((req.req_id, req.responder, req_span, req.target_peer_idx));
             }
             res = async {
                 if let Some(t) = conn.transport_mut() {
@@ -2359,14 +2379,15 @@ async fn run_one_backend_conn(
 }
 
 /// A request the backend driver has written and still owes a reply:
-/// (req_id, responder, span, target peer index). The target index is
-/// carried through to the reply so the replica coalescer counts the local
-/// datastore's vote.
+/// (req_id, responder, span, target peer index, deadline). The target
+/// index is carried through to the reply so the replica coalescer counts
+/// the local datastore's vote.
 type PendingReply = (
     u64,
     tokio::sync::mpsc::Sender<dynomite::net::OutboundEnvelope>,
     tracing::Span,
     Option<u32>,
+    Option<tokio::time::Instant>,
 );
 
 /// Parse every complete reply in `accumulated` and hand each to the
@@ -2400,7 +2421,8 @@ async fn deliver_replies(
                 let bytes = accumulated[..consumed].to_vec();
                 accumulated.drain(0..consumed);
                 *frames_ok = frames_ok.saturating_add(1);
-                if let Some((req_id, responder, req_span, source_peer_idx)) = pending.pop_front() {
+                if let Some((req_id, responder, req_span, source_peer_idx, _)) = pending.pop_front()
+                {
                     let parse_span = tracing::info_span!(
                         parent: &req_span,
                         "backend.parse",
@@ -2904,6 +2926,7 @@ async fn gossip_task(
                         span: tracing::Span::current(),
                         ty: DmsgType::GossipSyn,
                         target_peer_idx: None,
+                        deadline: None,
                     };
                     if let Err(e) = tx.try_send(req) {
                         tracing::trace!(
@@ -2949,6 +2972,7 @@ fn send_gossip_shutdown(
             span: tracing::Span::current(),
             ty: DmsgType::GossipShutdown,
             target_peer_idx: None,
+            deadline: None,
         };
         if let Err(e) = tx.try_send(req) {
             tracing::trace!(
@@ -3049,6 +3073,7 @@ async fn hint_drainer_task(
                             span: tracing::Span::none(),
                             ty: DmsgType::ReqForward,
                             target_peer_idx: Some(peer_idx),
+                            deadline: None,
                         };
                         if tx.try_send(req).is_ok() {
                             shipped += 1;

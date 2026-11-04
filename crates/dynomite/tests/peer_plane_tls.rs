@@ -132,6 +132,7 @@ async fn dnode_proxy_with_tls_round_trips_a_redis_request() {
             span: tracing::Span::current(),
             ty: dynomite::proto::dnode::DmsgType::Req,
             target_peer_idx: None,
+            deadline: None,
         })
         .await
         .unwrap();
@@ -214,6 +215,7 @@ async fn dnode_proxy_without_tls_still_round_trips_plaintext() {
             span: tracing::Span::current(),
             ty: dynomite::proto::dnode::DmsgType::Req,
             target_peer_idx: None,
+            deadline: None,
         })
         .await
         .unwrap();
@@ -405,6 +407,7 @@ async fn drive_redis_frame(
             span: tracing::Span::current(),
             ty: dynomite::proto::dnode::DmsgType::Req,
             target_peer_idx: None,
+            deadline: None,
         })
         .await
         .unwrap();

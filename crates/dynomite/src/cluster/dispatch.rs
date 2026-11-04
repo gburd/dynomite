@@ -1321,6 +1321,7 @@ impl Dispatcher for ClusterDispatcher {
                         span: req_span.clone(),
                         ty: crate::proto::dnode::DmsgType::Req,
                         target_peer_idx: None,
+                        deadline: self.pool.request_deadline(&req, None),
                     };
                     let is_read = matches!(req.ty(), MsgType::Unknown) || req.flags().is_read;
                     if let Err(err) = tx.send(&self.pool, env, is_read) {
@@ -1627,6 +1628,9 @@ impl ClusterDispatcher {
             span: req_span.clone(),
             ty,
             target_peer_idx: Some(target.peer_idx),
+            deadline: self
+                .pool
+                .request_deadline(req, (!target.is_local).then_some(target.dc.as_str())),
         };
         let send_result = if target.is_local {
             let is_read = matches!(req.ty(), MsgType::Unknown) || req.flags().is_read;
@@ -1791,6 +1795,9 @@ impl ClusterDispatcher {
                 crate::proto::dnode::DmsgType::ReqForward
             },
             target_peer_idx: Some(target.peer_idx),
+            deadline: self
+                .pool
+                .request_deadline(req, (!target.is_local).then_some(target.dc.as_str())),
         };
         let send_result = if target.is_local {
             let is_read = matches!(req.ty(), MsgType::Unknown) || req.flags().is_read;
@@ -2142,6 +2149,7 @@ impl ReadRepairContext {
             span: span.clone(),
             ty: crate::proto::dnode::DmsgType::ReqForward,
             target_peer_idx: Some(peer_idx),
+            deadline: None,
         };
         let is_local = self
             .target_is_local
