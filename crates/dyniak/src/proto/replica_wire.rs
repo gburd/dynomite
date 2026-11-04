@@ -390,4 +390,165 @@ mod tests {
         bytes.extend_from_slice(&u32::MAX.to_be_bytes());
         assert_eq!(decode_peer_op(&bytes), Err(ReplicaWireError::Truncated));
     }
+
+    fn sample_dt_update() -> PeerOp {
+        PeerOp::DtUpdate {
+            bucket_type: b"counters".to_vec(),
+            bucket: b"hits".to_vec(),
+            key: b"page".to_vec(),
+            op: vec![1, 2, 3],
+        }
+    }
+
+    fn sample_dt_fetch() -> PeerOp {
+        PeerOp::DtFetch {
+            bucket_type: b"sets".to_vec(),
+            bucket: b"tags".to_vec(),
+            key: b"t".to_vec(),
+            tag: 0xAB,
+        }
+    }
+
+    fn sample_repair_put() -> PeerOp {
+        PeerOp::RepairPut {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+            storage: b"sibling-set".to_vec(),
+        }
+    }
+
+    fn all_samples() -> [PeerOp; 6] {
+        [
+            sample_put(),
+            sample_get(),
+            sample_del(),
+            sample_dt_update(),
+            sample_dt_fetch(),
+            sample_repair_put(),
+        ]
+    }
+
+    #[test]
+    fn every_kind_has_its_discriminator_and_round_trips() {
+        let kinds = [
+            KIND_PUT,
+            KIND_GET,
+            KIND_DEL,
+            KIND_DT_UPDATE,
+            KIND_DT_FETCH,
+            KIND_REPAIR_PUT,
+        ];
+        for (op, kind) in all_samples().into_iter().zip(kinds) {
+            let bytes = encode_peer_op(&op);
+            assert_eq!(bytes[0], kind, "{op:?}");
+            assert_eq!(decode_peer_op(&bytes).unwrap(), op);
+        }
+        // DtFetch ends in the raw tag byte, not a length-prefixed field.
+        assert_eq!(*encode_peer_op(&sample_dt_fetch()).last().unwrap(), 0xAB);
+    }
+
+    #[test]
+    fn every_kind_rejects_every_strict_prefix_and_trailing_byte() {
+        for op in all_samples() {
+            let full = encode_peer_op(&op);
+            for cut in 0..full.len() {
+                assert_eq!(
+                    decode_peer_op(&full[..cut]),
+                    Err(ReplicaWireError::Truncated),
+                    "prefix {cut} of {op:?}"
+                );
+            }
+            let mut long = full.clone();
+            long.extend_from_slice(&[0, 0]);
+            assert_eq!(decode_peer_op(&long), Err(ReplicaWireError::Trailing(2)));
+        }
+    }
+
+    #[test]
+    fn every_unknown_kind_is_rejected() {
+        for kind in KIND_REPAIR_PUT + 1..=u8::MAX {
+            assert_eq!(
+                decode_peer_op(&[kind, 0, 0]),
+                Err(ReplicaWireError::BadKind(kind))
+            );
+        }
+    }
+
+    #[test]
+    fn error_messages_name_the_fault() {
+        assert_eq!(
+            ReplicaWireError::Truncated.to_string(),
+            "replica wire: truncated payload"
+        );
+        assert_eq!(
+            ReplicaWireError::BadKind(9).to_string(),
+            "replica wire: unknown op-kind 9"
+        );
+        assert_eq!(
+            ReplicaWireError::Trailing(3).to_string(),
+            "replica wire: 3 trailing bytes after op"
+        );
+    }
+
+    fn draw_bytes(tc: &hegel::TestCase) -> Vec<u8> {
+        use hegel::generators as gs;
+        tc.draw(gs::vecs(gs::integers::<u8>()).max_size(64))
+    }
+
+    #[hegel::test(test_cases = 256)]
+    fn prop_round_trip_any_op(tc: hegel::TestCase) {
+        use hegel::generators as gs;
+        let bucket_type = draw_bytes(&tc);
+        let bucket = draw_bytes(&tc);
+        let key = draw_bytes(&tc);
+        let payload = draw_bytes(&tc);
+        let op = match tc.draw(gs::integers::<u8>().max_value(KIND_REPAIR_PUT)) {
+            KIND_PUT => PeerOp::Put {
+                bucket_type,
+                bucket,
+                key,
+                value: payload,
+            },
+            KIND_GET => PeerOp::Get {
+                bucket_type,
+                bucket,
+                key,
+            },
+            KIND_DEL => PeerOp::Del {
+                bucket_type,
+                bucket,
+                key,
+            },
+            KIND_DT_UPDATE => PeerOp::DtUpdate {
+                bucket_type,
+                bucket,
+                key,
+                op: payload,
+            },
+            KIND_DT_FETCH => PeerOp::DtFetch {
+                bucket_type,
+                bucket,
+                key,
+                tag: tc.draw(gs::integers::<u8>()),
+            },
+            _ => PeerOp::RepairPut {
+                bucket_type,
+                bucket,
+                key,
+                storage: payload,
+            },
+        };
+        let bytes = encode_peer_op(&op);
+        assert_eq!(decode_peer_op(&bytes), Ok(op));
+    }
+
+    #[hegel::test(test_cases = 256)]
+    fn prop_decode_is_total_on_arbitrary_bytes(tc: hegel::TestCase) {
+        let bytes = draw_bytes(&tc);
+        // Never panics; any Ok re-encodes to exactly the input.
+        if let Ok(op) = decode_peer_op(&bytes) {
+            assert_eq!(encode_peer_op(&op), bytes);
+        }
+    }
 }
