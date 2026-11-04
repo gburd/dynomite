@@ -1807,16 +1807,16 @@ fn	memcache_make_repair_query	src/proto/dyn_memcache.c	1626	todo
 fn	memcache_clear_repair_md_for_key	src/proto/dyn_memcache.c	1631	todo				
 macro	_DN_PROTO_H_	src/proto/dyn_proto.h	24	todo				
 macro	_DN_PROTO_REPAIR_H_	src/proto/dyn_proto_repair.h	7	todo				
-macro	SET_SCRIPT	src/proto/dyn_proto_repair.h	87	todo				
-macro	GET_SCRIPT	src/proto/dyn_proto_repair.h	110	todo				
-macro	DEL_SCRIPT	src/proto/dyn_proto_repair.h	130	todo				
-macro	HSET_SCRIPT	src/proto/dyn_proto_repair.h	158	todo				
-macro	HDEL_SCRIPT	src/proto/dyn_proto_repair.h	214	todo				
-macro	HGET_SCRIPT	src/proto/dyn_proto_repair.h	255	todo				
-macro	ZADD_SCRIPT	src/proto/dyn_proto_repair.h	297	todo				
-macro	SADD_SCRIPT	src/proto/dyn_proto_repair.h	362	todo				
-macro	CLEANUP_DEL_SCRIPT	src/proto/dyn_proto_repair.h	421	todo				
-macro	CLEANUP_HDEL_SCRIPT	src/proto/dyn_proto_repair.h	437	todo				
+macro	SET_SCRIPT	src/proto/dyn_proto_repair.h	87	ported	crates/dynomite/src/proto/redis/repair/logic.rs::set_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
+macro	GET_SCRIPT	src/proto/dyn_proto_repair.h	110	ported	crates/dynomite/src/proto/redis/repair/logic.rs::get_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
+macro	DEL_SCRIPT	src/proto/dyn_proto_repair.h	130	ported	crates/dynomite/src/proto/redis/repair/logic.rs::del_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
+macro	HSET_SCRIPT	src/proto/dyn_proto_repair.h	158	ported	crates/dynomite/src/proto/redis/repair/logic.rs::hset_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
+macro	HDEL_SCRIPT	src/proto/dyn_proto_repair.h	214	ported	crates/dynomite/src/proto/redis/repair/logic.rs::hdel_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
+macro	HGET_SCRIPT	src/proto/dyn_proto_repair.h	255	ported	crates/dynomite/src/proto/redis/repair/logic.rs::hget_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
+macro	ZADD_SCRIPT	src/proto/dyn_proto_repair.h	297	ported	crates/dynomite/src/proto/redis/repair/logic.rs::zadd_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
+macro	SADD_SCRIPT	src/proto/dyn_proto_repair.h	362	ported	crates/dynomite/src/proto/redis/repair/logic.rs::sadd_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
+macro	CLEANUP_DEL_SCRIPT	src/proto/dyn_proto_repair.h	421	ported	crates/dynomite/src/proto/redis/repair/logic.rs::cleanup_del_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
+macro	CLEANUP_HDEL_SCRIPT	src/proto/dyn_proto_repair.h	437	ported	crates/dynomite/src/proto/redis/repair/logic.rs::cleanup_hdel_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
 macro	MAX_ARG_FMT_STR_LEN	src/proto/dyn_proto_repair.h	460	todo				
 macro	ADD_SET_STR	src/proto/dyn_proto_repair.h	462	todo				
 macro	REM_SET_STR	src/proto/dyn_proto_repair.h	463	todo				

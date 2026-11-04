@@ -13,6 +13,8 @@
 //!   when responses disagree.
 //! * [`clear::redis_clear_repair_md_for_key`] - emit a metadata
 //!   cleanup script after a delete completes.
+//! * [`logic`] - the timestamp bookkeeping each repair script
+//!   performs, evaluated by the engine over a [`logic::RepairStore`].
 //! * [`reconcile::redis_reconcile_responses`] - pick a single
 //!   response from the per-replica set, optionally producing a
 //!   read-repair side effect.
@@ -21,6 +23,7 @@
 //! requests live as compile-time constants in [`scripts`].
 
 pub mod clear;
+pub mod logic;
 pub mod make;
 pub mod reconcile;
 pub mod rewrite;
