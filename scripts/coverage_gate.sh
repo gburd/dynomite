@@ -36,9 +36,16 @@ fi
 mkdir -p target/coverage
 
 echo "==> cargo llvm-cov --workspace --features riak --summary-only --json"
-cargo llvm-cov --workspace --features riak --summary-only --json \
+# Test output goes to a log rather than /dev/null: when a test fails
+# under instrumentation the gate must say which one.
+if ! cargo llvm-cov --workspace --features riak --summary-only --json \
     --output-path target/coverage/summary.json \
-    >/dev/null
+    >target/coverage/test-output.log 2>&1; then
+    echo "coverage_gate: the instrumented test run failed:" >&2
+    grep -aE '\.\.\. FAILED|panicked at|test failed|^failures:|^    [a-z_:]+$' \
+        target/coverage/test-output.log | head -40 >&2
+    exit 1
+fi
 
 DYNOMITE_COV_THRESHOLD="$THRESHOLD" \
 DYNOMITE_COV_MODE="$mode" \
