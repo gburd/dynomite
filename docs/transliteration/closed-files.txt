@@ -33,3 +33,5 @@ src/dyn_log.h
 src/dyn_signal.h
 src/dyn_setting.c
 src/dyn_setting.h
+src/proto/dyn_redis_repair.c
+src/proto/dyn_proto_repair.h

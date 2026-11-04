@@ -88,7 +88,7 @@ def proposed_ids():
         return ids
     current = None
     for line in open(DEVIATIONS).read().splitlines():
-        m = re.match(r"^#{2,4} (DEV-[A-Z0-9]+)", line)
+        m = re.match(r"^#{2,4} (DEV-[A-Za-z0-9]+)", line)
         if m:
             current = m.group(1)
         elif current and line.startswith("* Status: PROPOSED"):
@@ -106,7 +106,7 @@ def authorized_ids():
     text = open(DEVIATIONS).read()
     current = None
     for line in text.splitlines():
-        m = re.match(r"^#{2,4} (DEV-[A-Z0-9]+)", line)
+        m = re.match(r"^#{2,4} (DEV-[A-Za-z0-9]+)", line)
         if m:
             current = m.group(1)
         elif current and line.startswith("* Status: AUTHORIZED"):

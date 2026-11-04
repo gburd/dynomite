@@ -1806,7 +1806,7 @@ fn	memcache_rewrite_query_with_timestamp_md	src/proto/dyn_memcache.c	1621	todo
 fn	memcache_make_repair_query	src/proto/dyn_memcache.c	1626	todo				
 fn	memcache_clear_repair_md_for_key	src/proto/dyn_memcache.c	1631	todo				
 macro	_DN_PROTO_H_	src/proto/dyn_proto.h	24	todo				
-macro	_DN_PROTO_REPAIR_H_	src/proto/dyn_proto_repair.h	7	todo				
+macro	_DN_PROTO_REPAIR_H_	src/proto/dyn_proto_repair.h	7	dead				include guard; no Rust counterpart needed
 macro	SET_SCRIPT	src/proto/dyn_proto_repair.h	87	ported	crates/dynomite/src/proto/redis/repair/logic.rs::set_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
 macro	GET_SCRIPT	src/proto/dyn_proto_repair.h	110	ported	crates/dynomite/src/proto/redis/repair/logic.rs::get_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
 macro	DEL_SCRIPT	src/proto/dyn_proto_repair.h	130	ported	crates/dynomite/src/proto/redis/repair/logic.rs::del_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
@@ -1817,10 +1817,10 @@ macro	ZADD_SCRIPT	src/proto/dyn_proto_repair.h	297	ported	crates/dynomite/src/pr
 macro	SADD_SCRIPT	src/proto/dyn_proto_repair.h	362	ported	crates/dynomite/src/proto/redis/repair/logic.rs::sadd_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
 macro	CLEANUP_DEL_SCRIPT	src/proto/dyn_proto_repair.h	421	ported	crates/dynomite/src/proto/redis/repair/logic.rs::cleanup_del_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
 macro	CLEANUP_HDEL_SCRIPT	src/proto/dyn_proto_repair.h	437	ported	crates/dynomite/src/proto/redis/repair/logic.rs::cleanup_hdel_script	crates/dynomite/tests/repair_logic_oracle.rs::every_repair_script_matches_the_lua_reference		script body evaluated in Rust (P3); oracle EVALs the header body on valkey
-macro	MAX_ARG_FMT_STR_LEN	src/proto/dyn_proto_repair.h	460	todo				
-macro	ADD_SET_STR	src/proto/dyn_proto_repair.h	462	todo				
-macro	REM_SET_STR	src/proto/dyn_proto_repair.h	463	todo				
-struct	cmd_info	src/proto/dyn_proto_repair.h	465	todo				
+macro	MAX_ARG_FMT_STR_LEN	src/proto/dyn_proto_repair.h	460	dead				not referenced in src/ (grep: only its #define)
+macro	ADD_SET_STR	src/proto/dyn_proto_repair.h	462	ported	crates/dynomite/src/proto/redis/repair/request.rs::ADD_SET	crates/dynomite/src/proto/redis/repair/request.rs::tests::rewrite_layout_per_command		
+macro	REM_SET_STR	src/proto/dyn_proto_repair.h	463	ported	crates/dynomite/src/proto/redis/repair/request.rs::REM_SET	crates/dynomite/src/proto/redis/repair/request.rs::tests::rewrite_layout_per_command		
+struct	cmd_info	src/proto/dyn_proto_repair.h	465	ported	crates/dynomite/src/proto/redis/repair/request.rs::CmdInfo	crates/dynomite/src/proto/redis/repair/request.rs::tests::rewrite_layout_per_command		
 macro	RSP_STRING	src/proto/dyn_redis.c	32	todo				
 macro	DEFINE_ACTION	src/proto/dyn_redis.c	36	todo				
 fn	RSP_STRING	src/proto/dyn_redis.c	38	todo				
@@ -1910,26 +1910,26 @@ fn	redis_get_fragment_quorum	src/proto/dyn_redis.c	3689	todo
 fn	free_rsp_each	src/proto/dyn_redis.c	3718	todo				
 fn	redis_reconcile_multikey_responses	src/proto/dyn_redis.c	3726	todo				
 fn	redis_reconcile_responses	src/proto/dyn_redis.c	3840	todo				
-var	proto_cmd_info	src/proto/dyn_redis_repair.c	16	todo				
-fn	total_tokens_of_type	src/proto/dyn_redis_repair.c	186	todo				
-fn	parse_tokens_of_type	src/proto/dyn_redis_repair.c	196	todo				
-fn	get_values_from_source	src/proto/dyn_redis_repair.c	234	todo				
-fn	post_parse_optional_args	src/proto/dyn_redis_repair.c	250	todo				
-fn	post_parse_msg	src/proto/dyn_redis_repair.c	310	todo				
-fn	obtain_info_from_latest_rsp	src/proto/dyn_redis_repair.c	433	todo				
-macro	REDIS_PRTCL_BEGIN_TOTAL_TOKENS	src/proto/dyn_redis_repair.c	498	todo				
-macro	REDIS_PRTCL_INT_ARG_FMT	src/proto/dyn_redis_repair.c	499	todo				
-macro	REDIS_PRTCL_VARCHAR_ARG_FMT	src/proto/dyn_redis_repair.c	500	todo				
-macro	REDIS_PRTCL_LLU_ARG_FMT	src/proto/dyn_redis_repair.c	501	todo				
-fn	update_total_num_tokens	src/proto/dyn_redis_repair.c	508	todo				
-fn	create_redis_prtcl_script	src/proto/dyn_redis_repair.c	565	todo				
-fn	finalize_repair_msg	src/proto/dyn_redis_repair.c	665	todo				
-fn	find_most_updated_rsp	src/proto/dyn_redis_repair.c	711	todo				
-fn	adjust_rsp_buffers_for_client	src/proto/dyn_redis_repair.c	762	todo				
-fn	redis_make_repair_query	src/proto/dyn_redis_repair.c	852	todo				
-fn	redis_rewrite_query_with_timestamp_md	src/proto/dyn_redis_repair.c	912	todo				
-fn	create_cleanup_script	src/proto/dyn_redis_repair.c	952	todo				
-fn	redis_clear_repair_md_for_key	src/proto/dyn_redis_repair.c	1018	todo				
+var	proto_cmd_info	src/proto/dyn_redis_repair.c	16	ported	crates/dynomite/src/proto/redis/repair/request.rs::cmd_info	crates/dynomite/src/proto/redis/repair/request.rs::tests::rewrite_layout_per_command		the 13 commands with repair support; every other command has none
+fn	total_tokens_of_type	src/proto/dyn_redis_repair.c	186	ported	crates/dynomite/src/proto/redis/repair/request.rs::ScriptRequest::from_request	crates/dynomite/src/proto/redis/repair/request.rs::tests::rewrite_layout_per_command		token counts per command
+fn	parse_tokens_of_type	src/proto/dyn_redis_repair.c	196	ported	crates/dynomite/src/proto/redis/repair/request.rs::ScriptRequest::from_request	crates/dynomite/src/proto/redis/repair/request.rs::tests::rewrite_layout_per_command		
+fn	get_values_from_source	src/proto/dyn_redis_repair.c	234	ported	crates/dynomite/src/proto/redis/repair/make.rs::repair_request	crates/dynomite/src/proto/redis/repair/make.rs::tests::repair_by_add_and_rem_per_read		
+fn	post_parse_optional_args	src/proto/dyn_redis_repair.c	250	ported	crates/dynomite/src/proto/redis/repair/request.rs::ScriptRequest::from_request	crates/dynomite/src/proto/redis/repair/request.rs::tests::rewrite_layout_per_command		ZADD NX/XX/CH/INCR before the first score
+fn	post_parse_msg	src/proto/dyn_redis_repair.c	310	ported	crates/dynomite/src/proto/redis/repair/request.rs::ScriptRequest::from_request	crates/dynomite/src/proto/redis/repair/request.rs::tests::from_request_needs_one_key_and_its_arguments		C skips the rewrite for arguments split across mbufs; Rust holds arguments contiguously and always rewrites
+fn	obtain_info_from_latest_rsp	src/proto/dyn_redis_repair.c	433	ported	crates/dynomite/src/proto/redis/repair/make.rs::repair_request	crates/dynomite/src/proto/redis/repair/make.rs::tests::repair_by_add_and_rem_per_read		
+macro	REDIS_PRTCL_BEGIN_TOTAL_TOKENS	src/proto/dyn_redis_repair.c	498	replaced	crates/dynomite/src/proto/redis/repair/request.rs::encode_command			DEV-S2: RESP encoder
+macro	REDIS_PRTCL_INT_ARG_FMT	src/proto/dyn_redis_repair.c	499	replaced	crates/dynomite/src/proto/redis/repair/request.rs::encode_command			DEV-S2: RESP encoder
+macro	REDIS_PRTCL_VARCHAR_ARG_FMT	src/proto/dyn_redis_repair.c	500	replaced	crates/dynomite/src/proto/redis/repair/request.rs::encode_command			DEV-S2: RESP encoder
+macro	REDIS_PRTCL_LLU_ARG_FMT	src/proto/dyn_redis_repair.c	501	replaced	crates/dynomite/src/proto/redis/repair/request.rs::encode_command			DEV-S2: RESP encoder
+fn	update_total_num_tokens	src/proto/dyn_redis_repair.c	508	replaced	crates/dynomite/src/proto/redis/repair/request.rs::ScriptRequest::encode			DEV-S2: the encoder counts the array it writes
+fn	create_redis_prtcl_script	src/proto/dyn_redis_repair.c	565	deviation:DEV-R1a	crates/dynomite/src/proto/redis/repair/request.rs::ScriptRequest::encode			P3/DEV-R1a: the KEYS/ARGV layout without the Lua body, under DYNOMITE.REPAIR-SCRIPT
+fn	finalize_repair_msg	src/proto/dyn_redis_repair.c	665	ported	crates/dynomite/src/proto/redis/repair/request.rs::ScriptRequest::encode	crates/dynomite/src/proto/redis/repair/request.rs::tests::peer_parses_request_as_local_only_with_its_key		the encoded request parses as a request
+fn	find_most_updated_rsp	src/proto/dyn_redis_repair.c	711	ported	crates/dynomite/src/proto/redis/repair/make.rs::find_most_updated	crates/dynomite/src/proto/redis/repair/make.rs::tests::equal_stale_reply_after_new_max_is_not_marked		C tie behaviour kept: an equal-to-old-max reply seen before a newer max is not marked stale
+fn	adjust_rsp_buffers_for_client	src/proto/dyn_redis_repair.c	762	ported	crates/dynomite/src/proto/redis/repair/make.rs::TsReply::client_reply	crates/dynomite/tests/read_repair.rs::timestamp_read_repair		
+fn	redis_make_repair_query	src/proto/dyn_redis_repair.c	852	ported	crates/dynomite/src/proto/redis/repair/make.rs::repair_request	crates/dynomite/tests/read_repair.rs::timestamp_read_repair		driven by the coalescer in cluster/dispatch.rs
+fn	redis_rewrite_query_with_timestamp_md	src/proto/dyn_redis_repair.c	912	ported	crates/dynomite/src/proto/redis/repair/request.rs::ScriptRequest::from_request	crates/optest/tests/c_func_test.rs::func_test_safe_quorum_read_repair		applied in ClusterDispatcher::dispatch
+fn	create_cleanup_script	src/proto/dyn_redis_repair.c	952	ported	crates/dynomite/src/proto/redis/repair/request.rs::ScriptRequest::cleanup	crates/dynomite/tests/read_repair.rs::timestamp_read_repair		
+fn	redis_clear_repair_md_for_key	src/proto/dyn_redis_repair.c	1018	ported	crates/dynomite/src/cluster/dispatch.rs::ReadRepairContext::cleanup	crates/dynomite/tests/read_repair.rs::timestamp_read_repair		after every replica answered a delete
 macro	DNS_TXT_NAME	src/seedsprovider/dyn_dns.c	28	todo				
 var	dnsName	src/seedsprovider/dyn_dns.c	31	todo				
 var	dnsType	src/seedsprovider/dyn_dns.c	32	todo				
