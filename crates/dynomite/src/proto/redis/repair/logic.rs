@@ -201,21 +201,21 @@ fn claim_key(store: &mut impl RepairStore, keys: ScriptKeys<'_>, cur_ts: &[u8]) 
     Ok(true)
 }
 
-/// Per-field staleness check. A field with a remove entry loses it either
-/// always (`drop_stale_remove`) or only when this write is not older.
+/// Per-field staleness check. A field's remove entry is dropped only when
+/// this operation is not older than it: a stale write or delete leaves the
+/// newer remove entry in place, so the field stays deleted (DEV-R2).
 fn field_is_stale(
     store: &mut impl RepairStore,
     add_set: &[u8],
     rem_set: &[u8],
     cur_ts: &[u8],
     field: &[u8],
-    drop_stale_remove: bool,
 ) -> Step<bool> {
     let added = zscore(store, add_set, field)?;
     let removed = zscore(store, rem_set, field)?;
     if removed.is_truthy() {
         let stale = older(cur_ts, &removed)?;
-        if drop_stale_remove || !stale {
+        if !stale {
             call(store, &[b"ZREM", rem_set, field])?;
         }
         Ok(stale)
@@ -402,7 +402,7 @@ pub fn hset_script(
     }
     let mut ret = Reply::Bulk(None);
     for &(field, value) in pairs {
-        if !field_is_stale(store, &add_set, &rem_set, cur_ts, field, true)? {
+        if !field_is_stale(store, &add_set, &rem_set, cur_ts, field)? {
             call(store, &[b"ZADD", &add_set, cur_ts, field])?;
             ret = call(store, &[orig_cmd, keys.key, field, value])?;
         }
@@ -443,7 +443,7 @@ pub fn hdel_script(
     let rem_set = keys.composite_rem();
     let mut ret = 0;
     for &field in fields {
-        if !field_is_stale(store, &add_set, &rem_set, cur_ts, field, false)? {
+        if !field_is_stale(store, &add_set, &rem_set, cur_ts, field)? {
             call(store, &[b"ZADD", &add_set, cur_ts, field])?;
             ret = add_count(ret, &call(store, &[orig_cmd, keys.key, field])?)?;
         }
@@ -563,7 +563,7 @@ pub fn zadd_script(
     }
     let mut ret = Reply::Bulk(None);
     for &(field, value) in pairs {
-        if !field_is_stale(store, &add_set, &rem_set, cur_ts, field, true)? {
+        if !field_is_stale(store, &add_set, &rem_set, cur_ts, field)? {
             ret = if opts.len() <= 3 {
                 let mut args: Vec<&[u8]> = vec![orig_cmd, keys.key];
                 args.extend_from_slice(opts);
@@ -611,7 +611,7 @@ pub fn sadd_script(
     }
     let mut ret = 0;
     for &field in members {
-        if !field_is_stale(store, &add_set, &rem_set, cur_ts, field, true)? {
+        if !field_is_stale(store, &add_set, &rem_set, cur_ts, field)? {
             call(store, &[b"ZADD", &add_set, cur_ts, field])?;
             ret = add_count(ret, &call(store, &[orig_cmd, keys.key, field])?)?;
         }

@@ -175,7 +175,7 @@ impl Scripts {
                 }
                 cur = lines.next().expect("continued #define");
             }
-            bodies.push((name.to_string(), eval_body(&raw)));
+            bodies.push((name.to_string(), apply_dev_r2(name, eval_body(&raw))));
         }
         Some(Scripts { bodies })
     }
@@ -209,6 +209,31 @@ fn unescape(lit: &str) -> Vec<u8> {
 }
 
 /// Strip `$4\r\nEVAL\r\n$<n>\r\n` and the trailing CRLF, checking `<n>`.
+/// The C write scripts (HSET, ZADD, SADD) drop a field's remove entry
+/// before checking whether the write is stale, which resurrects a deleted
+/// field (DEV-R2, owner-authorised fix). The fix is HDEL's ordering: drop
+/// the entry only when the write is not stale. It is applied to the C text
+/// here so that every other step is still compared against the real Lua.
+/// `DEV_R2_NEGATIVE=1` skips it: the oracle must then fail, which shows it
+/// can see the difference.
+fn apply_dev_r2(name: &str, body: Vec<u8>) -> Vec<u8> {
+    if std::env::var_os("DEV_R2_NEGATIVE").is_some()
+        || !matches!(name, "HSET_SCRIPT" | "ZADD_SCRIPT" | "SADD_SCRIPT")
+    {
+        return body;
+    }
+    let text = String::from_utf8(body).expect("ascii script");
+    let buggy = "      skiploop = true\n    end\n    redis.call('ZREM', rem_set, field)\n";
+    let fixed =
+        "      skiploop = true\n    else\n      redis.call('ZREM', rem_set, field)\n    end\n";
+    assert_eq!(
+        text.matches(buggy).count(),
+        1,
+        "{name}: DEV-R2 site not found once"
+    );
+    text.replace(buggy, fixed).into_bytes()
+}
+
 fn eval_body(raw: &[u8]) -> Vec<u8> {
     let rest = raw
         .strip_prefix(b"$4\r\nEVAL\r\n$")
@@ -561,6 +586,50 @@ fn directed(scripts: &Scripts, lua: &mut Client, rust: &mut Client) {
         (
             vec![op("CLEANUP_HDEL", "h1", "1", &[], &[("f1", "")])],
             Reply::Bulk(None),
+        ),
+        // DEV-R2: a stale field write leaves the newer delete in place, so
+        // the field stays deleted (the C scripts dropped the delete entry and
+        // a second stale write resurrected the field).
+        (
+            vec![
+                op("HSET", "h1", "3", &[], &[("f1", "a")]),
+                op("HDEL", "h1", "5", &[], &[("f1", "")]),
+                op("HSET", "h1", "1", &[], &[("f1", "b")]),
+                op("HSET", "h1", "2", &[], &[("f1", "c")]),
+                op("HGET", "h1", "0", &[], &[("f1", "")]),
+            ],
+            Reply::Array(vec![bulk("R"), bulk("5"), Reply::Bulk(None)]),
+        ),
+        (
+            vec![
+                op("SADD", "t1", "3", &[], &[("f1", "")]),
+                op("SREM", "t1", "5", &[], &[("f1", "")]),
+                op("SADD", "t1", "1", &[], &[("f1", "")]),
+                op("SADD", "t1", "2", &[], &[("f1", "")]),
+                op("SISMEMBER", "t1", "0", &[], &[("f1", "")]),
+            ],
+            Reply::Array(vec![bulk("R"), bulk("5"), Reply::Integer(0)]),
+        ),
+        (
+            vec![
+                op("ZADD", "z1", "3", &[], &[("f1", "1")]),
+                op("ZREM", "z1", "5", &[], &[("f1", "")]),
+                op("ZADD", "z1", "1", &[], &[("f1", "2")]),
+                op("ZADD", "z1", "2", &[], &[("f1", "3")]),
+                op("ZSCORE", "z1", "0", &[], &[("f1", "")]),
+            ],
+            Reply::Array(vec![bulk("R"), bulk("5"), Reply::Bulk(None)]),
+        ),
+        // ... and a write newer than the delete still brings the field back.
+        (
+            vec![
+                op("HSET", "h1", "3", &[], &[("f1", "a")]),
+                op("HDEL", "h1", "5", &[], &[("f1", "")]),
+                op("HSET", "h1", "1", &[], &[("f1", "b")]),
+                op("HSET", "h1", "6", &[], &[("f1", "d")]),
+                op("HGET", "h1", "0", &[], &[("f1", "")]),
+            ],
+            Reply::Array(vec![bulk("E"), bulk("6"), bulk("d")]),
         ),
         // A type clash aborts the script after the metadata write.
         (
