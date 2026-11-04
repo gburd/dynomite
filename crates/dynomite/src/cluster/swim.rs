@@ -902,4 +902,364 @@ mod tests {
         assert_eq!(s.member_state(1), PeerState::Normal);
         assert_eq!(s.status(1), Status::Alive);
     }
+
+    fn suspect(since: Tick, suspectors: u32) -> Status {
+        Status::Suspect { since, suspectors }
+    }
+
+    #[test]
+    #[should_panic(expected = "must be < group size")]
+    fn new_rejects_self_outside_group() {
+        let _ = SwimState::new(3, 3, SwimConfig::default());
+    }
+
+    #[test]
+    fn accessors_report_self_and_unknown_members() {
+        let mut s = SwimState::new(1, 3, SwimConfig::default());
+        assert_eq!(s.me(), 1);
+        assert_eq!(s.incarnation(1), 0);
+        assert_eq!(s.incarnation(0), 0);
+        // Unknown index: alive, incarnation 0, no deadline.
+        assert_eq!(s.status(99), Status::Alive);
+        assert_eq!(s.incarnation(99), 0);
+        assert_eq!(s.confirm_deadline(99), None);
+        assert_eq!(s.confirm_deadline(0), None);
+        s.on_update(
+            1,
+            Update {
+                member: 1,
+                incarnation: 4,
+                status: Status::Dead,
+            },
+        );
+        assert_eq!(s.incarnation(1), 5);
+        assert_eq!(
+            s.snapshot(),
+            vec![(0, PeerState::Normal), (2, PeerState::Normal)]
+        );
+    }
+
+    #[test]
+    fn probing_self_is_a_no_op() {
+        let mut s = SwimState::new(0, 2, SwimConfig::default());
+        assert!(s.on_probe(1, 0, ProbeResult::Failed).is_empty());
+        assert!(s.on_probe(1, 0, ProbeResult::IndirectAcked).is_empty());
+        assert_eq!(s.nack_score(), 0);
+    }
+
+    #[test]
+    fn acked_probe_clears_suspicion_and_decays_nack_score() {
+        let mut s = SwimState::new(0, 2, SwimConfig::default());
+        s.on_probe(0, 1, ProbeResult::IndirectAcked);
+        s.on_probe(0, 1, ProbeResult::IndirectAcked);
+        assert_eq!(s.nack_score(), 2);
+        assert_eq!(
+            s.on_probe(1, 1, ProbeResult::Failed),
+            vec![(1, PeerState::Down)]
+        );
+        assert_eq!(
+            s.on_probe(2, 1, ProbeResult::Acked),
+            vec![(1, PeerState::Normal)]
+        );
+        assert_eq!(s.nack_score(), 1);
+        assert_eq!(s.status(1), Status::Alive);
+        // Acked on a healthy observer saturates at zero.
+        s.on_probe(3, 1, ProbeResult::Acked);
+        s.on_probe(4, 1, ProbeResult::Acked);
+        assert_eq!(s.nack_score(), 0);
+    }
+
+    #[test]
+    fn nack_score_is_capped_at_ns_max() {
+        let cfg = SwimConfig {
+            ns_max: 2,
+            ..SwimConfig::default()
+        };
+        let mut s = SwimState::new(0, 2, cfg);
+        for _ in 0..5 {
+            s.on_probe(0, 1, ProbeResult::IndirectAcked);
+        }
+        assert_eq!(s.nack_score(), 2);
+    }
+
+    #[test]
+    fn dead_member_stays_dead_on_local_probe_results() {
+        let mut s = SwimState::new(0, 2, SwimConfig::default());
+        s.on_update(
+            1,
+            Update {
+                member: 1,
+                incarnation: 0,
+                status: Status::Dead,
+            },
+        );
+        assert_eq!(s.status(1), Status::Dead);
+        // Neither an ack nor a failed probe resurrects or re-suspects
+        // a confirmed death; only a higher incarnation does.
+        assert!(s.on_probe(2, 1, ProbeResult::Acked).is_empty());
+        assert!(s.on_probe(3, 1, ProbeResult::Failed).is_empty());
+        assert_eq!(s.status(1), Status::Dead);
+        assert!(s.tick(100).is_empty());
+    }
+
+    #[test]
+    fn repeated_failed_probes_accumulate_suspectors() {
+        let mut s = SwimState::new(0, 2, SwimConfig::default());
+        s.on_probe(5, 1, ProbeResult::Failed);
+        assert!(s.on_probe(6, 1, ProbeResult::Failed).is_empty());
+        assert_eq!(s.status(1), suspect(5, 2));
+        // base 4, one extra suspector halves it: 5 + 2.
+        assert_eq!(s.confirm_deadline(1), Some(7));
+    }
+
+    #[test]
+    fn update_about_unknown_member_is_inserted() {
+        let mut s = SwimState::new(0, 2, SwimConfig::default());
+        let t = s.on_update(
+            9,
+            Update {
+                member: 7,
+                incarnation: 2,
+                status: suspect(3, 0),
+            },
+        );
+        assert_eq!(t, vec![(7, PeerState::Down)]);
+        // Alive -> Suspect merge restamps since to the local tick and
+        // floors the suspector count at one.
+        assert_eq!(s.status(7), suspect(9, 1));
+        assert_eq!(s.incarnation(7), 2);
+    }
+
+    #[test]
+    fn equal_incarnation_better_belief_is_ignored() {
+        let mut s = SwimState::new(0, 2, SwimConfig::default());
+        s.on_probe(1, 1, ProbeResult::Failed);
+        let t = s.on_update(
+            2,
+            Update {
+                member: 1,
+                incarnation: 0,
+                status: Status::Alive,
+            },
+        );
+        assert!(t.is_empty());
+        assert_eq!(s.status(1), suspect(1, 1));
+        // Dead beats Suspect at the same incarnation.
+        s.on_update(
+            3,
+            Update {
+                member: 1,
+                incarnation: 0,
+                status: Status::Dead,
+            },
+        );
+        assert_eq!(s.status(1), Status::Dead);
+    }
+
+    #[test]
+    fn update_about_self_refutes_only_when_current() {
+        let mut s = SwimState::new(0, 2, SwimConfig::default());
+        // Alive about self: nothing to refute.
+        s.on_update(
+            1,
+            Update {
+                member: 0,
+                incarnation: 0,
+                status: Status::Alive,
+            },
+        );
+        assert_eq!(s.my_incarnation(), 0);
+        s.on_update(
+            1,
+            Update {
+                member: 0,
+                incarnation: 3,
+                status: suspect(1, 1),
+            },
+        );
+        assert_eq!(s.my_incarnation(), 4);
+        // A stale suspicion below our incarnation is already refuted.
+        s.on_update(
+            2,
+            Update {
+                member: 0,
+                incarnation: 2,
+                status: Status::Dead,
+            },
+        );
+        assert_eq!(s.my_incarnation(), 4);
+    }
+
+    #[test]
+    fn confirm_deadline_floors_at_one_period_and_saturates() {
+        let cfg = SwimConfig {
+            suspicion_periods_base: 1,
+            ..SwimConfig::default()
+        };
+        let mut s = SwimState::new(0, 2, cfg);
+        s.on_update(
+            0,
+            Update {
+                member: 1,
+                incarnation: 0,
+                status: suspect(0, 100),
+            },
+        );
+        assert_eq!(s.confirm_deadline(1), Some(1));
+        let mut far = SwimState::new(0, 2, SwimConfig::default());
+        far.on_probe(Tick::MAX - 1, 1, ProbeResult::Failed);
+        assert_eq!(far.confirm_deadline(1), Some(Tick::MAX));
+    }
+
+    #[test]
+    fn tick_reports_transitions_only_for_newly_down_members() {
+        let mut s = SwimState::new(0, 3, SwimConfig::default());
+        s.on_probe(0, 1, ProbeResult::Failed);
+        let d = s.confirm_deadline(1).unwrap();
+        // Suspect -> Dead is Down -> Down: no PeerState change.
+        assert!(s.tick(d).is_empty());
+        assert_eq!(s.status(1), Status::Dead);
+        assert_eq!(s.status(2), Status::Alive);
+    }
+
+    #[test]
+    fn merge_suspect_combinations() {
+        assert_eq!(
+            merge_suspect(suspect(1, 2), suspect(5, 3), 9),
+            suspect(1, 5)
+        );
+        assert_eq!(merge_suspect(Status::Dead, suspect(5, 0), 9), suspect(9, 1));
+        assert_eq!(merge_suspect(suspect(1, 1), Status::Dead, 9), Status::Dead);
+        assert_eq!(merge_suspect(Status::Dead, Status::Alive, 9), Status::Alive);
+        assert_eq!(status_rank(Status::Alive), 0);
+        assert_eq!(status_rank(suspect(0, 1)), 1);
+        assert_eq!(status_rank(Status::Dead), 2);
+    }
+
+    #[test]
+    fn now_secs_wall_reads_the_epoch_clock() {
+        // 2020-01-01T00:00:00Z.
+        assert!(now_secs_wall() > 1_577_836_800);
+    }
+
+    mod handler {
+        use std::sync::Arc;
+
+        use super::*;
+        use crate::cluster::peer::{Peer, PeerEndpoint};
+        use crate::cluster::pool::PoolConfig;
+        use crate::hashkit::DynToken;
+
+        fn pool() -> Arc<ServerPool> {
+            let cfg = PoolConfig {
+                dc: "dc1".into(),
+                rack: "r1".into(),
+                ..PoolConfig::default()
+            };
+            let peer = |idx, port, local| {
+                Peer::new(
+                    idx,
+                    PeerEndpoint::tcp("127.0.0.1".into(), port),
+                    "r1".into(),
+                    "dc1".into(),
+                    vec![DynToken::from_u32(idx * 1000)],
+                    local,
+                    true,
+                    false,
+                )
+            };
+            Arc::new(ServerPool::new(
+                cfg,
+                vec![peer(0, 8101, true), peer(1, 8102, false)],
+            ))
+        }
+
+        fn state_of(pool: &ServerPool, idx: u32) -> PeerState {
+            pool.peers()
+                .read()
+                .iter()
+                .find(|p| p.idx() == idx)
+                .map(Peer::state)
+                .unwrap()
+        }
+
+        #[test]
+        fn probe_update_and_evaluate_reconcile_onto_the_pool() {
+            let pool = pool();
+            let h = SwimHandler::new(
+                pool.clone(),
+                0,
+                2,
+                SwimConfig::default(),
+                Duration::from_secs(1),
+            );
+            assert!(Arc::ptr_eq(h.pool(), &pool));
+            let t0 = h.epoch;
+            // A remote peer starts Down; the state machine believes it
+            // Alive, so an ack produces no transition and no write.
+            assert!(h.on_probe(t0, 1, ProbeResult::Acked).is_empty());
+            assert_eq!(state_of(&pool, 1), PeerState::Down);
+            // Higher incarnation Alive is also no transition.
+            let alive = Update {
+                member: 1,
+                incarnation: 1,
+                status: Status::Alive,
+            };
+            assert!(h.on_update(t0, alive).is_empty());
+            // Suspect via gossip: Normal -> Down transition applied
+            // (pool already Down, so the per-peer write is skipped).
+            let sus = Update {
+                member: 1,
+                incarnation: 1,
+                status: Status::Suspect {
+                    since: 0,
+                    suspectors: 1,
+                },
+            };
+            assert_eq!(h.on_update(t0, sus), vec![(1, PeerState::Down)]);
+            // Refutation restores Normal and the pool follows.
+            let refute = Update {
+                member: 1,
+                incarnation: 2,
+                status: Status::Alive,
+            };
+            assert_eq!(h.on_update(t0, refute), vec![(1, PeerState::Normal)]);
+            assert_eq!(state_of(&pool, 1), PeerState::Normal);
+            // A failed probe 2 periods in drops it again.
+            let t2 = t0 + Duration::from_secs(2);
+            assert_eq!(
+                h.on_probe(t2, 1, ProbeResult::Failed),
+                vec![(1, PeerState::Down)]
+            );
+            assert_eq!(state_of(&pool, 1), PeerState::Down);
+            assert_eq!(
+                h.state.lock().status(1),
+                Status::Suspect {
+                    since: 2,
+                    suspectors: 1
+                }
+            );
+            // evaluate before the deadline does nothing; after it the
+            // suspicion is confirmed.
+            assert!(h.evaluate(t2).is_empty());
+            assert!(h.evaluate(t0 + Duration::from_mins(1)).is_empty());
+            assert_eq!(h.state.lock().status(1), Status::Dead);
+            // The local node is never rewritten by a transition.
+            let local_before = state_of(&pool, 0);
+            h.apply(&[(0, PeerState::Down)]);
+            assert_eq!(state_of(&pool, 0), local_before);
+            assert_ne!(local_before, PeerState::Down);
+        }
+
+        #[test]
+        fn zero_period_is_clamped_and_ticks_derive_from_elapsed_time() {
+            let h = SwimHandler::new(pool(), 0, 2, SwimConfig::default(), Duration::ZERO);
+            assert_eq!(h.period, Duration::from_millis(1));
+            assert_eq!(h.tick_of(h.epoch + Duration::from_millis(7)), 7);
+            // An instant before the epoch saturates to tick 0.
+            if let Some(before) = h.epoch.checked_sub(Duration::from_secs(1)) {
+                assert_eq!(h.tick_of(before), 0);
+            }
+        }
+    }
 }
