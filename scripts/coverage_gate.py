@@ -128,9 +128,17 @@ def main() -> int:
         rel = os.path.relpath(entry.get("filename", ""), cwd)
         if not rel.startswith("crates/"):
             continue
-        # Test, fuzz, and bench-harness fixtures are not gated.
-        if "/tests/" in rel or "/benches/" in rel or rel.startswith(
-            "crates/fuzz/"
+        # Test, fuzz, and bench-harness fixtures are not gated. The C
+        # oracle (FFI wrappers over the C reference, exercised only by its
+        # own tests) and optest (the namespace/fault harness, whose code
+        # runs in sandboxed child processes) are test harnesses, not
+        # product code.
+        if (
+            "/tests/" in rel
+            or "/benches/" in rel
+            or rel.startswith("crates/fuzz/")
+            or rel.startswith("crates/c-oracle/")
+            or rel.startswith("crates/optest/")
         ):
             continue
         summary = entry.get("summary", {})
