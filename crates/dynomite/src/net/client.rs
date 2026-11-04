@@ -261,6 +261,9 @@ pub async fn client_loop(
     let mut read_buf = vec![0u8; CLIENT_READ_CHUNK];
     let mut accumulated: Vec<u8> = Vec::new();
     let mut pending_writes: Vec<u8> = Vec::new();
+    // Replies that completed before an earlier request on this connection.
+    let mut early: std::collections::HashMap<MsgId, OutboundEnvelope> =
+        std::collections::HashMap::new();
 
     loop {
         // Flush any buffered response bytes first so the loop
@@ -301,7 +304,8 @@ pub async fn client_loop(
                 drive_parser(&mut conn, &mut handler, &mut accumulated).await?;
             }
             Some(env) = rx.recv() => {
-                handle_response(&mut conn, &env, &mut pending_writes);
+                early.insert(env.req_id, env);
+                release_in_order(&mut conn, &mut early, &mut pending_writes);
             }
             else => {
                 conn.set_done();
@@ -374,7 +378,17 @@ async fn drive_parser(
                         .dispatcher
                         .dispatch(msg, handler.response_tx.clone());
                     let inline = match outcome {
-                        DispatchOutcome::Pending | DispatchOutcome::Drop => None,
+                        DispatchOutcome::Pending => None,
+                        DispatchOutcome::Drop => {
+                            // No reply will come: take the request out of
+                            // the outstanding queue so it does not hold
+                            // back the replies to later requests. QUIT is
+                            // answered below and keeps its slot.
+                            if !was_quit {
+                                drop_outstanding(conn, id);
+                            }
+                            None
+                        }
                         DispatchOutcome::Inline(rsp) | DispatchOutcome::Error(rsp) => {
                             Some(OutboundEnvelope {
                                 req_id: rsp.id(),
@@ -438,6 +452,49 @@ async fn drive_parser(
         }
     }
     Ok(())
+}
+
+/// Forget a request that will never be answered (swallowed).
+fn drop_outstanding(conn: &mut Conn, id: MsgId) {
+    conn.outstanding_mut().remove(&id);
+    let q = conn.omsg_q_mut();
+    let kept: Vec<Msg> = std::iter::from_fn(|| q.pop_front())
+        .filter(|m| m.id() != id)
+        .collect();
+    for m in kept {
+        q.push_back(m);
+    }
+}
+
+/// Write every reply whose request is at the head of the connection's
+/// outstanding queue, in request order, and stop at the first request
+/// still waiting. Redis and memcache clients match replies to requests by
+/// position on the connection, so a reply that completes early (a fast
+/// replica for a later request, a timeout before a success) waits here
+/// until every earlier request has been answered.
+fn release_in_order(
+    conn: &mut Conn,
+    early: &mut std::collections::HashMap<MsgId, OutboundEnvelope>,
+    pending: &mut Vec<u8>,
+) {
+    while let Some(head) = conn.omsg_q().front().map(Msg::id) {
+        let Some(env) = early.remove(&head) else {
+            break;
+        };
+        handle_response(conn, &env, pending);
+    }
+    // A reply for a request that is no longer outstanding (the connection
+    // never queued it, e.g. an inline error) is written as before.
+    let stray: Vec<MsgId> = early
+        .keys()
+        .copied()
+        .filter(|id| !conn.omsg_q().iter().any(|m| m.id() == *id))
+        .collect();
+    for id in stray {
+        if let Some(env) = early.remove(&id) {
+            handle_response(conn, &env, pending);
+        }
+    }
 }
 
 fn handle_response(conn: &mut Conn, env: &OutboundEnvelope, pending: &mut Vec<u8>) {
