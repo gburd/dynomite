@@ -32,6 +32,7 @@ const UNITS: &[&str] = &[
     "src/hashkit/dyn_one_at_a_time.c",
     "src/hashkit/dyn_token.c",
     "src/dyn_vnode.c",
+    "src/dyn_histogram.c",
     "contrib/murmur3/murmur3.c",
 ];
 
@@ -62,6 +63,8 @@ fn main() {
         .include(src_root.join("src"))
         .include(src_root.join("src/hashkit"))
         .include(src_root.join("contrib/murmur3"))
+        // dyn_histogram.c includes dyn_conf.h, which includes <yaml.h>.
+        .include(src_root.join("contrib/yaml-0.1.4/include"))
         .define("HAVE_CONFIG_H", None)
         .define("_GNU_SOURCE", None)
         // The C tree predates modern warning promotion and relies on

@@ -636,15 +636,15 @@ struct	gossip_node	src/dyn_gossip.h	27	todo
 struct	gossip_rack	src/dyn_gossip.h	42	todo				
 struct	gossip_dc	src/dyn_gossip.h	52	todo				
 struct	gossip_node_pool	src/dyn_gossip.h	58	todo				
-var	bucket_offsets	src/dyn_histogram.c	23	todo				
-fn	histo_init	src/dyn_histogram.c	25	todo				
-fn	histo_reset	src/dyn_histogram.c	55	todo				
-fn	count	src/dyn_histogram.c	75	todo				
-fn	histo_add	src/dyn_histogram.c	87	todo				
-fn	histo_compute	src/dyn_histogram.c	225	todo				
-macro	DYN_HISTOGRAM_H_	src/dyn_histogram.h	9	todo				
-macro	BUCKET_SIZE	src/dyn_histogram.h	11	todo				
-struct	histogram	src/dyn_histogram.h	13	todo				
+var	bucket_offsets	src/dyn_histogram.c	23	ported	crates/dynomite/src/stats/histogram.rs::bucket_offsets	crates/c-oracle/tests/histogram_oracle.rs::bucket_boundaries_match_c		f64 floor(last*1.2) table in a OnceLock
+fn	histo_init	src/dyn_histogram.c	25	ported	crates/dynomite/src/stats/histogram.rs::Histogram::new	crates/c-oracle/tests/histogram_oracle.rs::histogram_ops_match_c		offset table built lazily by bucket_offsets
+fn	histo_reset	src/dyn_histogram.c	55	ported	crates/dynomite/src/stats/histogram.rs::Histogram::reset	crates/c-oracle/tests/histogram_oracle.rs::histogram_ops_match_c		
+fn	count	src/dyn_histogram.c	75	ported	crates/dynomite/src/stats/histogram.rs::Histogram::count	crates/c-oracle/tests/histogram_oracle.rs::histogram_ops_match_c		
+fn	histo_add	src/dyn_histogram.c	87	ported	crates/dynomite/src/stats/histogram.rs::Histogram::record	crates/c-oracle/tests/histogram_oracle.rs::histogram_ops_match_c		same bisection: left = middle; final bucket unreachable
+fn	histo_compute	src/dyn_histogram.c	225	ported	crates/dynomite/src/stats/histogram.rs::Histogram::compute	crates/c-oracle/tests/histogram_oracle.rs::histogram_batch_compute_matches_c		called per histogram by Stats::snapshot (stats_swap)
+macro	DYN_HISTOGRAM_H_	src/dyn_histogram.h	9	dead				include guard; no Rust counterpart needed
+macro	BUCKET_SIZE	src/dyn_histogram.h	11	ported	crates/dynomite/src/stats/histogram.rs::BUCKET_COUNT	crates/c-oracle/tests/histogram_oracle.rs::layout_constants_match_c		
+struct	histogram	src/dyn_histogram.h	13	ported	crates/dynomite/src/stats/histogram.rs::Histogram	crates/c-oracle/tests/histogram_oracle.rs::histogram_ops_match_c		every field compared against the C struct
 var	logger	src/dyn_log.c	33	todo				
 fn	log_init	src/dyn_log.c	42	todo				
 fn	log_deinit	src/dyn_log.c	63	todo				
