@@ -51,9 +51,12 @@ Rust with the C logic, checked against the C binary, and ledgered.
   here. The tree stays out of this repository (removed in `2561d13`).
 * Rust toolchain: `rust-toolchain.toml` (1.95.0).
 * Storage: noxu 7.11 now; noxu 8.x when the owner announces it (section 9).
-* Hosts: this host for development and the oracle; AWS burner account
-  `chef` (842964983020) for Debian/AL2023 qualification, multi-node
-  differential, chaos and benchmarks.
+* Hosts: this host for development and the oracle; an AWS burner account
+  for Debian/AL2023 qualification, multi-node differential, chaos and
+  benchmarks: `woof` (176550300114) from 2026-11-04, replacing `chef`
+  (842964983020), which expired. `scripts/ec2-dist/burner-testhost.sh`
+  launches, provisions (fault libraries, C reference) and tears down a
+  test host on either.
 
 ## 3. Deviation catalogue
 
@@ -180,7 +183,7 @@ performance gate green (section 6), check.sh green.
 
 ## 6. Performance gate ("as well or better on all dimensions")
 
-Measured on chef EC2, same instance type, same datastore (redis-server and
+Measured on the burner EC2 host, same instance type, same datastore (redis-server and
 memcached from the distro), C and Rust built release, A/B interleaved, n>=5
 per point, report median and variance, STABLE/NOISY verdict per the
 `pg-benchmark-rigor` discipline.
@@ -210,7 +213,7 @@ transliterate, write oracle tests, port C tests, run the gates, review
 
 | Stage | C files | Notes |
 |---|---|---|
-| T0 | tooling | `c_inventory.sh`, `ledger.tsv`, `check_parity.sh`, `c-oracle` crate skeleton, `build_cref.sh` refresh, chef bootstrap script |
+| T0 | tooling | `c_inventory.sh`, `ledger.tsv`, `check_parity.sh`, `c-oracle` crate skeleton, `build_cref.sh` refresh, burner bootstrap script |
 | T1 | `dyn_types`, `dyn_string`, `dyn_util`, `dyn_log`, `dyn_signal`, `dyn_setting`, `dyn_histogram`, `dyn_cbuf.h`, `dyn_queue.h` | logging levels incl. SIGUSR1/2 log-level and SIGTTIN/TTOU, SIGSEGV stacktrace |
 | T2 | `hashkit/*` | oracle-pinned every algorithm; replaces the hand-walked vectors |
 | T3 | `dyn_mbuf`, `dyn_array`, `dyn_dict*`, `dyn_rbtree`, `dyn_ring_queue`, `dyn_task` | substrate rows: replaced, with behavioural tests |
@@ -226,7 +229,7 @@ transliterate, write oracle tests, port C tests, run the gates, review
 | T13 | `dyn_core`, `dynomite.c` | init/teardown order, CLI flags, daemonize, pidfile, signals |
 | T14 | `dyn_test.c`, `test/*.py`, `scripts/dynomite/*` | C tests ported in full |
 | T15 | differential strict | system-level oracle green (side-by-side clusters, never mixed) |
-| T16 | performance gate on chef | section 6 |
+| T16 | performance gate on the burner host | section 6 |
 | T17 | deviation review closeout | every deviation authorised or reverted |
 | T18 | additions re-integration | dyniak, search, QUIC, etc. rebased on the transliterated core; strictly additive check |
 | T19 | noxu 8.x | section 9 |
@@ -256,7 +259,7 @@ Decisions are recorded in `deviations.md` with the owner's sign-off line.
 ## 9. noxu 8.x
 
 When the owner announces noxu 8.x: bump on a branch, run the full gate on
-chef Debian, re-run the dyniak and noxu-datastore benches. noxu sits under
+the burner Debian host, re-run the dyniak and noxu-datastore benches. noxu sits under
 the additions, not under the C-compatible core, so the transliteration does
 not wait on it.
 
