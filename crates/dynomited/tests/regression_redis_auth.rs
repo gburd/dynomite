@@ -312,11 +312,11 @@ async fn redis_auth_wrong_password_supervisor_fails() {
     // enough for >= 1 attempt across CI noise.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Probe: drive a SET and confirm we do NOT get a reply
-    // within a short window. The dispatcher hands the request
-    // to the backend channel; the supervisor never enters its
-    // run loop because every AUTH is rejected, so no reply is
-    // ever produced.
+    // Probe: drive a SET. The supervisor never enters its run loop
+    // because every AUTH is rejected, so the node has no datastore: it
+    // answers at once with the storage error (the C engine does the
+    // same when it cannot reach its datastore) instead of leaving the
+    // client waiting.
     let mut sock = TcpStream::connect(("127.0.0.1", listen_port))
         .await
         .expect("connect dynomited");
@@ -324,13 +324,15 @@ async fn redis_auth_wrong_password_supervisor_fails() {
     sock.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n")
         .await
         .expect("write SET");
-    let mut probe = [0u8; 5];
-    let read_outcome =
-        tokio::time::timeout(Duration::from_secs(2), sock.read_exact(&mut probe)).await;
-    assert!(
-        read_outcome.is_err(),
-        "expected SET to hang (no backend), but got reply: {:?}",
-        &probe[..]
+    let want = b"-ERR Storage: Datastore refused connection\r\n";
+    let mut probe = vec![0u8; want.len()];
+    tokio::time::timeout(Duration::from_secs(2), sock.read_exact(&mut probe))
+        .await
+        .expect("an error reply within 2s, not a hang")
+        .expect("read reply");
+    assert_eq!(
+        String::from_utf8_lossy(&probe),
+        String::from_utf8_lossy(want)
     );
     drop(sock);
 

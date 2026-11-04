@@ -591,6 +591,20 @@ impl Cluster {
             .collect()
     }
 
+    /// Stop node `i`'s datastore (SHUTDOWN NOSAVE through its own
+    /// client) and wait for the process to exit; the dynomite node keeps
+    /// running.
+    pub fn stop_store(&mut self, i: usize) -> Result<()> {
+        if let Ok(mut c) = self.nodes[i].store_client() {
+            let _ = c.cmd(&["SHUTDOWN", "NOSAVE"]);
+        }
+        if let Some(mut p) = self.nodes[i].store.take() {
+            let _ = p.kill();
+            let _ = p.wait();
+        }
+        Ok(())
+    }
+
     /// Keys stored in each node's datastore, in node order.
     pub fn store_sizes(&self) -> Result<Vec<i64>> {
         self.nodes.iter().map(Node::store_dbsize).collect()

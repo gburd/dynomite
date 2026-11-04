@@ -78,7 +78,8 @@ fn attach_payload(rsp: &mut Msg, pool: &MbufPool, bytes: &[u8]) {
 /// The wire formats produced are:
 ///
 /// * Redis (RESP):
-///   * `RspRedisError`: `-Dynomite: <message>\r\n`
+///   * `RspRedisError`: `-ERR <source> <message>\r\n`, the error
+///     Dynomite raises itself; `<source>` is [`DynErrorCode::source`]
 ///   * `RspRedisErrorErr`: `-ERR <message>\r\n`
 ///   * `RspRedisErrorOom`: `-OOM <message>\r\n`
 ///   * `RspRedisErrorBusy`: `-BUSY <message>\r\n`
@@ -93,7 +94,7 @@ fn attach_payload(rsp: &mut Msg, pool: &MbufPool, bytes: &[u8]) {
 ///   * `RspRedisErrorMasterdown`: `-MASTERDOWN <message>\r\n`
 ///   * `RspRedisErrorNoreplicas`: `-NOREPLICAS <message>\r\n`
 /// * Memcache (text):
-///   * `RspMcServerError`: `SERVER_ERROR <message>\r\n`
+///   * `RspMcServerError`: `SERVER_ERROR <source> <message>\r\n`
 ///   * `RspMcClientError`: `CLIENT_ERROR <message>\r\n`
 ///   * `RspMcError`: `ERROR\r\n`
 ///
@@ -117,7 +118,7 @@ fn attach_payload(rsp: &mut Msg, pool: &MbufPool, bytes: &[u8]) {
 /// assert_eq!(rsp.parent_id(), 7);
 /// assert!(rsp.flags().is_error);
 /// let bytes: Vec<u8> = rsp.mbufs().iter().flat_map(|b| b.readable().to_vec()).collect();
-/// assert_eq!(bytes, b"-Dynomite: Peer Node is down\r\n".to_vec());
+/// assert_eq!(bytes, b"-ERR Peer: Peer Node is down\r\n".to_vec());
 /// ```
 #[must_use]
 pub fn make_error(
@@ -155,7 +156,25 @@ pub fn make_error(
     rsp.set_is_error(true);
     rsp.set_error_code(error_code);
     rsp.set_dyn_error_code(dyn_error_code);
-    let wire = render_error_wire(err_type, dyn_error_code.message());
+    let wire = match err_type {
+        // Errors Dynomite itself raises: `<-ERR|SERVER_ERROR> <source> <message>`,
+        // e.g. `-ERR Storage: Datastore refused connection`. An unset code
+        // reads `unknown: unknown`.
+        MsgType::RspRedisError | MsgType::RspMcServerError => {
+            let prot = if matches!(err_type, MsgType::RspRedisError) {
+                "-ERR"
+            } else {
+                "SERVER_ERROR"
+            };
+            let message = if matches!(dyn_error_code, DynErrorCode::Ok) {
+                "unknown"
+            } else {
+                dyn_error_code.message()
+            };
+            format!("{prot} {} {message}\r\n", dyn_error_code.source()).into_bytes()
+        }
+        _ => render_error_wire(err_type, dyn_error_code.message()),
+    };
     if !wire.is_empty() {
         attach_payload(&mut rsp, pool, &wire);
     }
@@ -258,7 +277,7 @@ mod tests {
         );
         assert_eq!(
             wire_bytes(&rsp),
-            b"-Dynomite: Failed to achieve Quorum\r\n".to_vec()
+            b"-ERR Dynomite: Failed to achieve Quorum\r\n".to_vec()
         );
         assert_eq!(rsp.mlen() as usize, wire_bytes(&rsp).len());
     }
@@ -269,7 +288,7 @@ mod tests {
         let req = Msg::new(1, MsgType::ReqRedisGet, true);
         let dyn_err = DynErrorCode::DynomiteUnknownError;
         let cases: &[(MsgType, &[u8])] = &[
-            (MsgType::RspRedisError, b"-Dynomite: Unknown Error\r\n"),
+            (MsgType::RspRedisError, b"-ERR unknown: Unknown Error\r\n"),
             (MsgType::RspRedisErrorErr, b"-ERR Unknown Error\r\n"),
             (MsgType::RspRedisErrorOom, b"-OOM Unknown Error\r\n"),
             (MsgType::RspRedisErrorBusy, b"-BUSY Unknown Error\r\n"),
@@ -301,7 +320,10 @@ mod tests {
                 MsgType::RspRedisErrorNoreplicas,
                 b"-NOREPLICAS Unknown Error\r\n",
             ),
-            (MsgType::RspMcServerError, b"SERVER_ERROR Unknown Error\r\n"),
+            (
+                MsgType::RspMcServerError,
+                b"SERVER_ERROR unknown: Unknown Error\r\n",
+            ),
             (MsgType::RspMcClientError, b"CLIENT_ERROR Unknown Error\r\n"),
         ];
         for (ty, expected) in cases {
@@ -337,7 +359,7 @@ mod tests {
         );
         assert_eq!(
             wire_bytes(&rsp),
-            b"SERVER_ERROR Failed to achieve Quorum\r\n".to_vec()
+            b"SERVER_ERROR Dynomite: Failed to achieve Quorum\r\n".to_vec()
         );
     }
 
@@ -371,7 +393,7 @@ mod tests {
             &pool,
         );
         let bytes = wire_bytes(&rsp);
-        assert!(bytes.starts_with(b"-Dynomite: "));
+        assert!(bytes.starts_with(b"-ERR Dynomite: "));
         assert!(bytes.ends_with(b"\r\n"));
     }
 

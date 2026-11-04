@@ -1895,25 +1895,33 @@ async fn backend_supervisor(
         let mut transport = match connect {
             Ok(Ok(t)) => t,
             Ok(Err(e)) => {
-                record_reconnect_and_back_off(
-                    &backend_label,
-                    "connect_refused",
-                    Some(&e.to_string()),
-                    "backend connect failed; retrying",
-                    &mut consecutive_failures,
-                    &mut backoff_ms,
+                serve_errors_while(
+                    record_reconnect_and_back_off(
+                        &backend_label,
+                        "connect_refused",
+                        Some(&e.to_string()),
+                        "backend connect failed; retrying",
+                        &mut consecutive_failures,
+                        &mut backoff_ms,
+                    ),
+                    &mut rx,
+                    data_store,
                 )
                 .await;
                 continue;
             }
             Err(_) => {
-                record_reconnect_and_back_off(
-                    &backend_label,
-                    "connect_timeout",
-                    None,
-                    "backend connect timed out; retrying",
-                    &mut consecutive_failures,
-                    &mut backoff_ms,
+                serve_errors_while(
+                    record_reconnect_and_back_off(
+                        &backend_label,
+                        "connect_timeout",
+                        None,
+                        "backend connect timed out; retrying",
+                        &mut consecutive_failures,
+                        &mut backoff_ms,
+                    ),
+                    &mut rx,
+                    data_store,
                 )
                 .await;
                 continue;
@@ -1929,13 +1937,17 @@ async fn backend_supervisor(
                     redis_auth_handshake(transport.as_mut(), pw, Duration::from_secs(5)).await
                 {
                     drop(transport);
-                    record_reconnect_and_back_off(
-                        &backend_label,
-                        "auth_failed",
-                        Some(&e.to_string()),
-                        "backend AUTH failed; reconnecting after backoff",
-                        &mut consecutive_failures,
-                        &mut backoff_ms,
+                    serve_errors_while(
+                        record_reconnect_and_back_off(
+                            &backend_label,
+                            "auth_failed",
+                            Some(&e.to_string()),
+                            "backend AUTH failed; reconnecting after backoff",
+                            &mut consecutive_failures,
+                            &mut backoff_ms,
+                        ),
+                        &mut rx,
+                        data_store,
                     )
                     .await;
                     continue;
@@ -1951,7 +1963,13 @@ async fn backend_supervisor(
         // ServerConn loop manually here, owning the receiver
         // ourselves and forwarding requests / responses.
         let mut frames_ok: u64 = 0;
-        let driver_res = run_one_backend_conn(conn, &mut rx, data_store, &mut frames_ok).await;
+        let mut pending = std::collections::VecDeque::new();
+        let driver_res =
+            run_one_backend_conn(conn, &mut rx, data_store, &mut frames_ok, &mut pending).await;
+        // Every request written to the lost connection is answered with
+        // the storage error, as are those already queued, so no client
+        // waits on a reply that cannot come.
+        fail_backend_requests(&mut pending, &mut rx, data_store).await;
         match driver_res {
             Ok(()) => return Ok(()),
             Err(e) => {
@@ -1964,13 +1982,17 @@ async fn backend_supervisor(
                     consecutive_failures = 0;
                 }
                 let reason = classify_reconnect_reason(&e);
-                record_reconnect_and_back_off(
-                    &backend_label,
-                    reason,
-                    Some(&e.to_string()),
-                    "backend connection ended; reconnecting",
-                    &mut consecutive_failures,
-                    &mut backoff_ms,
+                serve_errors_while(
+                    record_reconnect_and_back_off(
+                        &backend_label,
+                        reason,
+                        Some(&e.to_string()),
+                        "backend connection ended; reconnecting",
+                        &mut consecutive_failures,
+                        &mut backoff_ms,
+                    ),
+                    &mut rx,
+                    data_store,
                 )
                 .await;
             }
@@ -1987,6 +2009,29 @@ async fn backend_supervisor(
 /// `backoff_ms` (advanced through [`next_backoff_ms`]) in place
 /// so callers see the same schedule the supervisor itself
 /// observes on the next iteration.
+/// While the datastore supervisor waits to reconnect, answer every
+/// request that arrives with the storage error at once instead of letting
+/// it wait out the backoff, so a node whose datastore is down fails its
+/// requests immediately. `wait` is the backoff itself.
+async fn serve_errors_while(
+    wait: impl std::future::Future<Output = ()>,
+    rx: &mut tokio::sync::mpsc::Receiver<OutboundRequest>,
+    data_store: dynomite::conf::DataStore,
+) {
+    tokio::pin!(wait);
+    loop {
+        tokio::select! {
+            () = &mut wait => return,
+            req = rx.recv() => {
+                let Some(req) = req else { return };
+                let mut one = BackendPending::new();
+                one.push_back((req.req_id, req.responder, req.span, req.target_peer_idx));
+                fail_backend_requests(&mut one, rx, data_store).await;
+            }
+        }
+    }
+}
+
 async fn record_reconnect_and_back_off(
     backend_label: &str,
     reason: &str,
@@ -2127,6 +2172,67 @@ pub fn spawn_backend_supervisor_unix_for_testing(
     ))
 }
 
+/// A request written to the datastore and awaiting its reply:
+/// (req_id, responder, span, target peer index). The target index is
+/// carried through to the reply so the replica coalescer counts the local
+/// datastore's vote.
+type BackendPending = std::collections::VecDeque<(
+    u64,
+    tokio::sync::mpsc::Sender<dynomite::net::OutboundEnvelope>,
+    tracing::Span,
+    Option<u32>,
+)>;
+
+/// Answer every request the datastore can no longer answer with
+/// `Storage: Datastore refused connection`: those written to a connection
+/// that ended (`pending`) and those already queued behind it (`rx`).
+async fn fail_backend_requests(
+    pending: &mut BackendPending,
+    rx: &mut tokio::sync::mpsc::Receiver<OutboundRequest>,
+    data_store: dynomite::conf::DataStore,
+) {
+    use dynomite::msg::{DynErrorCode, Msg, MsgType};
+    use dynomite::net::OutboundEnvelope;
+    let err_type = match data_store {
+        dynomite::conf::DataStore::Memcache => MsgType::RspMcServerError,
+        _ => MsgType::RspRedisError,
+    };
+    let pool = dynomite::io::mbuf::MbufPool::default();
+    let reply = |req_id: u64| {
+        let anchor = Msg::new(req_id, MsgType::Unknown, true);
+        dynomite::msg::response::make_error(
+            &anchor,
+            err_type,
+            0,
+            DynErrorCode::StorageConnectionRefuse,
+            &pool,
+        )
+    };
+    while let Some((req_id, responder, span, source_peer_idx)) = pending.pop_front() {
+        let rsp = reply(req_id);
+        let _ = responder
+            .send(OutboundEnvelope {
+                req_id,
+                rsp,
+                span,
+                source_peer_idx,
+            })
+            .await;
+    }
+    while let Ok(req) = rx.try_recv() {
+        let rsp = reply(req.req_id);
+        let _ = req
+            .responder
+            .send(OutboundEnvelope {
+                req_id: req.req_id,
+                rsp,
+                span: req.span,
+                source_peer_idx: req.target_peer_idx,
+            })
+            .await;
+    }
+}
+
 /// Drive one TCP connection to the backend. Reads requests from
 /// `rx`, writes them, parses responses, and pushes responses
 /// onto each request's per-connection responder channel. Returns
@@ -2146,21 +2252,13 @@ async fn run_one_backend_conn(
     rx: &mut tokio::sync::mpsc::Receiver<OutboundRequest>,
     data_store: dynomite::conf::DataStore,
     frames_ok: &mut u64,
+    pending: &mut BackendPending,
 ) -> Result<(), NetError> {
     use dynomite::msg::{Msg, MsgParseResult, MsgType};
     use dynomite::net::OutboundEnvelope;
     use tracing::Instrument as _;
     let mut accumulated: Vec<u8> = Vec::new();
     let mut read_buf = vec![0u8; 4096];
-    // (req_id, responder, span, target peer index). The target index is
-    // carried through to the reply so the replica coalescer counts the
-    // local datastore's vote.
-    let mut pending: std::collections::VecDeque<(
-        u64,
-        tokio::sync::mpsc::Sender<OutboundEnvelope>,
-        tracing::Span,
-        Option<u32>,
-    )> = std::collections::VecDeque::new();
     loop {
         tokio::select! {
             req = rx.recv() => {

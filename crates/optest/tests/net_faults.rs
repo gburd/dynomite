@@ -405,3 +405,66 @@ fn crashed_node_rejoins_the_mesh() {
         );
     }
 }
+
+/// A node whose datastore is down answers its share of the keyspace with
+/// `-ERR Storage: Datastore refused connection` at once, keeps serving the
+/// keys other nodes own, and keeps every reply on a pipelined connection
+/// in request order (Redis clients pair replies with requests by position).
+#[test]
+fn datastore_down_fails_fast_and_keeps_reply_order() {
+    sandboxed!("datastore_down_fails_fast_and_keeps_reply_order");
+    for engine in engines() {
+        let Some(mut c) = start_or_skip(ClusterSpec::grid(1, 1, 3).engine(engine)) else {
+            return;
+        };
+        let keys: Vec<String> = (0..24).map(|i| format!("k{i}")).collect();
+        let mut cl = c.nodes[0].client(T).expect("connect");
+        for k in &keys {
+            assert!(cl.cmd(&["SET", k, &format!("v{k}")]).expect("set").is_ok());
+        }
+        c.stop_store(1).expect("stop node 1 datastore");
+        std::thread::sleep(Duration::from_millis(500));
+        let mut cl = c.nodes[0].client(T).expect("connect");
+        let started = std::time::Instant::now();
+        let cmds: Vec<Vec<String>> = keys
+            .iter()
+            .flat_map(|k| [vec!["GET".to_string(), k.clone()], vec!["PING".to_string()]])
+            .collect();
+        let refs: Vec<&[String]> = cmds.iter().map(Vec::as_slice).collect();
+        cl.send_pipelined(&refs).expect("pipeline");
+        let (mut values, mut refused) = (0, 0);
+        for k in &keys {
+            match cl.read_reply().expect("GET reply") {
+                optest::resp::Value::Bulk(Some(v)) => {
+                    assert_eq!(v, format!("v{k}").into_bytes(), "{engine:?}: {k}");
+                    values += 1;
+                }
+                optest::resp::Value::Error(e) => {
+                    assert_eq!(
+                        e, "ERR Storage: Datastore refused connection",
+                        "{engine:?}: {k}"
+                    );
+                    refused += 1;
+                }
+                other => panic!("{engine:?}: {k}: {other:?}"),
+            }
+            assert_eq!(
+                cl.read_reply().expect("PING reply"),
+                optest::resp::Value::Simple("PONG".into()),
+                "{engine:?}: reply after GET {k} is not its PING"
+            );
+        }
+        eprintln!(
+            "[{engine:?}] {values} served, {refused} refused in {:?}",
+            started.elapsed()
+        );
+        assert!(
+            values > 0 && refused > 0,
+            "{engine:?}: {values} served, {refused} refused"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{engine:?}: not fail-fast"
+        );
+    }
+}

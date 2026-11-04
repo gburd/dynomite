@@ -35,6 +35,13 @@ default-filter = "not (binary(conformance) | binary(differential) | binary(integ
 filter = "test(reconcile_is_divergence_proportional)"
 slow-timeout = { period = "180s", terminate-after = 2 }
 
+# optest scenarios bound themselves (OPTEST_SCENARIO_TIMEOUT_SECS) and some
+# are long by design (the FAINT sweep fails every allocation site of the
+# config path in turn, a few minutes under load).
+[[profile.default.overrides]]
+filter = "package(optest)"
+slow-timeout = { period = "120s", terminate-after = 5 }
+
 [profile.conformance]
 # Conformance scenarios spawn real `dynomited` and `redis-server`
 # processes; serialise them so the OS does not run out of

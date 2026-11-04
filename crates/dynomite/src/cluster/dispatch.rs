@@ -1029,12 +1029,7 @@ impl Dispatcher for ClusterDispatcher {
                                 }
                             }
                         }
-                        let err_type =
-                            if matches!(req.ty(), MsgType::ReqRedisGet | MsgType::ReqRedisSet) {
-                                MsgType::RspRedisError
-                            } else {
-                                MsgType::RspMcServerError
-                            };
+                        let err_type = error_rsp_type(self.pool.config().data_store);
                         let rsp = crate::msg::response::make_error(
                             &req,
                             err_type,
@@ -2341,7 +2336,7 @@ mod tests {
     /// client because [`crate::msg::response::make_error`] never
     /// attached the wire-format error string. The client then
     /// hung until its read timeout. After the fix, the error
-    /// response carries a parseable `-Dynomite: ...` reply that
+    /// response carries a parseable `-ERR Dynomite: ...` reply that
     /// the client can render as an error.
     #[test]
     fn no_targets_error_response_carries_dynomite_wire_bytes() {
@@ -2370,7 +2365,7 @@ mod tests {
                     !bytes.is_empty(),
                     "NoTargets must produce on-wire bytes, not a 0-byte hang"
                 );
-                assert!(bytes.starts_with(b"-Dynomite: "));
+                assert!(bytes.starts_with(b"-ERR Dynomite: "));
                 assert!(bytes.ends_with(b"\r\n"));
                 assert_eq!(rsp.mlen() as usize, bytes.len());
             }

@@ -96,6 +96,18 @@ impl Client {
         self.read_reply()
     }
 
+    /// Send several commands in one write without waiting (a pipeline);
+    /// read the replies with [`Client::read_reply`], one per command, in
+    /// order.
+    pub fn send_pipelined<A: AsRef<[u8]>>(&mut self, cmds: &[&[A]]) -> Result<(), RespError> {
+        let mut buf = Vec::new();
+        for c in cmds {
+            buf.extend(encode(c));
+        }
+        self.s.write_all(&buf)?;
+        Ok(())
+    }
+
     /// Read the next reply.
     pub fn read_reply(&mut self) -> Result<Value, RespError> {
         loop {
