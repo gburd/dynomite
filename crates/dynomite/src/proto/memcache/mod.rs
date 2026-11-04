@@ -29,7 +29,10 @@ pub mod parser;
 pub mod repair;
 pub mod verify;
 
-pub use self::coalesce::{memcache_post_coalesce, memcache_pre_coalesce};
+pub use self::coalesce::{
+    memcache_coalesce_fragments, memcache_copy_bulk, memcache_post_coalesce, memcache_pre_coalesce,
+    MEMCACHE_FRAGMENT_ERROR_REPLY,
+};
 pub use self::commands::{
     memcache_arithmetic, memcache_cas, memcache_delete, memcache_retrieval, memcache_storage,
     memcache_touch,

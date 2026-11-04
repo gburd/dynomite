@@ -1180,26 +1180,40 @@ impl ClusterDispatcher {
         req: &mut Msg,
         responder: &ServerSink,
     ) -> Option<DispatchOutcome> {
-        let splits = matches!(
-            req.ty(),
-            MsgType::ReqRedisMget
-                | MsgType::ReqRedisDel
-                | MsgType::ReqRedisExists
-                | MsgType::ReqRedisMset
-        );
+        let data_store = self.pool.config().data_store;
+        let splits = if matches!(data_store, crate::conf::DataStore::Memcache) {
+            // Every retrieval splits, one key included.
+            crate::proto::memcache::memcache_retrieval(req.ty())
+        } else {
+            matches!(data_store, crate::conf::DataStore::Valkey)
+                && req.keys().len() >= 2
+                && matches!(
+                    req.ty(),
+                    MsgType::ReqRedisMget
+                        | MsgType::ReqRedisDel
+                        | MsgType::ReqRedisExists
+                        | MsgType::ReqRedisMset
+                )
+        };
         // Only client requests split: a fragment (frag_id set) or a
         // request relayed by a peer (dnode header) is served as is.
         if !splits
-            || req.keys().len() < 2
             || req.frag_id() != 0
             || req.dmsg().is_some()
             || !matches!(req.routing(), MsgRouting::Normal)
-            || !matches!(
-                self.pool.config().data_store,
-                crate::conf::DataStore::Valkey
-            )
         {
             return None;
+        }
+        if matches!(data_store, crate::conf::DataStore::Memcache) {
+            let outcome =
+                crate::proto::memcache::memcache_fragment(req, self, &self.mbuf_pool).ok()??;
+            return Some(self.fan_out_and_merge(
+                req,
+                responder,
+                outcome.fragments,
+                &outcome.shard_for_key,
+                crate::proto::memcache::memcache_coalesce_fragments,
+            ));
         }
         let values: Vec<Vec<u8>> = if matches!(req.ty(), MsgType::ReqRedisMset) {
             let bytes: Vec<u8> = req
@@ -1217,10 +1231,32 @@ impl ClusterDispatcher {
         };
         let outcome =
             crate::proto::redis::redis_fragment(req, self, &values, &self.mbuf_pool).ok()??;
+        let req_ty = req.ty();
+        Some(self.fan_out_and_merge(
+            req,
+            responder,
+            outcome.fragments,
+            &outcome.shard_for_key,
+            move |frag_for_key, replies| {
+                crate::proto::redis::redis_coalesce_fragments(req_ty, frag_for_key, replies)
+            },
+        ))
+    }
+
+    /// Dispatch each fragment through the ordinary single-request path
+    /// (so per-fragment replication and quorum are unchanged) and answer
+    /// the client with `merge(frag_for_key, replies)`.
+    fn fan_out_and_merge(
+        &self,
+        req: &Msg,
+        responder: &ServerSink,
+        fragments: Vec<Msg>,
+        shard_for_key: &[u32],
+        merge: impl FnOnce(&[usize], &[Option<Vec<u8>>]) -> Vec<u8> + Send + 'static,
+    ) -> DispatchOutcome {
         // Fragments are created in first-seen shard order.
         let mut shards: Vec<u32> = Vec::new();
-        let frag_for_key: Vec<usize> = outcome
-            .shard_for_key
+        let frag_for_key: Vec<usize> = shard_for_key
             .iter()
             .map(|s| {
                 shards.iter().position(|x| x == s).unwrap_or_else(|| {
@@ -1229,28 +1265,41 @@ impl ClusterDispatcher {
                 })
             })
             .collect();
-        let mut replies: Vec<Option<Vec<u8>>> = vec![None; outcome.fragments.len()];
+        let mut replies: Vec<Option<Vec<u8>>> = vec![None; fragments.len()];
         let mut waiting: Vec<(usize, mpsc::Receiver<OutboundEnvelope>)> = Vec::new();
-        for (f, frag) in outcome.fragments.into_iter().enumerate() {
+        let mut error_ty: Option<MsgType> = None;
+        for (f, frag) in fragments.into_iter().enumerate() {
             let (tx, rx) = mpsc::channel::<OutboundEnvelope>(2);
             match self.dispatch(frag, tx) {
                 DispatchOutcome::Pending => waiting.push((f, rx)),
-                DispatchOutcome::Inline(rsp) | DispatchOutcome::Error(rsp) => {
+                DispatchOutcome::Inline(rsp) => replies[f] = Some(msg_bytes(&rsp)),
+                DispatchOutcome::Error(rsp) => {
+                    error_ty.get_or_insert(rsp.ty());
                     replies[f] = Some(msg_bytes(&rsp));
                 }
                 DispatchOutcome::Drop => {}
             }
         }
         let req_id = req.id();
-        let req_ty = req.ty();
+        if waiting.is_empty() {
+            // Every fragment was answered in place: reply in place too.
+            let mut rsp = Msg::new(req_id, error_ty.unwrap_or(MsgType::Unknown), false);
+            rsp.set_parent_id(req_id);
+            rsp.append_bytes(&self.mbuf_pool, &merge(&frag_for_key, &replies));
+            return if error_ty.is_some() {
+                rsp.set_is_error(true);
+                DispatchOutcome::Error(rsp)
+            } else {
+                DispatchOutcome::Inline(rsp)
+            };
+        }
         let pool = self.mbuf_pool.clone();
         let responder = responder.clone();
         tokio::spawn(async move {
             for (f, mut rx) in waiting {
                 replies[f] = rx.recv().await.map(|env| msg_bytes(&env.rsp));
             }
-            let merged =
-                crate::proto::redis::redis_coalesce_fragments(req_ty, &frag_for_key, &replies);
+            let merged = merge(&frag_for_key, &replies);
             let mut rsp = Msg::new(req_id, MsgType::Unknown, false);
             rsp.set_parent_id(req_id);
             rsp.append_bytes(&pool, &merged);
@@ -1263,7 +1312,18 @@ impl ClusterDispatcher {
                 })
                 .await;
         });
-        Some(DispatchOutcome::Pending)
+        DispatchOutcome::Pending
+    }
+}
+
+/// Memcache retrievals split by the owning peer on the local rack.
+impl crate::proto::memcache::FragmentDispatcher for ClusterDispatcher {
+    fn shard_for(&self, key_tag: &[u8]) -> u32 {
+        self.rack_owner(key_tag).unwrap_or(0)
+    }
+
+    fn shard_count(&self) -> u32 {
+        u32::try_from(self.pool.peers().read().len()).unwrap_or(u32::MAX)
     }
 }
 

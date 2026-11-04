@@ -845,7 +845,7 @@ fn memcache_fragment_get_partitions_keys() {
         })
         .collect();
     wire_frames.sort();
-    let mut expected = vec![b"get b\r\n".to_vec(), b"get a c\r\n".to_vec()];
+    let mut expected = vec![b"get b \r\n".to_vec(), b"get a c \r\n".to_vec()];
     expected.sort();
     assert_eq!(wire_frames, expected);
 }

@@ -112,8 +112,9 @@ pub fn memcache_fragment<D: FragmentDispatcher + ?Sized>(
         let bucket_idx = if let Some(j) = bucket.get(idx).copied().flatten() {
             j
         } else {
-            let mut sub = Msg::new(0, r.ty(), true);
+            let mut sub = Msg::new(r.id(), r.ty(), true);
             sub.set_frag_id(frag_id);
+            sub.flags_mut().is_read = r.flags().is_read;
             fragments.push(sub);
             keys_per_fragment.push(Vec::new());
             let j = fragments.len() - 1;
@@ -161,9 +162,11 @@ fn encode_fragment(frag: &mut Msg, keys: &[KeyPos], pool: &MbufPool) -> Result<(
     };
     let mut buf: Vec<u8> = Vec::new();
     buf.extend_from_slice(verb);
+    buf.push(b' ');
+    // Every key is followed by one space, the last one included.
     for k in keys {
-        buf.push(b' ');
         buf.extend_from_slice(k.key());
+        buf.push(b' ');
     }
     buf.extend_from_slice(b"\r\n");
     write_buf_into_chain(frag, pool, &buf);
