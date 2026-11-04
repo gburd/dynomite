@@ -95,6 +95,7 @@ pub mod causal_object;
 pub mod crdt_convergence;
 pub mod crdt_routing;
 pub mod delta_crdt;
+pub mod fragment_merge;
 pub mod gossip;
 pub mod hlc;
 pub mod quorum;

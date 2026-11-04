@@ -63,7 +63,7 @@ fn	req_forward_local_dc	src/dyn_client.c	880	todo
 fn	req_forward	src/dyn_client.c	906	todo				
 fn	rewrite_query_if_necessary	src/dyn_client.c	1019	todo				
 fn	rewrite_query_with_timestamp_md	src/dyn_client.c	1044	todo				
-fn	fragment_query_if_necessary	src/dyn_client.c	1070	todo				
+fn	fragment_query_if_necessary	src/dyn_client.c	1070	ported	crates/dynomite/src/cluster/dispatch.rs::ClusterDispatcher::dispatch_fragmented	crates/dynomite/tests/regression_multikey_fragment.rs::dispatcher_fans_fragments_out_and_merges		splits by the local rack owner (rack_owner)
 fn	req_recv_done	src/dyn_client.c	1077	todo				
 fn	msg_get_rsp_handler	src/dyn_client.c	1141	todo				
 fn	msg_local_one_rsp_handler	src/dyn_client.c	1155	todo				
@@ -1890,15 +1890,15 @@ enumerator	SW_MULTIBULK_ARGN	src/proto/dyn_redis.c	2438	todo
 enumerator	SW_MULTIBULK_ARGN_LF	src/proto/dyn_redis.c	2439	todo				
 enumerator	SW_RUNTO_CRLF	src/proto/dyn_redis.c	2440	todo				
 enumerator	SW_ALMOST_DONE	src/proto/dyn_redis.c	2441	todo				
-fn	redis_copy_bulk	src/proto/dyn_redis.c	3014	todo				
-fn	redis_pre_coalesce	src/proto/dyn_redis.c	3107	todo				
-fn	redis_post_coalesce_mset	src/proto/dyn_redis.c	3198	todo				
-fn	redis_post_coalesce_num	src/proto/dyn_redis.c	3209	todo				
-fn	redis_post_coalesce_mget	src/proto/dyn_redis.c	3220	todo				
-fn	redis_post_coalesce	src/proto/dyn_redis.c	3264	todo				
+fn	redis_copy_bulk	src/proto/dyn_redis.c	3014	ported	crates/dynomite/src/proto/redis/coalesce.rs::redis_copy_bulk	crates/optest/tests/c_func_test.rs::func_test_multikey_fragmented		
+fn	redis_pre_coalesce	src/proto/dyn_redis.c	3107	ported	crates/dynomite/src/proto/redis/coalesce.rs::redis_coalesce_fragments	crates/dynomite/tests/regression_multikey_fragment.rs::merge_restores_client_order_and_errors_whole_reply		classification and integer accumulation over reply bytes
+fn	redis_post_coalesce_mset	src/proto/dyn_redis.c	3198	ported	crates/dynomite/src/proto/redis/coalesce.rs::redis_coalesce_fragments	crates/optest/tests/c_func_test.rs::func_test_multikey_fragmented		
+fn	redis_post_coalesce_num	src/proto/dyn_redis.c	3209	ported	crates/dynomite/src/proto/redis/coalesce.rs::redis_coalesce_fragments	crates/dynomite/tests/regression_multikey_fragment.rs::merge_restores_client_order_and_errors_whole_reply		
+fn	redis_post_coalesce_mget	src/proto/dyn_redis.c	3220	ported	crates/dynomite/src/proto/redis/coalesce.rs::redis_coalesce_fragments	crates/dynomite/tests/regression_multikey_fragment.rs::dispatcher_fans_fragments_out_and_merges		
+fn	redis_post_coalesce	src/proto/dyn_redis.c	3264	ported	crates/dynomite/src/proto/redis/coalesce.rs::redis_coalesce_fragments	crates/dynomite/tests/regression_multikey_fragment.rs::merge_restores_client_order_and_errors_whole_reply		fragment error -> FRAGMENT_ERROR_REPLY (rsp_make_error)
 fn	redis_append_key	src/proto/dyn_redis.c	3291	todo				
-fn	redis_fragment_argx	src/proto/dyn_redis.c	3392	todo				
-fn	redis_fragment	src/proto/dyn_redis.c	3536	todo				
+fn	redis_fragment_argx	src/proto/dyn_redis.c	3392	ported	crates/dynomite/src/proto/redis/fragment.rs::redis_fragment	crates/dynomite/tests/regression_multikey_fragment.rs::mget_splits_per_owner_in_key_order		one sub-request per distinct owner, keys in client order
+fn	redis_fragment	src/proto/dyn_redis.c	3536	ported	crates/dynomite/src/proto/redis/fragment.rs::redis_fragment	crates/dynomite/tests/regression_multikey_fragment.rs::mget_splits_per_owner_in_key_order		MGET/DEL/EXISTS/MSET; one key is left whole
 fn	redis_verify_request	src/proto/dyn_redis.c	3556	todo				
 fn	redis_is_multikey_request	src/proto/dyn_redis.c	3583	todo				
 fn	consume_numargs_from_response	src/proto/dyn_redis.c	3596	todo				
