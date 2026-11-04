@@ -45,7 +45,10 @@ emit() {
 # committed-into-gitignored case while leaving deliberately
 # whitelisted artefacts (e.g. the bundled C reference's
 # `_/dynomite/contrib/yaml-0.1.4.tar.gz`, kept via `!`) clean.
-tracked_under_ignored=$(git ls-files -ci --exclude-standard 2>/dev/null || true)
+# Only the repository's own ignore rules count: a developer's global
+# excludes file (core.excludesFile, e.g. one ignoring `core` or `dist/`)
+# would otherwise flag tracked source as drift on that host only.
+tracked_under_ignored=$(git -c core.excludesFile=/dev/null ls-files -ci --exclude-standard 2>/dev/null || true)
 if [ -n "$tracked_under_ignored" ]; then
     emit "tracked files matched by .gitignore:"
     printf '%s\n' "$tracked_under_ignored" >&2
