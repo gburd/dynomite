@@ -311,11 +311,24 @@ impl DynomitedNode {
                 log_path,
                 child: Some(child),
             };
-            // Drop will tear it down; surface the error.
+            // Drop will tear it down; surface the error with the node's
+            // own log so a failure says why it did not come up.
             if let Some(mut c) = node.child.take() {
                 terminate_pg(&mut c);
             }
-            return Err(io::Error::other("dynomited failed to bind listen port"));
+            let log = std::fs::read_to_string(&node.log_path).unwrap_or_default();
+            let tail: Vec<&str> = log
+                .lines()
+                .rev()
+                .take(20)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            return Err(io::Error::other(format!(
+                "dynomited failed to bind listen port {probe_port}; log tail:\n{}",
+                tail.join("\n")
+            )));
         }
         Ok(Self {
             spec,
