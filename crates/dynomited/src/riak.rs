@@ -1097,4 +1097,255 @@ mod tests {
             }
         ));
     }
+
+    fn tls_pair(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        std::fs::write(&cert_path, cert.cert.pem()).unwrap();
+        std::fs::write(&key_path, cert.signing_key.serialize_pem()).unwrap();
+        (cert_path, key_path)
+    }
+
+    #[tokio::test]
+    async fn build_handles_rejects_key_without_cert_bad_pem_and_bad_aae() {
+        let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+        let key_only = ConfRiak {
+            pbc_listen: Some("127.0.0.1:0".into()),
+            tls_key: Some(std::path::PathBuf::from("/no/such/key")),
+            ..ConfRiak::default()
+        };
+        let Err(err) = build_handles(&key_only, Arc::clone(&ds)).await else {
+            panic!("tls_key without tls_cert must fail");
+        };
+        assert!(matches!(
+            err,
+            RiakWireError::BadAddr {
+                field: "tls_cert",
+                ..
+            }
+        ));
+        let missing_pem = ConfRiak {
+            pbc_listen: Some("127.0.0.1:0".into()),
+            tls_cert: Some(std::path::PathBuf::from("/no/such/cert")),
+            tls_key: Some(std::path::PathBuf::from("/no/such/key")),
+            ..ConfRiak::default()
+        };
+        let Err(err) = build_handles(&missing_pem, Arc::clone(&ds)).await else {
+            panic!("unreadable PEM material must fail");
+        };
+        assert!(matches!(
+            err,
+            RiakWireError::BadAddr {
+                field: "tls_cert",
+                ..
+            }
+        ));
+        assert!(err.to_string().contains("/no/such/cert"));
+        let bad_aae = ConfRiak {
+            http_listen: Some("127.0.0.1:0".into()),
+            aae_enabled: Some(true),
+            aae_segment_interval_seconds: Some(60),
+            aae_full_sweep_interval_seconds: Some(5),
+            ..ConfRiak::default()
+        };
+        let Err(err) = build_handles(&bad_aae, ds).await else {
+            panic!("segment interval above the full sweep must fail");
+        };
+        assert!(matches!(err, RiakWireError::BadAddr { field: "aae", .. }));
+    }
+
+    #[tokio::test]
+    async fn spawn_listeners_serve_until_cancelled_plain_and_tls() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_path, key_path) = tls_pair(dir.path());
+        for tls in [false, true] {
+            let (tls_cert, tls_key) = if tls {
+                (Some(cert_path.clone()), Some(key_path.clone()))
+            } else {
+                (None, None)
+            };
+            let cfg = ConfRiak {
+                pbc_listen: Some("127.0.0.1:0".into()),
+                http_listen: Some("127.0.0.1:0".into()),
+                tls_cert,
+                tls_key,
+                ..ConfRiak::default()
+            };
+            let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+            let mut h = build_handles(&cfg, ds).await.unwrap().unwrap();
+            assert_eq!(h.tls.is_some(), tls);
+            let pbc_addr = h.pbc_addr.unwrap();
+            let http_addr = h.http_addr.unwrap();
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let (pbc, http, quic) = spawn_listeners(&mut h, &cancel_rx);
+            assert!(h.pbc_listener.is_none() && h.http_listener.is_none());
+            assert!(quic.is_none());
+            let _pbc_conn = tokio::net::TcpStream::connect(pbc_addr).await.unwrap();
+            let _http_conn = tokio::net::TcpStream::connect(http_addr).await.unwrap();
+            // Let both accept loops start before cancelling.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if tls {
+                // A dropped cancel sender also stops the loops.
+                drop(cancel_tx);
+            } else {
+                cancel_tx.send(true).unwrap();
+            }
+            pbc.unwrap().await.unwrap();
+            http.unwrap().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn peer_channel_outbound_delivers_encoded_ops_and_drops_failures() {
+        let (tx, mut rx) = mpsc::channel::<OutboundRequest>(1);
+        let out = PeerChannelOutbound::new(&[(4, "peer-4".into(), tx)]);
+        assert!(format!("{out:?}").contains("PeerChannelOutbound"));
+        let op = || PeerOp::Del {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+        };
+        out.dispatch(4, op()).await;
+        let req = rx.recv().await.expect("one outbound");
+        assert_eq!(req.bytes, encode_peer_op(&op()));
+        assert!(matches!(req.ty, DmsgType::RiakReplica));
+        assert_eq!(req.target_peer_idx, Some(4));
+        // Unknown peer, then a full channel: both dropped, never block.
+        out.dispatch(9, op()).await;
+        out.dispatch(4, op()).await;
+        out.dispatch(4, op()).await;
+        assert!(rx.recv().await.is_some());
+        assert!(rx.try_recv().is_err());
+        // Closed channel: dropped too.
+        drop(rx);
+        out.dispatch(4, op()).await;
+    }
+
+    #[tokio::test]
+    async fn repair_sink_full_channel_hands_the_task_back() {
+        let (tx, _rx) = mpsc::channel::<OutboundRequest>(1);
+        let sink = PeerChannelRepairSink::new(vec![(3, "peer-3".into(), tx)]);
+        let task = || RepairTask {
+            peer_idx: 3,
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+            vclock: Vec::new(),
+            direction: dyniak::aae::repair::RepairDirection::PushToRemote,
+        };
+        assert!(sink.submit(task()).is_ok());
+        let Err(back) = sink.submit(task()) else {
+            panic!("a full channel must hand the task back");
+        };
+        assert_eq!(back.peer_idx, 3);
+        assert_eq!(back.key, b"k");
+    }
+
+    fn routing_pool() -> Arc<dynomite::cluster::ServerPool> {
+        use dynomite::cluster::peer::{Peer, PeerEndpoint};
+        use dynomite::cluster::pool::PoolConfig;
+        use dynomite::hashkit::DynToken;
+        let cfg = PoolConfig {
+            dc: "dc1".into(),
+            rack: "r1".into(),
+            ..PoolConfig::default()
+        };
+        let peer = |idx: u32, port: u16, local: bool| {
+            Peer::new(
+                idx,
+                PeerEndpoint::tcp("127.0.0.1".into(), port),
+                "r1".into(),
+                "dc1".into(),
+                vec![DynToken::from_u32(idx * 1000)],
+                local,
+                true,
+                false,
+            )
+        };
+        Arc::new(dynomite::cluster::ServerPool::new(
+            cfg,
+            vec![peer(0, 8101, true), peer(1, 8102, false)],
+        ))
+    }
+
+    #[tokio::test]
+    async fn routing_hooks_take_the_local_actor_and_drive_routing_listeners() {
+        let pool = routing_pool();
+        let (tx, _rx) = mpsc::channel::<OutboundRequest>(8);
+        let hooks = build_routing_hooks(
+            &pool,
+            dynomite::conf::HashType::OneAtATime,
+            &[(1, "peer-1".into(), tx)],
+        );
+        assert_eq!(hooks.local_peer_idx, 0);
+        assert_eq!(hooks.local_actor.dc, "dc1");
+        assert_ne!(hooks.local_actor.peer, "local");
+        assert!(hooks.precommit.is_none());
+        let dir = tempfile::tempdir().unwrap();
+        let (cert_path, key_path) = tls_pair(dir.path());
+        for tls in [false, true] {
+            let (tls_cert, tls_key) = if tls {
+                (Some(cert_path.clone()), Some(key_path.clone()))
+            } else {
+                (None, None)
+            };
+            let cfg = ConfRiak {
+                pbc_listen: Some("127.0.0.1:0".into()),
+                http_listen: Some("127.0.0.1:0".into()),
+                tls_cert,
+                tls_key,
+                ..ConfRiak::default()
+            };
+            let ds: Arc<dyn Datastore> = Arc::new(MemoryDatastore::new());
+            let mut h = build_handles(&cfg, ds).await.unwrap().unwrap();
+            h.hooks = Some(hooks.clone());
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let (pbc, http, _quic) = spawn_listeners(&mut h, &cancel_rx);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel_tx.send(true).unwrap();
+            pbc.unwrap().await.unwrap();
+            http.unwrap().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_aae_pushes_local_objects_and_stops_on_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let ds = dyniak::datastore::NoxuDatastore::open(dir.path()).unwrap();
+        ds.riak_put(b"default/b", b"k", b"stored", &[])
+            .await
+            .unwrap();
+        let cfg = ConfAae {
+            enabled: true,
+            segment_interval_seconds: 1,
+            full_sweep_interval_seconds: 1,
+            ..ConfAae::default()
+        };
+        let (tx, mut rx) = mpsc::channel::<OutboundRequest>(16);
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let task = spawn_aae(
+            cfg.clone(),
+            vec![(5, "peer-5".into(), tx)],
+            Some(Arc::new(ds)),
+            cancel_rx,
+        );
+        let req = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("aae push within the first tick")
+            .expect("channel open");
+        assert_eq!(req.target_peer_idx, Some(5));
+        assert!(matches!(req.ty, DmsgType::RiakReplica));
+        let op = dyniak::proto::replica_wire::decode_peer_op(&req.bytes).unwrap();
+        assert!(matches!(op, PeerOp::RepairPut { .. }));
+        cancel_tx.send(true).unwrap();
+        task.await.unwrap();
+        // Without a datastore the task only ticks the cadence.
+        let (tx2, mut rx2) = mpsc::channel::<OutboundRequest>(1);
+        let (cancel2, rx_cancel2) = watch::channel(false);
+        let idle = spawn_aae(cfg, vec![(5, "peer-5".into(), tx2)], None, rx_cancel2);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(rx2.try_recv().is_err());
+        drop(cancel2);
+        idle.await.unwrap();
+    }
 }
