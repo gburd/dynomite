@@ -175,8 +175,11 @@ fn derive_release_config(debug_config: &Path) -> PathBuf {
                 "#define HAVE_ASSERT_PANIC 1" | "#define HAVE_DEBUG_LOG 1"
             )
         })
-        .map(|l| format!("{l}\n"))
-        .collect();
+        .fold(String::new(), |mut acc, l| {
+            acc.push_str(l);
+            acc.push('\n');
+            acc
+        });
     let dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("release");
     std::fs::create_dir_all(&dir).expect("create release config dir");
     std::fs::write(dir.join("config.h"), release).expect("write release config.h");

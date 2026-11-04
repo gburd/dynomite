@@ -2404,7 +2404,7 @@ async fn peer_supervisor(
         match driver_res {
             Ok(()) => tracing::info!(peer = %addr, "peer closed the connection; reconnecting"),
             Err(e) => {
-                tracing::warn!(peer = %addr, error = %e, "peer connection ended; reconnecting")
+                tracing::warn!(peer = %addr, error = %e, "peer connection ended; reconnecting");
             }
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

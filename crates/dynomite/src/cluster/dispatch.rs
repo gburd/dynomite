@@ -1681,11 +1681,6 @@ struct ReadRepairContext {
     target_is_local: std::collections::HashMap<u32, bool>,
 }
 
-/// Per-fan-out coalescer task body.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "actor task captures the entire dispatch context; bundling into a struct adds churn for no callsite gain"
-)]
 /// Give a replica reply its type and error flag before it votes.
 ///
 /// The local datastore's reply arrives already parsed; a peer's arrives as
@@ -1730,6 +1725,11 @@ fn error_rsp_type(data_store: crate::conf::DataStore) -> MsgType {
     }
 }
 
+/// Per-fan-out coalescer task body.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "actor task captures the entire dispatch context; bundling into a struct adds churn for no callsite gain"
+)]
 async fn coalesce_actor(
     req_id: crate::core::types::MsgId,
     req_ty: MsgType,

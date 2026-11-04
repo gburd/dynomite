@@ -71,7 +71,7 @@ fn simple(tc: &TestCase) -> Vec<u8> {
             out.extend(line_text(tc, 8));
         }
         1 => {
-            out.extend_from_slice(*pick(tc, ERROR_WORDS));
+            out.extend_from_slice(pick(tc, ERROR_WORDS).as_ref());
             if tc.draw(gs::booleans()) {
                 out.push(b' ');
                 out.extend(line_text(tc, 8));
