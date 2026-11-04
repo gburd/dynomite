@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Single Debian test host on the `chef` burner for the operational test
+# Single Debian test host on an AWS burner account for the operational test
 # suite: multi-node clusters in unprivileged network namespaces with tc
 # netem, libfiu I/O faults, libumem allocation faults, FAINT, libdirectio,
 # plus the C reference build for the oracle and differential tests.
@@ -10,14 +10,19 @@
 #
 # Usage:
 #   export RUN_ID=optest-$(date -u +%Y%m%d-%H%M%S)
-#   scripts/ec2-dist/chef-testhost.sh up        # launch + provision
-#   scripts/ec2-dist/chef-testhost.sh sync      # ship committed HEAD (git ls-files)
-#   scripts/ec2-dist/chef-testhost.sh run CMD   # run CMD in ~/dynomite on the host
-#   scripts/ec2-dist/chef-testhost.sh ssh       # interactive shell
-#   scripts/ec2-dist/chef-testhost.sh down      # terminate + delete SG + key
+#   scripts/ec2-dist/burner-testhost.sh up        # launch + provision
+#   scripts/ec2-dist/burner-testhost.sh sync      # ship committed HEAD (git ls-files)
+#   scripts/ec2-dist/burner-testhost.sh cref      # clone + build the C reference (after sync)
+#   scripts/ec2-dist/burner-testhost.sh run CMD   # run CMD in ~/dynomite on the host
+#   scripts/ec2-dist/burner-testhost.sh ssh       # interactive shell
+#   scripts/ec2-dist/burner-testhost.sh down      # terminate + delete SG + key
+#
+# PROFILE selects the burner (default woof). `up` refuses to launch unless
+# the profile's account is the one listed for it below, so a misconfigured
+# profile cannot launch into some other account.
 set -uo pipefail
 
-PROFILE="${PROFILE:-chef}"
+PROFILE="${PROFILE:-woof}"
 RUN_ID="${RUN_ID:?set RUN_ID}"
 SRC_DIR="${SRC_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 TAG=dyn-run
@@ -33,7 +38,16 @@ KEY="$STATE_DIR/key"
 mkdir -p "$STATE_DIR"
 
 aws() { command aws --profile "$PROFILE" --region "$REGION" "$@"; }
-log() { echo "[chef-testhost $(date -u +%H:%M:%S)] $*" >&2; }
+log() { echo "[burner-testhost $(date -u +%H:%M:%S)] $*" >&2; }
+
+# Burner profile -> the only account it may launch into.
+expected_account() {
+  case "$1" in
+    woof) echo 176550300114 ;;
+    chef) echo 842964983020 ;;
+    *) echo "" ;;
+  esac
+}
 
 nsh() {
   local ip; ip=$(cat "$STATE_DIR/pub")
@@ -52,8 +66,10 @@ phase_up() {
   local my_ip ami vpc sg iid pub
   my_ip=$(curl -s -m 10 https://checkip.amazonaws.com | tr -d '[:space:]')
   [ -n "$my_ip" ] || { log "cannot determine controller IP"; return 1; }
-  [ "$(aws sts get-caller-identity --query Account --output text)" = 842964983020 ] \
-    || { log "profile $PROFILE is not the chef burner"; return 1; }
+  local want; want=$(expected_account "$PROFILE")
+  [ -n "$want" ] || { log "profile $PROFILE is not a known burner"; return 1; }
+  [ "$(aws sts get-caller-identity --query Account --output text)" = "$want" ] \
+    || { log "profile $PROFILE is not account $want"; return 1; }
   [ -f "$KEY" ] || ssh-keygen -t ed25519 -N "" -f "$KEY" -q
   aws ec2 import-key-pair --key-name "${RUN_ID}-key" --public-key-material "fileb://${KEY}.pub" \
     --tag-specifications "ResourceType=key-pair,Tags=[{Key=$TAG,Value=$RUN_ID}]" >/dev/null
@@ -134,6 +150,18 @@ unshare -rn sh -c 'ip link set lo up && tc qdisc add dev lo root netem delay 5ms
 REMOTE
 }
 
+# C reference for the oracle and differential tests, pinned to the commit
+# the transliteration is verified against, built with scripts/build_cref.sh
+# into ~/dynomite/target/cref (where optest and c-oracle find it).
+C_REF_COMMIT="${C_REF_COMMIT:-2046b05}"
+phase_cref() {
+  nsh "set -e
+    [ -d ~/src/dynomite ] || git clone -q https://github.com/Netflix/dynomite.git ~/src/dynomite
+    git -C ~/src/dynomite checkout -q $C_REF_COMMIT
+    cd ~/dynomite && DYNOMITE_C_REF=\$HOME/src/dynomite bash scripts/build_cref.sh >/dev/null
+    ls -la ~/dynomite/target/cref/build/src/dynomite | cut -c1-80"
+}
+
 phase_sync() {
   local tgz="$STATE_DIR/src.tgz"
   ( cd "$SRC_DIR" && git ls-files -z --recurse-submodules | tar --null -T - -czf "$tgz" )
@@ -172,8 +200,9 @@ case "${1:-}" in
   up) phase_up ;;
   provision) phase_provision ;;
   sync) phase_sync ;;
+  cref) phase_cref ;;
   run) shift; phase_run "$@" ;;
   ssh) nsh ;;
   down) phase_down ;;
-  *) sed -n '2,17p' "$0"; exit 2 ;;
+  *) sed -n '2,21p' "$0"; exit 2 ;;
 esac

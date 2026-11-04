@@ -36,7 +36,7 @@ pub struct Tools {
 
 impl Tools {
     /// Discover tools from `PATH`, the `OPTEST_FAULT_PREFIX` install prefix
-    /// (default `$HOME/fault/prefix`, what `scripts/ec2-dist/chef-testhost.sh`
+    /// (default `$HOME/fault/prefix`, what `scripts/ec2-dist/burner-testhost.sh`
     /// builds), and explicit overrides:
     ///
     /// * `OPTEST_DYNOMITED` - the binary under test (else
