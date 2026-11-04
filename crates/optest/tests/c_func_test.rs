@@ -18,11 +18,9 @@
 //!
 //! Each scenario runs the C reference first, then `dynomited`.
 //!
-//! Known Rust gap: C timestamp read repair (`._add-set` metadata, DEV-R1,
-//! plan T8). `run_read_repair_test` lives in its own test,
-//! `func_test_safe_quorum_read_repair`, ignored with a reason naming T8 so
-//! `main` stays green and the gap stays listed; run it with
-//! `--run-ignored only`.
+//! `func_test_safe_quorum_read_repair` runs C's read-repair step (timestamp
+//! metadata in `._add-set`, a stale replica repaired on read) for both
+//! engines.
 //!
 //! Both C topologies enter through a one-node rack, so MGET/MSET never
 //! split there; `func_test_multikey_fragmented` adds two topologies whose
@@ -489,7 +487,6 @@ fn func_test_safe_quorum_request() {
 /// same command sequence, then `run_read_repair_test` (timestamp metadata
 /// in `._add-set`, a stale replica repaired on read).
 #[test]
-#[ignore = "T8: timestamp read repair (DEV-R1) is not wired into dynomited yet; the C reference passes. Run with --run-ignored only; un-ignore when T8 lands."]
 fn func_test_safe_quorum_read_repair() {
     sandboxed!("func_test_safe_quorum_read_repair");
     for engine in engines() {
