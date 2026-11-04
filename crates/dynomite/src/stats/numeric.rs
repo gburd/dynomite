@@ -1,7 +1,7 @@
 //! Allocation-free numeric helpers used by the stats subsystem.
 //!
-//! `u64_to_f64` keeps the `f64` <-> `u64` cast off the hot path in the
-//! histogram mean computation. `floor_p_times_u64` matches the IEEE 754
+//! `u64_to_f64` and `ceil_f64_to_u64` keep the `f64` <-> `u64` casts off
+//! the hot path in the histogram mean computation. `floor_p_times_u64` matches the IEEE 754
 //! semantics of the reference percentile expression
 //! `(double)count(histo) * percentile`, which the histogram percentile
 //! and `from_histogram` summary both depend on.
@@ -54,9 +54,48 @@ pub(crate) fn floor_p_times_u64(p: f64, scale: u64) -> u64 {
     floored as u64
 }
 
+/// Computes `ceil(x)` for non-negative finite `f64` values without an
+/// `as` cast, returning `u64::MAX` on overflow.
+pub(crate) fn ceil_f64_to_u64(x: f64) -> u64 {
+    if !x.is_finite() || x <= 0.0 {
+        return 0;
+    }
+    let ceil = x.ceil();
+    let bits = ceil.to_bits();
+    let exp = u32::try_from((bits >> 52) & 0x7FF).expect("11-bit field");
+    let mant = bits & ((1u64 << 52) - 1);
+    if exp < 1023 {
+        // 0.0 < ceil < 1.0 cannot occur after ceil(); fall back safely.
+        return 1;
+    }
+    let unbiased = exp - 1023;
+    if unbiased >= 64 {
+        return u64::MAX;
+    }
+    let m = (1u64 << 52) | mant;
+    if unbiased >= 52 {
+        let shift = unbiased - 52;
+        m.checked_shl(shift).unwrap_or(u64::MAX)
+    } else {
+        m >> (52 - unbiased)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ceil_helper_matches_known_values() {
+        assert_eq!(ceil_f64_to_u64(0.0), 0);
+        assert_eq!(ceil_f64_to_u64(1.0), 1);
+        assert_eq!(ceil_f64_to_u64(1.5), 2);
+        assert_eq!(ceil_f64_to_u64(2.0), 2);
+        assert_eq!(ceil_f64_to_u64(99.99), 100);
+        assert_eq!(ceil_f64_to_u64(f64::NAN), 0);
+        assert_eq!(ceil_f64_to_u64(f64::INFINITY), 0);
+        assert_eq!(ceil_f64_to_u64(-1.0), 0);
+    }
 
     #[test]
     fn floor_zero_or_negative_returns_zero() {

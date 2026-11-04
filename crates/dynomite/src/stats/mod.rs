@@ -33,7 +33,7 @@ pub use crate::stats::failure::{
     FailureMetrics, FailureSnapshot, NoTargetsEntry, PeerEntry, PeerStateEntry, PhiEntry,
     TimeoutEntry, TransitionEntry,
 };
-pub use crate::stats::histogram::{Histogram, BUCKET_COUNT};
+pub use crate::stats::histogram::{bucket_offsets, Histogram, BUCKET_COUNT};
 pub use crate::stats::prometheus::render_prometheus;
 pub use crate::stats::rest::{
     ClusterInfoProvider, RingProvider, StatsServer, MAX_HEADERS, MAX_REQUEST_BYTES,
@@ -120,6 +120,31 @@ impl StatsInner {
             alloc_mbufs: 0,
             free_mbufs: 0,
             dyn_memory: 0,
+        }
+    }
+
+    /// Publish the summary values of every histogram, as the stats
+    /// thread does before each snapshot.
+    fn compute_histograms(&mut self) {
+        for h in [
+            &mut self.latency,
+            &mut self.payload_size,
+            &mut self.server_latency,
+            &mut self.cross_zone_latency,
+            &mut self.cross_region_latency,
+            &mut self.server_queue_wait,
+            &mut self.cross_zone_queue_wait,
+            &mut self.cross_region_queue_wait,
+            &mut self.client_out_queue,
+            &mut self.server_in_queue,
+            &mut self.server_out_queue,
+            &mut self.dnode_client_out_queue,
+            &mut self.peer_in_queue,
+            &mut self.peer_out_queue,
+            &mut self.remote_peer_in_queue,
+            &mut self.remote_peer_out_queue,
+        ] {
+            h.compute();
         }
     }
 }
@@ -572,7 +597,8 @@ impl Stats {
     /// assert_eq!(snap.pool.name, "p");
     /// ```
     pub fn snapshot(&self) -> Snapshot {
-        let inner = self.inner.lock();
+        let mut inner = self.inner.lock();
+        inner.compute_histograms();
         let elapsed = self.started.elapsed();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -591,14 +617,14 @@ impl Stats {
             ),
             cross_zone_queue_wait: HistogramSummary::from_histogram(&inner.cross_zone_queue_wait),
             server_queue_wait: HistogramSummary::from_histogram(&inner.server_queue_wait),
-            client_out_queue_p99: queue_p99(&inner.client_out_queue),
-            server_in_queue_p99: queue_p99(&inner.server_in_queue),
-            server_out_queue_p99: queue_p99(&inner.server_out_queue),
-            dnode_client_out_queue_p99: queue_p99(&inner.dnode_client_out_queue),
-            peer_in_queue_p99: queue_p99(&inner.peer_in_queue),
-            peer_out_queue_p99: queue_p99(&inner.peer_out_queue),
-            remote_peer_in_queue_p99: queue_p99(&inner.remote_peer_in_queue),
-            remote_peer_out_queue_p99: queue_p99(&inner.remote_peer_out_queue),
+            client_out_queue_p99: inner.client_out_queue.val_99th(),
+            server_in_queue_p99: inner.server_in_queue.val_99th(),
+            server_out_queue_p99: inner.server_out_queue.val_99th(),
+            dnode_client_out_queue_p99: inner.dnode_client_out_queue.val_99th(),
+            peer_in_queue_p99: inner.peer_in_queue.val_99th(),
+            peer_out_queue_p99: inner.peer_out_queue.val_99th(),
+            remote_peer_in_queue_p99: inner.remote_peer_in_queue.val_99th(),
+            remote_peer_out_queue_p99: inner.remote_peer_out_queue.val_99th(),
             alloc_msgs: inner.alloc_msgs,
             free_msgs: inner.free_msgs,
             alloc_mbufs: inner.alloc_mbufs,
@@ -644,18 +670,6 @@ impl Stats {
         inner.peer_out_queue.reset();
         inner.remote_peer_in_queue.reset();
         inner.remote_peer_out_queue.reset();
-    }
-}
-
-/// Returns the queue p99 from `h`, or `0` when the histogram is
-/// overflowing. Percentile publishing is suppressed in the overflow
-/// path so overflow values do not leak into the JSON output as
-/// `u64::MAX`.
-fn queue_p99(h: &Histogram) -> u64 {
-    if h.is_overflowing() {
-        0
-    } else {
-        h.percentile(0.99)
     }
 }
 

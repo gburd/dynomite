@@ -2,8 +2,10 @@
 //!
 //! The bucket layout follows Cassandra's `EstimatedHistogram`: 94 buckets
 //! whose offsets grow geometrically by a factor of 1.2, starting at 1.
-//! Recording a value finds the bucket whose offset is the largest value
-//! still less than or equal to the input.
+//! [`Histogram::record`] counts an observation in the bucket a bisection
+//! over the offsets selects; [`Histogram::compute`] publishes the mean and
+//! the 95th, 99th, and 99.9th percentiles from the bucket counts, and the
+//! accessors return what the last compute published.
 //!
 //! # Examples
 //!
@@ -14,13 +16,14 @@
 //! for v in 0..=100 {
 //!     h.record(v);
 //! }
+//! h.compute();
 //! assert_eq!(h.count(), 101);
-//! assert!(h.percentile(0.5) <= h.percentile(0.95));
+//! assert!(h.val_95th() <= h.val_99th());
 //! ```
 
 use std::sync::OnceLock;
 
-use crate::stats::numeric::{floor_p_times_u64, u64_to_f64};
+use crate::stats::numeric::{ceil_f64_to_u64, floor_p_times_u64, u64_to_f64};
 
 /// Number of buckets in the estimated histogram.
 ///
@@ -32,20 +35,27 @@ use crate::stats::numeric::{floor_p_times_u64, u64_to_f64};
 /// ```
 pub const BUCKET_COUNT: usize = 94;
 
-/// Returns the cached bucket offset table.
+/// The bucket offset table shared by every histogram.
 ///
-/// The first bucket starts at `1`. Each subsequent offset is
-/// `floor(prev * 6 / 5)`, bumped by one if the multiplication did not
-/// advance. This is the integer-equivalent of the original `* 1.2`
-/// factor used by Cassandra's estimated histogram.
-fn bucket_offsets() -> &'static [u64; BUCKET_COUNT] {
+/// The first offset is `1`. Each later offset is `floor(prev * 1.2)`
+/// evaluated in `f64`, bumped by one when the product does not advance.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::stats::bucket_offsets;
+/// let off = bucket_offsets();
+/// assert_eq!(&off[..12], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14]);
+/// assert_eq!(off[93], 36_157_192);
+/// ```
+pub fn bucket_offsets() -> &'static [u64; BUCKET_COUNT] {
     static OFFSETS: OnceLock<[u64; BUCKET_COUNT]> = OnceLock::new();
     OFFSETS.get_or_init(|| {
         let mut offsets = [0u64; BUCKET_COUNT];
         let mut last: u64 = 1;
-        offsets[0] = 1;
+        offsets[0] = last;
         for slot in offsets.iter_mut().skip(1) {
-            let mut next = last.saturating_mul(6) / 5;
+            let mut next = floor_p_times_u64(1.2, last);
             if next == last {
                 next += 1;
             }
@@ -62,11 +72,16 @@ fn bucket_offsets() -> &'static [u64; BUCKET_COUNT] {
 #[derive(Clone, Debug)]
 pub struct Histogram {
     buckets: [u64; BUCKET_COUNT],
+    mean: u64,
+    val_95th: u64,
+    val_99th: u64,
+    val_999th: u64,
     val_max: u64,
 }
 
 impl Histogram {
-    /// Construct a fresh histogram with all bucket counts set to zero.
+    /// Construct a fresh histogram with every count and published value
+    /// set to zero.
     ///
     /// # Examples
     ///
@@ -78,16 +93,21 @@ impl Histogram {
     pub fn new() -> Self {
         Self {
             buckets: [0; BUCKET_COUNT],
+            mean: 0,
+            val_95th: 0,
+            val_99th: 0,
+            val_999th: 0,
             val_max: 0,
         }
     }
 
-    /// Record a single observation, placing it in the appropriate bucket.
+    /// Record a single observation.
     ///
-    /// Values larger than the largest bucket offset land in the final
-    /// bucket and signal histogram overflow. Once the overflow bucket is
-    /// non-empty, [`Histogram::percentile`], [`Histogram::mean`], and
-    /// [`Histogram::max`] all return [`Histogram::OVERFLOW_SENTINEL`].
+    /// The bucket is chosen by bisecting the offset table. Values below
+    /// the second offset land in bucket 0; values at or beyond the
+    /// second-to-last offset land in bucket `BUCKET_COUNT - 2`, so the
+    /// final bucket never fills. The recorded maximum tracks the raw
+    /// value.
     ///
     /// # Examples
     ///
@@ -100,36 +120,87 @@ impl Histogram {
     /// ```
     pub fn record(&mut self, val: u64) {
         let offsets = bucket_offsets();
-        let next = offsets.partition_point(|&o| o <= val);
-        let bucket = next.saturating_sub(1).min(BUCKET_COUNT - 1);
-        self.buckets[bucket] = self.buckets[bucket].saturating_add(1);
-        if val > self.val_max {
-            self.val_max = val;
+        let mut left = 0usize;
+        let mut right = BUCKET_COUNT - 1;
+        let mut index = 0usize;
+
+        while left < right {
+            let middle = left + (right - left) / 2;
+            match val.cmp(&offsets[middle]) {
+                std::cmp::Ordering::Equal => {
+                    index = middle;
+                    break;
+                }
+                std::cmp::Ordering::Less => right = middle,
+                std::cmp::Ordering::Greater => left = middle,
+            }
+            if left == right - 1 {
+                index = left;
+                break;
+            }
         }
+
+        if left == right - 1 {
+            index = left;
+        }
+
+        self.buckets[index] = self.buckets[index].wrapping_add(1);
+        self.val_max = self.val_max.max(val);
     }
 
-    /// Sentinel value returned by [`Histogram::percentile`],
-    /// [`Histogram::mean`], and [`Histogram::max`] when the overflow
-    /// bucket is non-empty.
-    pub const OVERFLOW_SENTINEL: u64 = u64::MAX;
-
-    /// Returns `true` when the final (overflow) bucket is non-empty.
+    /// Publish the mean and the 95th, 99th, and 99.9th percentiles from
+    /// the current bucket counts.
     ///
-    /// When the overflow bucket is non-empty, published quantiles are
-    /// unreliable; that signal is surfaced through this method and
-    /// through the [`Histogram::OVERFLOW_SENTINEL`]
-    /// returned from quantile accessors.
+    /// Each percentile is the offset of the first bucket whose cumulative
+    /// count reaches `floor(count * p)`; with fewer observations than one
+    /// percentile step that threshold is zero, so the first offset (`1`)
+    /// is published. The mean is `ceil(sum / count)` over bucket offsets,
+    /// left unchanged when there are no observations. A non-empty final
+    /// bucket logs an error and publishes nothing.
     ///
     /// # Examples
     ///
     /// ```
     /// use dynomite::stats::Histogram;
     /// let mut h = Histogram::new();
-    /// h.record(10);
-    /// assert!(!h.is_overflowing());
+    /// h.compute();
+    /// assert_eq!((h.mean(), h.val_99th()), (0, 1));
+    /// for _ in 0..990 { h.record(10); }
+    /// for _ in 0..10 { h.record(1_000); }
+    /// h.compute();
+    /// assert_eq!((h.val_99th(), h.val_999th()), (10, 926));
+    /// assert_eq!(h.mean(), 20);
     /// ```
-    pub fn is_overflowing(&self) -> bool {
-        self.buckets[BUCKET_COUNT - 1] > 0
+    pub fn compute(&mut self) {
+        let last_bucket = BUCKET_COUNT - 1;
+        if self.buckets[last_bucket] > 0 {
+            tracing::error!("histogram overflowed!");
+            return;
+        }
+
+        // 95th, 99th, and 99.9th: the threshold count and the offset
+        // published for each.
+        let pcounts = [0.95, 0.99, 0.999].map(|p| floor_p_times_u64(p, self.count()));
+        let mut vals = [0u64; 3];
+
+        let mut elements: u64 = 0;
+        let mut sum: u64 = 0;
+        let offsets = bucket_offsets();
+        for (&n, &offset) in self.buckets.iter().zip(offsets).take(last_bucket) {
+            elements = elements.wrapping_add(n);
+            for (val, &pcount) in vals.iter_mut().zip(&pcounts) {
+                if elements >= pcount && *val == 0 {
+                    *val = offset;
+                }
+            }
+            sum = sum.wrapping_add(n.wrapping_mul(offset));
+        }
+
+        if elements != 0 {
+            self.mean = ceil_f64_to_u64(u64_to_f64(sum) / u64_to_f64(elements));
+        }
+
+        [self.val_95th, self.val_99th, self.val_999th] = vals;
     }
 
     /// Total number of observations recorded.
@@ -144,54 +215,10 @@ impl Histogram {
     /// assert_eq!(h.count(), 2);
     /// ```
     pub fn count(&self) -> u64 {
-        self.buckets.iter().copied().fold(0u64, u64::saturating_add)
+        self.buckets.iter().copied().fold(0u64, u64::wrapping_add)
     }
 
-    /// Approximate percentile, where `p` is in the closed interval
-    /// `[0.0, 1.0]`. Inputs outside the range or NaN return `0`.
-    ///
-    /// The result is the offset of the first bucket whose cumulative
-    /// count meets or exceeds `floor(count * p)`. Returns
-    /// [`Histogram::OVERFLOW_SENTINEL`] if the histogram is
-    /// [`Histogram::is_overflowing`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use dynomite::stats::Histogram;
-    /// let mut h = Histogram::new();
-    /// for v in 0..1_000 { h.record(v); }
-    /// assert!(h.percentile(0.95) >= h.percentile(0.5));
-    /// ```
-    pub fn percentile(&self, p: f64) -> u64 {
-        if !p.is_finite() || !(0.0..=1.0).contains(&p) {
-            return 0;
-        }
-        if self.is_overflowing() {
-            return Self::OVERFLOW_SENTINEL;
-        }
-        let total = self.count();
-        if total == 0 {
-            return 0;
-        }
-        let pcount = floor_p_times_u64(p, total);
-        if pcount == 0 {
-            return 0;
-        }
-        let offsets = bucket_offsets();
-        let mut elements: u64 = 0;
-        for (i, &offset) in offsets.iter().enumerate().take(BUCKET_COUNT - 1) {
-            elements = elements.saturating_add(self.buckets[i]);
-            if elements >= pcount {
-                return offset;
-            }
-        }
-        0
-    }
-
-    /// Arithmetic mean of all observations using bucket offsets as
-    /// representative values. Returns `0.0` for an empty histogram and
-    /// `f64::INFINITY` when the histogram is [`Histogram::is_overflowing`].
+    /// Mean published by the last [`Histogram::compute`].
     ///
     /// # Examples
     ///
@@ -199,30 +226,59 @@ impl Histogram {
     /// use dynomite::stats::Histogram;
     /// let mut h = Histogram::new();
     /// h.record(10);
-    /// assert!(h.mean() > 0.0);
+    /// h.compute();
+    /// assert_eq!(h.mean(), 10);
     /// ```
-    pub fn mean(&self) -> f64 {
-        if self.is_overflowing() {
-            return f64::INFINITY;
-        }
-        let offsets = bucket_offsets();
-        let mut sum: u64 = 0;
-        let mut elements: u64 = 0;
-        for (i, &offset) in offsets.iter().enumerate().take(BUCKET_COUNT - 1) {
-            elements = elements.saturating_add(self.buckets[i]);
-            sum = sum.saturating_add(self.buckets[i].saturating_mul(offset));
-        }
-        if elements == 0 {
-            return 0.0;
-        }
-        let quotient = sum / elements;
-        let remainder = sum % elements;
-        u64_to_f64(quotient) + u64_to_f64(remainder) / u64_to_f64(elements)
+    pub fn mean(&self) -> u64 {
+        self.mean
+    }
+
+    /// 95th percentile published by the last [`Histogram::compute`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Histogram;
+    /// let mut h = Histogram::new();
+    /// for v in 0..1_000 { h.record(v); }
+    /// h.compute();
+    /// assert_eq!(h.val_95th(), 926);
+    /// ```
+    pub fn val_95th(&self) -> u64 {
+        self.val_95th
+    }
+
+    /// 99th percentile published by the last [`Histogram::compute`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Histogram;
+    /// let mut h = Histogram::new();
+    /// for v in 0..1_000 { h.record(v); }
+    /// h.compute();
+    /// assert_eq!(h.val_99th(), 926);
+    /// ```
+    pub fn val_99th(&self) -> u64 {
+        self.val_99th
+    }
+
+    /// 99.9th percentile published by the last [`Histogram::compute`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::stats::Histogram;
+    /// let mut h = Histogram::new();
+    /// for v in 0..1_000 { h.record(v); }
+    /// h.compute();
+    /// assert_eq!(h.val_999th(), 926);
+    /// ```
+    pub fn val_999th(&self) -> u64 {
+        self.val_999th
     }
 
     /// Maximum observation seen since the last [`Histogram::reset`].
-    /// Returns [`Histogram::OVERFLOW_SENTINEL`] when the histogram is
-    /// [`Histogram::is_overflowing`].
     ///
     /// # Examples
     ///
@@ -233,13 +289,10 @@ impl Histogram {
     /// assert_eq!(h.max(), 99);
     /// ```
     pub fn max(&self) -> u64 {
-        if self.is_overflowing() {
-            return Self::OVERFLOW_SENTINEL;
-        }
         self.val_max
     }
 
-    /// Reset all bucket counts and the recorded maximum to zero.
+    /// Reset every bucket count and published value to zero.
     ///
     /// # Examples
     ///
@@ -247,12 +300,12 @@ impl Histogram {
     /// use dynomite::stats::Histogram;
     /// let mut h = Histogram::new();
     /// h.record(7);
+    /// h.compute();
     /// h.reset();
-    /// assert_eq!(h.count(), 0);
+    /// assert_eq!((h.count(), h.mean(), h.max()), (0, 0, 0));
     /// ```
     pub fn reset(&mut self) {
-        self.buckets = [0; BUCKET_COUNT];
-        self.val_max = 0;
+        *self = Self::new();
     }
 
     /// Merge bucket counts from another histogram into this one.
@@ -311,15 +364,17 @@ mod tests {
             assert!(window[0] < window[1], "offsets must be strictly monotonic");
         }
         assert_eq!(off[0], 1);
+        assert_eq!(off[BUCKET_COUNT - 2], 30_130_994);
     }
 
     #[test]
-    fn empty_histogram_returns_zeros() {
-        let h = Histogram::new();
+    fn empty_histogram_computes_first_offset_percentiles() {
+        let mut h = Histogram::new();
+        h.compute();
         assert_eq!(h.count(), 0);
         assert_eq!(h.max(), 0);
-        assert_eq!(h.percentile(0.5), 0);
-        assert!(h.mean().abs() < f64::EPSILON);
+        assert_eq!(h.mean(), 0);
+        assert_eq!((h.val_95th(), h.val_99th(), h.val_999th()), (1, 1, 1));
     }
 
     #[test]
@@ -333,19 +388,60 @@ mod tests {
     }
 
     #[test]
-    fn percentile_is_monotone_non_decreasing() {
+    fn record_selects_largest_offset_not_above_value() {
+        let off = bucket_offsets();
         let mut h = Histogram::new();
-        for v in 0..1_000 {
+        for v in [0, 1, 11, 12, 13] {
             h.record(v);
         }
-        let mut last = 0u64;
-        let mut p = 0.0f64;
-        while p <= 1.0 {
-            let v = h.percentile(p);
-            assert!(v >= last, "percentile decreased at p={p}: {v} < {last}");
-            last = v;
-            p += 0.05;
-        }
+        assert_eq!(h.buckets()[0], 2);
+        assert_eq!(h.buckets()[9], 1);
+        assert_eq!(h.buckets()[10], 2);
+        assert_eq!(off[10], 12);
+    }
+
+    #[test]
+    fn values_past_the_table_never_reach_the_final_bucket() {
+        let mut h = Histogram::new();
+        h.record(bucket_offsets()[BUCKET_COUNT - 1]);
+        h.record(u64::MAX);
+        assert_eq!(h.buckets()[BUCKET_COUNT - 1], 0);
+        assert_eq!(h.buckets()[BUCKET_COUNT - 2], 2);
+        assert_eq!(h.max(), u64::MAX);
+        h.compute();
+        assert_eq!(h.val_999th(), 30_130_994);
+    }
+
+    #[test]
+    fn full_final_bucket_skips_compute() {
+        let mut h = Histogram::new();
+        h.record(10);
+        h.compute();
+        h.buckets[BUCKET_COUNT - 1] = 1;
+        h.record(1_000);
+        h.compute();
+        // Still the values the first compute published.
+        assert_eq!((h.mean(), h.val_99th()), (10, 1));
+    }
+
+    #[test]
+    fn compute_keeps_mean_when_empty() {
+        let mut h = Histogram::new();
+        h.mean = 7;
+        h.compute();
+        assert_eq!(h.mean(), 7);
+    }
+
+    #[test]
+    fn mean_is_ceiling_over_offsets() {
+        let mut h = Histogram::new();
+        h.record(10);
+        h.record(12);
+        h.record(14);
+        h.record(14);
+        h.compute();
+        // (10 + 12 + 14 + 14) / 4 = 12.5
+        assert_eq!(h.mean(), 13);
     }
 
     #[test]
@@ -365,44 +461,11 @@ mod tests {
     fn reset_clears_state() {
         let mut h = Histogram::new();
         h.record(123);
+        h.compute();
         h.reset();
         assert_eq!(h.count(), 0);
         assert_eq!(h.max(), 0);
-    }
-
-    #[test]
-    fn percentile_outside_range_returns_zero() {
-        let mut h = Histogram::new();
-        h.record(10);
-        assert_eq!(h.percentile(-0.1), 0);
-        assert_eq!(h.percentile(1.1), 0);
-        assert_eq!(h.percentile(f64::NAN), 0);
-    }
-
-    #[test]
-    fn overflow_signals_quantile_callers() {
-        let mut h = Histogram::new();
-        // Record a value larger than every bucket offset.
-        let last_offset = *bucket_offsets().last().expect("non-empty offsets");
-        h.record(last_offset.saturating_add(1));
-        assert!(h.is_overflowing(), "expected overflow signal");
-        assert_eq!(h.percentile(0.5), Histogram::OVERFLOW_SENTINEL);
-        assert_eq!(h.max(), Histogram::OVERFLOW_SENTINEL);
-        assert!(h.mean().is_infinite());
-        // After reset the overflow signal clears.
-        h.reset();
-        assert!(!h.is_overflowing());
-    }
-
-    #[test]
-    fn mean_rough_match_for_uniform() {
-        let mut h = Histogram::new();
-        for v in 0..1000u64 {
-            h.record(v);
-        }
-        // True mean is 499.5; bucket-quantization makes the result
-        // approximate but within an order of magnitude.
-        let m = h.mean();
-        assert!((100.0..=1500.0).contains(&m), "mean was {m}");
+        assert_eq!(h.mean(), 0);
+        assert_eq!((h.val_95th(), h.val_99th(), h.val_999th()), (0, 0, 0));
     }
 }

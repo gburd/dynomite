@@ -11,7 +11,7 @@ use hegel::generators as gs;
 use hegel::TestCase;
 
 #[hegel::test]
-fn histogram_percentile_is_monotone(tc: TestCase) {
+fn histogram_percentiles_are_ordered(tc: TestCase) {
     let samples = tc.draw(
         gs::vecs(gs::integers::<u64>().min_value(1).max_value(999_999))
             .min_size(1)
@@ -21,13 +21,9 @@ fn histogram_percentile_is_monotone(tc: TestCase) {
     for v in &samples {
         h.record(*v);
     }
-    let probes = [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 0.999, 1.0];
-    let mut prev = 0u64;
-    for p in probes {
-        let cur = h.percentile(p);
-        assert!(cur >= prev, "p={p} cur={cur} prev={prev}");
-        prev = cur;
-    }
+    h.compute();
+    assert!(h.val_95th() <= h.val_99th(), "{samples:?}");
+    assert!(h.val_99th() <= h.val_999th(), "{samples:?}");
 }
 
 #[hegel::test]
@@ -38,19 +34,13 @@ fn histogram_percentile_within_observed_range(tc: TestCase) {
             .max_size(255),
     );
     let mut h = Histogram::new();
-    let mut max = 0u64;
     for v in &samples {
         h.record(*v);
-        if *v > max {
-            max = *v;
-        }
     }
-    let p = h.percentile(0.99);
-    assert!(
-        p == 0 || p <= max * 2,
-        "percentile {p} not within bound 2*max={}",
-        max * 2
-    );
+    h.compute();
+    // A bucket's offset never exceeds the values counted in it.
+    let max = samples.iter().copied().max().unwrap_or(0);
+    assert!(h.val_99th() <= max, "p99 {} above max {max}", h.val_99th());
 }
 
 #[hegel::test]

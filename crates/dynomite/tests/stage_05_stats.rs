@@ -11,8 +11,8 @@ use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
 use dynomite::hashkit::DynToken;
 use dynomite::stats::{
-    describe_stats, Histogram, Latency, PoolField, PoolStats, ServerField, ServerStats,
-    ServiceInfo, Snapshot, Stats, StatsServer, BUCKET_COUNT, POOL_CODEC, SERVER_CODEC,
+    bucket_offsets, describe_stats, Histogram, Latency, PoolField, PoolStats, ServerField,
+    ServerStats, ServiceInfo, Snapshot, Stats, StatsServer, BUCKET_COUNT, POOL_CODEC, SERVER_CODEC,
 };
 use hegel::generators as gs;
 use hegel::TestCase;
@@ -407,7 +407,7 @@ async fn stats_endpoint_unchanged() {
 }
 
 #[hegel::test(test_cases = 256)]
-fn histogram_percentile_is_monotone_non_decreasing(tc: TestCase) {
+fn histogram_percentiles_are_ordered(tc: TestCase) {
     let values = tc.draw(
         gs::vecs(gs::integers::<u64>().min_value(0).max_value(1_000_000))
             .min_size(1)
@@ -417,13 +417,9 @@ fn histogram_percentile_is_monotone_non_decreasing(tc: TestCase) {
     for v in &values {
         h.record(*v);
     }
-    let mut last = 0u64;
-    for i in 0..=20 {
-        let p = f64::from(i) / 20.0;
-        let q = h.percentile(p);
-        assert!(q >= last, "percentile decreased at p={p}: {q} < {last}");
-        last = q;
-    }
+    h.compute();
+    assert!(h.val_95th() <= h.val_99th());
+    assert!(h.val_99th() <= h.val_999th());
 }
 
 #[hegel::test(test_cases = 256)]
@@ -433,29 +429,20 @@ fn histogram_uniform_percentile_within_bucket_resolution(tc: TestCase) {
     for v in 0..n {
         h.record(v);
     }
-    let percentiles: [(f64, u64); 9] = [
-        (0.1, 1),
-        (0.2, 2),
-        (0.3, 3),
-        (0.4, 4),
-        (0.5, 5),
-        (0.6, 6),
-        (0.7, 7),
-        (0.8, 8),
-        (0.9, 9),
-    ];
-    for (p, num) in percentiles {
-        let q = h.percentile(p);
-        // For uniform [0..n] inputs the true percentile is num*n/10.
-        // Bucket resolution at this scale is bounded; allow a
-        // generous tolerance of 25% plus a small floor.
-        let expected = (n * num) / 10;
-        let tolerance = (expected / 4) + 2;
-        let lo = expected.saturating_sub(tolerance);
-        let hi = expected.saturating_add(tolerance);
+    h.compute();
+    for (num, q) in [
+        (950, h.val_95th()),
+        (990, h.val_99th()),
+        (999, h.val_999th()),
+    ] {
+        // Uniform 0..n puts `offset[i + 1]` observations at or below
+        // bucket i, so the published offset is the last one below the
+        // threshold and the next offset (at most 1.2x) reaches it. The
+        // slack of one covers the f64 rounding of `n * p`.
+        let threshold = n * num / 1_000;
         assert!(
-            q >= lo && q <= hi,
-            "p={p}: expected~={expected}, got {q}, tol={tolerance}"
+            q <= threshold && threshold <= (q * 6 / 5).max(q + 1) + 1,
+            "p{num}: threshold {threshold}, got {q}"
         );
     }
 }
@@ -485,53 +472,28 @@ fn histogram_merge_preserves_count_sum(tc: TestCase) {
     assert_eq!(a.count(), total);
 }
 
-/// Differential check: for any count of identical zero observations
-/// the histogram's percentile threshold matches the reference
-/// expression `(p * count as f64).floor() as u64`. The helper
-/// `floor_p_times_u64` is internal to the engine so this test
-/// pins the observable behavior at the public API.
+/// Identical observations publish their bucket offset for every
+/// percentile, including counts too small for any percentile threshold
+/// to reach one observation (the first offset, 1, is published then).
 #[hegel::test(test_cases = 256)]
-fn percentile_threshold_matches_f64_floor(tc: TestCase) {
-    let count = tc.draw(
-        gs::integers::<u64>()
-            .min_value(1)
-            .max_value(u64::from(u16::MAX)),
-    );
-    let p_idx = tc.draw(gs::integers::<usize>().min_value(0).max_value(6));
-    let ps = [0.0f64, 0.5, 0.9, 0.95, 0.99, 0.999, 1.0];
-    let p = ps[p_idx];
+fn identical_observations_publish_their_offset(tc: TestCase) {
+    let count = tc.draw(gs::integers::<u64>().min_value(1).max_value(5_000));
+    let v = tc.draw(gs::integers::<u64>().min_value(0).max_value(1));
     let mut h = Histogram::new();
     for _ in 0..count {
-        h.record(0);
+        h.record(v);
     }
-    // Bucket 0 has offset 1, so percentile is 1 when the floor
-    // threshold is >= 1 and 0 otherwise. p=1.0 in the engine
-    // returns 0 because the percentile gate excludes p > 1.0
-    // wraps; here p=1.0 is in range and yields the offset.
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    let reference_floor = (p * (count as f64)).floor() as u64;
-    let expected = u64::from(reference_floor >= 1);
-    assert_eq!(
-        h.percentile(p),
-        expected,
-        "percentile diverged from f64 floor at p={p} count={count}"
-    );
+    h.compute();
+    assert_eq!((h.val_95th(), h.val_99th(), h.val_999th()), (1, 1, 1));
+    assert_eq!(h.mean(), 1);
 }
 
-/// Drives a `Stats` instance into histogram overflow via the public
-/// `record_latency` entry point and asserts that the JSON snapshot
-/// layer suppresses every percentile by zeroing them. The histogram
-/// signals overflow with `Histogram::OVERFLOW_SENTINEL`; the
-/// `HistogramSummary::from_histogram` mapping turns that into a
-/// default-valued summary, so the publicly observed values are all
-/// `0`. See `crates/dynomite/src/stats/snapshot.rs` and
-/// `crates/dynomite/src/stats/histogram.rs`.
+/// A value past the end of the bucket table is counted in the last
+/// bucket the bisection can reach (never the final, overflow bucket),
+/// so the snapshot keeps publishing: max is the raw value and the
+/// percentiles that bucket reaches are its offset.
 #[test]
-fn latency_overflow_zeroes_snapshot_percentiles() {
+fn latency_huge_value_lands_in_last_reachable_bucket() {
     let stats = Stats::new(
         ServiceInfo {
             source: "node".into(),
@@ -543,27 +505,27 @@ fn latency_overflow_zeroes_snapshot_percentiles() {
         ServerStats::new("redis"),
     );
 
-    // First, a normal observation lands and shows up in the snapshot.
-    stats.record_latency(Latency::Request, 50);
+    for _ in 0..1_000 {
+        stats.record_latency(Latency::Request, 50);
+    }
     let pre = stats.snapshot();
-    assert!(pre.latency.max >= 1, "baseline observation lost");
+    assert_eq!(pre.latency.max, 50);
+    assert_eq!(pre.latency.p99, 44, "50 counts in the bucket at offset 44");
 
-    // Now overflow the request-latency histogram. BUCKET_COUNT covers
-    // bucket positions 0..BUCKET_COUNT-1; recording a value strictly
-    // larger than the largest geometric offset routes into the final
-    // bucket and trips the overflow flag. u64::MAX is comfortably
-    // beyond every offset.
     assert_eq!(BUCKET_COUNT, Histogram::new().buckets().len());
-    stats.record_latency(Latency::Request, u64::MAX);
+    for _ in 0..20 {
+        stats.record_latency(Latency::Request, u64::MAX);
+    }
 
     let snap = stats.snapshot();
-    assert_eq!(snap.latency.max, 0, "overflow must zero max");
-    assert_eq!(snap.latency.p999, 0, "overflow must zero p999");
-    assert_eq!(snap.latency.p99, 0, "overflow must zero p99");
-    assert_eq!(snap.latency.p95, 0, "overflow must zero p95");
-    assert_eq!(snap.latency.mean, 0, "overflow must zero mean");
+    let last_counted = bucket_offsets()[BUCKET_COUNT - 2];
+    assert_eq!(snap.latency.max, u64::MAX);
+    assert_eq!(snap.latency.p999, last_counted);
+    assert_eq!(snap.latency.p99, last_counted);
+    assert_eq!(snap.latency.p95, 44);
+    assert!(snap.latency.mean > 44);
 
-    // Other histograms are untouched by an overflow on `latency`.
+    // Other histograms are untouched.
     assert_eq!(snap.payload_size.max, 0);
     assert_eq!(snap.server_latency.max, 0);
 }

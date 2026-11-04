@@ -56,11 +56,7 @@ pub struct HistogramSummary {
 }
 
 impl HistogramSummary {
-    /// Compute the standard quantile summary from a histogram.
-    ///
-    /// When the histogram is in overflow (a value larger than the
-    /// largest bucket offset has been recorded), the summary is
-    /// zeroed: percentiles are not published in that state.
+    /// Read the values the last [`Histogram::compute`] published.
     ///
     /// # Examples
     ///
@@ -68,54 +64,18 @@ impl HistogramSummary {
     /// use dynomite::stats::{Histogram, HistogramSummary};
     /// let mut h = Histogram::new();
     /// for v in 0..100 { h.record(v); }
+    /// h.compute();
     /// let s = HistogramSummary::from_histogram(&h);
     /// assert!(s.p99 >= s.p95);
     /// ```
     pub fn from_histogram(h: &Histogram) -> Self {
-        if h.is_overflowing() {
-            return Self::default();
-        }
-        let mean_f = h.mean();
-        let mean = if mean_f.is_finite() && mean_f > 0.0 {
-            // Round mean up to the nearest integer.
-            ceil_f64_to_u64(mean_f)
-        } else {
-            0
-        };
         Self {
             max: h.max(),
-            p999: h.percentile(0.999),
-            p99: h.percentile(0.99),
-            p95: h.percentile(0.95),
-            mean,
+            p999: h.val_999th(),
+            p99: h.val_99th(),
+            p95: h.val_95th(),
+            mean: h.mean(),
         }
-    }
-}
-
-/// Computes `ceil(x)` for non-negative finite `f64` values without an
-/// `as` cast, returning `u64::MAX` on overflow.
-fn ceil_f64_to_u64(x: f64) -> u64 {
-    if !x.is_finite() || x <= 0.0 {
-        return 0;
-    }
-    let ceil = x.ceil();
-    let bits = ceil.to_bits();
-    let exp = u32::try_from((bits >> 52) & 0x7FF).expect("11-bit field");
-    let mant = bits & ((1u64 << 52) - 1);
-    if exp < 1023 {
-        // 0.0 < ceil < 1.0 cannot occur after ceil(); fall back safely.
-        return 1;
-    }
-    let unbiased = exp - 1023;
-    if unbiased >= 64 {
-        return u64::MAX;
-    }
-    let m = (1u64 << 52) | mant;
-    if unbiased >= 52 {
-        let shift = unbiased - 52;
-        m.checked_shl(shift).unwrap_or(u64::MAX)
-    } else {
-        m >> (52 - unbiased)
     }
 }
 
@@ -559,18 +519,6 @@ pub fn describe_stats() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn ceil_helper_matches_known_values() {
-        assert_eq!(ceil_f64_to_u64(0.0), 0);
-        assert_eq!(ceil_f64_to_u64(1.0), 1);
-        assert_eq!(ceil_f64_to_u64(1.5), 2);
-        assert_eq!(ceil_f64_to_u64(2.0), 2);
-        assert_eq!(ceil_f64_to_u64(99.99), 100);
-        assert_eq!(ceil_f64_to_u64(f64::NAN), 0);
-        assert_eq!(ceil_f64_to_u64(f64::INFINITY), 0);
-        assert_eq!(ceil_f64_to_u64(-1.0), 0);
-    }
 
     #[test]
     fn empty_snapshot_renders_to_valid_json_skeleton() {

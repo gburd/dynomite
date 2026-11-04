@@ -2,8 +2,8 @@
 //!
 //! Drives every Latency / QueueWait / QueueGauge match arm in the
 //! record_* methods, the server_incr / server_decr helpers,
-//! reset_histograms, the queue_p99 overflow short-circuit (via a
-//! u64::MAX observation), and one tick of the async Aggregator loop
+//! reset_histograms, the published queue p99 for a single u64::MAX
+//! observation, and one tick of the async Aggregator loop
 //! followed by clean cancellation.
 
 use std::sync::Arc;
@@ -109,14 +109,13 @@ fn reset_histograms_clears_observations() {
 }
 
 #[test]
-fn queue_p99_overflow_is_suppressed() {
-    // An overflowing queue histogram publishes p99 == 0 rather than
-    // the OVERFLOW_SENTINEL (u64::MAX). A single u64::MAX observation
-    // lands in the overflow bucket.
+fn queue_p99_of_single_huge_observation_is_first_offset() {
+    // One observation floors the p99 threshold to zero, so the first
+    // bucket's offset (1) is published whatever the value was.
     let s = fresh();
     s.record_queue_len(QueueGauge::ClientOut, u64::MAX);
     let snap = s.snapshot();
-    assert_eq!(snap.client_out_queue_p99, 0);
+    assert_eq!(snap.client_out_queue_p99, 1);
 }
 
 #[test]
