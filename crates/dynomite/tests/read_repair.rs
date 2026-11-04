@@ -1,15 +1,16 @@
 //! Read-repair integration tests.
 //!
-//! Three-replica in-process cluster. Each replica is modelled as
-//! a tokio task that pulls outbound requests off a per-peer
-//! channel, decodes them, and synthesises a Redis reply. The
-//! dispatcher fans the request to all three replicas, the
-//! coalescer picks a winner, and the test asserts that:
+//! Three-replica in-process cluster. Each replica is a tokio task that
+//! pulls outbound requests off a per-peer channel, records them, and
+//! answers with a scripted reply. With read repairs on and both
+//! consistencies above `DC_ONE`:
 //!
-//! * the client receives the quorum-winning reply;
-//! * after a short delay the divergent replica has received a
-//!   `SET key <winner>` repair write tagged with
-//!   `DmsgType::ReqForward`.
+//! * every repair-aware command reaches the replicas as a repair-script
+//!   request; under `DC_ONE` it is forwarded unchanged;
+//! * a repairable read answers the client with the freshest replica's
+//!   plain value and sends the add repair to each stale replica;
+//! * a delete answered by every replica is followed by its cleanup
+//!   script on each of them.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,73 +19,51 @@ use dynomite::cluster::dispatch::ClusterDispatcher;
 use dynomite::cluster::peer::{Peer, PeerEndpoint, PeerState};
 use dynomite::cluster::pool::{PoolConfig, ServerPool};
 use dynomite::hashkit::DynToken;
-use dynomite::msg::keypos::KeyPos;
-use dynomite::msg::{ConsistencyLevel, Msg, MsgType};
+use dynomite::io::mbuf::MbufPool;
+use dynomite::msg::{set_read_repairs_enabled, ConsistencyLevel, Msg, MsgParseResult, MsgType};
 use dynomite::net::dispatcher::{Dispatcher, OutboundEnvelope};
 use dynomite::net::server::OutboundRequest;
 use dynomite::proto::dnode::DmsgType;
-
+use dynomite::proto::redis::redis_parse_req;
+use dynomite::proto::redis::repair::request::{
+    encode_command, Script, ScriptRequest, REPAIR_SCRIPT_CMD,
+};
 use tokio::sync::mpsc;
 
-/// Spawn one fake replica that replies with a fixed bulk string
-/// to any GET, swallows any SET/DEL by recording the bytes onto
-/// the supplied `recorded_writes` channel, and answers SET / DEL
-/// repair traffic with a `+OK\r\n` simple-string reply.
-fn spawn_fake_replica(
+type Recorded = (u32, DmsgType, Vec<u8>);
+
+/// Spawn one replica that records every request and answers a
+/// repair-script read with `read_reply` and anything else with `:1`.
+fn spawn_replica(
     peer_idx: u32,
-    fixed_get_value: Option<Vec<u8>>,
-    rx: &mut mpsc::Receiver<OutboundRequest>,
-    recorded: mpsc::Sender<(u32, DmsgType, Vec<u8>)>,
-) -> tokio::task::JoinHandle<()> {
-    use dynomite::io::mbuf::MbufPool;
-    let mut rx = std::mem::replace(rx, {
-        let (_t, r) = mpsc::channel(1);
-        r
-    });
+    read_reply: Vec<u8>,
+    mut rx: mpsc::Receiver<OutboundRequest>,
+    recorded: mpsc::Sender<Recorded>,
+) {
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
             let _ = recorded.send((peer_idx, req.ty, req.bytes.clone())).await;
-            let pool = MbufPool::default();
-            let mut rsp_msg = Msg::new(req.req_id, MsgType::RspRedisBulk, false);
-            rsp_msg.set_parent_id(req.req_id);
-            // Decide reply shape from the request bytes.
-            let bytes_upper: Vec<u8> = req.bytes.iter().map(u8::to_ascii_uppercase).collect();
-            let is_get = bytes_upper.windows(3).any(|w| w == b"GET");
-            let is_set = bytes_upper.windows(3).any(|w| w == b"SET");
-            let is_del = bytes_upper.windows(3).any(|w| w == b"DEL");
-            let payload: Vec<u8> = if is_get {
-                match fixed_get_value.as_deref() {
-                    Some(v) => {
-                        let mut out = Vec::new();
-                        out.extend_from_slice(b"$");
-                        out.extend_from_slice(v.len().to_string().as_bytes());
-                        out.extend_from_slice(b"\r\n");
-                        out.extend_from_slice(v);
-                        out.extend_from_slice(b"\r\n");
-                        out
-                    }
-                    None => b"$-1\r\n".to_vec(),
-                }
-            } else if is_set || is_del {
-                rsp_msg = Msg::new(req.req_id, MsgType::RspRedisStatus, false);
-                rsp_msg.set_parent_id(req.req_id);
-                b"+OK\r\n".to_vec()
+            let is_read = ScriptRequest::decode(&req.bytes)
+                .is_some_and(|s| matches!(s.script, Some(Script::Get | Script::Hget)));
+            let payload = if is_read {
+                read_reply.clone()
             } else {
-                b"+OK\r\n".to_vec()
+                b":1\r\n".to_vec()
             };
-            let mut buf = pool.get();
-            buf.recv(&payload);
-            rsp_msg.mbufs_mut().push_back(buf);
-            rsp_msg.recompute_mlen();
-            let env = OutboundEnvelope {
-                req_id: req.req_id,
-                rsp: rsp_msg,
-                span: req.span,
-                source_peer_idx: req.target_peer_idx,
-            };
-            let _ = req.responder.send(env).await;
+            let mut rsp = Msg::new(req.req_id, MsgType::Unknown, false);
+            rsp.set_parent_id(req.req_id);
+            rsp.append_bytes(&MbufPool::default(), &payload);
+            let _ = req
+                .responder
+                .send(OutboundEnvelope {
+                    req_id: req.req_id,
+                    rsp,
+                    span: req.span,
+                    source_peer_idx: req.target_peer_idx,
+                })
+                .await;
         }
-    })
+    });
 }
 
 fn local_peer(idx: u32, rack: &str, tok: u32, is_local: bool) -> Peer {
@@ -105,12 +84,12 @@ fn local_peer(idx: u32, rack: &str, tok: u32, is_local: bool) -> Peer {
     p
 }
 
-fn pool_three_replicas() -> Arc<ServerPool> {
+fn pool_three_replicas(level: ConsistencyLevel) -> Arc<ServerPool> {
     let cfg = PoolConfig {
         dc: "dc1".into(),
         rack: "rA".into(),
-        read_consistency: ConsistencyLevel::DcQuorum,
-        write_consistency: ConsistencyLevel::DcQuorum,
+        read_consistency: level,
+        write_consistency: level,
         ..PoolConfig::default()
     };
     let peers = vec![
@@ -128,167 +107,147 @@ fn pool_three_replicas() -> Arc<ServerPool> {
     Arc::new(pool)
 }
 
-/// Build a request with a single key and the wire bytes for a
-/// `GET key` so the dispatcher can clone the bytes onto every
-/// per-target outbound.
-fn build_get_req(req_id: u64, key: &[u8]) -> Msg {
-    use dynomite::io::mbuf::MbufPool;
-    let pool = MbufPool::default();
-    let mut req = Msg::new(req_id, MsgType::ReqRedisGet, true);
-    req.flags_mut().is_read = true;
-    req.push_key(KeyPos::without_tag(key.to_vec()));
-    let mut wire = Vec::new();
-    wire.extend_from_slice(b"*2\r\n$3\r\nGET\r\n$");
-    wire.extend_from_slice(key.len().to_string().as_bytes());
-    wire.extend_from_slice(b"\r\n");
-    wire.extend_from_slice(key);
-    wire.extend_from_slice(b"\r\n");
-    let mut mb = pool.get();
-    mb.recv(&wire);
-    req.mbufs_mut().push_back(mb);
-    req.recompute_mlen();
-    req
+/// A parsed client request.
+fn request(id: u64, args: &[&str]) -> Msg {
+    let wire = encode_command(args);
+    let mut m = Msg::new(id, MsgType::Unknown, true);
+    assert_eq!(redis_parse_req(&mut m, &wire), MsgParseResult::Ok);
+    m.append_bytes(&MbufPool::default(), &wire);
+    m
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "flaky on CI runners under shared-I/O pressure (the synthetic per-peer channels race the 2-second deadline). Passes reliably locally and under the slow-tests workflow. The covering invariants are also exercised in dispatch_quorum.rs and proto::redis::repair tests, which are not flaky."]
-async fn dc_quorum_get_returns_majority_value_and_repairs_divergent_replica() {
-    let pool = pool_three_replicas();
-    // Three per-peer channels.
-    let (peer0_tx, mut peer0_rx) = mpsc::channel::<OutboundRequest>(8);
-    let (peer1_tx, mut peer1_rx) = mpsc::channel::<OutboundRequest>(8);
-    let (peer2_tx, mut peer2_rx) = mpsc::channel::<OutboundRequest>(8);
-    // Recorder channel: every replica reports the requests it
-    // observed.
-    let (recorded_tx, mut recorded_rx) = mpsc::channel::<(u32, DmsgType, Vec<u8>)>(64);
-    // Replica 0 returns "v1"; replicas 1 and 2 return "v2".
-    let h0 = spawn_fake_replica(0, Some(b"v1".to_vec()), &mut peer0_rx, recorded_tx.clone());
-    let h1 = spawn_fake_replica(1, Some(b"v2".to_vec()), &mut peer1_rx, recorded_tx.clone());
-    let h2 = spawn_fake_replica(2, Some(b"v2".to_vec()), &mut peer2_rx, recorded_tx.clone());
-    drop(recorded_tx);
+fn ts_reply(status: &str, ts: u64, value: &str) -> Vec<u8> {
+    encode_command(&[status, &ts.to_string(), value])
+}
 
-    let disp = ClusterDispatcher::new(pool)
-        .with_peer_backend(0, peer0_tx)
-        .with_peer_backend(1, peer1_tx)
-        .with_peer_backend(2, peer2_tx);
-
-    // Client responder.
-    let (client_tx, mut client_rx) = mpsc::channel::<OutboundEnvelope>(4);
-    let req = build_get_req(7, b"hot");
-    let _ = disp.dispatch(req, client_tx);
-
-    // Read the coalesced reply: should be "v2".
-    let env = tokio::time::timeout(Duration::from_secs(2), client_rx.recv())
-        .await
-        .expect("timed out waiting for coalesced reply")
-        .expect("no reply produced");
-    let bytes: Vec<u8> = env
-        .rsp
-        .mbufs()
-        .iter()
-        .flat_map(|b| b.readable().to_vec())
-        .collect();
-    assert_eq!(bytes, b"$2\r\nv2\r\n");
-
-    // The coalescer should now have shipped a SET hot v2 with
-    // `DmsgType::ReqForward` to peer 0 (the divergent replica).
-    // Drain the recorder; ignore the original GETs (peers 0/1/2)
-    // and any +OK / repair acks; assert we observe the SET to
-    // peer 0.
-    let mut got_repair = false;
-    let mut last_recv = std::time::Instant::now();
-    while last_recv.elapsed() < Duration::from_secs(2) {
-        match tokio::time::timeout(Duration::from_millis(100), recorded_rx.recv()).await {
-            Ok(Some((peer, ty, bytes))) => {
-                last_recv = std::time::Instant::now();
-                let upper: Vec<u8> = bytes.iter().map(u8::to_ascii_uppercase).collect();
-                let is_set = upper.windows(3).any(|w| w == b"SET");
-                if peer == 0 && matches!(ty, DmsgType::ReqForward) && is_set {
-                    // Confirm payload contains both the key and
-                    // the winning value.
-                    assert!(bytes.windows(3).any(|w| w == b"hot"));
-                    assert!(bytes.windows(2).any(|w| w == b"v2"));
-                    got_repair = true;
-                    break;
-                }
-            }
-            Ok(None) => break,
-            Err(_) => {}
-        }
+/// Dispatch `req` to three replicas answering a read with `replies`;
+/// returns the client's reply bytes and every request the replicas saw
+/// within a short window.
+async fn run(level: ConsistencyLevel, req: Msg, replies: [Vec<u8>; 3]) -> (Vec<u8>, Vec<Recorded>) {
+    let (rec_tx, mut rec_rx) = mpsc::channel::<Recorded>(64);
+    let mut disp = ClusterDispatcher::new(pool_three_replicas(level));
+    for (i, reply) in replies.into_iter().enumerate() {
+        let (tx, rx) = mpsc::channel::<OutboundRequest>(8);
+        let idx = u32::try_from(i).unwrap();
+        spawn_replica(idx, reply, rx, rec_tx.clone());
+        disp = disp.with_peer_backend(idx, tx);
     }
-    assert!(
-        got_repair,
-        "expected a ReqForward SET hot v2 to peer 0 (divergent replica)"
-    );
-
-    // Cleanup: drop dispatcher senders -> replica RX closes ->
-    // tasks exit.
-    drop(disp);
-    let _ = tokio::time::timeout(Duration::from_secs(2), async {
-        let _ = h0.await;
-        let _ = h1.await;
-        let _ = h2.await;
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dc_quorum_get_unanimous_no_repair() {
-    let pool = pool_three_replicas();
-    let (peer0_tx, mut peer0_rx) = mpsc::channel::<OutboundRequest>(8);
-    let (peer1_tx, mut peer1_rx) = mpsc::channel::<OutboundRequest>(8);
-    let (peer2_tx, mut peer2_rx) = mpsc::channel::<OutboundRequest>(8);
-    let (recorded_tx, mut recorded_rx) = mpsc::channel::<(u32, DmsgType, Vec<u8>)>(64);
-    let h0 = spawn_fake_replica(0, Some(b"q".to_vec()), &mut peer0_rx, recorded_tx.clone());
-    let h1 = spawn_fake_replica(1, Some(b"q".to_vec()), &mut peer1_rx, recorded_tx.clone());
-    let h2 = spawn_fake_replica(2, Some(b"q".to_vec()), &mut peer2_rx, recorded_tx.clone());
-    drop(recorded_tx);
-
-    let disp = ClusterDispatcher::new(pool)
-        .with_peer_backend(0, peer0_tx)
-        .with_peer_backend(1, peer1_tx)
-        .with_peer_backend(2, peer2_tx);
-
+    drop(rec_tx);
     let (client_tx, mut client_rx) = mpsc::channel::<OutboundEnvelope>(4);
-    let req = build_get_req(11, b"k");
     let _ = disp.dispatch(req, client_tx);
-
-    let env = tokio::time::timeout(Duration::from_secs(2), client_rx.recv())
+    let env = tokio::time::timeout(Duration::from_secs(5), client_rx.recv())
         .await
         .expect("timeout")
         .expect("no reply");
+    let mut seen = Vec::new();
+    while let Ok(Some(r)) = tokio::time::timeout(Duration::from_millis(300), rec_rx.recv()).await {
+        seen.push(r);
+    }
     let bytes: Vec<u8> = env
         .rsp
         .mbufs()
         .iter()
         .flat_map(|b| b.readable().to_vec())
         .collect();
-    assert_eq!(bytes, b"$1\r\nq\r\n");
+    (bytes, seen)
+}
 
-    // Drain a brief window: there must be NO ReqForward SET on
-    // any peer.
-    let deadline = std::time::Instant::now() + Duration::from_millis(300);
-    while std::time::Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_millis(100), recorded_rx.recv()).await {
-            Ok(Some((_peer, ty, bytes))) => {
-                let upper: Vec<u8> = bytes.iter().map(u8::to_ascii_uppercase).collect();
-                let is_set = upper.windows(3).any(|w| w == b"SET");
-                let is_del = upper.windows(3).any(|w| w == b"DEL");
-                assert!(
-                    !(matches!(ty, DmsgType::ReqForward) && (is_set || is_del)),
-                    "no read-repair should fire when replicas agree"
-                );
-            }
-            Ok(None) => break,
-            Err(_) => {}
-        }
+fn is_script(bytes: &[u8]) -> bool {
+    ScriptRequest::decode(bytes).is_some()
+        && bytes
+            .windows(REPAIR_SCRIPT_CMD.len())
+            .any(|w| w == REPAIR_SCRIPT_CMD)
+}
+
+// One test owns the process-wide read-repair flag, so the phases run in
+// sequence.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn timestamp_read_repair() {
+    let ok = || encode_command(&["E", "1", "v"]);
+    set_read_repairs_enabled(true);
+
+    // DC_ONE: the gate is off and the SET is forwarded unchanged.
+    let set = request(1, &["SET", "k", "v"]);
+    let (_, seen) = run(ConsistencyLevel::DcOne, set, [ok(), ok(), ok()]).await;
+    assert!(!seen.is_empty());
+    assert!(seen
+        .iter()
+        .all(|(_, _, b)| b.as_slice() == encode_command(&["SET", "k", "v"])));
+
+    // DC_SAFE_QUORUM: every replica gets the repair-script SET.
+    let set = request(2, &["SET", "k", "v"]);
+    let (_, seen) = run(ConsistencyLevel::DcSafeQuorum, set, [ok(), ok(), ok()]).await;
+    assert_eq!(seen.len(), 3);
+    for (_, _, b) in &seen {
+        let s = ScriptRequest::decode(b).expect("repair script");
+        assert_eq!((s.script, s.key.as_slice()), (Some(Script::Set), &b"k"[..]));
+        assert_eq!(s.values, vec![b"v".to_vec()]);
     }
 
-    drop(disp);
-    let _ = tokio::time::timeout(Duration::from_secs(2), async {
-        let _ = h0.await;
-        let _ = h1.await;
-        let _ = h2.await;
-    })
+    // A read: replica 1 holds the newest value; the client gets it plain
+    // and replicas 0 and 2 get the add repair at its timestamp. The stale
+    // timestamps differ: a stale reply equal to an earlier maximum is not
+    // marked (see make.rs `equal_stale_reply_after_new_max_is_not_marked`),
+    // and arrival order is not fixed here.
+    let get = request(3, &["GET", "k"]);
+    let replies = [
+        ts_reply("E", 5, "old"),
+        ts_reply("E", 9, "new"),
+        ts_reply("E", 3, "older"),
+    ];
+    let (bytes, seen) = run(ConsistencyLevel::DcSafeQuorum, get, replies).await;
+    assert_eq!(bytes, b"$3\r\nnew\r\n");
+    let mut repaired: Vec<u32> = seen
+        .iter()
+        .filter_map(|(p, ty, b)| {
+            let s = ScriptRequest::decode(b)?;
+            (s.script == Some(Script::Set)).then(|| {
+                assert_eq!(*ty, DmsgType::ReqForward);
+                assert_eq!((s.ts, s.values.clone()), (9, vec![b"new".to_vec()]));
+                *p
+            })
+        })
+        .collect();
+    repaired.sort_unstable();
+    assert_eq!(repaired, vec![0, 2]);
+
+    // The freshest state is a delete: the stale replica is repaired by
+    // a delete, the client sees nil.
+    let get = request(4, &["GET", "k"]);
+    let r_nil = b"*3\r\n$1\r\nR\r\n$1\r\n9\r\n$-1\r\n".to_vec();
+    let replies = [r_nil.clone(), ts_reply("E", 5, "old"), r_nil];
+    let (bytes, seen) = run(ConsistencyLevel::DcSafeQuorum, get, replies).await;
+    assert_eq!(bytes, b"$-1\r\n");
+    let dels: Vec<u32> = seen
+        .iter()
+        .filter(|(_, _, b)| ScriptRequest::decode(b).is_some_and(|s| s.script == Some(Script::Del)))
+        .map(|(p, _, _)| *p)
+        .collect();
+    assert_eq!(dels, vec![1]);
+
+    // Equal timestamps: nothing to repair, the value is answered plain.
+    let get = request(5, &["HGET", "h", "f"]);
+    let same = || ts_reply("E", 7, "x");
+    let (bytes, seen) = run(
+        ConsistencyLevel::DcSafeQuorum,
+        get,
+        [same(), same(), same()],
+    )
     .await;
+    assert_eq!(bytes, b"$1\r\nx\r\n");
+    assert_eq!(seen.len(), 3, "no repair writes: {seen:?}");
+
+    // A delete answered by every replica is followed by its cleanup.
+    let del = request(6, &["SREM", "s", "m"]);
+    let (_, seen) = run(ConsistencyLevel::DcSafeQuorum, del, [ok(), ok(), ok()]).await;
+    let cleanups: Vec<ScriptRequest> = seen
+        .iter()
+        .filter_map(|(_, _, b)| ScriptRequest::decode(b))
+        .filter(|s| s.script == Some(Script::CleanupHdel))
+        .collect();
+    assert_eq!(cleanups.len(), 3);
+    assert!(cleanups.iter().all(|s| s.fields == vec![b"m".to_vec()]));
+    assert!(seen.iter().all(|(_, _, b)| is_script(b)));
+
+    set_read_repairs_enabled(false);
 }

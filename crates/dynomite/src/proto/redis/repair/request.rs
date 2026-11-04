@@ -765,6 +765,157 @@ mod tests {
     }
 
     #[test]
+    fn every_script_name_round_trips() {
+        for (script, name) in SCRIPTS {
+            assert_eq!(script.name(), name);
+            assert_eq!(Script::from_name(name), Some(script));
+        }
+    }
+
+    #[test]
+    fn from_request_needs_one_key_and_its_arguments() {
+        let mut two = Msg::new(1, MsgType::ReqRedisDel, true);
+        two.push_key(crate::msg::KeyPos::without_tag(b"a".to_vec()));
+        two.push_key(crate::msg::KeyPos::without_tag(b"b".to_vec()));
+        assert!(ScriptRequest::from_request(&two, 1).is_none());
+        let mut none = Msg::new(1, MsgType::ReqRedisGet, true);
+        assert!(ScriptRequest::from_request(&none, 1).is_none());
+        none.set_type(MsgType::ReqRedisLpush);
+        assert!(ScriptRequest::from_request(&none, 1).is_none());
+        // A field write with no value, a field read with no field.
+        for (ty, args) in [
+            (MsgType::ReqRedisHset, &[&b"f"[..]][..]),
+            (MsgType::ReqRedisSet, &[][..]),
+            (MsgType::ReqRedisHget, &[][..]),
+        ] {
+            let mut m = Msg::new(1, ty, true);
+            m.push_key(crate::msg::KeyPos::without_tag(b"k".to_vec()));
+            for a in args {
+                m.push_arg(crate::msg::keypos::ArgPos::new(a.to_vec()));
+            }
+            assert!(ScriptRequest::from_request(&m, 1).is_none(), "{ty:?}");
+        }
+    }
+
+    #[test]
+    fn decode_rejects_malformed_requests() {
+        let good = ScriptRequest::cleanup(Script::CleanupHdel, b"k", Some(b"f"), 3);
+        let mut words: Vec<Vec<u8>> = match parse_reply(&good.encode()) {
+            Some((Reply::Array(items), _)) => items
+                .into_iter()
+                .map(|r| match r {
+                    Reply::Bulk(Some(b)) => b,
+                    other => panic!("{other:?}"),
+                })
+                .collect(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(ScriptRequest::decode(&encode_command(&words)), Some(good));
+        let mut variants: Vec<Vec<u8>> = Vec::new();
+        for (i, bad) in [(2, &b"NOPE"[..]), (6, b"x"), (7, b"9"), (9, b"-1")] {
+            let mut w = words.clone();
+            w[i] = bad.to_vec();
+            variants.push(encode_command(&w));
+        }
+        let mut short = words.clone();
+        short.truncate(5);
+        variants.push(encode_command(&short));
+        words.push(b"extra".to_vec());
+        variants.push(encode_command(&words));
+        variants.push(b"*2\r\n$22\r\nDYNOMITE.REPAIR-SCRIPT\r\n:1\r\n".to_vec());
+        variants.push(b":1\r\n".to_vec());
+        variants.push([encode_command(&short), b"+".to_vec()].concat());
+        for v in variants {
+            assert!(ScriptRequest::decode(&v).is_none(), "{v:?}");
+        }
+    }
+
+    #[test]
+    fn run_reports_missing_arguments() {
+        let mut store = |_: &[&[u8]]| Reply::Bulk(None);
+        for script in [
+            Some(Script::Set),
+            Some(Script::Hget),
+            Some(Script::CleanupHdel),
+            None,
+        ] {
+            let req = ScriptRequest {
+                script,
+                ..ScriptRequest::default()
+            };
+            assert!(
+                matches!(req.run(&mut store), Err(Reply::Error(_))),
+                "{script:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_script_runs_from_a_parsed_command() {
+        for cmd in [
+            "SET k v",
+            "GET k",
+            "DEL k",
+            "HSET k f v",
+            "HDEL k f",
+            "HGET k f",
+            "ZADD k 1 m",
+            "SADD k a",
+        ] {
+            let req = ScriptRequest::from_request(&parsed(&encode_command(&words(cmd))), 4)
+                .expect("rewrite");
+            let mut store = |args: &[&[u8]]| match args[0] {
+                b"ZSCORE" | b"GET" | b"HGET" => Reply::Bulk(None),
+                _ => Reply::Integer(1),
+            };
+            assert!(req.run(&mut store).is_ok(), "{cmd}");
+        }
+        let mut store = |_: &[&[u8]]| Reply::Bulk(None);
+        let hdel = ScriptRequest::cleanup(Script::CleanupHdel, b"k", Some(b"f"), 2);
+        assert!(hdel.run(&mut store).is_ok());
+    }
+
+    #[test]
+    fn parse_reply_edge_cases() {
+        assert_eq!(parse_reply(b"*-1\r\n"), Some((Reply::Bulk(None), 5)));
+        assert_eq!(parse_reply(b"$-1\r\n"), Some((Reply::Bulk(None), 5)));
+        assert_eq!(
+            parse_reply(b"+OK\r\n"),
+            Some((Reply::Status(b"OK".to_vec()), 5))
+        );
+        assert_eq!(
+            parse_reply(b"-ERR x\r\n"),
+            Some((Reply::Error(b"ERR x".to_vec()), 8))
+        );
+        for bad in [
+            &b""[..],
+            b"+OK",
+            b"?x\r\n",
+            b":x\r\n",
+            b"$x\r\n",
+            b"$1\r\nab\r\n",
+            b"*x\r\n",
+            b"*2\r\n:1\r\n",
+        ] {
+            assert_eq!(parse_reply(bad), None, "{bad:?}");
+        }
+        let all = Reply::Array(vec![
+            Reply::Status(b"OK".to_vec()),
+            Reply::Error(b"E".to_vec()),
+            Reply::Integer(-3),
+            Reply::Bulk(None),
+            Reply::Bulk(Some(Vec::new())),
+            Reply::Array(Vec::new()),
+        ]);
+        let wire = encode_reply(&all);
+        assert_eq!(
+            wire,
+            b"*6\r\n+OK\r\n-E\r\n:-3\r\n$-1\r\n$0\r\n\r\n*0\r\n".to_vec()
+        );
+        assert_eq!(parse_reply(&wire), Some((all, wire.len())));
+    }
+
+    #[test]
     fn decode_rejects_other_commands_and_truncation() {
         assert!(ScriptRequest::decode(&encode_command(&[&b"GET"[..], b"k"])).is_none());
         let wire = ScriptRequest::cleanup(Script::CleanupHdel, b"k", Some(b"f"), 3).encode();

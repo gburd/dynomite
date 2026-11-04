@@ -9,8 +9,9 @@
 //!   (the `SMEMBERS -> SORT ALPHA` case under DC_SAFE_QUORUM).
 //! * [`rewrite::redis_rewrite_query_with_timestamp_md`] - rewrite
 //!   a write request into a Lua script that records timestamps.
-//! * [`make::redis_make_repair_query`] - build a repair message
-//!   when responses disagree.
+//! * [`make`] - pick the freshest timestamped read reply
+//!   ([`make::find_most_updated`]) and build the write that repairs the
+//!   stale replicas ([`make::repair_request`]).
 //! * [`clear::redis_clear_repair_md_for_key`] - emit a metadata
 //!   cleanup script after a delete completes.
 //! * [`logic`] - the timestamp bookkeeping each repair script

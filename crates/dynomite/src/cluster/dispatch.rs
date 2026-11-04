@@ -56,6 +56,8 @@ use crate::io::mbuf::MbufPool;
 use crate::msg::{ConsistencyLevel, Msg, MsgRouting, MsgType};
 use crate::net::dispatcher::{DispatchOutcome, Dispatcher, OutboundEnvelope, ServerSink};
 use crate::net::server::OutboundRequest;
+use crate::proto::redis::repair::make::{find_most_updated, repair_request, TsReply};
+use crate::proto::redis::repair::request::{cmd_info, Script, ScriptRequest};
 
 /// Process-global Prometheus-friendly counter of
 /// shadow-distribution disagreements. The dispatcher bumps this
@@ -1141,6 +1143,7 @@ impl Dispatcher for ClusterDispatcher {
             .unwrap_or_default();
         let plan = self.plan(&req, &key);
         let (req_span, _plan_span) = enter_plan_span(req.id(), &plan);
+        let script = self.repair_script(&req);
         match plan {
             DispatchPlan::Drop => DispatchOutcome::Drop,
             DispatchPlan::NoTargets => {
@@ -1185,11 +1188,10 @@ impl Dispatcher for ClusterDispatcher {
                     // chain. The chain is the original on-the-wire
                     // sequence the parser walked, so this is a
                     // faithful relay rather than a re-encode.
-                    let bytes: Vec<u8> = req
-                        .mbufs()
-                        .iter()
-                        .flat_map(|b| b.readable().to_vec())
-                        .collect();
+                    let bytes = script
+                        .as_ref()
+                        .map_or_else(|| msg_bytes(&req), ScriptRequest::encode);
+                    let responder = self.client_sink(script.as_ref(), req.ty(), responder);
                     if bytes.is_empty() {
                         // Parsed request with no replayable bytes
                         // (e.g. a synthetic `Msg`) - drop rather
@@ -1233,7 +1235,14 @@ impl Dispatcher for ClusterDispatcher {
             DispatchPlan::Replicas {
                 targets,
                 consistency,
-            } => self.dispatch_replicas(&req, &req_span, &targets, consistency, responder),
+            } => self.dispatch_replicas(
+                &req,
+                &req_span,
+                &targets,
+                consistency,
+                responder,
+                script.as_ref(),
+            ),
         }
     }
 }
@@ -1247,9 +1256,11 @@ impl ClusterDispatcher {
     /// spawns a coalescer task on the ambient tokio runtime; the
     /// task drains the per-target replies, picks one according
     /// to the consistency level, and forwards the chosen reply
-    /// to the original `responder`. Divergent replicas are
-    /// scheduled for read-repair writes via the same
-    /// `peer_backends` channels.
+    /// to the original `responder`. Under read repair
+    /// ([`ServerPool::is_read_repairs_enabled`]) `script` is the
+    /// repair-script form every target receives; replicas a
+    /// repairable read finds stale get a repair write via the same
+    /// channels.
     ///
     /// When [`hinted_handoff_active`](Self::hinted_handoff_active)
     /// reports true and the request is a write, targets that
@@ -1268,6 +1279,7 @@ impl ClusterDispatcher {
         targets: &[ReplicaTarget],
         consistency: ConsistencyLevel,
         responder: ServerSink,
+        script: Option<&ScriptRequest>,
     ) -> DispatchOutcome {
         if targets.is_empty() {
             return DispatchOutcome::Drop;
@@ -1275,11 +1287,7 @@ impl ClusterDispatcher {
         // Snapshot the wire bytes once. Each target gets its
         // own clone (the ServerConn / DnodeServerConn takes
         // ownership of `bytes`).
-        let bytes: Vec<u8> = req
-            .mbufs()
-            .iter()
-            .flat_map(|b| b.readable().to_vec())
-            .collect();
+        let bytes = script.map_or_else(|| msg_bytes(req), ScriptRequest::encode);
         if bytes.is_empty() {
             return DispatchOutcome::Drop;
         }
@@ -1293,6 +1301,7 @@ impl ClusterDispatcher {
         // Single-target path: no coalescing needed; forward
         // directly to the original responder.
         if targets.len() == 1 {
+            let responder = self.client_sink(script, req.ty(), responder);
             return self.dispatch_replicas_direct(
                 req,
                 req_span,
@@ -1318,18 +1327,12 @@ impl ClusterDispatcher {
         // per-target dispatch state.
         let target_pairs: Vec<(u32, String)> =
             targets.iter().map(|t| (t.peer_idx, t.dc.clone())).collect();
-        // Read repair context: the original primary key (single-
-        // key requests only) and the request type.
-        let repair_key: Option<Vec<u8>> = req
-            .keys()
-            .first()
-            .map(|kp| kp.tag_bytes().to_vec())
-            .filter(|k| !k.is_empty());
-        let repair_ctx = repair_key.map(|key| ReadRepairContext {
+        // Read repair context, for requests rewritten into a repair
+        // script.
+        let repair_ctx = script.map(|script| ReadRepairContext {
             req_id: req.id(),
             req_ty: req.ty(),
-            key,
-            mbuf_pool: self.mbuf_pool.clone(),
+            script: script.clone(),
             peer_backends: self.peer_backends.clone(),
             local_backend: self.backend.clone(),
             target_is_local: targets.iter().map(|t| (t.peer_idx, t.is_local)).collect(),
@@ -1384,6 +1387,53 @@ impl ClusterDispatcher {
             failure_metrics,
         ));
         DispatchOutcome::Pending
+    }
+
+    /// The repair script a client request is rewritten into: when read
+    /// repairs are on ([`ServerPool::is_read_repairs_enabled`]) and the
+    /// command has repair support, stamped with the current time in
+    /// milliseconds. Requests relayed by a peer are served as they came.
+    fn repair_script(&self, req: &Msg) -> Option<ScriptRequest> {
+        if req.dmsg().is_some()
+            || matches!(
+                self.pool.config().data_store,
+                crate::conf::DataStore::Memcache
+            )
+            || !self.pool.is_read_repairs_enabled()
+        {
+            return None;
+        }
+        cmd_info(req.ty())?;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        ScriptRequest::from_request(req, ts)
+    }
+
+    /// The sink a single replica's reply goes to: the client's, with the
+    /// repair metadata stripped from a rewritten repairable read.
+    fn client_sink(
+        &self,
+        script: Option<&ScriptRequest>,
+        ty: MsgType,
+        client: ServerSink,
+    ) -> ServerSink {
+        if script.is_none() || !cmd_info(ty).is_some_and(|i| i.is_repairable) {
+            return client;
+        }
+        let pool = self.mbuf_pool.clone();
+        let (tx, mut rx) = mpsc::channel::<OutboundEnvelope>(1);
+        tokio::spawn(async move {
+            while let Some(mut env) = rx.recv().await {
+                if let Some(r) = TsReply::parse(&msg_bytes(&env.rsp)) {
+                    env.rsp = plain_rsp(env.req_id, &r.client_reply(), &pool);
+                }
+                if client.send(env).await.is_err() {
+                    break;
+                }
+            }
+        });
+        tx
     }
 
     /// Capture the current `PeerState` for each target so the
@@ -1848,20 +1898,130 @@ fn first_bulk_token(req: &Msg) -> Option<Vec<u8>> {
     Some(wire[body_start..body_end].to_vec())
 }
 
-/// Context required to schedule read-repair writes once the
-/// coalescer has identified a winner and a divergent set.
+/// Context for a request rewritten into a repair script: the coalescer
+/// repairs stale replicas of a read and clears delete markers after a
+/// delete.
 #[derive(Clone)]
 struct ReadRepairContext {
     req_id: crate::core::types::MsgId,
     req_ty: MsgType,
-    /// Original primary key (single-key requests only). The v1
-    /// repair scheduler operates over single-key Redis reads;
-    /// multi-key fragmentation goes through a separate path.
-    key: Vec<u8>,
-    mbuf_pool: MbufPool,
+    /// The repair script the request was rewritten into.
+    script: ScriptRequest,
     peer_backends: std::collections::HashMap<u32, mpsc::Sender<OutboundRequest>>,
     local_backend: Option<mpsc::Sender<OutboundRequest>>,
     target_is_local: std::collections::HashMap<u32, bool>,
+}
+
+impl ReadRepairContext {
+    fn is_repairable_read(&self) -> bool {
+        cmd_info(self.req_ty).is_some_and(|i| i.is_repairable)
+    }
+
+    /// Repair the replicas whose reply is older than the freshest one
+    /// and return the client bytes of the first reply that is not stale.
+    /// `None` when nothing needed a repair or no repair could be built,
+    /// so the replies are compared as they are.
+    fn repair(&self, replies: &[(u32, TsReply)], span: &tracing::Span) -> Option<Vec<u8>> {
+        let ts: Vec<TsReply> = replies.iter().map(|(_, r)| r.clone()).collect();
+        let m = find_most_updated(&ts)?;
+        let fix = repair_request(&self.script, self.req_ty, &ts[m.winner], m.repair_by_add)?;
+        let bytes = fix.encode();
+        for ((peer_idx, _), stale) in replies.iter().zip(&m.needs_repair) {
+            if *stale {
+                self.send(*peer_idx, &bytes, span);
+            }
+        }
+        replies
+            .iter()
+            .zip(&m.needs_repair)
+            .find(|(_, stale)| !**stale)
+            .map(|((_, r), _)| r.client_reply())
+    }
+
+    /// Once every replica has answered a delete, drop its delete marker
+    /// on all of them.
+    fn cleanup(&self, span: &tracing::Span) {
+        if !cmd_info(self.req_ty).is_some_and(|i| i.is_delete) {
+            return;
+        }
+        let req = if self.req_ty == MsgType::ReqRedisDel {
+            ScriptRequest::cleanup(Script::CleanupDel, &self.script.key, None, self.script.ts)
+        } else {
+            let Some(field) = self.script.fields.first() else {
+                return;
+            };
+            ScriptRequest::cleanup(
+                Script::CleanupHdel,
+                &self.script.key,
+                Some(field),
+                self.script.ts,
+            )
+        };
+        let bytes = req.encode();
+        for &peer_idx in self.target_is_local.keys() {
+            self.send(peer_idx, &bytes, span);
+        }
+    }
+
+    /// Best-effort send to one replica; the reply is discarded. Tagged
+    /// `ReqForward` so a peer serves it on its own datastore.
+    fn send(&self, peer_idx: u32, bytes: &[u8], span: &tracing::Span) {
+        let env = OutboundRequest {
+            bytes: bytes.to_vec(),
+            req_id: self.req_id,
+            responder: repair_sink(),
+            span: span.clone(),
+            ty: crate::proto::dnode::DmsgType::ReqForward,
+            target_peer_idx: Some(peer_idx),
+        };
+        let is_local = self
+            .target_is_local
+            .get(&peer_idx)
+            .copied()
+            .unwrap_or(false);
+        let sent = if is_local {
+            self.local_backend
+                .as_ref()
+                .is_some_and(|tx| tx.try_send(env).is_ok())
+        } else {
+            self.peer_backends
+                .get(&peer_idx)
+                .is_some_and(|tx| tx.try_send(env).is_ok())
+        };
+        tracing::debug!(
+            target: "dynomite::read_repair",
+            req_id = self.req_id,
+            peer_idx,
+            sent,
+            "repair-script write",
+        );
+    }
+}
+
+/// The quorum-unreachable error reply for a request.
+fn no_quorum_rsp(
+    req_id: crate::core::types::MsgId,
+    req_ty: MsgType,
+    data_store: crate::conf::DataStore,
+    pool: &MbufPool,
+) -> Msg {
+    let anchor = Msg::new(req_id, req_ty, true);
+    crate::msg::response::make_error(
+        &anchor,
+        error_rsp_type(data_store),
+        0,
+        crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
+        pool,
+    )
+}
+
+/// A reply message holding `bytes`, typed by the response parser.
+fn plain_rsp(req_id: crate::core::types::MsgId, bytes: &[u8], pool: &MbufPool) -> Msg {
+    let mut rsp = Msg::new(req_id, MsgType::Unknown, false);
+    let _ = crate::proto::redis::redis_parse_rsp(&mut rsp, bytes);
+    rsp.set_parent_id(req_id);
+    rsp.append_bytes(pool, bytes);
+    rsp
 }
 
 /// Give a replica reply its type and error flag before it votes.
@@ -1927,64 +2087,67 @@ async fn coalesce_actor(
     failure_metrics: Option<Arc<crate::stats::FailureMetrics>>,
 ) {
     use crate::proto::redis::{CoalesceOutcome, CoalesceTracker};
+    let total = targets.len();
     let mut tracker = CoalesceTracker::new(req_id, consistency, targets, &local_dc);
     let mut emitted = false;
+    let ts_read = repair_ctx
+        .as_ref()
+        .is_some_and(ReadRepairContext::is_repairable_read);
+    // Replies to a rewritten repairable read, in arrival order; each
+    // votes with its metadata stripped.
+    let mut ts_replies: Vec<(u32, TsReply)> = Vec::new();
+    let mut replied = 0usize;
+    let mut good = 0usize;
     while let Some(env) = intermediate_rx.recv().await {
         let source = env.source_peer_idx.unwrap_or(u32::MAX);
         let span = env.span.clone();
         let mut rsp = env.rsp;
+        replied += 1;
+        if ts_read {
+            if let Some(r) = TsReply::parse(&msg_bytes(&rsp)) {
+                rsp = plain_rsp(req_id, &r.client_reply(), &mbuf_pool);
+                ts_replies.push((source, r));
+            }
+        }
         classify_reply(&mut rsp, data_store);
+        if !rsp.flags().is_error {
+            good += 1;
+        }
         let outcome = tracker.record_reply(source, rsp);
-        match outcome {
-            CoalesceOutcome::Pending => {}
-            CoalesceOutcome::Ready {
-                winner,
-                divergent_targets,
-            } => {
-                if !emitted {
-                    let winner_bytes: Vec<u8> = winner
-                        .mbufs()
-                        .iter()
-                        .flat_map(|b| b.readable().to_vec())
-                        .collect();
-                    let out_env = OutboundEnvelope {
-                        req_id,
-                        rsp: *winner,
-                        span: span.clone(),
-                        source_peer_idx: None,
-                    };
-                    let _ = client_tx.send(out_env).await;
-                    emitted = true;
-                    if !divergent_targets.is_empty() {
-                        if let Some(ctx) = repair_ctx.as_ref() {
-                            schedule_read_repair(ctx, &divergent_targets, &winner_bytes, &span);
-                        }
-                    }
-                }
+        let fresh = match (&outcome, repair_ctx.as_ref()) {
+            (CoalesceOutcome::Ready { .. } | CoalesceOutcome::Error(_), Some(ctx))
+                if ts_read && !emitted =>
+            {
+                ctx.repair(&ts_replies, &span)
             }
+            _ => None,
+        };
+        // Delete markers are dropped only once every replica deleted.
+        if replied == total && good == total {
+            if let Some(ctx) = repair_ctx.as_ref() {
+                ctx.cleanup(&span);
+            }
+        }
+        let to_client = match outcome {
+            CoalesceOutcome::Pending => None,
+            CoalesceOutcome::Ready { winner, .. } => Some(*winner),
             CoalesceOutcome::Error(reason) => {
-                if !emitted {
-                    let err_type = error_rsp_type(data_store);
-                    let anchor = Msg::new(req_id, req_ty, true);
-                    let rsp = crate::msg::response::make_error(
-                        &anchor,
-                        err_type,
-                        0,
-                        crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
-                        &mbuf_pool,
-                    );
-                    let _ = client_tx
-                        .send(OutboundEnvelope {
-                            req_id,
-                            rsp,
-                            span: span.clone(),
-                            source_peer_idx: None,
-                        })
-                        .await;
-                    emitted = true;
-                }
                 tracing::debug!(target: "dynomite::coalesce", req_id, reason = %reason, "coalesce error");
+                Some(no_quorum_rsp(req_id, req_ty, data_store, &mbuf_pool))
             }
+        };
+        if let (Some(rsp), false) = (to_client, emitted) {
+            // The freshest timestamped reply answers a repaired read.
+            let rsp = fresh.map_or(rsp, |b| plain_rsp(req_id, &b, &mbuf_pool));
+            let _ = client_tx
+                .send(OutboundEnvelope {
+                    req_id,
+                    rsp,
+                    span: span.clone(),
+                    source_peer_idx: None,
+                })
+                .await;
+            emitted = true;
         }
     }
     if !emitted {
@@ -1997,15 +2160,7 @@ async fn coalesce_actor(
         if let Some(m) = failure_metrics.as_ref() {
             m.record_response_timeout(consistency);
         }
-        let err_type = error_rsp_type(data_store);
-        let anchor = Msg::new(req_id, req_ty, true);
-        let rsp = crate::msg::response::make_error(
-            &anchor,
-            err_type,
-            0,
-            crate::msg::DynErrorCode::DynomiteNoQuorumAchieved,
-            &mbuf_pool,
-        );
+        let rsp = no_quorum_rsp(req_id, req_ty, data_store, &mbuf_pool);
         let _ = client_tx
             .send(OutboundEnvelope {
                 req_id,
@@ -2028,39 +2183,6 @@ fn repair_sink() -> ServerSink {
         }
     });
     tx
-}
-
-/// Decode a winning RESP reply into the bytes we want to write
-/// back to divergent replicas.
-///
-/// Returns `Some(bytes)` for a bulk-string winner (we ship a
-/// `SET key value` to the divergent replica) or for a nil reply
-/// (we ship a `DEL key`). Returns `None` for any other shape
-/// (errors, integers, multibulk, ...) since the v1 repair
-/// scheduler only handles single-bulk Redis GET-style winners.
-fn decode_winner_for_repair(payload: &[u8]) -> Option<RepairAction> {
-    if payload == b"$-1\r\n" {
-        return Some(RepairAction::Delete);
-    }
-    if !payload.starts_with(b"$") {
-        return None;
-    }
-    // `$<len>\r\n<value>\r\n`
-    let crlf = payload.iter().position(|&b| b == b'\r')?;
-    if payload.get(crlf + 1).copied() != Some(b'\n') {
-        return None;
-    }
-    let len_str = std::str::from_utf8(&payload[1..crlf]).ok()?;
-    let len: usize = len_str.parse().ok()?;
-    let body_start = crlf + 2;
-    let body_end = body_start.checked_add(len)?;
-    if payload.len() < body_end + 2 {
-        return None;
-    }
-    if &payload[body_end..body_end + 2] != b"\r\n" {
-        return None;
-    }
-    Some(RepairAction::Write(payload[body_start..body_end].to_vec()))
 }
 
 /// Bundle of handoff state passed into
@@ -2093,117 +2215,9 @@ enum TargetAction {
 /// for hinted handoff. Mismatched-shape writes (DEL with one
 /// hinted target) coalesce to the surviving real reply via the
 /// plurality / quorum branch and the divergence is harmless
-/// because read-repair only fires for `MsgType::ReqRedisGet`.
+/// because read repair acts only on timestamped read replies.
 fn synth_hint_reply(req: &Msg, pool: &MbufPool) -> Msg {
     crate::msg::response::make_simple_redis(req, pool, b"+OK\r\n")
-}
-
-/// Action a read-repair task should take against a divergent
-/// replica.
-enum RepairAction {
-    /// Ship `SET key <bytes>` to overwrite the stale value.
-    Write(Vec<u8>),
-    /// Ship `DEL key` to drop the stale value (winning reply
-    /// was a nil bulk).
-    Delete,
-}
-
-/// Build the wire bytes for a Redis repair write.
-fn build_repair_bytes(action: &RepairAction, key: &[u8]) -> Vec<u8> {
-    match action {
-        RepairAction::Write(value) => {
-            let mut out = Vec::with_capacity(key.len() + value.len() + 32);
-            out.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$");
-            out.extend_from_slice(key.len().to_string().as_bytes());
-            out.extend_from_slice(b"\r\n");
-            out.extend_from_slice(key);
-            out.extend_from_slice(b"\r\n$");
-            out.extend_from_slice(value.len().to_string().as_bytes());
-            out.extend_from_slice(b"\r\n");
-            out.extend_from_slice(value);
-            out.extend_from_slice(b"\r\n");
-            out
-        }
-        RepairAction::Delete => {
-            let mut out = Vec::with_capacity(key.len() + 24);
-            out.extend_from_slice(b"*2\r\n$3\r\nDEL\r\n$");
-            out.extend_from_slice(key.len().to_string().as_bytes());
-            out.extend_from_slice(b"\r\n");
-            out.extend_from_slice(key);
-            out.extend_from_slice(b"\r\n");
-            out
-        }
-    }
-}
-
-/// Schedule fire-and-forget read-repair writes to every
-/// divergent target. The function only awaits a bounded mpsc
-/// permit; it never blocks for the repair to complete or for
-/// the divergent replica to ack.
-///
-/// The repair shape is decoded from `winner_bytes`:
-///
-/// * Bulk-string winner -> `SET key <value>`.
-/// * Nil bulk winner -> `DEL key`.
-/// * Anything else -> skipped (entropy reconciliation will
-///   handle it later). This v1 limitation is documented in the
-///   dispatcher tests and in `docs/parity.md`.
-///
-/// Repair writes are tagged with `DmsgType::ReqForward` so the
-/// receiving peer's `dnode_client_loop` rewrites the parsed
-/// request's routing tag to `LocalNodeOnly`, preventing a
-/// recursive multi-replica fan-out at the divergent peer.
-fn schedule_read_repair(
-    ctx: &ReadRepairContext,
-    divergent: &[u32],
-    winner_bytes: &[u8],
-    span: &tracing::Span,
-) {
-    if !matches!(ctx.req_ty, MsgType::ReqRedisGet) {
-        return;
-    }
-    let Some(action) = decode_winner_for_repair(winner_bytes) else {
-        return;
-    };
-    let bytes = build_repair_bytes(&action, &ctx.key);
-    let sink = repair_sink();
-    for &peer_idx in divergent {
-        let is_local = ctx.target_is_local.get(&peer_idx).copied().unwrap_or(false);
-        let env = OutboundRequest {
-            bytes: bytes.clone(),
-            req_id: ctx.req_id,
-            responder: sink.clone(),
-            span: span.clone(),
-            ty: crate::proto::dnode::DmsgType::ReqForward,
-            target_peer_idx: Some(peer_idx),
-        };
-        let sent = if is_local {
-            ctx.local_backend
-                .as_ref()
-                .is_some_and(|tx| tx.try_send(env).is_ok())
-        } else {
-            ctx.peer_backends
-                .get(&peer_idx)
-                .is_some_and(|tx| tx.try_send(env).is_ok())
-        };
-        if sent {
-            let _ = &ctx.mbuf_pool;
-            tracing::debug!(
-                target: "dynomite::read_repair",
-                req_id = ctx.req_id,
-                peer_idx,
-                bytes = bytes.len(),
-                "scheduled read-repair write",
-            );
-        } else {
-            tracing::debug!(
-                target: "dynomite::read_repair",
-                req_id = ctx.req_id,
-                peer_idx,
-                "read-repair drop: backend channel unavailable or full",
-            );
-        }
-    }
 }
 
 #[cfg(test)]
