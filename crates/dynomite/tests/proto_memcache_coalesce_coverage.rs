@@ -1,5 +1,5 @@
 //! Branch coverage for the Memcached response-shaping helpers:
-//! `multikey`, `coalesce` (pre/post), and `verify`.
+//! `multikey`, `verify`, and `fragment` edge arms.
 //!
 //! These modules hold the data-shape side of multi-key request
 //! handling. The mbuf-level wiring lives in the connection FSM and is
@@ -7,12 +7,11 @@
 //! arm of the pure helpers offline.
 
 use dynomite::io::mbuf::MbufPool;
-use dynomite::msg::{DynErrorCode, KeyPos, Msg, MsgType};
+use dynomite::msg::{KeyPos, Msg, MsgType};
 use dynomite::proto::memcache::fragment::FragmentError;
 use dynomite::proto::memcache::verify::VerifyError;
 use dynomite::proto::memcache::{
-    memcache_fragment, memcache_is_multikey_request, memcache_post_coalesce, memcache_pre_coalesce,
-    memcache_verify_request, FragmentDispatcher,
+    memcache_fragment, memcache_is_multikey_request, memcache_verify_request, FragmentDispatcher,
 };
 
 // -------------------------------------------------------------
@@ -33,92 +32,6 @@ fn multikey_is_always_false() {
     ] {
         assert!(!memcache_is_multikey_request(ty));
     }
-}
-
-// -------------------------------------------------------------
-// pre_coalesce: the four reachable arms.
-// -------------------------------------------------------------
-
-#[test]
-fn pre_coalesce_ignores_requests() {
-    // A request short-circuits at the is_request guard with no
-    // mutation.
-    let mut req = Msg::new(0, MsgType::ReqMcGet, true);
-    req.set_frag_id(5);
-    memcache_pre_coalesce(&mut req);
-    assert!(!req.flags().is_error);
-}
-
-#[test]
-fn pre_coalesce_ignores_zero_frag_id() {
-    // A non-fragmented response (frag_id == 0) returns early.
-    let mut rsp = Msg::new(0, MsgType::RspMcEnd, false);
-    assert_eq!(rsp.frag_id(), 0);
-    memcache_pre_coalesce(&mut rsp);
-    assert!(!rsp.flags().is_error);
-}
-
-#[test]
-fn pre_coalesce_value_and_end_are_clean() {
-    // VALUE and END shard responses on a fragmented request are the
-    // expected shapes: no error is flagged (the END-drop is the
-    // FSM's job).
-    for ty in [MsgType::RspMcValue, MsgType::RspMcEnd] {
-        let mut rsp = Msg::new(0, ty, false);
-        rsp.set_frag_id(7);
-        memcache_pre_coalesce(&mut rsp);
-        assert!(!rsp.flags().is_error, "type {ty:?}");
-    }
-}
-
-#[test]
-fn pre_coalesce_unexpected_shape_flags_error() {
-    // Any other response type on a fragmented request is a protocol
-    // error: the message is flagged with BadFormat.
-    let mut rsp = Msg::new(0, MsgType::RspMcStored, false);
-    rsp.set_frag_id(7);
-    memcache_pre_coalesce(&mut rsp);
-    assert!(rsp.flags().is_error);
-    assert_eq!(rsp.dyn_error_code(), DynErrorCode::BadFormat);
-}
-
-// -------------------------------------------------------------
-// post_coalesce: the three reachable arms.
-// -------------------------------------------------------------
-
-#[test]
-fn post_coalesce_ignores_responses() {
-    // A response short-circuits at the !is_request guard.
-    let mut rsp = Msg::new(0, MsgType::RspMcEnd, false);
-    memcache_post_coalesce(&mut rsp);
-    assert!(!rsp.flags().done);
-}
-
-#[test]
-fn post_coalesce_clean_request_marks_done() {
-    // A clean parent request is marked done after every shard reply.
-    let mut req = Msg::new(0, MsgType::ReqMcGet, true);
-    memcache_post_coalesce(&mut req);
-    assert!(req.flags().done);
-}
-
-#[test]
-fn post_coalesce_errored_request_stays_not_done() {
-    // An errored parent request is left to the connection-coupled
-    // path; it is not marked done here.
-    let mut req = Msg::new(0, MsgType::ReqMcGet, true);
-    req.set_is_error(true);
-    memcache_post_coalesce(&mut req);
-    assert!(!req.flags().done);
-}
-
-#[test]
-fn post_coalesce_ferror_request_stays_not_done() {
-    // The is_ferror arm of the error guard also skips set_done.
-    let mut req = Msg::new(0, MsgType::ReqMcGet, true);
-    req.flags_mut().is_ferror = true;
-    memcache_post_coalesce(&mut req);
-    assert!(!req.flags().done);
 }
 
 // -------------------------------------------------------------

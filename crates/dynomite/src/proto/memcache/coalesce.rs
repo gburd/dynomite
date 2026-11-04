@@ -1,89 +1,12 @@
-//! Memcached response coalescing helpers.
+//! Memcached response coalescing for split `get` / `gets` requests.
 //!
-//! When a `get` / `gets` request fans out across shards, the
-//! per-shard responses need to be stitched back into a single
-//! reply. Two helpers handle this: `memcache_pre_coalesce` adjusts
-//! each shard response in place to drop the `END` marker, and
-//! `memcache_post_coalesce` concatenates the per-shard payloads and
-//! appends a single trailing `END\r\n`.
-//!
-//! These helpers cover the data-shape side; the mbuf-level wiring
-//! the reactor needs lives in the connection FSM in [`crate::net`].
-
-use crate::msg::{Msg, MsgType};
-
-/// Adjust `rsp` in place ahead of post-coalesce.
-///
-/// For `VALUE` and `END` shard responses, the helper records that
-/// the trailing `END` marker should be dropped during merge. For
-/// any other response on a fragmented request the helper flags the
-/// parent request as errored.
-///
-/// # Examples
-///
-/// ```
-/// use dynomite::msg::{Msg, MsgType};
-/// use dynomite::proto::memcache::memcache_pre_coalesce;
-///
-/// let mut rsp = Msg::new(0, MsgType::RspMcEnd, false);
-/// rsp.set_frag_id(1);
-/// memcache_pre_coalesce(&mut rsp);
-/// // No mbuf side-effects in the data-shape path; the function
-/// // returns without panicking.
-/// ```
-pub fn memcache_pre_coalesce(rsp: &mut Msg) {
-    if rsp.is_request() {
-        return;
-    }
-    if rsp.frag_id() == 0 {
-        return;
-    }
-    match rsp.ty() {
-        MsgType::RspMcValue | MsgType::RspMcEnd => {
-            // The trailing END marker is dropped from the
-            // response chain by the connection FSM, which owns the
-            // mbuf chain mutation; the data-shape side just records
-            // the intent via the existing `end_marker` field.
-            // No-op here: the parser already populated `end_marker`.
-        }
-        _ => {
-            rsp.set_is_error(true);
-            rsp.set_dyn_error_code(crate::msg::DynErrorCode::BadFormat);
-        }
-    }
-}
-
-/// Post-coalesce hook for the parent request once every shard
-/// response has arrived.
-///
-/// This concatenates each shard's value
-/// payload onto the parent response and writes a single trailing
-/// `END\r\n`. The data-shape side is to flag the parent request
-/// as fully done; the mbuf-level concatenation is done by the
-/// connection FSM.
-///
-/// # Examples
-///
-/// ```
-/// use dynomite::msg::{Msg, MsgType};
-/// use dynomite::proto::memcache::memcache_post_coalesce;
-///
-/// let mut req = Msg::new(0, MsgType::ReqMcGet, true);
-/// memcache_post_coalesce(&mut req);
-/// // The data-shape path is a no-op when there are no fragments
-/// // attached.
-/// ```
-pub fn memcache_post_coalesce(request: &mut Msg) {
-    if !request.is_request() {
-        return;
-    }
-    if request.flags().is_error || request.flags().is_ferror {
-        // The owner connection is marked as errored by the
-        // connection-coupled path in [`crate::net`].
-        return;
-    }
-    request.set_done(true);
-}
+//! When a retrieval fans out across the owners of the local rack, the
+//! per-owner replies are stitched back into a single reply:
+//! [`memcache_pre_coalesce`] checks each fragment reply and drops its
+//! `END` marker, and [`memcache_post_coalesce`] takes each key's `VALUE`
+//! block in client key order and appends a single trailing `END\r\n`.
+//! [`memcache_coalesce_fragments`] runs both and is what the dispatcher
+//! calls.
 
 /// The reply a client gets when any fragment of a split retrieval failed:
 /// the generic server error built from the parent's (zero) error codes.
@@ -134,11 +57,53 @@ pub fn memcache_copy_bulk(dst: &mut Vec<u8>, src: &[u8]) -> Option<usize> {
     Some(total)
 }
 
-/// One fragment reply with its `END` marker stripped; `None` unless the
-/// reply is `VALUE` blocks or a bare `END`.
-fn fragment_body(reply: &[u8]) -> Option<&[u8]> {
+/// One fragment reply with its `END` marker dropped.
+///
+/// `None` unless the reply is `VALUE` blocks followed by `END`, or a bare
+/// `END`: any other reply to a fragment is an error for the whole request.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::proto::memcache::memcache_pre_coalesce;
+///
+/// assert_eq!(memcache_pre_coalesce(b"VALUE a 0 1\r\nA\r\nEND\r\n"), Some(&b"VALUE a 0 1\r\nA\r\n"[..]));
+/// assert_eq!(memcache_pre_coalesce(b"END\r\n"), Some(&b""[..]));
+/// assert_eq!(memcache_pre_coalesce(b"SERVER_ERROR oom\r\n"), None);
+/// ```
+#[must_use]
+pub fn memcache_pre_coalesce(reply: &[u8]) -> Option<&[u8]> {
     let body = reply.strip_suffix(b"END\r\n")?;
     (body.is_empty() || body.starts_with(b"VALUE ")).then_some(body)
+}
+
+/// Build the client reply from the fragment bodies left by
+/// [`memcache_pre_coalesce`]: every key in client order takes the next
+/// `VALUE` block of its fragment `frag_for_key[i]` (a miss takes
+/// nothing), then `END\r\n`. `None` when a key names no fragment or a
+/// block is malformed.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::proto::memcache::memcache_post_coalesce;
+///
+/// let bodies: [&[u8]; 2] = [b"VALUE a 0 1\r\nA\r\n", b""];
+/// assert_eq!(
+///     memcache_post_coalesce(&[1, 0], &bodies).unwrap(),
+///     b"VALUE a 0 1\r\nA\r\nEND\r\n"
+/// );
+/// ```
+#[must_use]
+pub fn memcache_post_coalesce(frag_for_key: &[usize], bodies: &[&[u8]]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut cursor = vec![0usize; bodies.len()];
+    for &f in frag_for_key {
+        let at = cursor.get_mut(f)?;
+        *at += memcache_copy_bulk(&mut out, bodies.get(f)?.get(*at..)?)?;
+    }
+    out.extend_from_slice(b"END\r\n");
+    Some(out)
 }
 
 /// Merge the replies to the fragments of a split `get` / `gets` into the
@@ -169,28 +134,11 @@ fn fragment_body(reply: &[u8]) -> Option<&[u8]> {
 /// ```
 #[must_use]
 pub fn memcache_coalesce_fragments(frag_for_key: &[usize], replies: &[Option<Vec<u8>>]) -> Vec<u8> {
-    let err = || MEMCACHE_FRAGMENT_ERROR_REPLY.to_vec();
-    let mut bodies: Vec<&[u8]> = Vec::with_capacity(replies.len());
-    for reply in replies {
-        match reply.as_deref().and_then(fragment_body) {
-            Some(b) => bodies.push(b),
-            None => return err(),
-        }
-    }
-    let mut out = Vec::new();
-    let mut cursor = vec![0usize; bodies.len()];
-    for &f in frag_for_key {
-        let (Some(body), Some(at)) = (bodies.get(f), cursor.get_mut(f)) else {
-            return err();
-        };
-        match body
-            .get(*at..)
-            .and_then(|rest| memcache_copy_bulk(&mut out, rest))
-        {
-            Some(n) => *at += n,
-            None => return err(),
-        }
-    }
-    out.extend_from_slice(b"END\r\n");
-    out
+    let bodies: Option<Vec<&[u8]>> = replies
+        .iter()
+        .map(|r| r.as_deref().and_then(memcache_pre_coalesce))
+        .collect();
+    bodies
+        .and_then(|b| memcache_post_coalesce(frag_for_key, &b))
+        .unwrap_or_else(|| MEMCACHE_FRAGMENT_ERROR_REPLY.to_vec())
 }
