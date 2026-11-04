@@ -42,11 +42,11 @@ fn replica_view(store: &mut optest::resp::Client, key: &str) -> String {
             format!("{:?}", store.cmd(&["GET", key]).expect("GET"))
         }
         Value::Simple(t) if t == "hash" => {
-            let mut v = match store.cmd(&["HGETALL", key]).expect("HGETALL") {
-                Value::Array(Some(v)) => v,
+            let all = match store.cmd(&["HGETALL", key]).expect("HGETALL") {
+                Value::Array(Some(all)) => all,
                 other => panic!("HGETALL {other:?}"),
             };
-            let mut pairs: Vec<String> = v.chunks_mut(2).map(|p| format!("{:?}", p)).collect();
+            let mut pairs: Vec<String> = all.chunks(2).map(|pair| format!("{pair:?}")).collect();
             pairs.sort();
             pairs.join(",")
         }
@@ -97,19 +97,19 @@ fn concurrent_writers_converge_after_repairing_reads() {
         let strings = ["s1", "s2"];
         let hashes = ["h1", "h2"];
         std::thread::scope(|scope| {
-            for (w, node) in c.nodes.iter().enumerate() {
+            for (writer, node) in c.nodes.iter().enumerate() {
                 scope.spawn(move || {
                     let mut cl = node.client(T).expect("connect");
-                    for i in 0..60 {
-                        let v = format!("w{w}i{i}");
-                        let s = strings[(w + i) % 2];
-                        let h = hashes[(w + i) % 2];
-                        let f = ["f1", "f2"][i % 2];
-                        let cmd: Vec<&str> = match (w + i) % 4 {
-                            0 => vec!["SET", s, &v],
-                            1 => vec!["DEL", s],
-                            2 => vec!["HSET", h, f, &v],
-                            _ => vec!["HDEL", h, f],
+                    for step in 0..60 {
+                        let value = format!("w{writer}i{step}");
+                        let string = strings[(writer + step) % 2];
+                        let hash = hashes[(writer + step) % 2];
+                        let field = ["f1", "f2"][step % 2];
+                        let cmd: Vec<&str> = match (writer + step) % 4 {
+                            0 => vec!["SET", string, &value],
+                            1 => vec!["DEL", string],
+                            2 => vec!["HSET", hash, field, &value],
+                            _ => vec!["HDEL", hash, field],
                         };
                         let _ = cl.cmd(&cmd);
                     }
