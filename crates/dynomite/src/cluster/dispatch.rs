@@ -207,7 +207,7 @@ pub struct ClusterDispatcher {
     /// backend). When set, requests for the local node are
     /// encoded onto the wire and shipped to the [`crate::net::ServerConn`]
     /// task that drives the redis / memcache backend.
-    backend: Option<mpsc::Sender<OutboundRequest>>,
+    backend: Option<LocalBackend>,
     /// Per-peer outbound channel for cross-DC fan-out. Keyed by
     /// `Peer::idx`. When a `DispatchPlan::Replicas` plan names a
     /// non-local peer, the dispatcher forwards via the matching
@@ -255,6 +255,116 @@ pub struct ClusterDispatcher {
     /// `ServerHandle::inject_request` uses. When `None`, the
     /// backend byte channel is used (the standalone proxy path).
     local_datastore: Option<Arc<dyn crate::embed::hooks::Datastore>>,
+}
+
+/// What the node's own state allows for a request bound for its local
+/// datastore.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalGate {
+    /// Send it, and everything held ahead of it, now.
+    Send,
+    /// Send it only when nothing is held ahead of it; otherwise hold it
+    /// behind the earlier requests.
+    SendIfIdle,
+    /// Accept it but hold it unsent until a request arrives under
+    /// [`DynState::Resuming`](crate::cluster::pool::DynState::Resuming).
+    Hold,
+    /// Refuse it with `DynomiteInvalidState`.
+    Refuse,
+}
+
+/// The local-datastore gate for a request in node state `state`: NORMAL
+/// sends when nothing is held ahead; STANDBY refuses everything;
+/// WRITES_ONLY refuses reads and holds writes; RESUMING refuses reads and
+/// sends writes together with whatever was held; any other state
+/// (JOINING, INIT, ...) holds the request.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::cluster::dispatch::{local_gate, LocalGate};
+/// use dynomite::cluster::pool::DynState;
+/// assert_eq!(local_gate(DynState::Normal, true), LocalGate::SendIfIdle);
+/// assert_eq!(local_gate(DynState::Standby, false), LocalGate::Refuse);
+/// assert_eq!(local_gate(DynState::WritesOnly, true), LocalGate::Refuse);
+/// assert_eq!(local_gate(DynState::WritesOnly, false), LocalGate::Hold);
+/// assert_eq!(local_gate(DynState::Resuming, false), LocalGate::Send);
+/// assert_eq!(local_gate(DynState::Joining, true), LocalGate::Hold);
+/// ```
+#[must_use]
+pub fn local_gate(state: crate::cluster::pool::DynState, is_read: bool) -> LocalGate {
+    use crate::cluster::pool::DynState;
+    match state {
+        DynState::Normal => LocalGate::SendIfIdle,
+        DynState::Standby => LocalGate::Refuse,
+        DynState::WritesOnly | DynState::Resuming if is_read => LocalGate::Refuse,
+        DynState::Resuming => LocalGate::Send,
+        _ => LocalGate::Hold,
+    }
+}
+
+/// Why [`LocalBackend::send`] did not hand a request on.
+#[derive(Debug)]
+enum LocalSendError {
+    /// The node's state refuses it ([`LocalGate::Refuse`]).
+    Refused,
+    /// The backend channel is full or closed.
+    Channel(tokio::sync::mpsc::error::TrySendError<OutboundRequest>),
+}
+
+/// The local datastore's request channel behind the node-state gate.
+/// Requests the gate holds wait here, oldest first, until a request
+/// arrives under RESUMING; every clone shares the queue, so it is per
+/// node.
+#[derive(Clone)]
+struct LocalBackend {
+    tx: mpsc::Sender<OutboundRequest>,
+    held: Arc<parking_lot::Mutex<std::collections::VecDeque<OutboundRequest>>>,
+}
+
+impl LocalBackend {
+    fn new(tx: mpsc::Sender<OutboundRequest>) -> Self {
+        Self {
+            tx,
+            held: Arc::default(),
+        }
+    }
+
+    /// Hand `env` on as `pool`'s state allows ([`local_gate`]). A send
+    /// under RESUMING first flushes the held requests in order, as far as
+    /// the channel has room; whatever does not fit stays held, ahead of
+    /// `env`.
+    fn send(
+        &self,
+        pool: &ServerPool,
+        env: OutboundRequest,
+        is_read: bool,
+    ) -> Result<(), LocalSendError> {
+        use tokio::sync::mpsc::error::TrySendError;
+        let mut held = self.held.lock();
+        match local_gate(pool.local_state(), is_read) {
+            LocalGate::Refuse => Err(LocalSendError::Refused),
+            LocalGate::SendIfIdle if held.is_empty() => {
+                self.tx.try_send(env).map_err(LocalSendError::Channel)
+            }
+            LocalGate::Hold | LocalGate::SendIfIdle => {
+                held.push_back(env);
+                Ok(())
+            }
+            LocalGate::Send => {
+                while let Some(h) = held.pop_front() {
+                    if let Err(TrySendError::Full(h) | TrySendError::Closed(h)) =
+                        self.tx.try_send(h)
+                    {
+                        held.push_front(h);
+                        held.push_back(env);
+                        return Ok(());
+                    }
+                }
+                self.tx.try_send(env).map_err(LocalSendError::Channel)
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for ClusterDispatcher {
@@ -353,7 +463,7 @@ impl ClusterDispatcher {
     /// the same channel are fine.
     #[must_use]
     pub fn with_backend(mut self, backend: mpsc::Sender<OutboundRequest>) -> Self {
-        self.backend = Some(backend);
+        self.backend = Some(LocalBackend::new(backend));
         self
     }
 
@@ -791,7 +901,13 @@ fn collect_routable(
             if let Some(peer_idx) = candidate {
                 if let Some(peer) = peers.get(peer_idx as usize) {
                     let state = peer.state();
-                    let accept = state.is_routable()
+                    // A local node in STANDBY still owns its keys: the
+                    // state gates the local datastore send ([`local_gate`]),
+                    // not routing.
+                    let local_standby = peer.is_local()
+                        && matches!(state, crate::cluster::peer::PeerState::Standby);
+                    let accept = local_standby
+                        || state.is_routable()
                         || (include_down && matches!(state, crate::cluster::peer::PeerState::Down));
                     if accept {
                         routable.push((dc_idx, rack_idx, peer_idx));
@@ -1206,7 +1322,11 @@ impl Dispatcher for ClusterDispatcher {
                         ty: crate::proto::dnode::DmsgType::Req,
                         target_peer_idx: None,
                     };
-                    if let Err(err) = tx.try_send(env) {
+                    let is_read = matches!(req.ty(), MsgType::Unknown) || req.flags().is_read;
+                    if let Err(err) = tx.send(&self.pool, env, is_read) {
+                        let LocalSendError::Channel(err) = err else {
+                            return DispatchOutcome::Error(self.invalid_state_error(&req));
+                        };
                         // Backend channel full or closed: surface
                         // an error to the client immediately.
                         if let Some(m) = self.failure_metrics.as_ref() {
@@ -1335,6 +1455,7 @@ impl ClusterDispatcher {
             script: script.clone(),
             peer_backends: self.peer_backends.clone(),
             local_backend: self.backend.clone(),
+            pool: self.pool.clone(),
             target_is_local: targets.iter().map(|t| (t.peer_idx, t.is_local)).collect(),
         });
         // Fan out: each per-target outbound feeds the coalescer
@@ -1508,7 +1629,30 @@ impl ClusterDispatcher {
             target_peer_idx: Some(target.peer_idx),
         };
         let send_result = if target.is_local {
-            self.backend.as_ref().map(|tx| tx.try_send(env))
+            let is_read = matches!(req.ty(), MsgType::Unknown) || req.flags().is_read;
+            match self
+                .backend
+                .as_ref()
+                .map(|tx| tx.send(&self.pool, env, is_read))
+            {
+                Some(Err(LocalSendError::Refused)) => {
+                    // The node's state refuses its own replica: that
+                    // replica answers with the state error, which the
+                    // coalescer counts like any other reply.
+                    let rsp = self.invalid_state_error(req);
+                    return intermediate_tx
+                        .try_send(OutboundEnvelope {
+                            req_id: req.id(),
+                            rsp,
+                            span: req_span.clone(),
+                            source_peer_idx: Some(target.peer_idx),
+                        })
+                        .is_ok();
+                }
+                Some(Err(LocalSendError::Channel(e))) => Some(Err(e)),
+                Some(Ok(())) => Some(Ok(())),
+                None => None,
+            }
         } else {
             self.peer_backends
                 .get(&target.peer_idx)
@@ -1649,7 +1793,19 @@ impl ClusterDispatcher {
             target_peer_idx: Some(target.peer_idx),
         };
         let send_result = if target.is_local {
-            self.backend.as_ref().map(|tx| tx.try_send(env))
+            let is_read = matches!(req.ty(), MsgType::Unknown) || req.flags().is_read;
+            match self
+                .backend
+                .as_ref()
+                .map(|tx| tx.send(&self.pool, env, is_read))
+            {
+                Some(Err(LocalSendError::Refused)) => {
+                    return DispatchOutcome::Error(self.invalid_state_error(req));
+                }
+                Some(Err(LocalSendError::Channel(e))) => Some(Err(e)),
+                Some(Ok(())) => Some(Ok(())),
+                None => None,
+            }
         } else {
             self.peer_backends
                 .get(&target.peer_idx)
@@ -1709,6 +1865,18 @@ impl ClusterDispatcher {
         };
         let _ = responder.try_send(env);
         true
+    }
+
+    /// The `Dynomite's current state does not allow this request` reply
+    /// for a request the node's state refuses.
+    fn invalid_state_error(&self, req: &Msg) -> Msg {
+        crate::msg::response::make_error(
+            req,
+            error_rsp_type(self.pool.config().data_store),
+            0,
+            crate::msg::DynErrorCode::DynomiteInvalidState,
+            &self.mbuf_pool,
+        )
     }
 
     fn no_quorum_error(&self, req: &Msg) -> Msg {
@@ -1908,7 +2076,8 @@ struct ReadRepairContext {
     /// The repair script the request was rewritten into.
     script: ScriptRequest,
     peer_backends: std::collections::HashMap<u32, mpsc::Sender<OutboundRequest>>,
-    local_backend: Option<mpsc::Sender<OutboundRequest>>,
+    local_backend: Option<LocalBackend>,
+    pool: Arc<ServerPool>,
     target_is_local: std::collections::HashMap<u32, bool>,
 }
 
@@ -1980,9 +2149,11 @@ impl ReadRepairContext {
             .copied()
             .unwrap_or(false);
         let sent = if is_local {
+            // Repair writes pass the node-state gate like any other
+            // request bound for the local datastore.
             self.local_backend
                 .as_ref()
-                .is_some_and(|tx| tx.try_send(env).is_ok())
+                .is_some_and(|tx| tx.send(&self.pool, env, false).is_ok())
         } else {
             self.peer_backends
                 .get(&peer_idx)
