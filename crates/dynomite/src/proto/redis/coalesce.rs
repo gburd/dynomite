@@ -164,6 +164,131 @@ pub fn redis_post_coalesce(req: &mut Msg) {
     req.set_done(true);
 }
 
+/// The reply a client gets when any fragment of a split request failed:
+/// the generic error built from the parent's (zero) error codes.
+pub const FRAGMENT_ERROR_REPLY: &[u8] = b"-ERR unknown: unknown\r\n";
+
+/// Copy one bulk (`$-1\r\n` or `$<len>\r\n<bytes>\r\n`) from the
+/// front of `src` into `dst` and return the number of bytes consumed.
+///
+/// `None` when `src` is empty, does not start with `$`, or is truncated.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::proto::redis::redis_copy_bulk;
+///
+/// let mut out = Vec::new();
+/// assert_eq!(redis_copy_bulk(&mut out, b"$2\r\nhi\r\n$-1\r\n"), Some(8));
+/// assert_eq!(out, b"$2\r\nhi\r\n");
+/// assert_eq!(redis_copy_bulk(&mut out, b"$-1\r\n"), Some(5));
+/// assert_eq!(redis_copy_bulk(&mut out, b":1\r\n"), None);
+/// ```
+pub fn redis_copy_bulk(dst: &mut Vec<u8>, src: &[u8]) -> Option<usize> {
+    if src.first() != Some(&b'$') {
+        return None;
+    }
+    let len = if src.get(1..3) == Some(&b"-1"[..]) {
+        5
+    } else {
+        let digits = src[1..].iter().take_while(|b| b.is_ascii_digit()).count();
+        let n: usize = std::str::from_utf8(&src[1..=digits]).ok()?.parse().ok()?;
+        1 + digits + 2 + n + 2
+    };
+    let bulk = src.get(..len)?;
+    dst.extend_from_slice(bulk);
+    Some(len)
+}
+
+/// Merge the replies to the fragments of a split `MGET` / `DEL` /
+/// `EXISTS` / `MSET` into the one reply the client gets.
+///
+/// `frag_for_key[i]` is the fragment index key `i` (client order) was
+/// placed in; `replies[f]` is fragment `f`'s reply wire bytes, `None`
+/// when the fragment produced no reply. Each fragment's reply carries its
+/// keys in client order, so `MGET` takes the next bulk of key `i`'s
+/// fragment for every key in turn. `DEL` / `EXISTS` sum the integers;
+/// `MSET` answers `+OK`. Any error, missing, or malformed fragment reply
+/// makes the whole reply [`FRAGMENT_ERROR_REPLY`].
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::msg::MsgType;
+/// use dynomite::proto::redis::redis_coalesce_fragments;
+///
+/// // MGET a b c with a,c on fragment 0 and b on fragment 1.
+/// let replies = vec![
+///     Some(b"*2\r\n$1\r\nA\r\n$-1\r\n".to_vec()),
+///     Some(b"*1\r\n$1\r\nB\r\n".to_vec()),
+/// ];
+/// let out = redis_coalesce_fragments(MsgType::ReqRedisMget, &[0, 1, 0], &replies);
+/// assert_eq!(out, b"*3\r\n$1\r\nA\r\n$1\r\nB\r\n$-1\r\n");
+///
+/// let ints = vec![Some(b":1\r\n".to_vec()), Some(b":2\r\n".to_vec())];
+/// assert_eq!(redis_coalesce_fragments(MsgType::ReqRedisDel, &[0, 1], &ints), b":3\r\n");
+/// ```
+#[must_use]
+pub fn redis_coalesce_fragments(
+    req_ty: MsgType,
+    frag_for_key: &[usize],
+    replies: &[Option<Vec<u8>>],
+) -> Vec<u8> {
+    let err = || FRAGMENT_ERROR_REPLY.to_vec();
+    // Pre-coalesce: classify every fragment reply; strip the multibulk
+    // header of MGET replies and accumulate DEL / EXISTS integers.
+    let mut bodies: Vec<&[u8]> = Vec::with_capacity(replies.len());
+    let mut integer: i64 = 0;
+    for reply in replies {
+        let Some(r) = reply.as_deref() else {
+            return err();
+        };
+        let line_end = r.windows(2).position(|w| w == b"\r\n");
+        match (r.first(), line_end) {
+            (Some(b':'), Some(end))
+                if matches!(req_ty, MsgType::ReqRedisDel | MsgType::ReqRedisExists) =>
+            {
+                let Some(n) = std::str::from_utf8(&r[1..end])
+                    .ok()
+                    .and_then(|t| t.parse::<i64>().ok())
+                else {
+                    return err();
+                };
+                integer = integer.saturating_add(n);
+                bodies.push(&[]);
+            }
+            (Some(b'*'), Some(end)) if matches!(req_ty, MsgType::ReqRedisMget) => {
+                bodies.push(&r[end + 2..]);
+            }
+            (Some(b'+'), Some(_)) if matches!(req_ty, MsgType::ReqRedisMset) => bodies.push(&[]),
+            _ => return err(),
+        }
+    }
+    // Post-coalesce: build the client reply.
+    match req_ty {
+        MsgType::ReqRedisMget => {
+            let mut out = format!("*{}\r\n", frag_for_key.len()).into_bytes();
+            let mut cursor = vec![0usize; bodies.len()];
+            for &f in frag_for_key {
+                let (Some(body), Some(at)) = (bodies.get(f), cursor.get_mut(f)) else {
+                    return err();
+                };
+                match body
+                    .get(*at..)
+                    .and_then(|rest| redis_copy_bulk(&mut out, rest))
+                {
+                    Some(n) => *at += n,
+                    None => return err(),
+                }
+            }
+            out
+        }
+        MsgType::ReqRedisDel | MsgType::ReqRedisExists => format!(":{integer}\r\n").into_bytes(),
+        MsgType::ReqRedisMset => b"+OK\r\n".to_vec(),
+        _ => err(),
+    }
+}
+
 /// Per-replica reply coalescer.
 ///
 /// The tracker is bound to a single client request and the set of

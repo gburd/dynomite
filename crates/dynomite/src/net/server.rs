@@ -26,6 +26,14 @@ use crate::net::dispatcher::OutboundEnvelope;
 use crate::net::NetError;
 use crate::proto::dnode::DmsgType;
 
+/// An in-flight request: id, span, target peer, and its responder.
+type PendingResponse = (
+    MsgId,
+    tracing::Span,
+    Option<u32>,
+    Option<mpsc::Sender<OutboundEnvelope>>,
+);
+
 /// Outbound server-side connection driver.
 ///
 /// The struct owns the transport-bound [`Conn`] plus the receiving
@@ -34,7 +42,9 @@ pub struct ServerConn {
     conn: Conn,
     requests: mpsc::Receiver<OutboundRequest>,
     data_store: DataStore,
-    pending_responses: std::collections::VecDeque<(MsgId, tracing::Span, Option<u32>)>,
+    /// In-flight requests in send order, each paired with the responder
+    /// its reply goes to (replies arrive in request order).
+    pending_responses: std::collections::VecDeque<PendingResponse>,
 }
 
 /// Envelope sent into the server driver.
@@ -134,7 +144,6 @@ impl ServerConn {
     pub async fn run(mut self) -> Result<(), NetError> {
         let mut read_buf = vec![0u8; 4096];
         let mut accumulated = Vec::<u8>::new();
-        let mut pending_responder: Option<mpsc::Sender<OutboundEnvelope>> = None;
 
         loop {
             if self.conn.is_eof() && self.pending_responses.is_empty() {
@@ -166,9 +175,12 @@ impl ServerConn {
                         .await;
                     write_res?;
                     self.conn.record_send(req_bytes.len());
-                    self.pending_responses
-                        .push_back((out_req.req_id, req_span, out_req.target_peer_idx));
-                    pending_responder = Some(out_req.responder);
+                    self.pending_responses.push_back((
+                        out_req.req_id,
+                        req_span,
+                        out_req.target_peer_idx,
+                        Some(out_req.responder),
+                    ));
                 }
                 read_res = async {
                     if let Some(t) = self.conn.transport_mut() {
@@ -184,17 +196,13 @@ impl ServerConn {
                     }
                     self.conn.record_recv(n);
                     accumulated.extend_from_slice(&read_buf[..n]);
-                    self.drive_response_parser(&mut accumulated, &mut pending_responder).await?;
+                    self.drive_response_parser(&mut accumulated).await?;
                 }
             }
         }
     }
 
-    async fn drive_response_parser(
-        &mut self,
-        accumulated: &mut Vec<u8>,
-        responder: &mut Option<mpsc::Sender<OutboundEnvelope>>,
-    ) -> Result<(), NetError> {
+    async fn drive_response_parser(&mut self, accumulated: &mut Vec<u8>) -> Result<(), NetError> {
         use crate::proto::memcache::memcache_parse_rsp;
         use crate::proto::redis::redis_parse_rsp;
 
@@ -202,8 +210,8 @@ impl ServerConn {
             let head_span = self
                 .pending_responses
                 .front()
-                .map_or_else(tracing::Span::current, |(_, s, _)| s.clone());
-            let id = self.pending_responses.front().map_or(0, |(i, _, _)| *i);
+                .map_or_else(tracing::Span::current, |(_, s, _, _)| s.clone());
+            let id = self.pending_responses.front().map_or(0, |(i, _, _, _)| *i);
             let mut msg = Msg::new(id, MsgType::Unknown, false);
             let result = match self.data_store {
                 DataStore::Valkey | DataStore::Dyniak => redis_parse_rsp(&mut msg, accumulated),
@@ -217,10 +225,10 @@ impl ServerConn {
                     }
                     let bytes = accumulated[..consumed].to_vec();
                     accumulated.drain(0..consumed);
-                    let (req_id, req_span, source_peer_idx) = self
+                    let (req_id, req_span, source_peer_idx, reply_to) = self
                         .pending_responses
                         .pop_front()
-                        .unwrap_or((0, head_span, None));
+                        .unwrap_or((0, head_span, None, None));
                     let parse_span = tracing::info_span!(
                         parent: &req_span,
                         "backend.parse",
@@ -238,7 +246,7 @@ impl ServerConn {
                             source_peer_idx,
                         }
                     });
-                    if let Some(sender) = responder.as_ref() {
+                    if let Some(sender) = reply_to.as_ref() {
                         let _ = sender.send(env).await;
                     }
                 }

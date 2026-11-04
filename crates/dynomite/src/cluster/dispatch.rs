@@ -743,6 +743,37 @@ fn plans_agree(a: &[(usize, usize, u32)], b: &[(usize, usize, u32)]) -> bool {
     a_idx == b_idx
 }
 
+/// The peer that owns a key on one rack: the vnode continuum lookup, or
+/// the random-slice claimant when that distribution is active.
+fn rack_candidate(
+    dc: &crate::cluster::Datacenter,
+    rack: &crate::cluster::Rack,
+    peers: &[crate::cluster::peer::Peer],
+    token: &crate::hashkit::DynToken,
+    hash64: u64,
+    distribution: crate::conf::Distribution,
+) -> Option<u32> {
+    match (distribution, rack.random_slices()) {
+        (crate::conf::Distribution::RandomSlicing, Some(slices)) => {
+            // The slice table holds peer pnames (host:port); resolve the
+            // claimant to a peer index within this rack.
+            slices.claimant_for(hash64).and_then(|name| {
+                peers.iter().find_map(|p| {
+                    if p.dc() == dc.name()
+                        && p.rack() == rack.name()
+                        && p.endpoint().pname() == name
+                    {
+                        Some(p.idx())
+                    } else {
+                        None
+                    }
+                })
+            })
+        }
+        _ => vnode::dispatch(rack.continuums(), token),
+    }
+}
+
 fn collect_routable(
     dcs: &[crate::cluster::Datacenter],
     peers: &[crate::cluster::peer::Peer],
@@ -754,29 +785,7 @@ fn collect_routable(
     let mut routable: Vec<(usize, usize, u32)> = Vec::new();
     for (dc_idx, dc) in dcs.iter().enumerate() {
         for (rack_idx, rack) in dc.racks().iter().enumerate() {
-            let candidate = match (distribution, rack.random_slices()) {
-                (crate::conf::Distribution::RandomSlicing, Some(slices)) => {
-                    // Map the chosen claimant name back onto a
-                    // peer index. The slice table holds peer
-                    // pname strings (host:port) so the
-                    // resolution is a linear scan over the
-                    // rack's peer set, which is small (peers
-                    // per rack, not the whole pool).
-                    slices.claimant_for(hash64).and_then(|name| {
-                        peers.iter().find_map(|p| {
-                            if p.dc() == dc.name()
-                                && p.rack() == rack.name()
-                                && p.endpoint().pname() == name
-                            {
-                                Some(p.idx())
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                }
-                _ => vnode::dispatch(rack.continuums(), token),
-            };
+            let candidate = rack_candidate(dc, rack, peers, token, hash64, distribution);
             if let Some(peer_idx) = candidate {
                 if let Some(peer) = peers.get(peer_idx as usize) {
                     let state = peer.state();
@@ -920,14 +929,193 @@ fn plan_with_consistency(
     }
 }
 
+impl ClusterDispatcher {
+    /// The peer that owns `key_tag` on the local node's rack, with the
+    /// same placement [`ClusterDispatcher::plan`] uses. `None` when the
+    /// local rack is not in the topology or has no continuum.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use dynomite::cluster::dispatch::ClusterDispatcher;
+    /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// # use dynomite::cluster::peer::{Peer, PeerEndpoint};
+    /// # use dynomite::hashkit::DynToken;
+    /// # use std::sync::Arc;
+    /// let cfg = PoolConfig { dc: "d".into(), rack: "r".into(), ..PoolConfig::default() };
+    /// let local = Peer::new(
+    ///     0, PeerEndpoint::tcp("h".into(), 1), "r".into(), "d".into(),
+    ///     vec![DynToken::from_u32(0)], true, true, false,
+    /// );
+    /// let pool = Arc::new(ServerPool::new(cfg, vec![local]));
+    /// pool.rebuild_ring();
+    /// assert_eq!(ClusterDispatcher::new(pool).rack_owner(b"k"), Some(0));
+    /// ```
+    #[must_use]
+    pub fn rack_owner(&self, key_tag: &[u8]) -> Option<u32> {
+        let cfg = self.pool.config();
+        let peers = self.pool.peers().read();
+        let dcs = self.pool.datacenters().read();
+        let dc = dcs.iter().find(|d| d.name() == cfg.dc)?;
+        let rack = dc.racks().iter().find(|r| r.name() == cfg.rack)?;
+        let token = hashkit::hash(map_hash(cfg.hash), key_tag);
+        let hash64 = hashkit::hash64(map_hash(cfg.hash), key_tag);
+        rack_candidate(dc, rack, &peers, &token, hash64, cfg.distribution)
+    }
+}
+
+/// Multi-key requests split by the owning peer on the local rack.
+impl crate::proto::redis::FragmentDispatcher for ClusterDispatcher {
+    fn shard_for(&self, key_tag: &[u8]) -> u32 {
+        self.rack_owner(key_tag).unwrap_or(0)
+    }
+
+    fn shard_count(&self) -> u32 {
+        u32::try_from(self.pool.peers().read().len()).unwrap_or(u32::MAX)
+    }
+}
+
+impl ClusterDispatcher {
+    /// Split a client's multi-key `MGET` / `DEL` / `EXISTS` / `MSET` by
+    /// the owning peer on the local rack, dispatch each fragment through
+    /// the ordinary single-request path (so per-fragment replication and
+    /// quorum are unchanged), and answer the client with the merged reply
+    /// in its key order. `None` when the request is not one that splits.
+    fn dispatch_fragmented(
+        &self,
+        req: &mut Msg,
+        responder: &ServerSink,
+    ) -> Option<DispatchOutcome> {
+        let splits = matches!(
+            req.ty(),
+            MsgType::ReqRedisMget
+                | MsgType::ReqRedisDel
+                | MsgType::ReqRedisExists
+                | MsgType::ReqRedisMset
+        );
+        // Only client requests split: a fragment (frag_id set) or a
+        // request relayed by a peer (dnode header) is served as is.
+        if !splits
+            || req.keys().len() < 2
+            || req.frag_id() != 0
+            || req.dmsg().is_some()
+            || !matches!(req.routing(), MsgRouting::Normal)
+            || !matches!(
+                self.pool.config().data_store,
+                crate::conf::DataStore::Valkey
+            )
+        {
+            return None;
+        }
+        let values: Vec<Vec<u8>> = if matches!(req.ty(), MsgType::ReqRedisMset) {
+            let bytes: Vec<u8> = req
+                .mbufs()
+                .iter()
+                .flat_map(|b| b.readable().to_vec())
+                .collect();
+            resp_array_tokens(&bytes)?
+                .into_iter()
+                .skip(2)
+                .step_by(2)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let outcome =
+            crate::proto::redis::redis_fragment(req, self, &values, &self.mbuf_pool).ok()??;
+        // Fragments are created in first-seen shard order.
+        let mut shards: Vec<u32> = Vec::new();
+        let frag_for_key: Vec<usize> = outcome
+            .shard_for_key
+            .iter()
+            .map(|s| {
+                shards.iter().position(|x| x == s).unwrap_or_else(|| {
+                    shards.push(*s);
+                    shards.len() - 1
+                })
+            })
+            .collect();
+        let mut replies: Vec<Option<Vec<u8>>> = vec![None; outcome.fragments.len()];
+        let mut waiting: Vec<(usize, mpsc::Receiver<OutboundEnvelope>)> = Vec::new();
+        for (f, frag) in outcome.fragments.into_iter().enumerate() {
+            let (tx, rx) = mpsc::channel::<OutboundEnvelope>(2);
+            match self.dispatch(frag, tx) {
+                DispatchOutcome::Pending => waiting.push((f, rx)),
+                DispatchOutcome::Inline(rsp) | DispatchOutcome::Error(rsp) => {
+                    replies[f] = Some(msg_bytes(&rsp));
+                }
+                DispatchOutcome::Drop => {}
+            }
+        }
+        let req_id = req.id();
+        let req_ty = req.ty();
+        let pool = self.mbuf_pool.clone();
+        let responder = responder.clone();
+        tokio::spawn(async move {
+            for (f, mut rx) in waiting {
+                replies[f] = rx.recv().await.map(|env| msg_bytes(&env.rsp));
+            }
+            let merged =
+                crate::proto::redis::redis_coalesce_fragments(req_ty, &frag_for_key, &replies);
+            let mut rsp = Msg::new(req_id, MsgType::Unknown, false);
+            rsp.set_parent_id(req_id);
+            rsp.append_bytes(&pool, &merged);
+            let _ = responder
+                .send(OutboundEnvelope {
+                    req_id,
+                    rsp,
+                    span: tracing::Span::none(),
+                    source_peer_idx: None,
+                })
+                .await;
+        });
+        Some(DispatchOutcome::Pending)
+    }
+}
+
+/// The wire bytes of a message's mbuf chain.
+fn msg_bytes(m: &Msg) -> Vec<u8> {
+    m.mbufs()
+        .iter()
+        .flat_map(|b| b.readable().to_vec())
+        .collect()
+}
+
+/// The bulk tokens of a RESP array request (`*n` then `n` bulks).
+fn resp_array_tokens(wire: &[u8]) -> Option<Vec<Vec<u8>>> {
+    fn line(wire: &[u8], at: usize) -> Option<(&[u8], usize)> {
+        let end = at + wire.get(at..)?.windows(2).position(|w| w == b"\r\n")?;
+        Some((&wire[at..end], end + 2))
+    }
+    let (head, mut p) = line(wire, 0)?;
+    let n: usize = std::str::from_utf8(head.strip_prefix(b"*")?)
+        .ok()?
+        .parse()
+        .ok()?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (len, body) = line(wire, p)?;
+        let len: usize = std::str::from_utf8(len.strip_prefix(b"$")?)
+            .ok()?
+            .parse()
+            .ok()?;
+        out.push(wire.get(body..body + len)?.to_vec());
+        p = body + len + 2;
+    }
+    Some(out)
+}
+
 impl Dispatcher for ClusterDispatcher {
     #[allow(
         clippy::too_many_lines,
         reason = "single dispatch fn must enumerate every plan; splitting hides the planner-to-effect mapping"
     )]
-    fn dispatch(&self, req: Msg, responder: ServerSink) -> DispatchOutcome {
+    fn dispatch(&self, mut req: Msg, responder: ServerSink) -> DispatchOutcome {
         if req.flags().quit {
             return DispatchOutcome::Drop;
+        }
+        if let Some(outcome) = self.dispatch_fragmented(&mut req, &responder) {
+            return outcome;
         }
         // FT.* / HSET interception. Runs before the routing
         // planner so vector-index commands never visit the

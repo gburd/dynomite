@@ -31,8 +31,8 @@ pub mod verify;
 
 pub use self::bucket::bucket_name;
 pub use self::coalesce::{
-    accumulate_fragment_integer, redis_post_coalesce, redis_pre_coalesce, CoalesceOutcome,
-    CoalesceTracker,
+    accumulate_fragment_integer, redis_coalesce_fragments, redis_copy_bulk, redis_post_coalesce,
+    redis_pre_coalesce, CoalesceOutcome, CoalesceTracker, FRAGMENT_ERROR_REPLY,
 };
 pub use self::commands::CommandClass;
 pub use self::fragment::{redis_fragment, FragmentDispatcher, FragmentOutcome};

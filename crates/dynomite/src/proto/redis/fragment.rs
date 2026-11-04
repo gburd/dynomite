@@ -119,8 +119,9 @@ pub fn redis_fragment<D: FragmentDispatcher + ?Sized>(
         let bucket_idx = if let Some(j) = bucket.get(idx).copied().flatten() {
             j
         } else {
-            let mut sub = Msg::new(0, r.ty(), true);
+            let mut sub = Msg::new(r.id(), r.ty(), true);
             sub.set_frag_id(frag_id);
+            sub.flags_mut().is_read = r.flags().is_read;
             fragments.push(sub);
             keys_per_fragment.push(Vec::new());
             values_per_fragment.push(Vec::new());
