@@ -563,7 +563,17 @@ impl Cluster {
                     tail(&log, 40)
                 )));
             }
-            if let Ok(mut c) = self.nodes[i].client(Duration::from_millis(500)) {
+            if matches!(self.spec.store, Store::Memcache) {
+                // A memcache node has no PING; an accepted connection is ready.
+                if std::net::TcpStream::connect_timeout(
+                    &self.nodes[i].client_addr(),
+                    Duration::from_millis(500),
+                )
+                .is_ok()
+                {
+                    return Ok(());
+                }
+            } else if let Ok(mut c) = self.nodes[i].client(Duration::from_millis(500)) {
                 if c.cmd(&["PING"]).is_ok() {
                     return Ok(());
                 }
@@ -663,7 +673,11 @@ fn start_store(tools: &Tools, store: Store, node: usize, dir: &Path) -> Result<C
                 .memcached
                 .clone()
                 .ok_or(Error::MissingTool("memcached"))?,
+            // The sandbox maps the test user to root; memcached refuses
+            // to run as root without `-u root`.
             vec![
+                "-u".into(),
+                "root".into(),
                 "-l".into(),
                 ip.to_string(),
                 "-p".into(),
