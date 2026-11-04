@@ -518,6 +518,22 @@ held at its current behaviour until the owner decides.
   configurations whose rack names in one DC have equal length behave as C.
 * Status: PROPOSED
 
+### DEV-R3: a reply equal to an old maximum is not repaired (C finding)
+
+* C: `find_most_updated_rsp` (src/proto/dyn_redis_repair.c:711) marks a
+  reply stale only when its timestamp is below the running maximum at the
+  time it is seen, or when a later reply beats the current winner. A
+  reply EQUAL to a maximum that a later reply then beats is never marked:
+  for timestamps 5, 5, 9 the first replica is repaired and the second is
+  left at 5.
+* Rust: identical (`proto/redis/repair/make.rs::find_most_updated`,
+  pinned by `equal_stale_reply_after_new_max_is_not_marked`).
+* Effect: the second replica stays stale until a later read; with
+  DC_SAFE_QUORUM the next read of the key repairs it.
+* Recommendation: fix it (mark every reply below the final maximum). It
+  only adds repair writes C would have needed anyway on the next read.
+* Status: PROPOSED
+
 ## E. Decisions log
 
 Owner decisions are appended here with date and the exact instruction.
