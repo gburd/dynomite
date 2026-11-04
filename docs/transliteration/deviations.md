@@ -584,6 +584,39 @@ held at its current behaviour until the owner decides.
   gossip state (the C rule); then adopt C's schedule. The alternative,
   routing to DOWN owners as C does, changes the failure behaviour every
   optest partition scenario pins, so it is a larger decision.
+### DEV-M1: every memcache retrieval crashes the C engine (finding)
+
+* C (`2046b05`): `memcache_fragment` splits every `get` / `gets`, one key
+  included (no one-key short-circuit, unlike `redis_fragment`). When the
+  last fragment completes, `req_done` calls `memcache_post_coalesce`,
+  which reads `request->peer` (the merged response) and
+  `request->frag_seq[i]->peer` (each fragment's response). Since upstream
+  `71381b4` ("Introduce selected_rsp in the message") nothing sets `peer`
+  on a request (only `rsp->peer = req`); `redis_post_coalesce` was moved
+  to `selected_rsp`, the memcache one was not. `request->peer` is NULL
+  and is dereferenced at once.
+* Reproduced 2026-11-04 against the harness C build: memcached plus a
+  one-node dynomite with `data_store: 1`; the client sends `get k1\r\n`,
+  sees EOF, and dynomite dies with SIGSEGV (exit 139), stack
+  `memcache_post_coalesce+0x1f <- req_done <- msg_recv <- core_core`.
+  Reproduced independently by the lead.
+* Consequence: C has no working memcache retrieval, so no C-vs-Rust
+  reply comparison is possible for `get` / `gets`.
+* Rust: the intended semantics. Split per local-rack owner
+  (`get ` / `gets `, each key followed by one space, CRLF); drop each
+  fragment's `END`; every key in client order takes the next `VALUE`
+  block of its fragment (a miss takes nothing); append `END\r\n`.
+  A fragment error or a missing fragment reply answers
+  `SERVER_ERROR unknown: unknown\r\n`, the reply `req_error` /
+  `rsp_make_error` build for a request vector with an errored fragment
+  (`memcache_pre_coalesce` flags the fragment `EINVAL`, dyn code 0).
+  The `owner->err = 1` close in `memcache_post_coalesce` is not
+  reproduced: it is unreachable (the engine crashes first), and the
+  merged redis split path answers the same error instead of closing.
+* Recommendation: authorise the semantics above (the C fix is to read
+  `selected_rsp`), with the error reply instead of the connection close.
+* Pinned by: `crates/dynomite/tests/regression_memcache_multiget_fragment.rs`.
+* Status: PROPOSED
 
 ## E. Decisions log
 
