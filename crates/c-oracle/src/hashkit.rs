@@ -52,6 +52,44 @@ extern "C" {
     fn cmp_dyn_token(t1: *const CToken, t2: *const CToken) -> i32;
     fn parse_dyn_token(start: *mut u8, len: u32, token: *mut CToken) -> RStatus;
     fn MurmurHash3_x86_32(key: *const c_void, len: c_int, seed: u32, out: *mut c_void);
+    fn get_hash_type(hash_name: *const CString) -> c_int;
+    fn get_hash_func(hash_type: c_int) -> Option<HashFn>;
+}
+
+/// Mirrors `struct string` in `src/dyn_string.h`: `{ uint32_t len; uint8_t *data; }`.
+#[repr(C)]
+struct CString {
+    len: u32,
+    data: *const u8,
+}
+
+/// C `get_hash_type`: the `HASH_CODEC` index of `name`, or `HASH_INVALID`
+/// (the number of hash types) when the name is unknown.
+pub fn hash_type_index(name: &[u8]) -> i32 {
+    let s = CString {
+        len: u32::try_from(name.len()).expect("hash name fits u32"),
+        data: name.as_ptr(),
+    };
+    // SAFETY: `s` points at `name`, valid for `s.len` bytes for the whole
+    // call; `get_hash_type` only reads `len` bytes of it.
+    unsafe { get_hash_type(&raw const s) }
+}
+
+/// C `get_hash_func` followed by a call: hash `key` with the function C
+/// selects for `index`, or `None` when C has no function for it
+/// (`index` out of range). `key` must be non-empty (see [`hash`]).
+pub fn hash_by_index(index: i32, key: &[u8]) -> Option<CToken> {
+    assert!(!key.is_empty(), "the C hashes leave an empty key undefined");
+    // SAFETY: `get_hash_func` only range-checks `index` and reads a static
+    // table.
+    let f = unsafe { get_hash_func(index) }?;
+    let mut token = CToken::default();
+    // SAFETY: `f` is one of the hash_* functions; it reads `key.len()`
+    // bytes of `key` and writes only through `token`. `hash_crc32a` is
+    // declared returning uint32_t, which is returned in the same register
+    // as rstatus_t on every supported ABI and is not inspected here.
+    unsafe { f(key.as_ptr(), key.len(), &raw mut token) };
+    Some(token)
 }
 
 /// The C hash functions selectable by `hash:` in the C config

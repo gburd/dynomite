@@ -166,3 +166,37 @@ fn crc32_sz_matches_c(tc: TestCase) {
         "buf {buf:?} seed {seed:#x}"
     );
 }
+
+/// C `get_hash_type` / `get_hash_func`: every configuration name resolves to
+/// the same position in the hash table as `HashType::from_name` /
+/// `HashType::all`, the function at that position is the same hash, and an
+/// unknown or case-changed name is rejected by both (C returns
+/// `HASH_INVALID`, the table length).
+#[test]
+fn hash_name_lookup_matches_c() {
+    let names: Vec<&str> = CHash::ALL.iter().map(|&h| rust_type(h).as_str()).collect();
+    for (i, name) in names.iter().enumerate() {
+        let c_index = hashkit::hash_type_index(name.as_bytes());
+        assert_eq!(usize::try_from(c_index).unwrap(), i, "C index of {name}");
+        let rust = HashType::from_name(name).expect("Rust knows every C name");
+        assert_eq!(HashType::all()[i], rust, "Rust table position of {name}");
+        for key in [&b"a"[..], b"hello", b"{tag}:key", &[0xff; 70][..]] {
+            let c = hashkit::hash_by_index(c_index, key).expect("C function for a valid index");
+            if DEVIATES.contains(&CHash::ALL[i]) {
+                continue;
+            }
+            assert_same(CHash::ALL[i], key, &c, &rs::hash(rust, key));
+        }
+    }
+    let invalid = i32::try_from(names.len()).unwrap();
+    for bad in ["", "MURMUR3", "murmur3 ", "nope", "crc32b"] {
+        assert_eq!(
+            hashkit::hash_type_index(bad.as_bytes()),
+            invalid,
+            "C on {bad:?}"
+        );
+        assert_eq!(HashType::from_name(bad), None, "Rust on {bad:?}");
+    }
+    assert!(hashkit::hash_by_index(invalid, b"k").is_none());
+    assert!(hashkit::hash_by_index(-1, b"k").is_none());
+}

@@ -1,1 +1,17 @@
 # C files whose transliteration stage is closed (zero todo rows allowed).
+src/hashkit/dyn_crc16.c
+src/hashkit/dyn_crc32.c
+src/hashkit/dyn_fnv.c
+src/hashkit/dyn_hashkit.c
+src/hashkit/dyn_hashkit.h
+src/hashkit/dyn_hsieh.c
+src/hashkit/dyn_jenkins.c
+src/hashkit/dyn_ketama.c
+src/hashkit/dyn_md5.c
+src/hashkit/dyn_modula.c
+src/hashkit/dyn_murmur.c
+src/hashkit/dyn_murmur3.c
+src/hashkit/dyn_one_at_a_time.c
+src/hashkit/dyn_random.c
+src/hashkit/dyn_token.c
+src/hashkit/dyn_token.h

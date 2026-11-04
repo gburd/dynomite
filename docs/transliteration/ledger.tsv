@@ -1651,64 +1651,64 @@ fn	event_del_conn	src/event/dyn_kqueue.c	204	todo
 fn	event_wait	src/event/dyn_kqueue.c	232	todo				
 fn	event_loop_stats	src/event/dyn_kqueue.c	340	todo				
 fn	event_loop_entropy	src/event/dyn_kqueue.c	402	todo				
-var	crc16tab	src/hashkit/dyn_crc16.c	26	todo				
+var	crc16tab	src/hashkit/dyn_crc16.c	26	ported	crates/dynomite/src/hashkit/crc16.rs::CRC16TAB	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		table; every entry exercised by the hash oracle
 fn	hash_crc16	src/hashkit/dyn_crc16.c	58	ported	crates/dynomite/src/hashkit/crc16.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
-var	crc32tab	src/hashkit/dyn_crc32.c	35	todo				
+var	crc32tab	src/hashkit/dyn_crc32.c	35	ported	crates/dynomite/src/hashkit/crc32.rs::CRC32TAB	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		table; also crc32_sz_matches_c
 fn	hash_crc32	src/hashkit/dyn_crc32.c	85	ported	crates/dynomite/src/hashkit/crc32.rs::hash_libmemcached	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 fn	hash_crc32a	src/hashkit/dyn_crc32.c	101	ported	crates/dynomite/src/hashkit/crc32.rs::hash_standard	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
-macro	_CRC32_	src/hashkit/dyn_crc32.c	120	todo				
+macro	_CRC32_	src/hashkit/dyn_crc32.c	120	ported	crates/dynomite/src/hashkit/crc32.rs::crc32_sz	crates/c-oracle/tests/hashkit_oracle.rs::crc32_sz_matches_c		inlined per-byte step
 fn	crc32_sz	src/hashkit/dyn_crc32.c	122	ported	crates/dynomite/src/hashkit/mod.rs::crc32_sz	crates/c-oracle/tests/hashkit_oracle.rs::crc32_sz_matches_c		
-var	FNV_64_INIT	src/hashkit/dyn_fnv.c	26	todo				
-var	FNV_64_PRIME	src/hashkit/dyn_fnv.c	27	todo				
-var	FNV_32_INIT	src/hashkit/dyn_fnv.c	28	todo				
-var	FNV_32_PRIME	src/hashkit/dyn_fnv.c	29	todo				
+var	FNV_64_INIT	src/hashkit/dyn_fnv.c	26	ported	crates/dynomite/src/hashkit/fnv.rs::FNV_64_INIT	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+var	FNV_64_PRIME	src/hashkit/dyn_fnv.c	27	ported	crates/dynomite/src/hashkit/fnv.rs::FNV_64_PRIME	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+var	FNV_32_INIT	src/hashkit/dyn_fnv.c	28	ported	crates/dynomite/src/hashkit/fnv.rs::FNV_32_INIT	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+var	FNV_32_PRIME	src/hashkit/dyn_fnv.c	29	ported	crates/dynomite/src/hashkit/fnv.rs::FNV_32_PRIME	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 fn	hash_fnv1_64	src/hashkit/dyn_fnv.c	31	ported	crates/dynomite/src/hashkit/fnv.rs::hash_fnv1_64	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 fn	hash_fnv1a_64	src/hashkit/dyn_fnv.c	49	ported	crates/dynomite/src/hashkit/fnv.rs::hash_fnv1a_64	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 fn	hash_fnv1_32	src/hashkit/dyn_fnv.c	66	ported	crates/dynomite/src/hashkit/fnv.rs::hash_fnv1_32	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 fn	hash_fnv1a_32	src/hashkit/dyn_fnv.c	83	ported	crates/dynomite/src/hashkit/fnv.rs::hash_fnv1a_32	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
-macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.c	5	todo				
-macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.c	5	todo				
-macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.c	5	todo				
-var	hash_strings	src/hashkit/dyn_hashkit.c	6	todo				
-fn	get_hash_func	src/hashkit/dyn_hashkit.c	22	todo				
-fn	get_hash_type	src/hashkit/dyn_hashkit.c	28	todo				
-macro	_DYN_HASHKIT_H_	src/hashkit/dyn_hashkit.h	24	todo				
-typedef	hash_func_t	src/hashkit/dyn_hashkit.h	32	todo				
-macro	HASH_CODEC	src/hashkit/dyn_hashkit.h	40	todo				
-macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.h	55	todo				
-enum	hash_type	src/hashkit/dyn_hashkit.h	56	todo				
-enumerator	HASH_CODEC	src/hashkit/dyn_hashkit.h	56	todo				
-typedef	hash_type_t	src/hashkit/dyn_hashkit.h	56	todo				
-macro	get16bits	src/hashkit/dyn_hsieh.c	40	todo				
-macro	get16bits	src/hashkit/dyn_hsieh.c	40	todo				
+macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.c	5	ported	crates/dynomite/src/hashkit/mod.rs::HashType	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		X-macro expansion helper
+macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.c	5	ported	crates/dynomite/src/hashkit/mod.rs::HashType	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		X-macro expansion helper
+macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.c	5	ported	crates/dynomite/src/hashkit/mod.rs::HashType	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		X-macro expansion helper
+var	hash_strings	src/hashkit/dyn_hashkit.c	6	ported	crates/dynomite/src/hashkit/mod.rs::HashType::as_str	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		name table, same order
+fn	get_hash_func	src/hashkit/dyn_hashkit.c	22	ported	crates/dynomite/src/hashkit/mod.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		HashType selects the function
+fn	get_hash_type	src/hashkit/dyn_hashkit.c	28	ported	crates/dynomite/src/hashkit/mod.rs::HashType::from_name	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		unknown name -> None (C HASH_INVALID)
+macro	_DYN_HASHKIT_H_	src/hashkit/dyn_hashkit.h	24	dead				include guard; no Rust counterpart needed
+typedef	hash_func_t	src/hashkit/dyn_hashkit.h	32	replaced	crates/dynomite/src/hashkit/mod.rs::hash			DEV-S2: function pointer replaced by match on HashType
+macro	HASH_CODEC	src/hashkit/dyn_hashkit.h	40	ported	crates/dynomite/src/hashkit/mod.rs::HashType::all	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		X-macro list; same order
+macro	DEFINE_ACTION	src/hashkit/dyn_hashkit.h	55	ported	crates/dynomite/src/hashkit/mod.rs::HashType	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		X-macro expansion helper
+enum	hash_type	src/hashkit/dyn_hashkit.h	56	ported	crates/dynomite/src/hashkit/mod.rs::HashType	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		
+enumerator	HASH_CODEC	src/hashkit/dyn_hashkit.h	56	ported	crates/dynomite/src/hashkit/mod.rs::HashType	crates/c-oracle/tests/hashkit_oracle.rs::hash_name_lookup_matches_c		enumerators generated by the X-macro
+typedef	hash_type_t	src/hashkit/dyn_hashkit.h	56	ported	crates/dynomite/src/hashkit/mod.rs::HashType			
+macro	get16bits	src/hashkit/dyn_hsieh.c	40	ported	crates/dynomite/src/hashkit/hsieh.rs::get16	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		byte-wise little-endian load; same value as the unaligned read on x86
+macro	get16bits	src/hashkit/dyn_hsieh.c	40	ported	crates/dynomite/src/hashkit/hsieh.rs::get16	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		byte-wise little-endian load; same value as the unaligned read on x86
 fn	hash_hsieh	src/hashkit/dyn_hsieh.c	45	ported	crates/dynomite/src/hashkit/hsieh.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
-macro	hashsize	src/hashkit/dyn_jenkins.c	38	todo				
-macro	hashmask	src/hashkit/dyn_jenkins.c	39	todo				
-macro	rot	src/hashkit/dyn_jenkins.c	40	todo				
-macro	mix	src/hashkit/dyn_jenkins.c	42	todo				
-macro	final	src/hashkit/dyn_jenkins.c	64	todo				
-macro	JENKINS_INITVAL	src/hashkit/dyn_jenkins.c	82	todo				
+macro	hashsize	src/hashkit/dyn_jenkins.c	38	dead				used only in a comment (src/hashkit/dyn_jenkins.c:96-97)
+macro	hashmask	src/hashkit/dyn_jenkins.c	39	dead				used only in a comment (src/hashkit/dyn_jenkins.c:96-97)
+macro	rot	src/hashkit/dyn_jenkins.c	40	ported	crates/dynomite/src/hashkit/jenkins.rs::rot	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+macro	mix	src/hashkit/dyn_jenkins.c	42	ported	crates/dynomite/src/hashkit/jenkins.rs::mix	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+macro	final	src/hashkit/dyn_jenkins.c	64	ported	crates/dynomite/src/hashkit/jenkins.rs::finalize	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
+macro	JENKINS_INITVAL	src/hashkit/dyn_jenkins.c	82	ported	crates/dynomite/src/hashkit/jenkins.rs::JENKINS_INITVAL	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 fn	hash_jenkins	src/hashkit/dyn_jenkins.c	100	ported	crates/dynomite/src/hashkit/jenkins.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 macro	KETAMA_CONTINUUM_ADDITION	src/hashkit/dyn_ketama.c	31	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 macro	KETAMA_POINTS_PER_SERVER	src/hashkit/dyn_ketama.c	33	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 macro	KETAMA_MAX_HOSTLEN	src/hashkit/dyn_ketama.c	34	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 fn	ketama_update	src/hashkit/dyn_ketama.c	63	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 fn	ketama_dispatch	src/hashkit/dyn_ketama.c	226	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
-typedef	MD5_u32plus	src/hashkit/dyn_md5.c	38	todo				
-typedef	MD5_CTX	src/hashkit/dyn_md5.c	45	todo				
-macro	F	src/hashkit/dyn_md5.c	54	todo				
-macro	G	src/hashkit/dyn_md5.c	55	todo				
-macro	H	src/hashkit/dyn_md5.c	56	todo				
-macro	I	src/hashkit/dyn_md5.c	57	todo				
-macro	STEP	src/hashkit/dyn_md5.c	62	todo				
-macro	SET	src/hashkit/dyn_md5.c	79	todo				
-macro	SET	src/hashkit/dyn_md5.c	79	todo				
-macro	GET	src/hashkit/dyn_md5.c	84	todo				
-macro	GET	src/hashkit/dyn_md5.c	84	todo				
-fn	body	src/hashkit/dyn_md5.c	91	todo				
-fn	MD5_Init	src/hashkit/dyn_md5.c	197	todo				
-fn	MD5_Update	src/hashkit/dyn_md5.c	207	todo				
-fn	MD5_Final	src/hashkit/dyn_md5.c	241	todo				
+typedef	MD5_u32plus	src/hashkit/dyn_md5.c	38	replaced	crates/dynomite/src/hashkit/md5.rs::Ctx			DEV-S2: u32
+typedef	MD5_CTX	src/hashkit/dyn_md5.c	45	ported	crates/dynomite/src/hashkit/md5.rs::Ctx	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+macro	F	src/hashkit/dyn_md5.c	54	ported	crates/dynomite/src/hashkit/md5.rs::f1	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+macro	G	src/hashkit/dyn_md5.c	55	ported	crates/dynomite/src/hashkit/md5.rs::g1	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+macro	H	src/hashkit/dyn_md5.c	56	ported	crates/dynomite/src/hashkit/md5.rs::h1	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+macro	I	src/hashkit/dyn_md5.c	57	ported	crates/dynomite/src/hashkit/md5.rs::i1	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+macro	STEP	src/hashkit/dyn_md5.c	62	ported	crates/dynomite/src/hashkit/md5.rs::step	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+macro	SET	src/hashkit/dyn_md5.c	79	replaced	crates/dynomite/src/hashkit/md5.rs::Ctx			DEV-S2: little-endian word load; u32::from_le_bytes
+macro	SET	src/hashkit/dyn_md5.c	79	replaced	crates/dynomite/src/hashkit/md5.rs::Ctx			DEV-S2: little-endian word load; u32::from_le_bytes
+macro	GET	src/hashkit/dyn_md5.c	84	replaced	crates/dynomite/src/hashkit/md5.rs::Ctx			DEV-S2: little-endian word load; u32::from_le_bytes
+macro	GET	src/hashkit/dyn_md5.c	84	replaced	crates/dynomite/src/hashkit/md5.rs::Ctx			DEV-S2: little-endian word load; u32::from_le_bytes
+fn	body	src/hashkit/dyn_md5.c	91	ported	crates/dynomite/src/hashkit/md5.rs::Ctx::body	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+fn	MD5_Init	src/hashkit/dyn_md5.c	197	ported	crates/dynomite/src/hashkit/md5.rs::Ctx::new	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+fn	MD5_Update	src/hashkit/dyn_md5.c	207	ported	crates/dynomite/src/hashkit/md5.rs::Ctx::update	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
+fn	MD5_Final	src/hashkit/dyn_md5.c	241	ported	crates/dynomite/src/hashkit/md5.rs::Ctx::finalize	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
 fn	md5_signature	src/hashkit/dyn_md5.c	295	ported	crates/dynomite/src/hashkit/mod.rs::md5_signature	crates/c-oracle/tests/hashkit_oracle.rs::md5_signature_matches_c		
 fn	hash_md5	src/hashkit/dyn_md5.c	304	ported	crates/dynomite/src/hashkit/md5.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
 macro	MODULA_CONTINUUM_ADDITION	src/hashkit/dyn_modula.c	30	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
@@ -1716,28 +1716,28 @@ macro	MODULA_POINTS_PER_SERVER	src/hashkit/dyn_modula.c	32	dead				DEV-H3: file 
 fn	modula_update	src/hashkit/dyn_modula.c	34	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 fn	modula_dispatch	src/hashkit/dyn_modula.c	155	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 fn	hash_murmur	src/hashkit/dyn_murmur.c	43	ported	crates/dynomite/src/hashkit/murmur.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		
-macro	MURMUR3_SEED	src/hashkit/dyn_murmur3.c	27	todo				
+macro	MURMUR3_SEED	src/hashkit/dyn_murmur3.c	27	ported	crates/dynomite/src/hashkit/murmur3.rs::MURMUR3_SEED	crates/c-oracle/tests/hashkit_oracle.rs::murmur3_ring_token_is_c_contrib_x86_32		
 fn	hash_murmur3	src/hashkit/dyn_murmur3.c	29	deviation:DEV-H1	crates/dynomite/src/hashkit/murmur3.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::murmur3_ring_token_is_c_contrib_x86_32		
 fn	hash_one_at_a_time	src/hashkit/dyn_one_at_a_time.c	40	deviation:DEV-H2	crates/dynomite/src/hashkit/one_at_a_time.rs::hash	crates/c-oracle/tests/hashkit_oracle.rs::one_at_a_time_reads_bytes_unsigned		
 macro	RANDOM_CONTINUUM_ADDITION	src/hashkit/dyn_random.c	30	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 macro	RANDOM_POINTS_PER_SERVER	src/hashkit/dyn_random.c	32	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 fn	random_update	src/hashkit/dyn_random.c	34	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
 fn	random_dispatch	src/hashkit/dyn_random.c	144	dead				DEV-H3: file not in libhashkit_a_SOURCES (src/hashkit/Makefile.am); distribution: is conf_set_deprecated (src/dyn_conf.c:1091)
-macro	BITS_PER_DIGIT	src/hashkit/dyn_token.c	33	todo				
+macro	BITS_PER_DIGIT	src/hashkit/dyn_token.c	33	dead				used only in a commented-out line (src/hashkit/dyn_token.c:131)
 macro	DIGITS_PER_INT	src/hashkit/dyn_token.c	36	ported	crates/dynomite/src/hashkit/token.rs::DIGITS_PER_INT			
-fn	init_dyn_token	src/hashkit/dyn_token.c	38	todo				
-fn	deinit_dyn_token	src/hashkit/dyn_token.c	43	todo				
-fn	size_dyn_token	src/hashkit/dyn_token.c	50	todo				
-fn	copy_dyn_token	src/hashkit/dyn_token.c	60	todo				
-fn	set_int_dyn_token	src/hashkit/dyn_token.c	68	todo				
-fn	print_dyn_token	src/hashkit/dyn_token.c	74	todo				
+fn	init_dyn_token	src/hashkit/dyn_token.c	38	ported	crates/dynomite/src/hashkit/token.rs::DynToken::new	crates/c-oracle/tests/token_oracle.rs::parse_dyn_token_matches_c		zero sign and length
+fn	deinit_dyn_token	src/hashkit/dyn_token.c	43	replaced	crates/dynomite/src/hashkit/token.rs::DynToken			DEV-S3: ownership; dropping the value ends it
+fn	size_dyn_token	src/hashkit/dyn_token.c	50	ported	crates/dynomite/src/hashkit/token.rs::DynToken::size	crates/c-oracle/tests/token_oracle.rs::parse_dyn_token_matches_c		C ASSERT(len<=4) becomes an Err
+fn	copy_dyn_token	src/hashkit/dyn_token.c	60	replaced	crates/dynomite/src/hashkit/token.rs::DynToken			DEV-S3: Clone (C copies mag[0] only; every C caller copies one-word tokens, DEV-H4)
+fn	set_int_dyn_token	src/hashkit/dyn_token.c	68	ported	crates/dynomite/src/hashkit/token.rs::DynToken::set_int	crates/c-oracle/tests/hashkit_oracle.rs::every_hash_matches_c		every hash writes its token through it
+fn	print_dyn_token	src/hashkit/dyn_token.c	74	replaced	crates/dynomite/src/hashkit/token.rs::DynToken			DEV-S2: Display/Debug for the debug-log dump
 fn	add_next_word	src/hashkit/dyn_token.c	83	ported	crates/dynomite/src/hashkit/token.rs::add_next_word	crates/c-oracle/tests/token_oracle.rs::parse_dyn_token_matches_c		exercised by >10-digit inputs
 fn	parse_dyn_token	src/hashkit/dyn_token.c	106	ported	crates/dynomite/src/hashkit/token.rs::parse_token	crates/c-oracle/tests/token_oracle.rs::parse_dyn_token_matches_c		
 fn	cmp_dyn_token	src/hashkit/dyn_token.c	154	ported	crates/dynomite/src/hashkit/token.rs::cmp	crates/c-oracle/tests/token_oracle.rs::cmp_dyn_token_matches_c		Rust impl Ord for DynToken
 fn	derive_tokens	src/hashkit/dyn_token.c	185	deviation:DEV-H4	crates/dynomite/src/conf/tokens.rs::parse			single token only; see DEV-H4
 fn	derive_token	src/hashkit/dyn_token.c	219	deviation:DEV-H4	crates/dynomite/src/cluster/gossip.rs::parse_seed_node			seed token; single in-range token via TokenList::parse (DEV-H4)
-macro	_DYN_TOKEN_H_	src/hashkit/dyn_token.h	7	todo				
-struct	dyn_token	src/hashkit/dyn_token.h	14	todo				
+macro	_DYN_TOKEN_H_	src/hashkit/dyn_token.h	7	dead				include guard; no Rust counterpart needed
+struct	dyn_token	src/hashkit/dyn_token.h	14	ported	crates/dynomite/src/hashkit/token.rs::DynToken	crates/c-oracle/tests/token_oracle.rs::parse_dyn_token_matches_c		
 macro	MEMCACHE_MAX_KEY_LENGTH	src/proto/dyn_memcache.c	39	todo				
 fn	memcache_storage	src/proto/dyn_memcache.c	45	todo				
 fn	memcache_cas	src/proto/dyn_memcache.c	66	todo				

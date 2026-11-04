@@ -31,6 +31,7 @@ const UNITS: &[&str] = &[
     "src/hashkit/dyn_murmur3.c",
     "src/hashkit/dyn_one_at_a_time.c",
     "src/hashkit/dyn_token.c",
+    "src/hashkit/dyn_hashkit.c",
     "src/dyn_vnode.c",
     "src/dyn_histogram.c",
     "contrib/murmur3/murmur3.c",
