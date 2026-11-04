@@ -688,3 +688,189 @@ pub fn cleanup_hdel_script(
     }
     Ok(Reply::Bulk(None))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A store that answers from a script of replies, in order, recording
+    /// the commands; the arms real Redis cannot reach (a falsy `EXISTS`, a
+    /// non-numeric score, a non-integer count) are driven this way.
+    struct Scripted {
+        replies: std::collections::VecDeque<Reply>,
+        seen: Vec<String>,
+    }
+
+    impl Scripted {
+        fn new(replies: Vec<Reply>) -> Self {
+            Self {
+                replies: replies.into(),
+                seen: Vec::new(),
+            }
+        }
+    }
+
+    impl RepairStore for Scripted {
+        fn call(&mut self, args: &[&[u8]]) -> Reply {
+            self.seen
+                .push(String::from_utf8_lossy(&args.join(&b' ')).into_owned());
+            self.replies.pop_front().unwrap_or(Reply::Bulk(None))
+        }
+    }
+
+    const KEYS: ScriptKeys<'static> = ScriptKeys {
+        key: b"k",
+        add_set: b"._add-set",
+        rem_set: b"._rem-set",
+    };
+
+    #[test]
+    fn non_numeric_score_is_a_script_error() {
+        let mut s = Scripted::new(vec![Reply::Bulk(None), Reply::bulk(b"not-a-number")]);
+        let r = set_script(&mut s, KEYS, b"SET", b"3", b"v");
+        assert_eq!(
+            r,
+            Err(Reply::Error(
+                b"ERR user_script: attempt to compare nil with number".to_vec()
+            ))
+        );
+        let mut s = Scripted::new(vec![Reply::Bulk(None), Reply::Integer(4)]);
+        assert!(
+            set_script(&mut s, KEYS, b"SET", b"3", b"v").is_err(),
+            "an integer score is not a bulk number"
+        );
+    }
+
+    #[test]
+    fn non_integer_count_is_a_script_error() {
+        // HDEL with no metadata: the field is not stale, ZADD, then HDEL
+        // replies with a status instead of an integer.
+        let mut s = Scripted::new(vec![
+            Reply::Bulk(None),
+            Reply::Bulk(None),
+            Reply::Status(b"OK".to_vec()),
+            Reply::Status(b"OK".to_vec()),
+        ]);
+        let r = hdel_script(&mut s, KEYS, b"HDEL", b"3", &[b"f"]);
+        assert_eq!(
+            r,
+            Err(Reply::Error(
+                b"ERR user_script: attempt to perform arithmetic on a non-number value".to_vec()
+            ))
+        );
+    }
+
+    #[test]
+    fn get_of_a_recorded_key_whose_value_is_gone_drops_the_add_entry() {
+        // GET -> nil; ZSCORE add -> "2"; ZREM add; ZSCORE rem -> nil.
+        let mut s = Scripted::new(vec![
+            Reply::Bulk(None),
+            Reply::bulk(b"2"),
+            Reply::Integer(1),
+            Reply::Bulk(None),
+        ]);
+        let r = get_script(&mut s, KEYS, b"GET").unwrap();
+        assert_eq!(
+            r,
+            Reply::Array(vec![
+                Reply::bulk(b"X"),
+                Reply::Integer(0),
+                Reply::Bulk(None)
+            ])
+        );
+        assert!(
+            s.seen.iter().any(|c| c == "ZREM ._add-set k"),
+            "{:?}",
+            s.seen
+        );
+    }
+
+    #[test]
+    fn delete_of_a_key_that_does_not_exist_replies_zero() {
+        // No metadata, then EXISTS -> nil (falsy): nothing is written.
+        let mut s = Scripted::new(vec![
+            Reply::Bulk(None),
+            Reply::Bulk(None),
+            Reply::Bulk(None),
+        ]);
+        assert_eq!(
+            del_script(&mut s, KEYS, b"DEL", b"3").unwrap(),
+            Reply::Integer(0)
+        );
+        assert!(
+            !s.seen.iter().any(|c| c.starts_with("ZADD")),
+            "{:?}",
+            s.seen
+        );
+    }
+
+    #[test]
+    fn stale_hash_write_against_a_top_level_delete_replies_zero() {
+        // ZSCORE rem k -> "5"; the write at ts 3 is older.
+        let mut s = Scripted::new(vec![Reply::bulk(b"5")]);
+        assert_eq!(
+            hset_script(&mut s, KEYS, b"HSET", b"3", &[(b"f", b"v")]).unwrap(),
+            Reply::Integer(0)
+        );
+    }
+
+    #[test]
+    fn hget_of_a_recorded_field_with_no_value_reports_absent() {
+        // rem k nil, rem field nil, add k "2", add field "2", HGET nil.
+        let mut s = Scripted::new(vec![
+            Reply::Bulk(None),
+            Reply::Bulk(None),
+            Reply::bulk(b"2"),
+            Reply::bulk(b"2"),
+            Reply::Bulk(None),
+        ]);
+        let r = hget_script(&mut s, KEYS, b"HGET", b"f").unwrap();
+        assert_eq!(
+            r,
+            Reply::Array(vec![
+                Reply::bulk(b"X"),
+                Reply::Integer(0),
+                Reply::Bulk(None)
+            ])
+        );
+    }
+
+    #[test]
+    fn zadd_with_more_than_three_options_writes_nothing() {
+        // claim_key: rem nil, add nil, ZADD add; field: add nil, rem nil.
+        let mut s = Scripted::new(vec![
+            Reply::Bulk(None),
+            Reply::Bulk(None),
+            Reply::Integer(1),
+            Reply::Bulk(None),
+            Reply::Bulk(None),
+        ]);
+        let opts: [&[u8]; 4] = [b"NX", b"CH", b"INCR", b"GT"];
+        let r = zadd_script(&mut s, KEYS, b"ZADD", b"3", &opts, &[(b"m", b"1")]).unwrap();
+        assert_eq!(r, Reply::Bulk(None));
+        assert!(
+            !s.seen.iter().any(|c| c.starts_with("ZADD k")),
+            "{:?}",
+            s.seen
+        );
+    }
+
+    #[test]
+    fn hash_cleanup_keeps_the_top_level_entry_while_fields_remain() {
+        // ZSCORE rem field -> "2"; ZREM -> 1; ZCARD -> 1 (another field).
+        let mut s = Scripted::new(vec![
+            Reply::bulk(b"2"),
+            Reply::Integer(1),
+            Reply::Integer(1),
+        ]);
+        assert_eq!(
+            cleanup_hdel_script(&mut s, KEYS, b"3", b"f").unwrap(),
+            Reply::Integer(1)
+        );
+        assert!(
+            !s.seen.iter().any(|c| c == "ZREM ._rem-set k"),
+            "{:?}",
+            s.seen
+        );
+    }
+}

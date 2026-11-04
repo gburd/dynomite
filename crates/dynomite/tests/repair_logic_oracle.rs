@@ -536,6 +536,94 @@ fn op(
     }
 }
 
+/// Directed cases for the delete-marker paths: writes and deletes racing a
+/// delete at another timestamp, and cleanups older than their delete.
+fn directed_tombstones(scripts: &Scripts, lua: &mut Client, rust: &mut Client) {
+    let bulk = |s: &str| Reply::Bulk(Some(s.as_bytes().to_vec()));
+    let cases: Vec<(Vec<Op>, Reply)> = vec![
+        // SET after a delete at an earlier ts takes the key back (the
+        // remove entry is dropped); a GET of a recorded key whose value is
+        // gone drops the stale add entry and reports X.
+        (
+            vec![
+                op("DEL", "s1", "2", &[], &[]),
+                op("SET", "s1", "3", &[], &[("f1", "a")]),
+                op("GET", "s1", "0", &[], &[]),
+            ],
+            Reply::Array(vec![bulk("E"), bulk("3"), bulk("a")]),
+        ),
+        (
+            vec![
+                op("HSET", "h1", "2", &[], &[("f1", "a")]),
+                op("SET", "h1", "3", &[], &[("f1", "b")]),
+                op("DEL", "h1", "4", &[], &[]),
+                op("GET", "h1", "0", &[], &[]),
+            ],
+            Reply::Array(vec![bulk("R"), bulk("4"), Reply::Bulk(None)]),
+        ),
+        // A newer delete of a written key deletes it (1); a delete older
+        // than an earlier delete replies 0.
+        (
+            vec![
+                op("SET", "s1", "3", &[], &[("f1", "a")]),
+                op("DEL", "s1", "4", &[], &[]),
+            ],
+            Reply::Integer(1),
+        ),
+        (
+            vec![
+                op("DEL", "s1", "4", &[], &[]),
+                op("DEL", "s1", "3", &[], &[]),
+            ],
+            Reply::Integer(0),
+        ),
+        // HGET of a field recorded but deleted out from under the script.
+        (
+            vec![
+                op("HSET", "h1", "2", &[], &[("f1", "a")]),
+                op("HDEL", "h1", "3", &[], &[("f2", "")]),
+                op("HGET", "h1", "0", &[], &[("f2", "")]),
+            ],
+            Reply::Array(vec![bulk("R"), bulk("3"), Reply::Bulk(None)]),
+        ),
+        // Writes older than a top-level delete are refused (0).
+        (
+            vec![
+                op("DEL", "z1", "5", &[], &[]),
+                op("ZADD", "z1", "4", &[], &[("f1", "1")]),
+            ],
+            Reply::Integer(0),
+        ),
+        (
+            vec![
+                op("DEL", "t1", "5", &[], &[]),
+                op("SADD", "t1", "4", &[], &[("f1", "")]),
+            ],
+            Reply::Integer(0),
+        ),
+        // Cleanups older than the delete they would clear do nothing.
+        (
+            vec![
+                op("DEL", "s1", "5", &[], &[]),
+                op("CLEANUP_DEL", "s1", "4", &[], &[]),
+            ],
+            Reply::Integer(0),
+        ),
+        (
+            vec![
+                op("HDEL", "h1", "5", &[], &[("f1", "")]),
+                op("CLEANUP_HDEL", "h1", "4", &[], &[("f1", "")]),
+            ],
+            Reply::Integer(0),
+        ),
+    ];
+    for (i, (ops, want)) in cases.into_iter().enumerate() {
+        let mut last = None;
+        run_ops(ops, scripts, lua, rust, |_, r| last = Some(r.clone()));
+        assert_eq!(last, Some(want), "tombstone case {i}");
+    }
+}
+
 /// Cases a random draw reaches rarely, each with the reply the reference
 /// gives, so a regression names the behaviour it broke.
 fn directed(scripts: &Scripts, lua: &mut Client, rust: &mut Client) {
@@ -642,10 +730,10 @@ fn directed(scripts: &Scripts, lua: &mut Client, rust: &mut Client) {
             ),
         ),
     ];
-    for (ops, want) in cases {
+    for (i, (ops, want)) in cases.into_iter().enumerate() {
         let mut last = None;
         run_ops(ops, scripts, lua, rust, |_, r| last = Some(r.clone()));
-        assert_eq!(last, Some(want));
+        assert_eq!(last, Some(want), "directed case {i}");
     }
 }
 
@@ -663,6 +751,7 @@ fn every_repair_script_matches_the_lua_reference() {
     let mut lua = Client::connect(lua_server.port);
     let mut rust = Client::connect(rust_server.port);
     directed(&scripts, &mut lua, &mut rust);
+    directed_tombstones(&scripts, &mut lua, &mut rust);
 
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     hegel::Hegel::new(|tc: TestCase| {

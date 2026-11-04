@@ -24,6 +24,10 @@
 //!   `crates/dynomite/src/msg/response_mgr.rs` and the consistency
 //!   fan-out in `crates/dynomite/src/cluster/dispatch.rs` /
 //!   `pool.rs`.
+//! * [`lww_repair`] models timestamp read repair across replicas (the
+//!   winner and stale-set choice of
+//!   `crates/dynomite/src/proto/redis/repair/make.rs`): after a repairing
+//!   read every replica holds the newest state.
 //! * [`reply_class`] models the classification of local and peer
 //!   replies before the coalescer votes on them (`classify_reply` in
 //!   `crates/dynomite/src/cluster/dispatch.rs`): identical payloads agree
@@ -98,6 +102,7 @@ pub mod delta_crdt;
 pub mod fragment_merge;
 pub mod gossip;
 pub mod hlc;
+pub mod lww_repair;
 pub mod quorum;
 pub mod quorum_decision;
 pub mod ramp;
