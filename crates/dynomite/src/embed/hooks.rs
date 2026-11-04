@@ -252,6 +252,8 @@ pub struct MemoryDatastore {
 #[derive(Debug, Default)]
 struct MemoryStore {
     calls: u64,
+    /// Bucket -> keys, for the streaming list routes.
+    buckets: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
 }
 
 impl MemoryDatastore {
@@ -732,7 +734,6 @@ impl MetricsSink for LoggingMetricsSink {
 
 use bytes::Bytes;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
 /// Type alias for the byte stream returned by
@@ -791,36 +792,10 @@ impl futures_core::Stream for VecByteStream {
 
 // ---------- MemoryDatastore listing index ----------------------------------
 //
-// `MemoryDatastore`'s public field layout (a single `Arc<Mutex<...>>`
-// holding the dispatch counter) was committed before the streaming
-// list path existed. To keep the published surface unchanged, the
-// per-instance bucket/key index is held in a process-wide registry
-// keyed by the `Arc<Mutex<MemoryStore>>` pointer identity. Cloning
-// a `MemoryDatastore` shares its `inner` `Arc`, so clones see the
-// same listing -- mirroring the existing dispatch-count behaviour.
-
-#[derive(Debug, Default)]
-struct MemoryListing {
-    buckets: BTreeMap<Vec<u8>, BTreeSet<Vec<u8>>>,
-}
-
-#[derive(Debug, Default, Clone)]
-struct ListingHandle {
-    inner: Arc<Mutex<MemoryListing>>,
-}
-
-fn listing_for(ds: &MemoryDatastore) -> ListingHandle {
-    static REGISTRY: OnceLock<Mutex<Vec<(usize, ListingHandle)>>> = OnceLock::new();
-    let registry = REGISTRY.get_or_init(|| Mutex::new(Vec::new()));
-    let id = Arc::as_ptr(&ds.inner) as usize;
-    let mut g = registry.lock();
-    if let Some((_, h)) = g.iter().find(|(k, _)| *k == id) {
-        return h.clone();
-    }
-    let h = ListingHandle::default();
-    g.push((id, h.clone()));
-    h
-}
+// The bucket / key index lives in the instance's own state, so clones
+// share it and separate instances never do. (It used to live in a
+// process-wide registry keyed by the inner Arc's address, which a dropped
+// instance's successor could reuse and inherit the old listing from.)
 
 impl MemoryDatastore {
     /// Insert `(bucket, key)` into the in-memory listing index.
@@ -840,8 +815,7 @@ impl MemoryDatastore {
     /// assert_eq!(ds.list_keys_snapshot(b"users").len(), 2);
     /// ```
     pub fn insert(&self, bucket: &[u8], key: &[u8]) {
-        let h = listing_for(self);
-        let mut g = h.inner.lock();
+        let mut g = self.inner.lock();
         g.buckets
             .entry(bucket.to_vec())
             .or_default()
@@ -859,8 +833,7 @@ impl MemoryDatastore {
     /// ```
     #[must_use]
     pub fn list_buckets_snapshot(&self) -> Vec<Bytes> {
-        let h = listing_for(self);
-        let g = h.inner.lock();
+        let g = self.inner.lock();
         g.buckets
             .keys()
             .map(|b| Bytes::copy_from_slice(b))
@@ -879,8 +852,7 @@ impl MemoryDatastore {
     /// ```
     #[must_use]
     pub fn list_keys_snapshot(&self, bucket: &[u8]) -> Vec<Bytes> {
-        let h = listing_for(self);
-        let g = h.inner.lock();
+        let g = self.inner.lock();
         g.buckets
             .get(bucket)
             .map(|s| s.iter().map(|k| Bytes::copy_from_slice(k)).collect())

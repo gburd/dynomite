@@ -306,3 +306,29 @@ async fn embedded_listen_socket_serves_a_wire_client() {
 
     handle.shutdown().await.expect("shutdown ok");
 }
+
+/// Regression: the MemoryDatastore listing index lived in a process-wide
+/// registry keyed by the address of the instance's inner Arc. A new
+/// instance allocated at a dropped one's address inherited its buckets
+/// (a dyniak list-buckets test saw 5 buckets where it created 3, under
+/// parallel tests). Each instance now owns its listing.
+#[test]
+fn regression_memory_datastore_listing_is_per_instance() {
+    use dynomite::embed::hooks::MemoryDatastore;
+    for round in 0..200 {
+        let old = MemoryDatastore::new();
+        old.insert(b"stale-a", b"k");
+        old.insert(b"stale-b", b"k");
+        drop(old);
+        let fresh = MemoryDatastore::new();
+        fresh.insert(b"b0", b"k");
+        assert_eq!(fresh.list_buckets_snapshot().len(), 1, "round {round}");
+        let clone = fresh.clone();
+        clone.insert(b"b1", b"k");
+        assert_eq!(
+            fresh.list_buckets_snapshot().len(),
+            2,
+            "clones share the listing"
+        );
+    }
+}
