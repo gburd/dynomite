@@ -61,7 +61,11 @@ for target in "${TARGETS[@]}"; do
     failed=1
     break
   fi
-  if ! "${FUZZ_CARGO[@]}" fuzz run --fuzz-dir "$FUZZ_DIR" "$target" "$seeds" \
+  # libFuzzer writes new inputs into the first corpus directory; keep
+  # the committed seeds read-only by giving it a scratch corpus first.
+  corpus="$ROOT/target/quickfuzz-corpus/$target"
+  mkdir -p "$corpus"
+  if ! "${FUZZ_CARGO[@]}" fuzz run --fuzz-dir "$FUZZ_DIR" "$target" "$corpus" "$seeds" \
       -- -max_total_time="$DURATION" -timeout=10 2>&1 | tee "target/quickfuzz-$target.log"
   then
     echo "quickfuzz: $target FAILED" >&2
