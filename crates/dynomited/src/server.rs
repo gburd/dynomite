@@ -2256,7 +2256,7 @@ async fn run_one_backend_conn(
     frames_ok: &mut u64,
     pending: &mut BackendPending,
 ) -> Result<(), NetError> {
-    use dynomite::msg::{Msg, MsgParseResult, MsgType};
+    use dynomite::msg::{Msg, MsgType};
     use dynomite::net::OutboundEnvelope;
     use tracing::Instrument as _;
     let mut accumulated: Vec<u8> = Vec::new();
@@ -2277,6 +2277,34 @@ async fn run_one_backend_conn(
                     bytes = req.bytes.len(),
                 );
                 let req_span = req.span.clone();
+                if data_store != dynomite::conf::DataStore::Memcache {
+                    if let Some(script) =
+                        dynomite::proto::redis::repair::request::ScriptRequest::decode(&req.bytes)
+                    {
+                        let sc = ScriptConn {
+                            conn: &mut conn,
+                            read_buf: &mut read_buf,
+                            accumulated: &mut accumulated,
+                            pending: &mut *pending,
+                            data_store,
+                            frames_ok,
+                        };
+                        let reply = run_repair_script(sc, script).instrument(send_span).await?;
+                        let mut msg = Msg::new(req.req_id, MsgType::Unknown, false);
+                        let _ = dynomite::proto::redis::redis_parse_rsp(&mut msg, &reply);
+                        msg.append_bytes(&conn.mbuf_pool().clone(), &reply);
+                        let _ = req
+                            .responder
+                            .send(OutboundEnvelope {
+                                req_id: req.req_id,
+                                rsp: msg,
+                                span: req_span,
+                                source_peer_idx: req.target_peer_idx,
+                            })
+                            .await;
+                        continue;
+                    }
+                }
                 let req_bytes = req.bytes;
                 let transport = conn.transport_mut().ok_or(NetError::Closed)?;
                 let write_res = async { transport.write_all(&req_bytes).await }
@@ -2304,68 +2332,166 @@ async fn run_one_backend_conn(
                 }
                 conn.record_recv(n);
                 accumulated.extend_from_slice(&read_buf[..n]);
-                while !accumulated.is_empty() {
-                    let head_id = pending.front().map_or(0, |p| p.0);
-                    let mut msg = Msg::new(head_id, MsgType::Unknown, false);
-                    let result = match data_store {
-                        dynomite::conf::DataStore::Valkey | dynomite::conf::DataStore::Dyniak => {
-                            dynomite::proto::redis::redis_parse_rsp(&mut msg, &accumulated)
-                        }
-                        dynomite::conf::DataStore::Memcache => {
-                            dynomite::proto::memcache::memcache_parse_rsp(&mut msg, &accumulated)
-                        }
-                    };
-                    match result {
-                        MsgParseResult::Ok => {
-                            let consumed = msg.parser_pos();
-                            if consumed == 0 {
-                                return Err(NetError::Parse("backend parser stalled".into()));
-                            }
-                            let bytes = accumulated[..consumed].to_vec();
-                            accumulated.drain(0..consumed);
-                            *frames_ok = frames_ok.saturating_add(1);
-                            if let Some((req_id, responder, req_span, source_peer_idx)) =
-                                pending.pop_front()
-                            {
-                                let parse_span = tracing::info_span!(
-                                    parent: &req_span,
-                                    "backend.parse",
-                                    req_id,
-                                    bytes = consumed,
-                                );
-                                let env = parse_span.in_scope(|| {
-                                    let pool = conn.mbuf_pool().clone();
-                                    msg.append_bytes(&pool, &bytes);
-                                    OutboundEnvelope {
-                                        req_id,
-                                        rsp: msg,
-                                        span: req_span,
-                                        source_peer_idx,
-                                    }
-                                });
-                                let _ = responder.send(env).await;
-                            }
-                        }
-                        MsgParseResult::Again => {
-                            break;
-                        }
-                        MsgParseResult::Repair
-                        | MsgParseResult::Noop
-                        | MsgParseResult::Fragment => {
-                            let consumed = msg.parser_pos();
-                            if consumed > 0 {
-                                accumulated.drain(0..consumed);
-                            } else {
-                                break;
-                            }
-                        }
-                        MsgParseResult::Error
-                        | MsgParseResult::OomError
-                        | MsgParseResult::DynoConfig => {
-                            return Err(NetError::Parse(format!("{result:?}")));
-                        }
-                    }
+                deliver_replies(&conn.mbuf_pool().clone(), &mut accumulated, pending, data_store, frames_ok).await?;
+            }
+        }
+    }
+}
+
+/// A request the backend driver has written and still owes a reply:
+/// (req_id, responder, span, target peer index). The target index is
+/// carried through to the reply so the replica coalescer counts the local
+/// datastore's vote.
+type PendingReply = (
+    u64,
+    tokio::sync::mpsc::Sender<dynomite::net::OutboundEnvelope>,
+    tracing::Span,
+    Option<u32>,
+);
+
+/// Parse every complete reply in `accumulated` and hand each to the
+/// responder of the oldest pending request.
+async fn deliver_replies(
+    mbuf_pool: &dynomite::io::mbuf::MbufPool,
+    accumulated: &mut Vec<u8>,
+    pending: &mut std::collections::VecDeque<PendingReply>,
+    data_store: dynomite::conf::DataStore,
+    frames_ok: &mut u64,
+) -> Result<(), NetError> {
+    use dynomite::msg::{Msg, MsgParseResult, MsgType};
+    use dynomite::net::OutboundEnvelope;
+    while !accumulated.is_empty() {
+        let head_id = pending.front().map_or(0, |p| p.0);
+        let mut msg = Msg::new(head_id, MsgType::Unknown, false);
+        let result = match data_store {
+            dynomite::conf::DataStore::Valkey | dynomite::conf::DataStore::Dyniak => {
+                dynomite::proto::redis::redis_parse_rsp(&mut msg, accumulated)
+            }
+            dynomite::conf::DataStore::Memcache => {
+                dynomite::proto::memcache::memcache_parse_rsp(&mut msg, accumulated)
+            }
+        };
+        match result {
+            MsgParseResult::Ok => {
+                let consumed = msg.parser_pos();
+                if consumed == 0 {
+                    return Err(NetError::Parse("backend parser stalled".into()));
                 }
+                let bytes = accumulated[..consumed].to_vec();
+                accumulated.drain(0..consumed);
+                *frames_ok = frames_ok.saturating_add(1);
+                if let Some((req_id, responder, req_span, source_peer_idx)) = pending.pop_front() {
+                    let parse_span = tracing::info_span!(
+                        parent: &req_span,
+                        "backend.parse",
+                        req_id,
+                        bytes = consumed,
+                    );
+                    let env = parse_span.in_scope(|| {
+                        msg.append_bytes(mbuf_pool, &bytes);
+                        OutboundEnvelope {
+                            req_id,
+                            rsp: msg,
+                            span: req_span,
+                            source_peer_idx,
+                        }
+                    });
+                    let _ = responder.send(env).await;
+                }
+            }
+            MsgParseResult::Again => break,
+            MsgParseResult::Repair | MsgParseResult::Noop | MsgParseResult::Fragment => {
+                let consumed = msg.parser_pos();
+                if consumed > 0 {
+                    accumulated.drain(0..consumed);
+                } else {
+                    break;
+                }
+            }
+            MsgParseResult::Error | MsgParseResult::OomError | MsgParseResult::DynoConfig => {
+                return Err(NetError::Parse(format!("{result:?}")));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Read more datastore bytes into `accumulated`.
+async fn read_more(
+    conn: &mut Conn,
+    read_buf: &mut [u8],
+    accumulated: &mut Vec<u8>,
+) -> Result<(), NetError> {
+    let transport = conn.transport_mut().ok_or(NetError::Closed)?;
+    let n = transport.read(read_buf).await.map_err(NetError::Io)?;
+    if n == 0 {
+        return Err(NetError::Closed);
+    }
+    conn.record_recv(n);
+    accumulated.extend_from_slice(&read_buf[..n]);
+    Ok(())
+}
+
+/// Connection state a repair script runs on.
+struct ScriptConn<'a> {
+    conn: &'a mut Conn,
+    read_buf: &'a mut [u8],
+    accumulated: &'a mut Vec<u8>,
+    pending: &'a mut std::collections::VecDeque<PendingReply>,
+    data_store: dynomite::conf::DataStore,
+    frames_ok: &'a mut u64,
+}
+
+/// Run a repair script on the datastore connection and return its reply
+/// as RESP bytes.
+///
+/// Replies owed to earlier pipelined requests are delivered first, then
+/// each script command is written and its reply read before the next.
+/// The caller reads no new request meanwhile, so no other command this
+/// node sends its datastore lands inside the script.
+async fn run_repair_script(
+    sc: ScriptConn<'_>,
+    script: dynomite::proto::redis::repair::request::ScriptRequest,
+) -> Result<Vec<u8>, NetError> {
+    use dynomite::proto::redis::repair::request::{
+        encode_command, encode_reply, parse_reply, ScriptRun, Step,
+    };
+    while !sc.pending.is_empty() {
+        read_more(sc.conn, sc.read_buf, sc.accumulated).await?;
+        let pool = sc.conn.mbuf_pool().clone();
+        deliver_replies(
+            &pool,
+            sc.accumulated,
+            sc.pending,
+            sc.data_store,
+            sc.frames_ok,
+        )
+        .await?;
+    }
+    let mut run = ScriptRun::new(script);
+    loop {
+        match run.step() {
+            Step::Command(cmd) => {
+                let bytes = encode_command(&cmd);
+                let transport = sc.conn.transport_mut().ok_or(NetError::Closed)?;
+                transport.write_all(&bytes).await.map_err(NetError::Io)?;
+                sc.conn.record_send(bytes.len());
+                // shortcut: an unparseable reply waits for more bytes; a
+                // datastore only sends well-formed RESP, EOF or an error ends it.
+                let reply = loop {
+                    if let Some((reply, used)) = parse_reply(sc.accumulated) {
+                        sc.accumulated.drain(..used);
+                        break reply;
+                    }
+                    read_more(sc.conn, sc.read_buf, sc.accumulated).await?;
+                };
+                run.feed(reply);
+            }
+            Step::Done(result) => {
+                *sc.frames_ok = sc.frames_ok.saturating_add(1);
+                return Ok(encode_reply(&match result {
+                    Ok(r) | Err(r) => r,
+                }));
             }
         }
     }
