@@ -374,7 +374,7 @@ fn xa_variants_parse_through_header() {
 #[test]
 fn regression_overlong_header_number_wraps_instead_of_panicking() {
     for field in 0..6 {
-        let mut parts = vec![
+        let mut parts = [
             "1".to_string(),
             "0".to_string(),
             "0".to_string(),
