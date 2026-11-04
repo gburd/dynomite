@@ -535,6 +535,72 @@ mod tests {
     }
 
     #[test]
+    fn display_and_default() {
+        assert_eq!(Hlc::default(), Hlc::zero());
+        assert_eq!(Hlc::from_parts(7, 2).unwrap().to_string(), "hlc(l=7, c=2)");
+        assert_eq!(
+            HlcError::LogicalOverflow.to_string(),
+            "hlc logical component exceeds 48 bits"
+        );
+        assert_eq!(
+            HlcError::CounterOverflow.to_string(),
+            "hlc counter exceeds 16 bits (physical clock wedged)"
+        );
+        assert_eq!(
+            HlcError::BadEncoding.to_string(),
+            "hlc encoding must be exactly 8 bytes"
+        );
+        let e: &dyn std::error::Error = &HlcError::BadEncoding;
+        assert!(e.source().is_none());
+    }
+
+    #[test]
+    fn wall_clock_tick_is_monotone_and_near_now() {
+        let mut c = Hlc::zero();
+        let a = c.now_from_wall_clock();
+        let b = c.now_from_wall_clock();
+        assert!(b > a);
+        // 2020-01-01 in epoch millis: the reading is a real wall clock.
+        assert!(a.logical() > 1_577_836_800_000);
+        assert!(a.logical() <= MAX_LOGICAL);
+    }
+
+    #[test]
+    fn try_update_overflow_on_each_branch_and_physical_range() {
+        // Received l dominates, its counter is wedged.
+        let mut c = Hlc::from_parts(1, 0).unwrap();
+        let remote = Hlc::from_parts(10, MAX_COUNTER).unwrap();
+        assert_eq!(c.try_update(&remote, 5), Err(HlcError::CounterOverflow));
+        // Local l dominates, local counter is wedged.
+        let mut d = Hlc::from_parts(10, MAX_COUNTER).unwrap();
+        let older = Hlc::from_parts(3, 0).unwrap();
+        assert_eq!(d.try_update(&older, 5), Err(HlcError::CounterOverflow));
+        // Physical time out of range.
+        let mut e = Hlc::zero();
+        assert_eq!(
+            e.try_update(&Hlc::zero(), MAX_LOGICAL + 1),
+            Err(HlcError::LogicalOverflow)
+        );
+        // Failed updates leave the clock untouched.
+        assert_eq!(c, Hlc::from_parts(1, 0).unwrap());
+        assert_eq!(e, Hlc::zero());
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant")]
+    fn tick_panics_on_out_of_range_physical_time() {
+        let mut c = Hlc::zero();
+        let _ = c.tick(MAX_LOGICAL + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "invariant")]
+    fn update_panics_on_wedged_counter() {
+        let mut c = Hlc::from_parts(10, MAX_COUNTER).unwrap();
+        let _ = c.update(&Hlc::from_parts(10, 0).unwrap(), 10);
+    }
+
+    #[test]
     fn hlc_cmp_matches_ord() {
         let a = Hlc::from_parts(1, 2).unwrap();
         let b = Hlc::from_parts(1, 3).unwrap();
