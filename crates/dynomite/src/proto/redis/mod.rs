@@ -39,7 +39,6 @@ pub use self::fragment::{redis_fragment, FragmentDispatcher, FragmentOutcome};
 pub use self::multikey::redis_is_multikey_request;
 pub use self::parser::{redis_parse_req, redis_parse_rsp};
 pub use self::repair::{
-    redis_clear_repair_md_for_key, redis_make_repair_query, redis_reconcile_responses,
-    redis_rewrite_query, redis_rewrite_query_with_timestamp_md, RepairError, RepairOutcome,
+    redis_reconcile_responses, redis_rewrite_query, RepairError, RepairOutcome,
 };
 pub use self::verify::{redis_verify_request, VerifyError};

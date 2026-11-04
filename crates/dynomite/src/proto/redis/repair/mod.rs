@@ -7,25 +7,24 @@
 //!
 //! * [`rewrite::redis_rewrite_query`] - command-level rewrites
 //!   (the `SMEMBERS -> SORT ALPHA` case under DC_SAFE_QUORUM).
-//! * [`rewrite::redis_rewrite_query_with_timestamp_md`] - rewrite
-//!   a write request into a Lua script that records timestamps.
+//! * [`request`] - a write or repairable read becomes a repair-script
+//!   request carrying the coordinator's timestamp
+//!   ([`request::ScriptRequest::from_request`]); replicas run it on their
+//!   datastore connection.
 //! * [`make`] - pick the freshest timestamped read reply
 //!   ([`make::find_most_updated`]) and build the write that repairs the
 //!   stale replicas ([`make::repair_request`]).
-//! * [`clear::redis_clear_repair_md_for_key`] - emit a metadata
-//!   cleanup script after a delete completes.
+//!   After every replica has answered a delete, the coordinator sends the
+//!   metadata cleanup script for it.
 //! * [`logic`] - the timestamp bookkeeping each repair script
 //!   performs, evaluated by the engine over a [`logic::RepairStore`].
-//! * [`request`] - the internal repair-script request replicas run on
-//!   their datastore connection.
 //! * [`reconcile::redis_reconcile_responses`] - pick a single
 //!   response from the per-replica set, optionally producing a
 //!   read-repair side effect.
 //!
-//! The Lua templates the rewrite path renders into outgoing
-//! requests live as compile-time constants in [`scripts`].
+//! The reference script texts the logic is checked against live as
+//! constants in [`scripts`].
 
-pub mod clear;
 pub mod logic;
 pub mod make;
 pub mod reconcile;
@@ -33,10 +32,8 @@ pub mod request;
 pub mod rewrite;
 pub mod scripts;
 
-pub use self::clear::redis_clear_repair_md_for_key;
-pub use self::make::redis_make_repair_query;
 pub use self::reconcile::redis_reconcile_responses;
-pub use self::rewrite::{redis_rewrite_query, redis_rewrite_query_with_timestamp_md};
+pub use self::rewrite::redis_rewrite_query;
 
 use crate::msg::Msg;
 

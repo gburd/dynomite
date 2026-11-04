@@ -62,65 +62,6 @@ pub fn redis_rewrite_query(orig: &mut Msg, pool: &MbufPool) -> Result<RepairOutc
     Ok(RepairOutcome::Rewritten(new_msg))
 }
 
-/// Rewrite a write request as a Lua script that records timestamps.
-///
-/// The full per-command timestamp-rewrite logic depends on the
-/// post-parsed argument structure, which uses
-/// `keypos` / `argpos` arrays the parser populates on every key
-/// and bulk argument. That per-command Lua-script generation is
-/// not yet wired into the read-repair workflow.
-///
-/// Returns [`RepairOutcome::NoOp`] when the request is not eligible
-/// for the rewrite. Returns
-/// [`RepairError::Invariant`] when the request is eligible but the
-/// post-parse invariant fails.
-///
-/// # Examples
-///
-/// ```
-/// use dynomite::msg::{Msg, MsgType};
-/// use dynomite::proto::redis::redis_rewrite_query_with_timestamp_md;
-///
-/// let mut req = Msg::new(0, MsgType::ReqRedisGet, true);
-/// let outcome = redis_rewrite_query_with_timestamp_md(&mut req).unwrap();
-/// matches!(outcome, dynomite::proto::redis::RepairOutcome::NoOp);
-/// ```
-pub fn redis_rewrite_query_with_timestamp_md(orig: &mut Msg) -> Result<RepairOutcome, RepairError> {
-    if !orig.is_request() {
-        return Ok(RepairOutcome::NoOp);
-    }
-    // Only commands with `has_repair_support` in `proto_cmd_info`
-    // are rewritten; the parser already records this via
-    // [`Msg::flags().rewrite_with_ts_possible`] (false for parses
-    // that crossed an mbuf boundary).
-    if !orig.flags().rewrite_with_ts_possible {
-        return Ok(RepairOutcome::NoOp);
-    }
-    let supported = matches!(
-        orig.ty(),
-        MsgType::ReqRedisSet
-            | MsgType::ReqRedisDel
-            | MsgType::ReqRedisHset
-            | MsgType::ReqRedisHmset
-            | MsgType::ReqRedisHdel
-            | MsgType::ReqRedisHget
-            | MsgType::ReqRedisGet
-            | MsgType::ReqRedisSadd
-            | MsgType::ReqRedisSrem
-            | MsgType::ReqRedisSismember
-            | MsgType::ReqRedisZadd
-            | MsgType::ReqRedisZrem
-            | MsgType::ReqRedisZscore
-    );
-    if !supported {
-        return Ok(RepairOutcome::NoOp);
-    }
-    // Full Lua-script generation lands once Stage 9 exercises the
-    // workflow end-to-end. The data-shape side: caller can detect
-    // `RepairOutcome::NoOp` and fall back to checksum-based repair.
-    Ok(RepairOutcome::NoOp)
-}
-
 fn write_into_chain(msg: &mut Msg, pool: &MbufPool, mut buf: &[u8]) {
     while !buf.is_empty() {
         let mut mb = pool.get();
@@ -187,52 +128,6 @@ mod tests {
         let pool = MbufPool::default();
         assert!(matches!(
             redis_rewrite_query(&mut rsp, &pool).unwrap(),
-            RepairOutcome::NoOp,
-        ));
-    }
-
-    #[test]
-    fn timestamp_rewrite_on_response_is_noop() {
-        // The timestamp-rewrite variant also guards on is_request.
-        let mut rsp = Msg::new(0, MsgType::RspRedisStatus, false);
-        assert!(matches!(
-            redis_rewrite_query_with_timestamp_md(&mut rsp).unwrap(),
-            RepairOutcome::NoOp,
-        ));
-    }
-
-    #[test]
-    fn timestamp_rewrite_supported_command_falls_through_to_noop() {
-        // A supported write command with rewrite_with_ts_possible set
-        // passes the `supported` match and reaches the final NoOp
-        // (full Lua generation is not yet wired in).
-        let mut req = Msg::new(0, MsgType::ReqRedisSet, true);
-        assert!(req.flags().rewrite_with_ts_possible);
-        assert!(matches!(
-            redis_rewrite_query_with_timestamp_md(&mut req).unwrap(),
-            RepairOutcome::NoOp,
-        ));
-    }
-
-    #[test]
-    fn timestamp_rewrite_unsupported_command_is_noop() {
-        // An unsupported command is filtered by the `supported`
-        // match (the !supported NoOp arm).
-        let mut req = Msg::new(0, MsgType::ReqRedisLpush, true);
-        assert!(matches!(
-            redis_rewrite_query_with_timestamp_md(&mut req).unwrap(),
-            RepairOutcome::NoOp,
-        ));
-    }
-
-    #[test]
-    fn timestamp_rewrite_blocked_when_ts_not_possible() {
-        // When the parse crossed an mbuf boundary the parser clears
-        // rewrite_with_ts_possible, and the rewrite bails early.
-        let mut req = Msg::new(0, MsgType::ReqRedisSet, true);
-        req.flags_mut().rewrite_with_ts_possible = false;
-        assert!(matches!(
-            redis_rewrite_query_with_timestamp_md(&mut req).unwrap(),
             RepairOutcome::NoOp,
         ));
     }

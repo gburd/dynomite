@@ -729,51 +729,6 @@ fn redis_rewrite_smembers_dc_one_is_noop() {
 }
 
 #[test]
-fn redis_rewrite_get_with_ts_md_is_noop() {
-    // GET is repairable; the ts-md rewrite returns NoOp until the
-    // post-parse argument arrays are wired up (Stage 9). Pinning
-    // the data-shape behaviour here.
-    let mut req = Msg::new(0, MsgType::ReqRedisGet, true);
-    req.push_key(KeyPos::without_tag(b"k".to_vec()));
-    let outcome = redis::redis_rewrite_query_with_timestamp_md(&mut req).unwrap();
-    assert!(matches!(outcome, redis::RepairOutcome::NoOp));
-}
-
-#[test]
-fn redis_rewrite_set_with_ts_md_after_chain_split() {
-    let mut req = Msg::new(0, MsgType::ReqRedisSet, true);
-    req.push_key(KeyPos::without_tag(b"k".to_vec()));
-    // Simulate the parser flagging the rewrite as impossible
-    // because the request crossed an mbuf boundary.
-    req.flags_mut().rewrite_with_ts_possible = false;
-    let outcome = redis::redis_rewrite_query_with_timestamp_md(&mut req).unwrap();
-    assert!(matches!(outcome, redis::RepairOutcome::NoOp));
-}
-
-#[test]
-fn redis_make_repair_query_disabled() {
-    // Without read repairs enabled, the repair surface is a no-op.
-    let req = Msg::new(0, MsgType::ReqRedisGet, true);
-    let mgr = ResponseMgr::new(&req, 3, None);
-    let outcome = redis::redis_make_repair_query(&mgr).unwrap();
-    assert!(matches!(outcome, redis::RepairOutcome::NoOp));
-}
-
-#[test]
-fn redis_clear_repair_md_for_non_delete_is_noop() {
-    let mut req = Msg::new(0, MsgType::ReqRedisGet, true);
-    let outcome = redis::redis_clear_repair_md_for_key(&mut req).unwrap();
-    assert!(matches!(outcome, redis::RepairOutcome::NoOp));
-}
-
-#[test]
-fn redis_clear_repair_md_for_del_returns_noop_until_quorum() {
-    let mut req = Msg::new(0, MsgType::ReqRedisDel, true);
-    let outcome = redis::redis_clear_repair_md_for_key(&mut req).unwrap();
-    assert!(matches!(outcome, redis::RepairOutcome::NoOp));
-}
-
-#[test]
 fn redis_reconcile_dc_quorum_picks_first() {
     let req = Msg::new(0, MsgType::ReqRedisGet, true);
     let mgr = ResponseMgr::new(&req, 3, None);

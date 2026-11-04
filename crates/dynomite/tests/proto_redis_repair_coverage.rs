@@ -4,20 +4,16 @@
 //! Exercises the MSET key/value fragmentation path (verb + value
 //! emission), the empty-keys and unsupported-type fragment errors,
 //! the pre/post-coalesce response-state guards and the fragment
-//! integer accumulation, the read-repair enabled path in
-//! `redis_make_repair_query`, and the multikey reconcile decision.
+//! integer accumulation, and the multikey reconcile decision.
 
 use dynomite::io::mbuf::MbufPool;
-use dynomite::msg::{
-    set_read_repairs_enabled, ConsistencyLevel, KeyPos, Msg, MsgParseResult, MsgType, ResponseMgr,
-};
-use dynomite::proto::redis::repair::make::{is_repairable, redis_make_repair_query};
+use dynomite::msg::{ConsistencyLevel, KeyPos, Msg, MsgParseResult, MsgType, ResponseMgr};
 use dynomite::proto::redis::repair::reconcile::{
     is_foldable_multikey_response, redis_reconcile_responses, ReconcileOutcome,
 };
 use dynomite::proto::redis::{
     accumulate_fragment_integer, redis_fragment, redis_parse_req, redis_post_coalesce,
-    redis_pre_coalesce, FragmentDispatcher, RepairOutcome,
+    redis_pre_coalesce, FragmentDispatcher,
 };
 
 /// Distribute by first key byte across two shards.
@@ -344,43 +340,4 @@ fn foldable_multikey_response_predicate() {
     assert!(is_foldable_multikey_response(MsgType::RspRedisMultibulk));
     assert!(is_foldable_multikey_response(MsgType::RspRedisStatus));
     assert!(!is_foldable_multikey_response(MsgType::RspRedisBulk));
-}
-
-#[test]
-fn repairable_predicate() {
-    assert!(is_repairable(MsgType::ReqRedisGet));
-    assert!(is_repairable(MsgType::ReqRedisHget));
-    assert!(is_repairable(MsgType::ReqRedisSismember));
-    assert!(is_repairable(MsgType::ReqRedisZscore));
-    assert!(!is_repairable(MsgType::ReqRedisSet));
-}
-
-#[test]
-fn make_repair_query_enabled_paths() {
-    // The read-repairs global is a process-wide one-shot. Under
-    // `cargo test` all tests in this binary share one process, so a
-    // single test owns the toggle and exercises both the repairable
-    // (reaches the post-toggle build branch) and non-repairable
-    // (short-circuits on the is_repairable guard) paths. Both report
-    // NoOp because the build step needs the Stage 9 per-response
-    // parsing.
-    set_read_repairs_enabled(true);
-    assert!(
-        dynomite::msg::is_read_repairs_enabled(),
-        "read repairs should be enabled after set_read_repairs_enabled(true)"
-    );
-
-    let get = Msg::new(0, MsgType::ReqRedisGet, true);
-    let get_mgr = ResponseMgr::new(&get, 3, None);
-    assert!(matches!(
-        redis_make_repair_query(&get_mgr).expect("repair query ok"),
-        RepairOutcome::NoOp
-    ));
-
-    let set = Msg::new(0, MsgType::ReqRedisSet, true);
-    let set_mgr = ResponseMgr::new(&set, 3, None);
-    assert!(matches!(
-        redis_make_repair_query(&set_mgr).expect("repair query ok"),
-        RepairOutcome::NoOp
-    ));
 }
