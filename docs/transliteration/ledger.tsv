@@ -685,28 +685,28 @@ macro	log_warn	src/dyn_log.h	111	replaced	crates/dynomite/src/core/log/mod.rs::l
 macro	log_panic	src/dyn_log.h	118	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
 var	nfree_mbufq	src/dyn_mbuf.c	28	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
 var	free_mbufq	src/dyn_mbuf.c	29	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
-var	mbuf_chunk_size	src/dyn_mbuf.c	31	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
-var	mbuf_offset	src/dyn_mbuf.c	33	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+var	mbuf_chunk_size	src/dyn_mbuf.c	31	ported	crates/dynomite/src/io/mbuf.rs::MBUF_CHUNK_SIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_data_size_matches_c		configured mbuf_size set by mbuf_init; Rust stores the size and derives the data region
+var	mbuf_offset	src/dyn_mbuf.c	33	ported	crates/dynomite/src/io/mbuf.rs::chunk_data_size	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_data_size_matches_c		size + MBUF_ESIZE - MBUF_HSIZE; 16336 at the 16384 default
 var	mbuf_alloc_count	src/dyn_mbuf.c	34	replaced	crates/dynomite/src/io/mbuf.rs::total_allocated	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2
 fn	mbuf_alloc_get_count	src/dyn_mbuf.c	36	replaced	crates/dynomite/src/io/mbuf.rs::total_allocated	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2
-fn	mbuf_chunk_sz	src/dyn_mbuf.c	38	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
-fn	_mbuf_get	src/dyn_mbuf.c	40	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
-fn	mbuf_get	src/dyn_mbuf.c	93	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+fn	mbuf_chunk_sz	src/dyn_mbuf.c	38	todo				size + MBUF_ESIZE; only caller is redis_copy_bulk (dyn_redis.c:3061), not yet ported
+fn	_mbuf_get	src/dyn_mbuf.c	40	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_data_size_matches_c		DEV-S2/S3: LIFO free list; each chunk holds mbuf_data_size bytes
+fn	mbuf_get	src/dyn_mbuf.c	93	ported	crates/dynomite/src/io/mbuf.rs::MbufPool::get	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_data_size_matches_c		end = data_size - MBUF_ESIZE (16320 writable at 16384)
 fn	mbuf_free	src/dyn_mbuf.c	121	replaced	crates/dynomite/src/io/mbuf.rs::Mbuf			DEV-S3: Drop
 fn	mbuf_free_queue_size	src/dyn_mbuf.c	133	replaced	crates/dynomite/src/io/mbuf.rs::free_count	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2
 fn	mbuf_dump	src/dyn_mbuf.c	135	replaced	crates/dynomite/src/io/mbuf.rs::readable			debug hexdump; Rust logs the readable slice
 fn	mbuf_put	src/dyn_mbuf.c	146	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
 fn	mbuf_rewind	src/dyn_mbuf.c	160	ported	crates/dynomite/src/io/mbuf.rs::rewind	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		
 fn	mbuf_length	src/dyn_mbuf.c	169	ported	crates/dynomite/src/io/mbuf.rs::len	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		
-fn	mbuf_remaining_space	src/dyn_mbuf.c	179	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
-fn	mbuf_data_size	src/dyn_mbuf.c	189	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+fn	mbuf_remaining_space	src/dyn_mbuf.c	179	ported	crates/dynomite/src/io/mbuf.rs::remaining	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_data_size_matches_c		
+fn	mbuf_data_size	src/dyn_mbuf.c	189	ported	crates/dynomite/src/io/mbuf.rs::mbuf_data_size	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_data_size_matches_c		redis key-length bound in proto/redis/parser.rs; regression crates/dynomite/tests/regression_mbuf_data_size.rs
 fn	mbuf_insert	src/dyn_mbuf.c	194	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque push_back/push_front/remove
 fn	mbuf_insert_head	src/dyn_mbuf.c	199	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque push_back/push_front/remove
 fn	mbuf_insert_after	src/dyn_mbuf.c	205	dead				no caller in src/ (grep -rnw over src/*.[ch]: definition only)
 fn	mbuf_remove	src/dyn_mbuf.c	215	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque push_back/push_front/remove
 fn	mbuf_copy	src/dyn_mbuf.c	228	ported	crates/dynomite/src/io/mbuf.rs::copy_from_slice	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		
 fn	mbuf_split	src/dyn_mbuf.c	250	ported	crates/dynomite/src/io/mbuf.rs::split_off	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		cb precopy argument: callers write into the returned Mbuf
-fn	mbuf_init	src/dyn_mbuf.c	292	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
+fn	mbuf_init	src/dyn_mbuf.c	292	ported	crates/dynomite/src/io/mbuf.rs::mbuf_init	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_data_size_matches_c		called by dynomited Server::build and embed Server::from_pool with mbuf_size (or deprecated -m); free list is DEV-S2
 fn	mbuf_deinit	src/dyn_mbuf.c	303	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
 fn	mbuf_write_char	src/dyn_mbuf.c	313	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: dnode header written with write! decimal formatting
 fn	mbuf_write_string	src/dyn_mbuf.c	319	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: dnode header written with write! decimal formatting
@@ -724,12 +724,12 @@ macro	MBUF_MAGIC	src/dyn_mbuf.h	49	replaced	crates/dynomite/src/io/mbuf.rs::Mbuf
 macro	MBUF_MIN_SIZE	src/dyn_mbuf.h	50	ported	crates/dynomite/src/io/mbuf.rs::MBUF_MIN_SIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		same value as C
 macro	MBUF_MAX_SIZE	src/dyn_mbuf.h	51	ported	crates/dynomite/src/io/mbuf.rs::MBUF_MAX_SIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		same value as C
 macro	MBUF_SIZE	src/dyn_mbuf.h	52	ported	crates/dynomite/src/io/mbuf.rs::MBUF_SIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		same value as C
-macro	MBUF_HSIZE	src/dyn_mbuf.h	53	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+macro	MBUF_HSIZE	src/dyn_mbuf.h	53	ported	crates/dynomite/src/io/mbuf.rs::MBUF_HSIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_data_size_matches_c		sizeof(struct mbuf) = 64 on x86_64
 macro	MBUF_ESIZE	src/dyn_mbuf.h	54	ported	crates/dynomite/src/io/mbuf.rs::MBUF_ESIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		same value as C
 macro	MBUF_FLAGS_READ_FLIP	src/dyn_mbuf.h	57	ported	crates/dynomite/src/io/mbuf.rs::MBUF_FLAG_READ_FLIP	crates/dynomite/src/io/mbuf.rs::mbuf_flags_round_trip		same value as C
 macro	MBUF_FLAGS_JUST_DECRYPTED	src/dyn_mbuf.h	58	ported	crates/dynomite/src/io/mbuf.rs::MBUF_FLAG_JUST_DECRYPTED	crates/dynomite/src/io/mbuf.rs::mbuf_flags_round_trip		same value as C
 fn	mbuf_empty	src/dyn_mbuf.h	60	ported	crates/dynomite/src/io/mbuf.rs::is_empty	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		
-fn	mbuf_full	src/dyn_mbuf.h	64	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+fn	mbuf_full	src/dyn_mbuf.h	64	ported	crates/dynomite/src/io/mbuf.rs::is_full	crates/c-oracle/tests/mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header		
 macro	DN_IOV_MAX	src/dyn_message.c	37	todo				
 macro	DN_IOV_MAX	src/dyn_message.c	37	todo				
 var	msg_id	src/dyn_message.c	146	todo				
