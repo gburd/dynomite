@@ -1324,6 +1324,315 @@ mod tests {
         assert_eq!(fetched, CrdtValue::Hll(n));
     }
 
+    fn actor(p: &str) -> ActorId {
+        ActorId::new("dc1", p)
+    }
+
+    fn every_map_op() -> Vec<MapOp> {
+        let f = |n: &str, t| FieldKey::new(n.as_bytes().to_vec(), t);
+        vec![
+            MapOp::Update {
+                field: f("c", FieldType::Counter),
+                op: NestedOp::Counter(2),
+            },
+            MapOp::Update {
+                field: f("s", FieldType::OrSet),
+                op: NestedOp::SetAdd(b"e".to_vec()),
+            },
+            MapOp::Update {
+                field: f("s", FieldType::OrSet),
+                op: NestedOp::SetAdd(b"keep".to_vec()),
+            },
+            MapOp::Update {
+                field: f("s", FieldType::OrSet),
+                op: NestedOp::SetRemove(b"e".to_vec()),
+            },
+            MapOp::Update {
+                field: f("r", FieldType::LwwRegister),
+                op: NestedOp::RegisterAssign {
+                    value: b"v".to_vec(),
+                    ts_micros: 7,
+                },
+            },
+            MapOp::Update {
+                field: f("f", FieldType::EwFlag),
+                op: NestedOp::Flag(true),
+            },
+            MapOp::Update {
+                field: f("m", FieldType::NestedMap),
+                op: NestedOp::Map(Box::new(MapOp::Update {
+                    field: f("ic", FieldType::Counter),
+                    op: NestedOp::Counter(1),
+                })),
+            },
+            MapOp::Remove {
+                field: f("gone", FieldType::Counter),
+            },
+        ]
+    }
+
+    fn every_op() -> Vec<CrdtOp> {
+        vec![
+            counter_op("a", -3),
+            CrdtOp::Set {
+                actor: actor("a"),
+                adds: vec![b"x".to_vec(), b"y".to_vec()],
+                removes: vec![b"y".to_vec()],
+            },
+            CrdtOp::Register {
+                actor: actor("a"),
+                value: b"v".to_vec(),
+            },
+            CrdtOp::Flag {
+                actor: actor("a"),
+                enable: true,
+            },
+            CrdtOp::Flag {
+                actor: actor("a"),
+                enable: false,
+            },
+            CrdtOp::Map {
+                actor: actor("a"),
+                ops: every_map_op(),
+            },
+            CrdtOp::Hll {
+                actor: actor("a"),
+                items: vec![b"i1".to_vec(), b"i2".to_vec()],
+            },
+        ]
+    }
+
+    #[test]
+    fn every_op_round_trips_and_rejects_every_prefix() {
+        for op in every_op() {
+            let bytes = op.to_bytes();
+            assert_eq!(bytes[0], op.type_tag());
+            assert_eq!(CrdtOp::from_bytes(&bytes).as_ref(), Ok(&op));
+            let wire = op.to_op_wire();
+            assert_eq!(wire[0], DT_WIRE_OP);
+            assert_eq!(&wire[1..], &bytes[..]);
+            assert_eq!(peek_tag(&op.to_state_bytes()), Ok(op.type_tag()));
+            for cut in 0..bytes.len() {
+                assert!(
+                    CrdtOp::from_bytes(&bytes[..cut]).is_err(),
+                    "{op:?} cut {cut}"
+                );
+            }
+        }
+        let state = to_state_wire(b"abc");
+        assert_eq!(state, vec![DT_WIRE_STATE, b'a', b'b', b'c']);
+    }
+
+    #[test]
+    fn from_bytes_rejects_unknown_discriminators_and_bad_actor() {
+        use crate::datatypes::CrdtSerialError;
+        let mut head = vec![99];
+        put_lp(&mut head, b"dc1");
+        put_lp(&mut head, b"a");
+        assert_eq!(
+            CrdtOp::from_bytes(&head),
+            Err(CrdtSerialError::UnknownTag(99))
+        );
+        // Map op with one entry; vary the bytes after the count.
+        let map_with = |tail: &[u8]| {
+            let mut b = head.clone();
+            b[0] = TAG_MAP;
+            b.extend_from_slice(&1u64.to_be_bytes());
+            b.extend_from_slice(tail);
+            CrdtOp::from_bytes(&b)
+        };
+        assert_eq!(map_with(&[7]), Err(CrdtSerialError::UnknownTag(7)));
+        let mut bad_field = vec![MAP_OP_REMOVE];
+        put_lp(&mut bad_field, b"f");
+        bad_field.push(9);
+        assert_eq!(map_with(&bad_field), Err(CrdtSerialError::UnknownTag(9)));
+        let mut bad_nested = vec![MAP_OP_UPDATE];
+        put_lp(&mut bad_nested, b"f");
+        bad_nested.push(1);
+        bad_nested.push(8);
+        assert_eq!(map_with(&bad_nested), Err(CrdtSerialError::UnknownTag(8)));
+        // Non-UTF-8 actor dc name.
+        let mut bad_dc = vec![TAG_COUNTER];
+        put_lp(&mut bad_dc, &[0xFF, 0xFE]);
+        assert_eq!(CrdtOp::from_bytes(&bad_dc), Err(CrdtSerialError::Truncated));
+    }
+
+    #[tokio::test]
+    async fn every_apply_path_agrees_on_the_projected_value() {
+        for op in every_op() {
+            let tag = op.type_tag();
+            let locked = store();
+            let borrowed = MemStore::default();
+            let merged = store();
+            for round in 0..2 {
+                let v1 = locked.apply(b"b", b"k", &op).await.unwrap();
+                let v2 = CrdtStore::apply_borrowed(&borrowed, b"b", b"k", &op)
+                    .await
+                    .unwrap();
+                assert_eq!(v1, v2, "{op:?} round {round}");
+                let (v3, state) = CrdtStore::apply_borrowed_with_state(&borrowed, b"b", b"x", &op)
+                    .await
+                    .unwrap();
+                assert_eq!(project_state(&state, tag).unwrap(), v3);
+                assert_eq!(locked.fetch(b"b", b"k", tag).await.unwrap(), v1);
+                assert_eq!(
+                    CrdtStore::fetch_borrowed(&borrowed, b"b", b"k", tag)
+                        .await
+                        .unwrap(),
+                    v2
+                );
+                // State shipping: merging the single-op state twice is
+                // idempotent and projects like the state itself.
+                let st = op.to_state_bytes();
+                merged.merge_state(b"b", b"k", &st).await.unwrap();
+                assert_eq!(
+                    merged.fetch(b"b", b"k", tag).await.unwrap(),
+                    project_state(&st, tag).unwrap()
+                );
+                assert_eq!(
+                    project_state(&merge_two_states(&st, &st).unwrap(), tag).unwrap(),
+                    project_state(&st, tag).unwrap()
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn type_mismatch_and_unknown_tags_are_serial_errors() {
+        let s = store();
+        s.apply(b"b", b"k", &counter_op("a", 1)).await.unwrap();
+        for op in every_op()
+            .into_iter()
+            .filter(|o| o.type_tag() != TAG_COUNTER)
+        {
+            assert!(matches!(
+                s.apply(b"b", b"k", &op).await,
+                Err(CrdtStoreError::Serial(_))
+            ));
+            let st = op.to_state_bytes();
+            assert!(matches!(
+                s.merge_state(b"b", b"k", &st).await,
+                Err(CrdtStoreError::Serial(_))
+            ));
+        }
+        assert!(matches!(
+            s.fetch(b"b", b"k", TAG_SET).await,
+            Err(CrdtStoreError::Serial(_))
+        ));
+        let ds = MemStore::default();
+        ds.riak_put(b"b", b"k", &counter_to_bytes(&PnCounter::new()), &[])
+            .await
+            .unwrap();
+        assert!(matches!(
+            s.fetch(b"b", b"k", 99).await,
+            Err(CrdtStoreError::Serial(_))
+        ));
+        assert!(matches!(
+            CrdtStore::fetch_borrowed(&ds, b"b", b"k", 99).await,
+            Err(CrdtStoreError::Serial(_))
+        ));
+        assert_eq!(
+            CrdtStore::fetch_borrowed(&ds, b"b", b"missing", TAG_SET)
+                .await
+                .unwrap(),
+            CrdtValue::Missing
+        );
+        // A blob with a valid version but an unknown type tag.
+        assert!(matches!(
+            s.merge_state(b"b", b"k", &[1, 99]).await,
+            Err(CrdtStoreError::Serial(_))
+        ));
+        assert!(matches!(
+            s.merge_state(b"b", b"k", &[42, 1]).await,
+            Err(CrdtStoreError::Serial(_))
+        ));
+    }
+
+    #[test]
+    fn merge_two_states_and_project_state_edges() {
+        use crate::datatypes::CrdtSerialError;
+        let mut c = PnCounter::new();
+        c.increment(&actor("a"), 2);
+        let cb = counter_to_bytes(&c);
+        assert_eq!(merge_two_states(&[], &cb).unwrap(), cb);
+        assert_eq!(merge_two_states(&cb, &[]).unwrap(), cb);
+        let mut d = PnCounter::new();
+        d.increment(&actor("b"), 3);
+        let m = merge_two_states(&cb, &counter_to_bytes(&d)).unwrap();
+        assert_eq!(
+            project_state(&m, TAG_COUNTER).unwrap(),
+            CrdtValue::Counter(5)
+        );
+        let mut s1 = OrSet::new();
+        s1.add(&actor("a"), b"x".to_vec());
+        let mut s2 = OrSet::new();
+        s2.add(&actor("b"), b"y".to_vec());
+        let ms = merge_two_states(&set_to_bytes(&s1), &set_to_bytes(&s2)).unwrap();
+        assert_eq!(
+            project_state(&ms, TAG_SET).unwrap(),
+            CrdtValue::Set(vec![b"x".to_vec(), b"y".to_vec()])
+        );
+        assert_eq!(
+            merge_two_states(&[1, 99], &cb),
+            Err(CrdtSerialError::UnknownTag(99))
+        );
+        assert_eq!(project_state(&cb, 99), Err(CrdtSerialError::UnknownTag(99)));
+    }
+
+    #[tokio::test]
+    async fn datastore_errors_surface_as_crdt_store_errors() {
+        let ds: Arc<dyn Datastore> = Arc::new(dynomite::embed::MemoryDatastore::new());
+        let s = CrdtStore::new(Arc::clone(&ds));
+        let e = s.apply(b"b", b"k", &counter_op("a", 1)).await.unwrap_err();
+        assert!(matches!(
+            e,
+            CrdtStoreError::Datastore(DatastoreError::Unsupported(_))
+        ));
+        assert!(e.to_string().starts_with("crdt store: datastore error: "));
+        assert!(s.fetch(b"b", b"k", TAG_COUNTER).await.is_err());
+        assert!(s
+            .merge_state(b"b", b"k", &counter_to_bytes(&PnCounter::new()))
+            .await
+            .is_err());
+        assert!(
+            CrdtStore::fetch_borrowed(ds.as_ref(), b"b", b"k", TAG_COUNTER)
+                .await
+                .is_err()
+        );
+        let se = CrdtStoreError::from(crate::datatypes::CrdtSerialError::Truncated);
+        assert_eq!(se.to_string(), "crdt store: crdt serial: truncated payload");
+    }
+
+    #[hegel::test(test_cases = 256)]
+    fn prop_scalar_ops_round_trip(tc: hegel::TestCase) {
+        use hegel::generators as gs;
+        let bytes = || gs::vecs(gs::integers::<u8>()).max_size(32);
+        let a = ActorId::new(
+            tc.draw(gs::text().max_size(8)),
+            tc.draw(gs::text().max_size(8)),
+        );
+        let op = match tc.draw(gs::integers::<u8>().max_value(3)) {
+            0 => CrdtOp::Counter {
+                actor: a,
+                delta: tc.draw(gs::integers::<i64>()),
+            },
+            1 => CrdtOp::Set {
+                actor: a,
+                adds: tc.draw(gs::vecs(bytes()).max_size(4)),
+                removes: tc.draw(gs::vecs(bytes()).max_size(4)),
+            },
+            2 => CrdtOp::Register {
+                actor: a,
+                value: tc.draw(bytes()),
+            },
+            _ => CrdtOp::Hll {
+                actor: a,
+                items: tc.draw(gs::vecs(bytes()).max_size(4)),
+            },
+        };
+        assert_eq!(CrdtOp::from_bytes(&op.to_bytes()), Ok(op));
+    }
+
     /// Regression: a corrupt replica DtUpdate op frame declaring a huge
     /// element count or field length must be a clean decode error, not
     /// a capacity-overflow or add-overflow panic in the receive loop.
