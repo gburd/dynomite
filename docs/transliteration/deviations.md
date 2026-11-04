@@ -534,6 +534,28 @@ held at its current behaviour until the owner decides.
   only adds repair writes C would have needed anyway on the next read.
 * Status: PROPOSED
 
+### DEV-R4: same-millisecond writes leave replicas divergent (C finding)
+
+* C: the coordinator stamps each write with `current_timestamp_in_millis`
+  (src/dyn_client.c ~345); the repair scripts let a write win when its
+  timestamp is not older (`<` comparisons), so two writes of one key in
+  the same millisecond through different coordinators carry equal
+  timestamps and each replica keeps whichever reached it last.
+  `find_most_updated_rsp` sees no newer reply, so a repairing read does
+  not reconcile them: the replicas stay divergent until a later write.
+* Rust: identical.
+* Evidence: optest `read_repair::concurrent_writers_converge_after_repairing_reads`
+  (three writers through three nodes, 60 conflicting ops each) leaves
+  one key divergent by such a tie in about 1 of 8 runs, for C and for
+  Rust alike; the scenario reports ties and fails on any other
+  disagreement.
+* Recommendation: break ties deterministically (e.g. append the
+  coordinator's node index to the timestamp, or compare the value bytes
+  when timestamps are equal) so equal-timestamp writes converge. That
+  changes the stored score format (or the scripts' comparison), so it
+  is an owner decision.
+* Status: PROPOSED
+
 ## E. Decisions log
 
 Owner decisions are appended here with date and the exact instruction.

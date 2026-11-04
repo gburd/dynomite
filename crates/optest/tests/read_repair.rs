@@ -5,7 +5,9 @@
 //! conflicting SET / DEL / HSET / HDEL on a few keys. Afterwards a
 //! repairing read of every key must leave every replica's datastore in
 //! the same state: the same value (or absence) and the same add / remove
-//! metadata for that key. Run against the C reference first (real Lua),
+//! metadata for that key, except where two writes landed in the same
+//! millisecond: equal timestamps have no winner, in C as in Rust (DEV-R4),
+//! and the scenario reports those ties instead of failing on them. Run against the C reference first (real Lua),
 //! then the Rust engine; timestamps differ between runs, so the check is
 //! structural: replicas agree with each other.
 
@@ -35,7 +37,7 @@ fn engines() -> Vec<Engine> {
 
 /// What one replica holds for `key`: value, hash, and the key's entries in
 /// the top-level add / remove sets (scores dropped: they are timestamps).
-fn replica_view(store: &mut optest::resp::Client, key: &str) -> String {
+fn replica_view(store: &mut optest::resp::Client, key: &str) -> (String, Option<Vec<u8>>) {
     let ty = store.cmd(&["TYPE", key]).expect("TYPE");
     let body = match &ty {
         Value::Simple(t) if t == "string" => {
@@ -61,11 +63,16 @@ fn replica_view(store: &mut optest::resp::Client, key: &str) -> String {
     let fields_rem = store
         .cmd(&["ZRANGE", &format!("._rem-set_{key}"), "0", "-1"])
         .expect("ZRANGE");
-    format!(
+    let add_ts = match &add {
+        Value::Bulk(Some(ts)) => Some(ts.clone()),
+        _ => None,
+    };
+    let view = format!(
         "type={ty:?} body={body} add={} rem={} rem_fields={fields_rem:?}",
-        !matches!(add, Value::Bulk(None)),
+        add_ts.is_some(),
         !matches!(rem, Value::Bulk(None))
-    )
+    );
+    (view, add_ts)
 }
 
 #[test]
@@ -132,18 +139,34 @@ fn concurrent_writers_converge_after_repairing_reads() {
             }
             std::thread::sleep(Duration::from_millis(300));
         }
+        let mut ties = 0;
         for key in strings.iter().chain(hashes.iter()) {
-            let views: Vec<String> = c
+            let views: Vec<(String, Option<Vec<u8>>)> = c
                 .nodes
                 .iter()
                 .map(|n| replica_view(&mut n.store_client().expect("store"), key))
                 .collect();
-            eprintln!("[{engine:?}] {key}: {}", views[0]);
+            eprintln!("[{engine:?}] {key}: {}", views[0].0);
+            if views.iter().all(|v| v.0 == views[0].0) {
+                continue;
+            }
+            // Two writes of the same key in the same millisecond carry the
+            // same timestamp; each replica keeps the one that reached it
+            // last and the repairing read sees no newer replica (DEV-R4).
+            // Any other disagreement is a repair failure.
+            let same_ts = views.iter().all(|v| v.1.is_some() && v.1 == views[0].1);
             assert!(
-                views.iter().all(|v| *v == views[0]),
+                same_ts,
                 "{engine:?}: replicas disagree on {key} after repairing reads:\n{}",
-                views.join("\n")
+                views
+                    .iter()
+                    .map(|v| v.0.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
             );
+            ties += 1;
+            eprintln!("[{engine:?}] {key}: same-millisecond tie left divergent (DEV-R4)");
         }
+        eprintln!("[{engine:?}] keys left divergent by a timestamp tie: {ties}");
     }
 }
