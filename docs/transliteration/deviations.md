@@ -423,6 +423,72 @@ held at its current behaviour until the owner decides.
   depth stack as an authorised fix. Until then Rust stays equal to C.
 * Status: PROPOSED
 
+### DEV-R1a: repair-script atomicity by running the logic on the datastore connection
+
+* C: each rewritten write or repairable read is an `EVAL` of a Lua
+  script; Redis runs a script atomically with respect to every other
+  command.
+* DEV-R1 (authorised) asked for `WATCH`/`MULTI`/`EXEC` per key, retried
+  on abort, "subject to the oracle test; if it cannot match the Lua
+  outcomes it comes back to the owner". It cannot, for two reasons
+  visible in the scripts themselves (`repair/logic.rs`, oracle-checked
+  against the real Lua in `tests/repair_logic_oracle.rs`):
+  1. The scripts read their own writes. HSET/SADD/ZADD/HDEL loop over
+     fields and each iteration's `ZSCORE` must see the previous
+     iteration's `ZADD`/`ZREM` (duplicate fields); HDEL's closing
+     `ZCARD rem_set` counts the `ZREM`s it just made. Inside `MULTI`
+     every read returns `QUEUED`.
+  2. Some writes depend on a reply: ZADD records the field only when
+     the `ZADD` reply is not nil (NX/XX/INCR not applied), and GET
+     drops a stale add-set entry only when the value is nil.
+  Emulating both needs a client-side model of Redis sorted-set and
+  command semantics, which is a second implementation of Redis.
+* Proposal: run the script logic inline on the node's single connection
+  to its datastore. Every command a node sends its datastore goes over
+  that one connection (the C `server_connections` option is deprecated;
+  the Rust pool opens one), so a script run there, with the connection
+  driver waiting for the script's replies before taking the next
+  request, is atomic with respect to every other command the node
+  issues, which is all the repair scheme relies on. The only traffic it
+  is not atomic against is a client talking to the datastore directly,
+  bypassing Dynomite; Lua would also cover that.
+* Evidence required before merge: the DEV-R1 concurrency oracle (C
+  engine with real Lua vs Rust engine, interleaved writers with
+  conflicting timestamps through the same node, identical final data
+  and metadata sets).
+* Status: PROPOSED
+
+### DEV-R2: stale field writes clear the field's delete marker (C finding)
+
+* C: `HSET_SCRIPT`, `SADD_SCRIPT` and `ZADD_SCRIPT` run
+  `redis.call('ZREM', rem_set, field)` whenever the field has a delete
+  marker, before checking whether the write is older than the delete.
+  `HDEL_SCRIPT` checks first. A stale HSET therefore erases the
+  tombstone it lost to.
+* Reproduced against the real Lua (valkey 9.1): HSET f at t3, HDEL f at
+  t5 -> HGET is `[R, 5, nil]`; HSET f at t1 (stale) replies nil and HGET
+  becomes `[X, 0, nil]`; HSET f at t2 (still older than the delete) then
+  succeeds and HGET is `[E, 2, v2]`: the deleted field is back.
+* Rust: identical to C (`repair/logic.rs`, oracle-verified).
+* Recommendation: authorise the HDEL ordering for the three write
+  scripts (remove the marker only when the write is not stale). It is a
+  one-line change per script and cannot change any non-stale outcome.
+* Status: PROPOSED
+
+### DEV-H5: empty latency histograms report 1, not 0 (C finding)
+
+* C: `histo_compute` publishes `bucket_offsets[0]` (1) for a percentile
+  whose threshold count is 0, which includes an empty histogram; the
+  Rust histogram now does the same (`c-oracle/tests/histogram_oracle.rs`).
+  An idle node's `/info` latency percentiles read 1 microsecond.
+* C also skips `histo_compute` when `stats->updated == 0`; Rust computes
+  on every snapshot, so after a reset with no traffic C keeps the old
+  values and Rust shows 1. Not yet checked against C.
+* Recommendation: keep C's 1 (it is what C operators see); align the
+  compute-on-update condition in T12 when the stats surface is
+  transliterated.
+* Status: PROPOSED
+
 ## E. Decisions log
 
 Owner decisions are appended here with date and the exact instruction.
