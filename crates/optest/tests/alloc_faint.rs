@@ -83,6 +83,7 @@ fn statuses(report: &str) -> Vec<String> {
 }
 
 #[test]
+#[ignore = "soak: FAINT re-runs the debug binary once per allocation site (5-15 min, load-dependent); runs in scripts/slow_tests.sh and the slow-tests workflow"]
 fn rust_config_path_fails_stop_on_every_allocation_failure() {
     let Some((faint, tools)) = faint_or_skip() else {
         return;
