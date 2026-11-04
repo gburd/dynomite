@@ -366,3 +366,33 @@ fn xa_variants_parse_through_header() {
         assert_eq!(p.dmsg().ty, ty);
     }
 }
+
+/// Regression (quickfuzz dnode_parse): a header numeric field longer than
+/// twenty digits overflowed the accumulator's add and panicked. Every
+/// header number accumulates in a wrapping u64, so an over-long field
+/// parses to its value modulo 2^64 instead of aborting the process.
+#[test]
+fn regression_overlong_header_number_wraps_instead_of_panicking() {
+    for field in 0..6 {
+        let mut parts = vec![
+            "1".to_string(),
+            "0".to_string(),
+            "0".to_string(),
+            "1".to_string(),
+            "1".to_string(),
+            "1".to_string(),
+        ];
+        parts[field] = format!("13{}", "0".repeat(120));
+        let line = format!(
+            "$2014$ {} {} {} {} {} *{} d *0\r\n",
+            parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+        );
+        let _ = step_full(line.as_bytes());
+    }
+    let crash = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fuzz/seeds/dnode_parse/regression-overlong-msg-id"
+    ))
+    .expect("regression seed");
+    let _ = step_full(&crash);
+}

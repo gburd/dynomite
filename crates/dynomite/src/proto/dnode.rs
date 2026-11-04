@@ -572,7 +572,7 @@ impl DnodeParser {
                     // rejected: the streaming parser surfaces an
                     // error so the caller can drop the buffer.
                     if ch.is_ascii_digit() {
-                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.num = self.num.wrapping_mul(10).wrapping_add(u64::from(ch - b'0'));
                         self.prev_was_digit = true;
                         idx += 1;
                         continue;
@@ -589,7 +589,7 @@ impl DnodeParser {
                 }
                 DynParseState::TypeId => {
                     if ch.is_ascii_digit() {
-                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.num = self.num.wrapping_mul(10).wrapping_add(u64::from(ch - b'0'));
                         self.prev_was_digit = true;
                         idx += 1;
                         continue;
@@ -609,7 +609,7 @@ impl DnodeParser {
                 }
                 DynParseState::BitField => {
                     if ch.is_ascii_digit() {
-                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.num = self.num.wrapping_mul(10).wrapping_add(u64::from(ch - b'0'));
                         self.prev_was_digit = true;
                         idx += 1;
                         continue;
@@ -626,7 +626,7 @@ impl DnodeParser {
                 }
                 DynParseState::Version => {
                     if ch.is_ascii_digit() {
-                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.num = self.num.wrapping_mul(10).wrapping_add(u64::from(ch - b'0'));
                         self.prev_was_digit = true;
                         idx += 1;
                         continue;
@@ -663,7 +663,7 @@ impl DnodeParser {
                         continue;
                     }
                     if ch.is_ascii_digit() {
-                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.num = self.num.wrapping_mul(10).wrapping_add(u64::from(ch - b'0'));
                         // Reject pathological-size length fields
                         // before the cast to u32 wraps and a
                         // downstream Vec::reserve allocates the
@@ -715,7 +715,7 @@ impl DnodeParser {
                 }
                 DynParseState::PayloadLen => {
                     if ch.is_ascii_digit() {
-                        self.num = self.num.wrapping_mul(10) + u64::from(ch - b'0');
+                        self.num = self.num.wrapping_mul(10).wrapping_add(u64::from(ch - b'0'));
                         if self.num > MAX_DATA_LEN {
                             return ParseStep::Error { consumed: idx };
                         }

@@ -10,8 +10,7 @@
 #
 # When `cargo-fuzz` is not installed, the script logs a SKIP and
 # exits 0 so the surrounding gate stays green on developer machines
-# without nightly. CI installs cargo-fuzz and exercises the full
-# matrix.
+# without it. CI installs cargo-fuzz and exercises the full matrix.
 set -euo pipefail
 
 DURATION="${1:-60}"
@@ -44,6 +43,15 @@ fi
 
 cd "$ROOT"
 
+# cargo-fuzz needs nightly-only rustc flags (-Zsanitizer). Use a rustup
+# nightly when there is one; otherwise (the nix dev shell pins one stable
+# toolchain and has no rustup) let the pinned stable compiler accept them.
+if cargo +nightly --version >/dev/null 2>&1; then
+  FUZZ_CARGO=(cargo +nightly)
+else
+  FUZZ_CARGO=(env RUSTC_BOOTSTRAP=1 cargo)
+fi
+
 failed=0
 for target in "${TARGETS[@]}"; do
   echo "==> quickfuzz $target ($DURATION s)"
@@ -53,7 +61,7 @@ for target in "${TARGETS[@]}"; do
     failed=1
     break
   fi
-  if ! cargo +nightly fuzz run --fuzz-dir "$FUZZ_DIR" "$target" "$seeds" \
+  if ! "${FUZZ_CARGO[@]}" fuzz run --fuzz-dir "$FUZZ_DIR" "$target" "$seeds" \
       -- -max_total_time="$DURATION" -timeout=10 2>&1 | tee "target/quickfuzz-$target.log"
   then
     echo "quickfuzz: $target FAILED" >&2
