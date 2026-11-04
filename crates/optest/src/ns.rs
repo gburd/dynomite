@@ -88,7 +88,16 @@ pub fn in_sandbox(test_name: &str) -> Sandbox {
             "--kill-child",
         ])
         .arg(&exe)
-        .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
+        // `--include-ignored`: the parent only reaches here when libtest
+        // chose to run the test, so an `#[ignore]`d scenario run with
+        // `--run-ignored` must run in the child too.
+        .args([
+            test_name,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+            "--include-ignored",
+        ])
         .env(SANDBOX_ENV, "1")
         .output()
         .expect("spawn sandboxed test");
