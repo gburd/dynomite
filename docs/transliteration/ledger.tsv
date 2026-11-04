@@ -51,7 +51,7 @@ fn	req_filter	src/dyn_client.c	352	todo
 fn	req_forward_error	src/dyn_client.c	406	todo				
 fn	req_redis_stats	src/dyn_client.c	431	todo				
 fn	req_forward_stats	src/dyn_client.c	522	todo				
-fn	req_forward_local_datastore	src/dyn_client.c	534	todo				
+fn	req_forward_local_datastore	src/dyn_client.c	534	ported	crates/dynomite/src/cluster/dispatch.rs::LocalBackend::send	crates/dynomite/tests/regression_local_state_gate.rs	crates/optest/tests/node_state.rs::admin_state_gates_the_local_datastore	node-state gate (local_gate); held requests wait for RESUMING, the C datastore-timeout answer lands with T6
 fn	admin_req_forward_local_datastore	src/dyn_client.c	605	todo				
 fn	req_forward_to_peer	src/dyn_client.c	625	todo				
 fn	req_forward_all_racks_for_dc	src/dyn_client.c	718	todo				
