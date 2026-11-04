@@ -272,13 +272,13 @@ impl CrdtOp {
             TAG_SET => {
                 let na = usize::try_from(r.u64()?)
                     .map_err(|_| crate::datatypes::CrdtSerialError::Truncated)?;
-                let mut adds = Vec::with_capacity(na);
+                let mut adds = Vec::with_capacity(r.capped(na));
                 for _ in 0..na {
                     adds.push(r.bytes()?);
                 }
                 let nr = usize::try_from(r.u64()?)
                     .map_err(|_| crate::datatypes::CrdtSerialError::Truncated)?;
-                let mut removes = Vec::with_capacity(nr);
+                let mut removes = Vec::with_capacity(r.capped(nr));
                 for _ in 0..nr {
                     removes.push(r.bytes()?);
                 }
@@ -299,7 +299,7 @@ impl CrdtOp {
             TAG_MAP => {
                 let no = usize::try_from(r.u64()?)
                     .map_err(|_| crate::datatypes::CrdtSerialError::Truncated)?;
-                let mut ops = Vec::with_capacity(no);
+                let mut ops = Vec::with_capacity(r.capped(no));
                 for _ in 0..no {
                     ops.push(read_map_op(&mut r)?);
                 }
@@ -308,7 +308,7 @@ impl CrdtOp {
             TAG_HLL => {
                 let ni = usize::try_from(r.u64()?)
                     .map_err(|_| crate::datatypes::CrdtSerialError::Truncated)?;
-                let mut items = Vec::with_capacity(ni);
+                let mut items = Vec::with_capacity(r.capped(ni));
                 for _ in 0..ni {
                     items.push(r.bytes()?);
                 }
@@ -454,8 +454,17 @@ impl OpReader<'_> {
         self.pos += 1;
         Ok(b)
     }
+    /// Bound a wire-declared element count by the bytes left: every
+    /// element occupies at least one byte, so a larger count is corrupt
+    /// and must not drive the pre-allocation.
+    fn capped(&self, n: usize) -> usize {
+        n.min(self.buf.len().saturating_sub(self.pos))
+    }
     fn u64(&mut self) -> Result<u64, crate::datatypes::CrdtSerialError> {
-        let end = self.pos + 8;
+        let end = self
+            .pos
+            .checked_add(8)
+            .ok_or(crate::datatypes::CrdtSerialError::Truncated)?;
         let s = self
             .buf
             .get(self.pos..end)
@@ -471,7 +480,10 @@ impl OpReader<'_> {
     fn bytes(&mut self) -> Result<Vec<u8>, crate::datatypes::CrdtSerialError> {
         let n = usize::try_from(self.u64()?)
             .map_err(|_| crate::datatypes::CrdtSerialError::Truncated)?;
-        let end = self.pos + n;
+        let end = self
+            .pos
+            .checked_add(n)
+            .ok_or(crate::datatypes::CrdtSerialError::Truncated)?;
         let s = self
             .buf
             .get(self.pos..end)
@@ -1310,6 +1322,33 @@ mod tests {
 
         let fetched = s.fetch(b"c", b"k", TAG_HLL).await.unwrap();
         assert_eq!(fetched, CrdtValue::Hll(n));
+    }
+
+    /// Regression: a corrupt replica DtUpdate op frame declaring a huge
+    /// element count or field length must be a clean decode error, not
+    /// a capacity-overflow or add-overflow panic in the receive loop.
+    #[test]
+    fn regression_huge_wire_counts_are_truncated_not_panics() {
+        let mut head = vec![TAG_SET];
+        put_lp(&mut head, b"dc1");
+        put_lp(&mut head, b"a");
+        for tag in [TAG_SET, TAG_MAP, TAG_HLL] {
+            let mut buf = head.clone();
+            buf[0] = tag;
+            buf.extend_from_slice(&u64::MAX.to_be_bytes());
+            assert_eq!(
+                CrdtOp::from_bytes(&buf),
+                Err(crate::datatypes::CrdtSerialError::Truncated),
+                "tag {tag}"
+            );
+        }
+        let mut buf = head.clone();
+        buf[0] = TAG_REGISTER;
+        buf.extend_from_slice(&u64::MAX.to_be_bytes());
+        assert_eq!(
+            CrdtOp::from_bytes(&buf),
+            Err(crate::datatypes::CrdtSerialError::Truncated)
+        );
     }
 
     #[test]
