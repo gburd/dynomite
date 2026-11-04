@@ -340,12 +340,9 @@ fn reloading_dc_sni_resolver_picks_up_new_cert_after_replace() {
 // public API smoke checks above plus the per-DC override unit
 // tests in `crates/dynomite/src/net/tls.rs`.
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let p = l.local_addr().unwrap().port();
-    drop(l);
-    p
-}
+#[path = "support/port.rs"]
+mod port;
+use port::pick_port;
 
 fn pick_port_distinct(other: u16) -> u16 {
     for _ in 0..32 {

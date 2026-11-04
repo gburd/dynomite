@@ -27,12 +27,9 @@ use tokio::net::TcpStream;
 use dynomite::conf::Config;
 use dynomited::server::Server;
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let p = l.local_addr().unwrap().port();
-    drop(l);
-    p
-}
+#[path = "support/port.rs"]
+mod port;
+use port::pick_port;
 
 fn pick_distinct_ports(n: usize) -> Vec<u16> {
     let mut out = Vec::new();

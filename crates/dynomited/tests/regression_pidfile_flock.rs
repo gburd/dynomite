@@ -43,12 +43,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let p = l.local_addr().unwrap().port();
-    drop(l);
-    p
-}
+#[path = "support/port.rs"]
+mod port;
+use port::pick_port;
 
 fn redis_server_in_path() -> Option<PathBuf> {
     let path_env = std::env::var_os("PATH")?;

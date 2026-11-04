@@ -243,12 +243,9 @@ fn pidfile_is_written_and_removed() {
     assert!(!pid.exists(), "pid file should be removed on exit");
 }
 
-fn pick_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let p = l.local_addr().unwrap().port();
-    drop(l);
-    p
-}
+#[path = "support/port.rs"]
+mod port;
+use port::pick_port;
 
 fn wait_with_timeout(
     child: &mut std::process::Child,

@@ -27,7 +27,6 @@
 #![allow(dead_code, missing_docs)]
 
 use std::io;
-use std::net::TcpListener;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -65,16 +64,9 @@ pub fn which_in_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Reserve an ephemeral TCP port. The listener is dropped before
-/// returning so the caller can rebind. Race-prone but adequate
-/// for test orchestration; we accept the small risk in exchange
-/// for parallel-test friendliness.
-pub fn pick_port() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    let p = l.local_addr().expect("local_addr").port();
-    drop(l);
-    p
-}
+#[path = "../support/port.rs"]
+mod port;
+pub use self::port::pick_port;
 
 /// Wait until `127.0.0.1:port` accepts a TCP connection or
 /// `deadline` is exceeded. Returns `true` on success.
@@ -910,12 +902,12 @@ mod tests {
     }
 
     #[test]
-    fn pick_port_returns_distinct_ports() {
+    fn pick_port_returns_distinct_ports_outside_the_ephemeral_range() {
         let a = pick_port();
         let b = pick_port();
-        // Not strictly required but the OS should not reuse the
-        // most-recent port instantly.
-        assert_ne!(a, 0);
-        assert_ne!(b, 0);
+        assert_ne!(a, b);
+        for p in [a, b] {
+            assert!((10_000..32_000).contains(&p), "port {p}");
+        }
     }
 }
