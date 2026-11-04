@@ -1,43 +1,43 @@
 kind	c_symbol	c_file	c_line	status	rust_path	oracle_test	c_test	notes
-fn	array_create	src/dyn_array.c	30	todo				
-fn	array_destroy	src/dyn_array.c	53	todo				
-fn	array_init	src/dyn_array.c	58	todo				
-fn	array_deinit	src/dyn_array.c	73	todo				
-fn	array_idx	src/dyn_array.c	81	todo				
-fn	array_push	src/dyn_array.c	98	todo				
-fn	array_pop	src/dyn_array.c	120	todo				
-fn	array_get	src/dyn_array.c	131	todo				
-fn	array_top	src/dyn_array.c	142	todo				
-fn	array_swap	src/dyn_array.c	148	todo				
+fn	array_create	src/dyn_array.c	30	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_destroy	src/dyn_array.c	53	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_init	src/dyn_array.c	58	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_deinit	src/dyn_array.c	73	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_idx	src/dyn_array.c	81	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_push	src/dyn_array.c	98	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_pop	src/dyn_array.c	120	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_get	src/dyn_array.c	131	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_top	src/dyn_array.c	142	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_swap	src/dyn_array.c	148	dead				no use outside dyn_array.[ch] (grep -rw over src/: no hits)
 fn	array_sort	src/dyn_array.c	160	todo				
-fn	array_each	src/dyn_array.c	170	todo				
-fn	array_each_2	src/dyn_array.c	188	todo				
-macro	_DYN_ARRAY_H_	src/dyn_array.h	24	todo				
-typedef	array_compare_t	src/dyn_array.h	28	todo				
-typedef	array_each_t	src/dyn_array.h	29	todo				
-typedef	array_each_2_t	src/dyn_array.h	30	todo				
-struct	array	src/dyn_array.h	32	todo				
-macro	null_array	src/dyn_array.h	39	todo				
-fn	array_null	src/dyn_array.h	42	todo				
-fn	array_set	src/dyn_array.h	49	todo				
-fn	array_n	src/dyn_array.h	57	todo				
-fn	array_reset	src/dyn_array.h	59	todo				
+fn	array_each	src/dyn_array.c	170	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_each_2	src/dyn_array.c	188	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+macro	_DYN_ARRAY_H_	src/dyn_array.h	24	dead				include guard; no Rust counterpart needed
+typedef	array_compare_t	src/dyn_array.h	28	dead				no use outside dyn_array.[ch] (grep -rw over src/: no hits)
+typedef	array_each_t	src/dyn_array.h	29	dead				no use outside dyn_array.[ch] (grep -rw over src/: no hits)
+typedef	array_each_2_t	src/dyn_array.h	30	dead				no use outside dyn_array.[ch] (grep -rw over src/: no hits)
+struct	array	src/dyn_array.h	32	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+macro	null_array	src/dyn_array.h	39	dead				no use outside dyn_array.[ch] (grep -rw over src/: no hits)
+fn	array_null	src/dyn_array.h	42	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_set	src/dyn_array.h	49	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_n	src/dyn_array.h	57	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
+fn	array_reset	src/dyn_array.h	59	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
 var	ascii_logo	src/dyn_asciilogo.h	8	todo				
-macro	DYN_CBUF_H	src/dyn_cbuf.h	78	todo				
-macro	CBUF_Init	src/dyn_cbuf.h	84	todo				
-macro	CBUF_Len	src/dyn_cbuf.h	91	todo				
-macro	CBUF_Push	src/dyn_cbuf.h	100	todo				
-macro	CBUF_Pop	src/dyn_cbuf.h	107	todo				
-macro	CBUF_GetLastEntryPtr	src/dyn_cbuf.h	113	todo				
-macro	CBUF_GetPushEntryPtr	src/dyn_cbuf.h	124	todo				
-macro	CBUF_AdvancePushIdx	src/dyn_cbuf.h	135	todo				
-macro	CBUF_AdvancePopIdx	src/dyn_cbuf.h	142	todo				
-macro	CBUF_Get	src/dyn_cbuf.h	149	todo				
-macro	CBUF_GetEnd	src/dyn_cbuf.h	157	todo				
-macro	CBUF_GetPopEntryPtr	src/dyn_cbuf.h	164	todo				
-macro	CBUF_IsEmpty	src/dyn_cbuf.h	171	todo				
-macro	CBUF_IsFull	src/dyn_cbuf.h	177	todo				
-macro	CBUF_Error	src/dyn_cbuf.h	183	todo				
+macro	DYN_CBUF_H	src/dyn_cbuf.h	78	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
+macro	CBUF_Init	src/dyn_cbuf.h	84	replaced	crates/dynomite/src/io/cbuf.rs::CBuf	crates/dynomite/tests/datastructure_property.rs::cbuf_matches_bounded_fifo_reference		DEV-S2: bounded FIFO ring; C uses it for the core<->gossip C2G queues (dyn_core.c, dyn_gossip.c); no Rust production caller, the Rust gossip task shares GossipState instead
+macro	CBUF_Len	src/dyn_cbuf.h	91	replaced	crates/dynomite/src/io/cbuf.rs::CBuf	crates/dynomite/tests/datastructure_property.rs::cbuf_matches_bounded_fifo_reference		DEV-S2: bounded FIFO ring; C uses it for the core<->gossip C2G queues (dyn_core.c, dyn_gossip.c); no Rust production caller, the Rust gossip task shares GossipState instead
+macro	CBUF_Push	src/dyn_cbuf.h	100	replaced	crates/dynomite/src/io/cbuf.rs::CBuf	crates/dynomite/tests/datastructure_property.rs::cbuf_matches_bounded_fifo_reference		DEV-S2: bounded FIFO ring; C uses it for the core<->gossip C2G queues (dyn_core.c, dyn_gossip.c); no Rust production caller, the Rust gossip task shares GossipState instead
+macro	CBUF_Pop	src/dyn_cbuf.h	107	replaced	crates/dynomite/src/io/cbuf.rs::CBuf	crates/dynomite/tests/datastructure_property.rs::cbuf_matches_bounded_fifo_reference		DEV-S2: bounded FIFO ring; C uses it for the core<->gossip C2G queues (dyn_core.c, dyn_gossip.c); no Rust production caller, the Rust gossip task shares GossipState instead
+macro	CBUF_GetLastEntryPtr	src/dyn_cbuf.h	113	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
+macro	CBUF_GetPushEntryPtr	src/dyn_cbuf.h	124	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
+macro	CBUF_AdvancePushIdx	src/dyn_cbuf.h	135	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
+macro	CBUF_AdvancePopIdx	src/dyn_cbuf.h	142	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
+macro	CBUF_Get	src/dyn_cbuf.h	149	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
+macro	CBUF_GetEnd	src/dyn_cbuf.h	157	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
+macro	CBUF_GetPopEntryPtr	src/dyn_cbuf.h	164	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
+macro	CBUF_IsEmpty	src/dyn_cbuf.h	171	replaced	crates/dynomite/src/io/cbuf.rs::CBuf	crates/dynomite/tests/datastructure_property.rs::cbuf_matches_bounded_fifo_reference		DEV-S2: bounded FIFO ring; C uses it for the core<->gossip C2G queues (dyn_core.c, dyn_gossip.c); no Rust production caller, the Rust gossip task shares GossipState instead
+macro	CBUF_IsFull	src/dyn_cbuf.h	177	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
+macro	CBUF_Error	src/dyn_cbuf.h	183	dead				macro never used outside dyn_cbuf.h (grep -rw over src/: no hits)
 fn	client_ref	src/dyn_client.c	62	todo				
 fn	client_unref_internal_try_put	src/dyn_client.c	88	todo				
 fn	client_unref_and_try_put	src/dyn_client.c	105	todo				
@@ -356,82 +356,82 @@ fn	dyn_rsa_encrypt	src/dyn_crypto.c	519	todo
 fn	dyn_rsa_decrypt	src/dyn_crypto.c	534	todo				
 macro	DYN_CRYPTO_H_	src/dyn_crypto.h	7	todo				
 macro	AES_KEYLEN	src/dyn_crypto.h	24	todo				
-var	dict_can_resize	src/dyn_dict.c	57	todo				
-var	dict_force_resize_ratio	src/dyn_dict.c	58	todo				
-var	dict_hash_function_seed	src/dyn_dict.c	89	todo				
-fn	dictSetHashFunctionSeed	src/dyn_dict.c	91	todo				
-fn	dictGetHashFunctionSeed	src/dyn_dict.c	93	todo				
-fn	dictGenHashFunction	src/dyn_dict.c	106	todo				
-fn	dictGenCaseHashFunction	src/dyn_dict.c	154	todo				
-fn	_dictReset	src/dyn_dict.c	166	todo				
-fn	dictCreate	src/dyn_dict.c	174	todo				
-fn	_dictInit	src/dyn_dict.c	182	todo				
-fn	dictResize	src/dyn_dict.c	194	todo				
-fn	dictExpand	src/dyn_dict.c	204	todo				
-fn	dictRehash	src/dyn_dict.c	235	todo				
-fn	_dictRehashStep	src/dyn_dict.c	305	todo				
-fn	dictAdd	src/dyn_dict.c	310	todo				
-fn	dictAddRaw	src/dyn_dict.c	333	todo				
-fn	dictReplace	src/dyn_dict.c	360	todo				
-fn	dictReplaceRaw	src/dyn_dict.c	385	todo				
-fn	dictGenericDelete	src/dyn_dict.c	392	todo				
-fn	dictDelete	src/dyn_dict.c	429	todo				
-fn	dictDeleteNoFree	src/dyn_dict.c	433	todo				
-fn	_dictClear	src/dyn_dict.c	438	todo				
-fn	dictRelease	src/dyn_dict.c	467	todo				
-fn	dictFind	src/dyn_dict.c	474	todo				
-fn	dictFetchValue	src/dyn_dict.c	493	todo				
-fn	dictFingerprint	src/dyn_dict.c	506	todo				
-fn	dictGetIterator	src/dyn_dict.c	538	todo				
-fn	dictGetSafeIterator	src/dyn_dict.c	550	todo				
-fn	dictNext	src/dyn_dict.c	557	todo				
-fn	dictReleaseIterator	src/dyn_dict.c	591	todo				
-fn	dictGetRandomKey	src/dyn_dict.c	604	todo				
-fn	dictGetRandomKeys	src/dyn_dict.c	659	todo				
-fn	rev	src/dyn_dict.c	694	todo				
-fn	dictScan	src/dyn_dict.c	788	todo				
-fn	_dictExpandIfNeeded	src/dyn_dict.c	859	todo				
-fn	_dictNextPower	src/dyn_dict.c	879	todo				
-fn	_dictKeyIndex	src/dyn_dict.c	895	todo				
-fn	dictEmpty	src/dyn_dict.c	917	todo				
-fn	dictEnableResize	src/dyn_dict.c	924	todo				
-fn	dictDisableResize	src/dyn_dict.c	926	todo				
-macro	__DYN_DICT_H	src/dyn_dict.h	39	todo				
-macro	DICT_OK	src/dyn_dict.h	41	todo				
-macro	DICT_ERR	src/dyn_dict.h	42	todo				
-macro	DICT_NOTUSED	src/dyn_dict.h	45	todo				
-struct	dictEntry	src/dyn_dict.h	47	todo				
-typedef	dictEntry	src/dyn_dict.h	55	todo				
-struct	dictType	src/dyn_dict.h	57	todo				
-typedef	dictType	src/dyn_dict.h	64	todo				
-struct	dictht	src/dyn_dict.h	68	todo				
-typedef	dictht	src/dyn_dict.h	73	todo				
-struct	dict	src/dyn_dict.h	75	todo				
-typedef	dict	src/dyn_dict.h	81	todo				
-struct	dictIterator	src/dyn_dict.h	87	todo				
-typedef	dictIterator	src/dyn_dict.h	92	todo				
-typedef	dictScanFunction	src/dyn_dict.h	94	todo				
-macro	DICT_HT_INITIAL_SIZE	src/dyn_dict.h	97	todo				
-macro	dictFreeVal	src/dyn_dict.h	100	todo				
-macro	dictSetVal	src/dyn_dict.h	104	todo				
-macro	dictSetSignedIntegerVal	src/dyn_dict.h	112	todo				
-macro	dictSetUnsignedIntegerVal	src/dyn_dict.h	117	todo				
-macro	dictFreeKey	src/dyn_dict.h	122	todo				
-macro	dictSetKey	src/dyn_dict.h	126	todo				
-macro	dictCompareKeys	src/dyn_dict.h	134	todo				
-macro	dictHashKey	src/dyn_dict.h	138	todo				
-macro	dictGetKey	src/dyn_dict.h	139	todo				
-macro	dictGetVal	src/dyn_dict.h	140	todo				
-macro	dictGetEntryKey	src/dyn_dict.h	141	todo				
-macro	dictGetEntryVal	src/dyn_dict.h	142	todo				
-macro	dictGetSignedIntegerVal	src/dyn_dict.h	143	todo				
-macro	dictGetUnsignedIntegerVal	src/dyn_dict.h	144	todo				
-macro	dictSlots	src/dyn_dict.h	145	todo				
-macro	dictSize	src/dyn_dict.h	146	todo				
-macro	dictIsRehashing	src/dyn_dict.h	147	todo				
-fn	dict_msg_id_hash	src/dyn_dict_msg_id.c	5	todo				
-fn	dict_msg_id_cmp	src/dyn_dict_msg_id.c	10	todo				
-var	msg_table_dict_type	src/dyn_dict_msg_id.c	16	todo				
+var	dict_can_resize	src/dyn_dict.c	57	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+var	dict_force_resize_ratio	src/dyn_dict.c	58	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+var	dict_hash_function_seed	src/dyn_dict.c	89	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictSetHashFunctionSeed	src/dyn_dict.c	91	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+fn	dictGetHashFunctionSeed	src/dyn_dict.c	93	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+fn	dictGenHashFunction	src/dyn_dict.c	106	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictGenCaseHashFunction	src/dyn_dict.c	154	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+fn	_dictReset	src/dyn_dict.c	166	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictCreate	src/dyn_dict.c	174	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	_dictInit	src/dyn_dict.c	182	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictResize	src/dyn_dict.c	194	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+fn	dictExpand	src/dyn_dict.c	204	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictRehash	src/dyn_dict.c	235	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	_dictRehashStep	src/dyn_dict.c	305	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictAdd	src/dyn_dict.c	310	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictAddRaw	src/dyn_dict.c	333	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictReplace	src/dyn_dict.c	360	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictReplaceRaw	src/dyn_dict.c	385	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictGenericDelete	src/dyn_dict.c	392	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictDelete	src/dyn_dict.c	429	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictDeleteNoFree	src/dyn_dict.c	433	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+fn	_dictClear	src/dyn_dict.c	438	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictRelease	src/dyn_dict.c	467	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictFind	src/dyn_dict.c	474	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictFetchValue	src/dyn_dict.c	493	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictFingerprint	src/dyn_dict.c	506	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictGetIterator	src/dyn_dict.c	538	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictGetSafeIterator	src/dyn_dict.c	550	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+fn	dictNext	src/dyn_dict.c	557	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictReleaseIterator	src/dyn_dict.c	591	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+fn	dictGetRandomKey	src/dyn_dict.c	604	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictGetRandomKeys	src/dyn_dict.c	659	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+fn	rev	src/dyn_dict.c	694	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictScan	src/dyn_dict.c	788	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	_dictExpandIfNeeded	src/dyn_dict.c	859	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	_dictNextPower	src/dyn_dict.c	879	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	_dictKeyIndex	src/dyn_dict.c	895	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictEmpty	src/dyn_dict.c	917	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+fn	dictEnableResize	src/dyn_dict.c	924	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dictDisableResize	src/dyn_dict.c	926	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+macro	__DYN_DICT_H	src/dyn_dict.h	39	dead				include guard; no Rust counterpart needed
+macro	DICT_OK	src/dyn_dict.h	41	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+macro	DICT_ERR	src/dyn_dict.h	42	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+macro	DICT_NOTUSED	src/dyn_dict.h	45	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+struct	dictEntry	src/dyn_dict.h	47	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+typedef	dictEntry	src/dyn_dict.h	55	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+struct	dictType	src/dyn_dict.h	57	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+typedef	dictType	src/dyn_dict.h	64	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+struct	dictht	src/dyn_dict.h	68	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+typedef	dictht	src/dyn_dict.h	73	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+struct	dict	src/dyn_dict.h	75	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+typedef	dict	src/dyn_dict.h	81	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+struct	dictIterator	src/dyn_dict.h	87	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+typedef	dictIterator	src/dyn_dict.h	92	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+typedef	dictScanFunction	src/dyn_dict.h	94	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+macro	DICT_HT_INITIAL_SIZE	src/dyn_dict.h	97	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+macro	dictFreeVal	src/dyn_dict.h	100	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+macro	dictSetVal	src/dyn_dict.h	104	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+macro	dictSetSignedIntegerVal	src/dyn_dict.h	112	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+macro	dictSetUnsignedIntegerVal	src/dyn_dict.h	117	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+macro	dictFreeKey	src/dyn_dict.h	122	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+macro	dictSetKey	src/dyn_dict.h	126	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+macro	dictCompareKeys	src/dyn_dict.h	134	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+macro	dictHashKey	src/dyn_dict.h	138	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+macro	dictGetKey	src/dyn_dict.h	139	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+macro	dictGetVal	src/dyn_dict.h	140	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+macro	dictGetEntryKey	src/dyn_dict.h	141	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+macro	dictGetEntryVal	src/dyn_dict.h	142	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+macro	dictGetSignedIntegerVal	src/dyn_dict.h	143	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+macro	dictGetUnsignedIntegerVal	src/dyn_dict.h	144	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+macro	dictSlots	src/dyn_dict.h	145	dead				no use outside dyn_dict.[ch] and at most a declaration+definition inside (grep -rw)
+macro	dictSize	src/dyn_dict.h	146	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: hash map; C iteration order (gossip_forward_state, dyn_gossip.c:232) is hash-bucket order, not a contract; receivers parse each entry independently
+macro	dictIsRehashing	src/dyn_dict.h	147	replaced	crates/dynomite/src/util/dict.rs::DictMap	crates/dynomite/src/util/dict.rs::insert_get_remove_round_trip		DEV-S2: part of the C dict implementation with no caller outside dyn_dict.[ch]; DictMap does its job
+fn	dict_msg_id_hash	src/dyn_dict_msg_id.c	5	replaced	crates/dynomite/src/util/dict.rs::MsgIndex	crates/dynomite/src/util/dict.rs::msg_index_alias_resolves		DEV-S2: map keyed on MsgId
+fn	dict_msg_id_cmp	src/dyn_dict_msg_id.c	10	replaced	crates/dynomite/src/util/dict.rs::MsgIndex	crates/dynomite/src/util/dict.rs::msg_index_alias_resolves		DEV-S2: map keyed on MsgId
+var	msg_table_dict_type	src/dyn_dict_msg_id.c	16	replaced	crates/dynomite/src/util/dict.rs::MsgIndex	crates/dynomite/src/util/dict.rs::msg_index_alias_resolves		DEV-S2: map keyed on MsgId
 fn	dnode_client_ref	src/dyn_dnode_client.c	12	todo				
 fn	dnode_client_unref_internal_try_put	src/dyn_dnode_client.c	36	todo				
 fn	dnode_client_unref_and_try_put	src/dyn_dnode_client.c	56	todo				
@@ -656,7 +656,7 @@ fn	log_loggable	src/dyn_log.c	111	todo
 fn	_log	src/dyn_log.c	121	todo				
 fn	_log_stderr	src/dyn_log.c	169	todo				
 fn	_log_hexdump	src/dyn_log.c	198	todo				
-macro	_DYN_LOG_H_	src/dyn_log.h	24	todo				
+macro	_DYN_LOG_H_	src/dyn_log.h	24	dead				include guard; no Rust counterpart needed
 struct	logger	src/dyn_log.h	26	todo				
 macro	LOG_EMERG	src/dyn_log.h	33	todo				
 macro	LOG_ALERT	src/dyn_log.h	34	todo				
@@ -717,7 +717,7 @@ fn	mbuf_write_uint32	src/dyn_mbuf.c	342	todo
 fn	mbuf_write_uint64	src/dyn_mbuf.c	352	todo				
 fn	mbuf_alloc	src/dyn_mbuf.c	363	todo				
 fn	mbuf_dealloc	src/dyn_mbuf.c	387	todo				
-macro	_DYN_MBUF_H_	src/dyn_mbuf.h	24	todo				
+macro	_DYN_MBUF_H_	src/dyn_mbuf.h	24	dead				include guard; no Rust counterpart needed
 typedef	func_mbuf_copy_t	src/dyn_mbuf.h	33	todo				
 struct	mbuf	src/dyn_mbuf.h	35	todo				
 macro	MBUF_MAGIC	src/dyn_mbuf.h	49	todo				
@@ -899,120 +899,120 @@ fn	proxy_recv	src/dyn_proxy.c	208	todo
 var	proxy_ops	src/dyn_proxy.c	224	todo				
 fn	init_proxy_conn	src/dyn_proxy.c	229	todo				
 macro	_DYN_PROXY_H_	src/dyn_proxy.h	24	todo				
-macro	_DYN_QUEUE_H_	src/dyn_queue.h	56	todo				
-macro	__offsetof	src/dyn_queue.h	63	todo				
-macro	QUEUE_MACRO_SCRUB	src/dyn_queue.h	137	todo				
-macro	QUEUE_MACRO_TRACE	src/dyn_queue.h	140	todo				
-macro	QUEUE_MACRO_ASSERT	src/dyn_queue.h	141	todo				
-macro	QMD_SAVELINK	src/dyn_queue.h	155	todo				
-macro	QMD_SAVELINK	src/dyn_queue.h	155	todo				
-macro	TRASHIT	src/dyn_queue.h	156	todo				
-macro	TRASHIT	src/dyn_queue.h	156	todo				
-struct	qm_trace	src/dyn_queue.h	163	todo				
-macro	QMD_TRACE_ELEM	src/dyn_queue.h	190	todo				
-macro	QMD_TRACE_ELEM	src/dyn_queue.h	190	todo				
-macro	QMD_TRACE_HEAD	src/dyn_queue.h	191	todo				
-macro	QMD_TRACE_HEAD	src/dyn_queue.h	191	todo				
-macro	TRACEBUF	src/dyn_queue.h	192	todo				
-macro	TRACEBUF	src/dyn_queue.h	192	todo				
-macro	SLIST_HEAD	src/dyn_queue.h	199	todo				
-macro	SLIST_HEAD_INITIALIZER	src/dyn_queue.h	204	todo				
-macro	SLIST_ENTRY	src/dyn_queue.h	207	todo				
-macro	SLIST_EMPTY	src/dyn_queue.h	215	todo				
-macro	SLIST_FIRST	src/dyn_queue.h	217	todo				
-macro	SLIST_FOREACH	src/dyn_queue.h	219	todo				
-macro	SLIST_FOREACH_SAFE	src/dyn_queue.h	222	todo				
-macro	SLIST_FOREACH_PREVPTR	src/dyn_queue.h	226	todo				
-macro	SLIST_INIT	src/dyn_queue.h	230	todo				
-macro	SLIST_INSERT_AFTER	src/dyn_queue.h	235	todo				
-macro	SLIST_INSERT_HEAD	src/dyn_queue.h	241	todo				
-macro	SLIST_NEXT	src/dyn_queue.h	247	todo				
-macro	SLIST_REMOVE	src/dyn_queue.h	249	todo				
-macro	SLIST_REMOVE_AFTER	src/dyn_queue.h	262	todo				
-macro	SLIST_REMOVE_HEAD	src/dyn_queue.h	269	todo				
-macro	STAILQ_HEAD	src/dyn_queue.h	279	todo				
-macro	STAILQ_HEAD_INITIALIZER	src/dyn_queue.h	285	todo				
-macro	STAILQ_ENTRY	src/dyn_queue.h	288	todo				
-macro	STAILQ_CONCAT	src/dyn_queue.h	296	todo				
-macro	STAILQ_EMPTY	src/dyn_queue.h	305	todo				
-macro	STAILQ_FIRST	src/dyn_queue.h	307	todo				
-macro	STAILQ_FOREACH	src/dyn_queue.h	309	todo				
-macro	STAILQ_FOREACH_SAFE	src/dyn_queue.h	312	todo				
-macro	STAILQ_INIT	src/dyn_queue.h	316	todo				
-macro	STAILQ_INSERT_AFTER	src/dyn_queue.h	322	todo				
-macro	STAILQ_INSERT_HEAD	src/dyn_queue.h	329	todo				
-macro	STAILQ_INSERT_TAIL	src/dyn_queue.h	336	todo				
-macro	STAILQ_LAST	src/dyn_queue.h	343	todo				
-macro	STAILQ_NEXT	src/dyn_queue.h	349	todo				
-macro	STAILQ_REMOVE	src/dyn_queue.h	351	todo				
-macro	STAILQ_REMOVE_HEAD	src/dyn_queue.h	363	todo				
-macro	STAILQ_REMOVE_AFTER	src/dyn_queue.h	373	todo				
-macro	STAILQ_SWAP	src/dyn_queue.h	383	todo				
-macro	LIST_HEAD	src/dyn_queue.h	398	todo				
-macro	LIST_HEAD_INITIALIZER	src/dyn_queue.h	403	todo				
-macro	LIST_ENTRY	src/dyn_queue.h	406	todo				
-macro	QMD_LIST_CHECK_HEAD	src/dyn_queue.h	443	todo				
-macro	QMD_LIST_CHECK_HEAD	src/dyn_queue.h	443	todo				
-macro	QMD_LIST_CHECK_NEXT	src/dyn_queue.h	444	todo				
-macro	QMD_LIST_CHECK_NEXT	src/dyn_queue.h	444	todo				
-macro	QMD_LIST_CHECK_PREV	src/dyn_queue.h	445	todo				
-macro	QMD_LIST_CHECK_PREV	src/dyn_queue.h	445	todo				
-macro	LIST_EMPTY	src/dyn_queue.h	449	todo				
-macro	LIST_FIRST	src/dyn_queue.h	451	todo				
-macro	LIST_FOREACH	src/dyn_queue.h	453	todo				
-macro	LIST_FOREACH_SAFE	src/dyn_queue.h	456	todo				
-macro	LIST_INIT	src/dyn_queue.h	460	todo				
-macro	LIST_INSERT_AFTER	src/dyn_queue.h	465	todo				
-macro	LIST_INSERT_BEFORE	src/dyn_queue.h	474	todo				
-macro	LIST_INSERT_HEAD	src/dyn_queue.h	483	todo				
-macro	LIST_NEXT	src/dyn_queue.h	492	todo				
-macro	LIST_REMOVE	src/dyn_queue.h	494	todo				
-macro	LIST_SWAP	src/dyn_queue.h	507	todo				
-macro	TAILQ_HEAD	src/dyn_queue.h	521	todo				
-macro	TAILQ_HEAD_INITIALIZER	src/dyn_queue.h	529	todo				
-macro	TAILQ_ENTRY	src/dyn_queue.h	532	todo				
-macro	QMD_TAILQ_CHECK_HEAD	src/dyn_queue.h	577	todo				
-macro	QMD_TAILQ_CHECK_HEAD	src/dyn_queue.h	577	todo				
-macro	QMD_TAILQ_CHECK_TAIL	src/dyn_queue.h	578	todo				
-macro	QMD_TAILQ_CHECK_TAIL	src/dyn_queue.h	578	todo				
-macro	QMD_TAILQ_CHECK_NEXT	src/dyn_queue.h	579	todo				
-macro	QMD_TAILQ_CHECK_NEXT	src/dyn_queue.h	579	todo				
-macro	QMD_TAILQ_CHECK_PREV	src/dyn_queue.h	580	todo				
-macro	QMD_TAILQ_CHECK_PREV	src/dyn_queue.h	580	todo				
-macro	TAILQ_CONCAT	src/dyn_queue.h	584	todo				
-macro	TAILQ_EMPTY	src/dyn_queue.h	597	todo				
-macro	TAILQ_COUNT	src/dyn_queue.h	599	todo				
-macro	TAILQ_FIRST	src/dyn_queue.h	600	todo				
-macro	TAILQ_FOREACH	src/dyn_queue.h	602	todo				
-macro	TAILQ_FOREACH_SAFE	src/dyn_queue.h	605	todo				
-macro	TAILQ_FOREACH_REVERSE	src/dyn_queue.h	609	todo				
-macro	TAILQ_FOREACH_REVERSE_SAFE	src/dyn_queue.h	613	todo				
-macro	TAILQ_INIT	src/dyn_queue.h	618	todo				
-macro	TAILQ_INSERT_AFTER	src/dyn_queue.h	626	todo				
-macro	TAILQ_INSERT_BEFORE	src/dyn_queue.h	642	todo				
-macro	TAILQ_INSERT_HEAD	src/dyn_queue.h	654	todo				
-macro	TAILQ_INSERT_TAIL	src/dyn_queue.h	668	todo				
-macro	TAILQ_LAST	src/dyn_queue.h	680	todo				
-macro	TAILQ_NEXT	src/dyn_queue.h	683	todo				
-macro	TAILQ_PREV	src/dyn_queue.h	685	todo				
-macro	TAILQ_REMOVE	src/dyn_queue.h	688	todo				
-macro	TAILQ_SWAP	src/dyn_queue.h	707	todo				
-macro	CIRCLEQ_HEAD	src/dyn_queue.h	731	todo				
-macro	CIRCLEQ_HEAD_INITIALIZER	src/dyn_queue.h	737	todo				
-macro	CIRCLEQ_ENTRY	src/dyn_queue.h	740	todo				
-macro	CIRCLEQ_EMPTY	src/dyn_queue.h	749	todo				
-macro	CIRCLEQ_FIRST	src/dyn_queue.h	751	todo				
-macro	CIRCLEQ_FOREACH	src/dyn_queue.h	753	todo				
-macro	CIRCLEQ_FOREACH_REVERSE	src/dyn_queue.h	758	todo				
-macro	CIRCLEQ_INIT	src/dyn_queue.h	763	todo				
-macro	CIRCLEQ_INSERT_AFTER	src/dyn_queue.h	769	todo				
-macro	CIRCLEQ_INSERT_BEFORE	src/dyn_queue.h	780	todo				
-macro	CIRCLEQ_INSERT_HEAD	src/dyn_queue.h	791	todo				
-macro	CIRCLEQ_INSERT_TAIL	src/dyn_queue.h	802	todo				
-macro	CIRCLEQ_LAST	src/dyn_queue.h	813	todo				
-macro	CIRCLEQ_NEXT	src/dyn_queue.h	815	todo				
-macro	CIRCLEQ_PREV	src/dyn_queue.h	817	todo				
-macro	CIRCLEQ_REMOVE	src/dyn_queue.h	819	todo				
+macro	_DYN_QUEUE_H_	src/dyn_queue.h	56	dead				include guard; no Rust counterpart needed
+macro	__offsetof	src/dyn_queue.h	63	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QUEUE_MACRO_SCRUB	src/dyn_queue.h	137	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QUEUE_MACRO_TRACE	src/dyn_queue.h	140	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QUEUE_MACRO_ASSERT	src/dyn_queue.h	141	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_SAVELINK	src/dyn_queue.h	155	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_SAVELINK	src/dyn_queue.h	155	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	TRASHIT	src/dyn_queue.h	156	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	TRASHIT	src/dyn_queue.h	156	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+struct	qm_trace	src/dyn_queue.h	163	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TRACE_ELEM	src/dyn_queue.h	190	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TRACE_ELEM	src/dyn_queue.h	190	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TRACE_HEAD	src/dyn_queue.h	191	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TRACE_HEAD	src/dyn_queue.h	191	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	TRACEBUF	src/dyn_queue.h	192	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	TRACEBUF	src/dyn_queue.h	192	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	SLIST_HEAD	src/dyn_queue.h	199	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_HEAD_INITIALIZER	src/dyn_queue.h	204	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_ENTRY	src/dyn_queue.h	207	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_EMPTY	src/dyn_queue.h	215	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_FIRST	src/dyn_queue.h	217	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_FOREACH	src/dyn_queue.h	219	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_FOREACH_SAFE	src/dyn_queue.h	222	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_FOREACH_PREVPTR	src/dyn_queue.h	226	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_INIT	src/dyn_queue.h	230	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_INSERT_AFTER	src/dyn_queue.h	235	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_INSERT_HEAD	src/dyn_queue.h	241	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_NEXT	src/dyn_queue.h	247	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_REMOVE	src/dyn_queue.h	249	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_REMOVE_AFTER	src/dyn_queue.h	262	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	SLIST_REMOVE_HEAD	src/dyn_queue.h	269	dead				no SLIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	STAILQ_HEAD	src/dyn_queue.h	279	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_mbuf.h
+macro	STAILQ_HEAD_INITIALIZER	src/dyn_queue.h	285	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	STAILQ_ENTRY	src/dyn_queue.h	288	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_mbuf.h
+macro	STAILQ_CONCAT	src/dyn_queue.h	296	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	STAILQ_EMPTY	src/dyn_queue.h	305	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_crypto.c,src/dyn_mbuf.c,src/dyn_message.c,src/proto/dyn_redis.c
+macro	STAILQ_FIRST	src/dyn_queue.h	307	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_client.c,src/dyn_crypto.c,src/dyn_dnode_client.c,src/dyn_mbuf.c
+macro	STAILQ_FOREACH	src/dyn_queue.h	309	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_message.c
+macro	STAILQ_FOREACH_SAFE	src/dyn_queue.h	312	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	STAILQ_INIT	src/dyn_queue.h	316	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_crypto.c,src/dyn_dnode_msg.c,src/dyn_mbuf.c,src/dyn_message.c
+macro	STAILQ_INSERT_AFTER	src/dyn_queue.h	322	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_mbuf.c
+macro	STAILQ_INSERT_HEAD	src/dyn_queue.h	329	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_crypto.c,src/dyn_mbuf.c,src/dyn_message.c,src/dyn_test.c
+macro	STAILQ_INSERT_TAIL	src/dyn_queue.h	336	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_crypto.c,src/dyn_mbuf.c,src/dyn_message.c,src/dyn_test.c
+macro	STAILQ_LAST	src/dyn_queue.h	343	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_dnode_msg.c,src/dyn_mbuf.c,src/dyn_message.c,src/dyn_test.c
+macro	STAILQ_NEXT	src/dyn_queue.h	349	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_mbuf.c,src/dyn_message.c,src/proto/dyn_memcache.c,src/proto/dyn_redis.c
+macro	STAILQ_REMOVE	src/dyn_queue.h	351	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_mbuf.c
+macro	STAILQ_REMOVE_HEAD	src/dyn_queue.h	363	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque-backed mbuf chain; FIFO order pinned; used in src/dyn_crypto.c,src/dyn_mbuf.c
+macro	STAILQ_REMOVE_AFTER	src/dyn_queue.h	373	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: expanded inside a used queue macro; VecDeque does the job
+macro	STAILQ_SWAP	src/dyn_queue.h	383	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_HEAD	src/dyn_queue.h	398	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_HEAD_INITIALIZER	src/dyn_queue.h	403	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_ENTRY	src/dyn_queue.h	406	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	QMD_LIST_CHECK_HEAD	src/dyn_queue.h	443	dead				no QMD_LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	QMD_LIST_CHECK_HEAD	src/dyn_queue.h	443	dead				no QMD_LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	QMD_LIST_CHECK_NEXT	src/dyn_queue.h	444	dead				no QMD_LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	QMD_LIST_CHECK_NEXT	src/dyn_queue.h	444	dead				no QMD_LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	QMD_LIST_CHECK_PREV	src/dyn_queue.h	445	dead				no QMD_LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	QMD_LIST_CHECK_PREV	src/dyn_queue.h	445	dead				no QMD_LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_EMPTY	src/dyn_queue.h	449	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_FIRST	src/dyn_queue.h	451	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_FOREACH	src/dyn_queue.h	453	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_FOREACH_SAFE	src/dyn_queue.h	456	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_INIT	src/dyn_queue.h	460	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_INSERT_AFTER	src/dyn_queue.h	465	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_INSERT_BEFORE	src/dyn_queue.h	474	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_INSERT_HEAD	src/dyn_queue.h	483	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_NEXT	src/dyn_queue.h	492	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_REMOVE	src/dyn_queue.h	494	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	LIST_SWAP	src/dyn_queue.h	507	dead				no LIST_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	TAILQ_HEAD	src/dyn_queue.h	521	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_connection.h,src/dyn_dnode_msg.h,src/dyn_message.h,src/dyn_test.c
+macro	TAILQ_HEAD_INITIALIZER	src/dyn_queue.h	529	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	TAILQ_ENTRY	src/dyn_queue.h	532	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_connection.h,src/dyn_dnode_msg.h,src/dyn_message.h,src/dyn_test.c
+macro	QMD_TAILQ_CHECK_HEAD	src/dyn_queue.h	577	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TAILQ_CHECK_HEAD	src/dyn_queue.h	577	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TAILQ_CHECK_TAIL	src/dyn_queue.h	578	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TAILQ_CHECK_TAIL	src/dyn_queue.h	578	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TAILQ_CHECK_NEXT	src/dyn_queue.h	579	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TAILQ_CHECK_NEXT	src/dyn_queue.h	579	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TAILQ_CHECK_PREV	src/dyn_queue.h	580	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	QMD_TAILQ_CHECK_PREV	src/dyn_queue.h	580	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2/S3: link-scrub and debug-trace helper inside the TAILQ_/STAILQ_ expansions; owned VecDeque elements cannot dangle
+macro	TAILQ_CONCAT	src/dyn_queue.h	584	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_test.c
+macro	TAILQ_EMPTY	src/dyn_queue.h	597	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_client.c,src/dyn_connection_internal.c,src/dyn_dnode_client.c,src/dyn_dnode_msg.c
+macro	TAILQ_COUNT	src/dyn_queue.h	599	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_client.c,src/dyn_dnode_client.c,src/dyn_dnode_msg.c,src/dyn_dnode_peer.c
+macro	TAILQ_FIRST	src/dyn_queue.h	600	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_client.c,src/dyn_connection.c,src/dyn_connection_internal.c,src/dyn_dnode_client.c
+macro	TAILQ_FOREACH	src/dyn_queue.h	602	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	TAILQ_FOREACH_SAFE	src/dyn_queue.h	605	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_core.c,src/dyn_message.c,src/dyn_test.c
+macro	TAILQ_FOREACH_REVERSE	src/dyn_queue.h	609	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	TAILQ_FOREACH_REVERSE_SAFE	src/dyn_queue.h	613	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	TAILQ_INIT	src/dyn_queue.h	618	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_client.c,src/dyn_connection_internal.c,src/dyn_dnode_msg.c,src/dyn_message.c
+macro	TAILQ_INSERT_AFTER	src/dyn_queue.h	626	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	TAILQ_INSERT_BEFORE	src/dyn_queue.h	642	dead				never expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	TAILQ_INSERT_HEAD	src/dyn_queue.h	654	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_connection_internal.c,src/dyn_dnode_msg.c,src/dyn_message.c
+macro	TAILQ_INSERT_TAIL	src/dyn_queue.h	668	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_client.c,src/dyn_connection_internal.c,src/dyn_dnode_client.c,src/dyn_dnode_peer.c
+macro	TAILQ_LAST	src/dyn_queue.h	680	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_test.c
+macro	TAILQ_NEXT	src/dyn_queue.h	683	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_client.c,src/dyn_connection_internal.c,src/dyn_dnode_client.c,src/dyn_dnode_msg.c
+macro	TAILQ_PREV	src/dyn_queue.h	685	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_request.c
+macro	TAILQ_REMOVE	src/dyn_queue.h	688	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_client.c,src/dyn_connection_internal.c,src/dyn_core.c,src/dyn_dnode_client.c
+macro	TAILQ_SWAP	src/dyn_queue.h	707	replaced	crates/dynomite/src/msg/queue.rs::MsgQueue	crates/dynomite/tests/datastructure_property.rs::msg_queue_interleaved_ops_match_reference		DEV-S2: VecDeque-backed queue; FIFO order pinned; used in src/dyn_test.c
+macro	CIRCLEQ_HEAD	src/dyn_queue.h	731	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_HEAD_INITIALIZER	src/dyn_queue.h	737	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_ENTRY	src/dyn_queue.h	740	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_EMPTY	src/dyn_queue.h	749	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_FIRST	src/dyn_queue.h	751	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_FOREACH	src/dyn_queue.h	753	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_FOREACH_REVERSE	src/dyn_queue.h	758	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_INIT	src/dyn_queue.h	763	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_INSERT_AFTER	src/dyn_queue.h	769	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_INSERT_BEFORE	src/dyn_queue.h	780	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_INSERT_HEAD	src/dyn_queue.h	791	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_INSERT_TAIL	src/dyn_queue.h	802	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_LAST	src/dyn_queue.h	813	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_NEXT	src/dyn_queue.h	815	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_PREV	src/dyn_queue.h	817	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
+macro	CIRCLEQ_REMOVE	src/dyn_queue.h	819	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
 fn	rbtree_node_init	src/dyn_rbtree.c	31	todo				
 fn	rbtree_init	src/dyn_rbtree.c	45	todo				
 fn	rbtree_node_min	src/dyn_rbtree.c	52	todo				
@@ -1021,7 +1021,7 @@ fn	rbtree_left_rotate	src/dyn_rbtree.c	76	todo
 fn	rbtree_right_rotate	src/dyn_rbtree.c	101	todo				
 fn	rbtree_insert	src/dyn_rbtree.c	126	todo				
 fn	rbtree_delete	src/dyn_rbtree.c	204	todo				
-macro	_DYN_RBTREE_	src/dyn_rbtree.h	24	todo				
+macro	_DYN_RBTREE_	src/dyn_rbtree.h	24	dead				include guard; no Rust counterpart needed
 macro	rbtree_red	src/dyn_rbtree.h	27	todo				
 macro	rbtree_black	src/dyn_rbtree.h	28	todo				
 macro	rbtree_is_red	src/dyn_rbtree.h	29	todo				
@@ -1053,23 +1053,23 @@ fn	rspmgr_clone_responses	src/dyn_response_mgr.c	330	todo
 macro	_DYN_RESPONSE_MGR_H_	src/dyn_response_mgr.h	2	todo				
 macro	MAX_REPLICAS_PER_DC	src/dyn_response_mgr.h	6	todo				
 struct	response_mgr	src/dyn_response_mgr.h	7	todo				
-fn	create_ring_msg	src/dyn_ring_queue.c	15	todo				
-fn	create_ring_msg_with_data	src/dyn_ring_queue.c	26	todo				
-fn	create_ring_msg_with_size	src/dyn_ring_queue.c	44	todo				
-fn	ring_msg_init	src/dyn_ring_queue.c	62	todo				
-fn	ring_msg_deinit	src/dyn_ring_queue.c	79	todo				
-fn	create_node	src/dyn_ring_queue.c	98	todo				
-fn	node_init	src/dyn_ring_queue.c	105	todo				
-fn	node_deinit	src/dyn_ring_queue.c	122	todo				
-fn	node_copy	src/dyn_ring_queue.c	137	todo				
-macro	_DYN_RING_QUEUE_	src/dyn_ring_queue.h	9	todo				
-macro	C2G_InQ_SIZE	src/dyn_ring_queue.h	11	todo				
-macro	C2G_OutQ_SIZE	src/dyn_ring_queue.h	12	todo				
-typedef	callback_t	src/dyn_ring_queue.h	16	todo				
-typedef	data_func_t	src/dyn_ring_queue.h	17	todo				
-var	C2G_InQ	src/dyn_ring_queue.h	23	todo				
-var	C2G_OutQ	src/dyn_ring_queue.h	29	todo				
-struct	ring_msg	src/dyn_ring_queue.h	31	todo				
+fn	create_ring_msg	src/dyn_ring_queue.c	15	replaced	crates/dynomite/src/core/ring_queue.rs::RingChannels	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: bounded crossbeam channels replace the C2G ring_msg queues
+fn	create_ring_msg_with_data	src/dyn_ring_queue.c	26	replaced	crates/dynomite/src/core/ring_queue.rs::RingChannels	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: bounded crossbeam channels replace the C2G ring_msg queues
+fn	create_ring_msg_with_size	src/dyn_ring_queue.c	44	replaced	crates/dynomite/src/core/ring_queue.rs::RingChannels	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: bounded crossbeam channels replace the C2G ring_msg queues
+fn	ring_msg_init	src/dyn_ring_queue.c	62	dead				no caller in src/ (grep -rw outside dyn_ring_queue.[ch]: no hits)
+fn	ring_msg_deinit	src/dyn_ring_queue.c	79	replaced	crates/dynomite/src/core/ring_queue.rs::RingChannels	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: bounded crossbeam channels replace the C2G ring_msg queues
+fn	create_node	src/dyn_ring_queue.c	98	dead				no caller in src/ (grep -rw outside dyn_ring_queue.[ch]: no hits)
+fn	node_init	src/dyn_ring_queue.c	105	replaced	crates/dynomite/src/cluster/gossip.rs::GossipNode			DEV-S3: gossip_node init/deinit/copy become construction, Drop and Clone
+fn	node_deinit	src/dyn_ring_queue.c	122	replaced	crates/dynomite/src/cluster/gossip.rs::GossipNode			DEV-S3: gossip_node init/deinit/copy become construction, Drop and Clone
+fn	node_copy	src/dyn_ring_queue.c	137	replaced	crates/dynomite/src/cluster/gossip.rs::GossipNode			DEV-S3: gossip_node init/deinit/copy become construction, Drop and Clone
+macro	_DYN_RING_QUEUE_	src/dyn_ring_queue.h	9	dead				include guard; no Rust counterpart needed
+macro	C2G_InQ_SIZE	src/dyn_ring_queue.h	11	replaced	crates/dynomite/src/core/ring_queue.rs::C2G_IN_CAPACITY	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: 256 slots as C
+macro	C2G_OutQ_SIZE	src/dyn_ring_queue.h	12	replaced	crates/dynomite/src/core/ring_queue.rs::C2G_OUT_CAPACITY	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: 256 slots as C
+typedef	callback_t	src/dyn_ring_queue.h	16	replaced	crates/dynomite/src/core/ring_queue.rs::RingChannels	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: bounded crossbeam channels replace the C2G ring_msg queues
+typedef	data_func_t	src/dyn_ring_queue.h	17	replaced	crates/dynomite/src/core/ring_queue.rs::RingChannels	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: bounded crossbeam channels replace the C2G ring_msg queues
+var	C2G_InQ	src/dyn_ring_queue.h	23	replaced	crates/dynomite/src/core/ring_queue.rs::RingChannels	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: bounded crossbeam channels replace the C2G ring_msg queues
+var	C2G_OutQ	src/dyn_ring_queue.h	29	replaced	crates/dynomite/src/core/ring_queue.rs::RingChannels	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: bounded crossbeam channels replace the C2G ring_msg queues
+struct	ring_msg	src/dyn_ring_queue.h	31	replaced	crates/dynomite/src/core/ring_queue.rs::RingChannels	crates/dynomite/src/core/ring_queue.rs::fifo_ordering_is_preserved		DEV-S2: bounded crossbeam channels replace the C2G ring_msg queues
 fn	_print_datastore	src/dyn_server.c	33	todo				
 fn	server_ref	src/dyn_server.c	41	todo				
 fn	server_unref	src/dyn_server.c	58	todo				
@@ -1117,12 +1117,12 @@ macro	_DYN_SERVER_H_	src/dyn_server.h	24	todo
 var	conn_msg_rate	src/dyn_setting.c	19	todo				
 fn	msgs_per_sec	src/dyn_setting.c	22	todo				
 fn	set_msgs_per_sec	src/dyn_setting.c	24	todo				
-macro	_DYN_SETTING_H_	src/dyn_setting.h	17	todo				
+macro	_DYN_SETTING_H_	src/dyn_setting.h	17	dead				include guard; no Rust counterpart needed
 var	signals	src/dyn_signal.c	29	todo				
 fn	signal_init	src/dyn_signal.c	45	todo				
 fn	signal_deinit	src/dyn_signal.c	67	todo				
 fn	signal_handler	src/dyn_signal.c	69	todo				
-macro	_DYN_SIGNAL_H_	src/dyn_signal.h	24	todo				
+macro	_DYN_SIGNAL_H_	src/dyn_signal.h	24	dead				include guard; no Rust counterpart needed
 struct	signal	src/dyn_signal.h	31	todo				
 struct	stats_desc	src/dyn_stats.c	42	todo				
 var	stats_pool_codec	src/dyn_stats.c	49	todo				
@@ -1291,7 +1291,7 @@ fn	string_duplicate	src/dyn_string.c	66	todo
 fn	string_copy	src/dyn_string.c	79	todo				
 fn	string_copy_c	src/dyn_string.c	94	todo				
 fn	string_compare	src/dyn_string.c	98	todo				
-macro	_DYN_STRING_H_	src/dyn_string.h	24	todo				
+macro	_DYN_STRING_H_	src/dyn_string.h	24	dead				include guard; no Rust counterpart needed
 struct	string	src/dyn_string.h	31	todo				
 macro	string	src/dyn_string.h	36	todo				
 macro	null_string	src/dyn_string.h	38	todo				
@@ -1313,18 +1313,18 @@ macro	dn_scnprintf	src/dyn_string.h	95	todo
 macro	dn_vscnprintf	src/dyn_string.h	98	todo				
 fn	_dn_strchr	src/dyn_string.h	101	todo				
 fn	_dn_strrchr	src/dyn_string.h	112	todo				
-var	task_rbt	src/dyn_task.c	28	todo				
-var	task_rbs	src/dyn_task.c	29	todo				
-struct	task	src/dyn_task.c	32	todo				
-fn	task_mgr_init	src/dyn_task.c	38	todo				
-fn	_create_task	src/dyn_task.c	43	todo				
-fn	schedule_task_1	src/dyn_task.c	50	todo				
-fn	time_to_next_task	src/dyn_task.c	66	todo				
-fn	task_expired	src/dyn_task.c	75	todo				
-fn	execute_expired_tasks	src/dyn_task.c	83	todo				
-fn	cancel_task	src/dyn_task.c	105	todo				
-macro	_DYN_TASK_H_	src/dyn_task.h	2	todo				
-typedef	task_handler_1	src/dyn_task.h	10	todo				
+var	task_rbt	src/dyn_task.c	28	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+var	task_rbs	src/dyn_task.c	29	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+struct	task	src/dyn_task.c	32	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+fn	task_mgr_init	src/dyn_task.c	38	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+fn	_create_task	src/dyn_task.c	43	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+fn	schedule_task_1	src/dyn_task.c	50	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+fn	time_to_next_task	src/dyn_task.c	66	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+fn	task_expired	src/dyn_task.c	75	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+fn	execute_expired_tasks	src/dyn_task.c	83	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+fn	cancel_task	src/dyn_task.c	105	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
+macro	_DYN_TASK_H_	src/dyn_task.h	2	dead				include guard; no Rust counterpart needed
+typedef	task_handler_1	src/dyn_task.h	10	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
 macro	TEST_CONF_PATH	src/dyn_test.c	20	todo				
 macro	TEST_LOG_DEFAULT	src/dyn_test.c	22	todo				
 macro	TEST_LOG_PATH	src/dyn_test.c	23	todo				
@@ -1443,7 +1443,7 @@ fn	count_digits	src/dyn_util.c	595	todo
 fn	current_timestamp_in_millis	src/dyn_util.c	599	todo				
 fn	keypos_elem_len	src/dyn_util.c	608	todo				
 fn	argpos_elem_len	src/dyn_util.c	613	todo				
-macro	_DYN_UTIL_H_	src/dyn_util.h	24	todo				
+macro	_DYN_UTIL_H_	src/dyn_util.h	24	dead				include guard; no Rust counterpart needed
 macro	LF	src/dyn_util.h	32	todo				
 macro	CR	src/dyn_util.h	33	todo				
 macro	CRLF	src/dyn_util.h	34	todo				

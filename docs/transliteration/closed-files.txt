@@ -15,3 +15,13 @@ src/hashkit/dyn_one_at_a_time.c
 src/hashkit/dyn_random.c
 src/hashkit/dyn_token.c
 src/hashkit/dyn_token.h
+src/dyn_queue.h
+src/dyn_cbuf.h
+src/dyn_ring_queue.c
+src/dyn_ring_queue.h
+src/dyn_task.c
+src/dyn_task.h
+src/dyn_dict.c
+src/dyn_dict.h
+src/dyn_dict_msg_id.c
+src/dyn_array.h
