@@ -75,14 +75,15 @@ startup instant and the log quiet.</dd>
 
 ## Design decisions and trade-offs
 
-```admonish note title="Road not taken: implicit topology"
-The builder does not infer datacenter, rack, or token. Dynomite makes
-placement explicit because getting it wrong silently changes where data
-lands -- an implicit default would hide a decision that has to be
-deliberate in any real cluster. The cost is a little more ceremony for a
-single node; the benefit is that the single-node config reads the same
-as a production one.
-```
+> [!NOTE]
+> **Road not taken: implicit topology**
+>
+> The builder does not infer datacenter, rack, or token. Dynomite makes
+> placement explicit because getting it wrong silently changes where data
+> lands -- an implicit default would hide a decision that has to be
+> deliberate in any real cluster. The cost is a little more ceremony for a
+> single node; the benefit is that the single-node config reads the same
+> as a production one.
 
 Fronting an *existing* Valkey (rather than the in-memory default) is the
 point of this example: it shows that the engine's job is orchestration,

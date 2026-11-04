@@ -58,14 +58,15 @@ nearest-neighbor search at query time.</dd>
 matching without a full inverted-index-per-term structure.</dd>
 </dl>
 
-```admonish note title="Road not taken: a separate search service"
-Dynomite embeds search in the same node that stores the data, rather
-than shipping documents to an external search service (the way Riak used
-Solr). Co-locating the index with the data keeps queries on the node that
-already owns the key and avoids a second system to operate; the trade-off
-is that the index shares the node's resources. See
-<a href="../dyniak/search.md">Full-Text, Vector, and Regex Search</a>.
-```
+> [!NOTE]
+> **Road not taken: a separate search service**
+>
+> Dynomite embeds search in the same node that stores the data, rather
+> than shipping documents to an external search service (the way Riak used
+> Solr). Co-locating the index with the data keeps queries on the node that
+> already owns the key and avoids a second system to operate; the trade-off
+> is that the index shares the node's resources. See
+> <a href="../dyniak/search.md">Full-Text, Vector, and Regex Search</a>.
 
 ## When to use this pattern
 

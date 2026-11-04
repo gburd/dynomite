@@ -82,21 +82,23 @@ enable gossip and share seeds.</dd>
 unlike the single-node examples.</dd>
 </dl>
 
-```admonish note title="Road not taken: three processes"
-A truly independent three-node cluster runs three processes with three
-backends and real gossip -- that is what the integration and conformance
-suites do. This example collapses it into one process on purpose: it
-exists to exercise the *hook surface* under multi-node routing, where a
-process boundary would add noise without teaching anything new.
-```
+> [!NOTE]
+> **Road not taken: three processes**
+>
+> A truly independent three-node cluster runs three processes with three
+> backends and real gossip -- that is what the integration and conformance
+> suites do. This example collapses it into one process on purpose: it
+> exists to exercise the *hook surface* under multi-node routing, where a
+> process boundary would add noise without teaching anything new.
 
-```admonish warning title="This is a scaffold, not a deployment"
-Because the three nodes share one in-memory map and use
-<code>inject_request</code>, do not read this example as a template for a
-production cluster. For that, see
-<a href="../getting-started/first-cluster.md">Your First Cluster</a>,
-which runs separate <code>dynomited</code> processes.
-```
+> [!WARNING]
+> **This is a scaffold, not a deployment**
+>
+> Because the three nodes share one in-memory map and use
+> <code>inject_request</code>, do not read this example as a template for a
+> production cluster. For that, see
+> <a href="../getting-started/first-cluster.md">Your First Cluster</a>,
+> which runs separate <code>dynomited</code> processes.
 
 ## When to use this pattern
 

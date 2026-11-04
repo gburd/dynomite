@@ -23,17 +23,18 @@ one answer -- but it is also a single point of failure and a single point
 of partition. If the coordinator is unreachable, either the cluster stops
 accepting membership changes or it forks into disagreeing halves.
 
-```admonish note title="Road not taken: a central membership coordinator"
-We deliberately did not put a coordinator, a consensus group, or an
-external registry (ZooKeeper / etcd) on the membership path. Gossip has no
-node whose loss stalls the cluster, degrades gracefully under partition
-(each side keeps its own converged view and reconciles when the link
-heals), and scales without a hot central service. The cost is that
-membership is eventually consistent -- a just-joined node is not instantly
-visible everywhere -- which is exactly the consistency posture the rest of
-Dynomite already assumes. See
-[Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken: a central membership coordinator**
+>
+> We deliberately did not put a coordinator, a consensus group, or an
+> external registry (ZooKeeper / etcd) on the membership path. Gossip has no
+> node whose loss stalls the cluster, degrades gracefully under partition
+> (each side keeps its own converged view and reconciles when the link
+> heals), and scales without a hot central service. The cost is that
+> membership is eventually consistent -- a just-joined node is not instantly
+> visible everywhere -- which is exactly the consistency posture the rest of
+> Dynomite already assumes. See
+> [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## Seeds: the bootstrap list
 
@@ -152,15 +153,16 @@ gossip handler records inbound heartbeats against the peer whose
 `PeerEndpoint::pname()` matches the sender, and the failure detector is
 keyed the same way. This makes the *advertised* address load-bearing.
 
-```admonish warning title="Bind wildcard, advertise routable"
-A node that binds its peer listener to a wildcard address such as
-<code>0.0.0.0</code> (or <code>::</code>) must still advertise a concrete,
-routable address in its seed entry and gossip identity. Peers match
-gossip by <code>host:port</code>; if a node advertises <code>0.0.0.0</code>
-its peers cannot associate its heartbeats with a ring position, the
-failure detector never sees heartbeats for it, and it is treated as
-permanently down. Bind wide, advertise narrow.
-```
+> [!WARNING]
+> **Bind wildcard, advertise routable**
+>
+> A node that binds its peer listener to a wildcard address such as
+> <code>0.0.0.0</code> (or <code>::</code>) must still advertise a concrete,
+> routable address in its seed entry and gossip identity. Peers match
+> gossip by <code>host:port</code>; if a node advertises <code>0.0.0.0</code>
+> its peers cannot associate its heartbeats with a ring position, the
+> failure detector never sees heartbeats for it, and it is treated as
+> permanently down. Bind wide, advertise narrow.
 
 The reason is mechanical: gossip carries a node's own claimed address, and
 every other node stores and matches on that address. A wildcard is not an
@@ -237,4 +239,3 @@ not bias the fresh suspicion value.
   `GOSSIP_SYN` and the state digests between peers.
 * [Configuration](../configuration.md) -- the `dyn_seeds`,
   `gos_interval`, and gossip enable knobs.
-</content>

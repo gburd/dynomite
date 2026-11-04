@@ -14,11 +14,12 @@ cross-node read at the end work. This is the shape of the shipped
 `node1.yml` / `node2.yml` sample pair, and you can start from those
 files directly.
 
-```admonish tip title="Prerequisites"
-Run everything inside `nix develop`. The flake pins `dynomited`,
-`valkey-server`, `valkey-cli` (via the `redis` package), and every tool
-below. Nothing here needs root.
-```
+> [!TIP]
+> **Prerequisites**
+>
+> Run everything inside `nix develop`. The flake pins `dynomited`,
+> `valkey-server`, `valkey-cli` (via the `redis` package), and every tool
+> below. Nothing here needs root.
 
 ## Step 1: enter the dev shell
 
@@ -35,12 +36,13 @@ You now have `valkey-server`, `valkey-cli`, and a way to run
 Each node fronts its **own** backend. This is the single most common
 first-time mistake, so it gets an admonition:
 
-```admonish warning title="One backend per node"
-Do not point two dynomited nodes at the same Valkey. If they share a
-backend, replication is an illusion -- both "replicas" are the same
-bytes, and a partition test proves nothing. Give every node a distinct
-backend (a distinct port here, distinct hosts in production).
-```
+> [!WARNING]
+> **One backend per node**
+>
+> Do not point two dynomited nodes at the same Valkey. If they share a
+> backend, replication is an illusion -- both "replicas" are the same
+> bytes, and a partition test proves nothing. Give every node a distinct
+> backend (a distinct port here, distinct hosts in production).
 
 Start two Valkey instances on distinct ports:
 
@@ -180,14 +182,15 @@ $ cargo run -p dynomited -- --conf-file node2.yml
 Each logs its bound client and peer addresses and then a gossip round as
 the two discover each other. Give it a second or two to converge.
 
-```admonish note title="Wildcard binds need an advertised address"
-The shipped samples bind <code>127.0.0.1</code> so the two nodes find
-each other on one host. If you bind a wildcard such as
-<code>0.0.0.0:8101</code> for <code>dyn_listen</code> in a real
-deployment, a peer cannot gossip to "all interfaces" -- it needs a
-concrete, reachable address to dial. Bind and advertise a specific
-routable address per node, not a wildcard, on the peer plane.
-```
+> [!NOTE]
+> **Wildcard binds need an advertised address**
+>
+> The shipped samples bind <code>127.0.0.1</code> so the two nodes find
+> each other on one host. If you bind a wildcard such as
+> <code>0.0.0.0:8101</code> for <code>dyn_listen</code> in a real
+> deployment, a peer cannot gossip to "all interfaces" -- it needs a
+> concrete, reachable address to dial. Bind and advertise a specific
+> routable address per node, not a wildcard, on the peer plane.
 
 ## Step 6: write to one node, read from the other
 

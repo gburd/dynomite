@@ -50,7 +50,6 @@
             # Docs
             mdbook
             mdbook-mermaid
-            mdbook-admonish
             mdbook-linkcheck2
             lychee
 

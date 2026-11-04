@@ -1,7 +1,7 @@
 name: docs
 
 # Builds the mdBook reference manual, runs the documentation link
-# checker (mdbook-linkcheck for internal links + lychee for external
+# checker (mdbook-linkcheck2 for internal links + lychee for external
 # URLs and man-page references), and deploys the result to GitHub
 # Pages. The Codeberg mirror runs the parallel `.forgejo/workflows/
 # docs.yml` which publishes to Codeberg Pages from the `pages` branch.
@@ -21,10 +21,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  MDBOOK_VERSION: "0.4.52"
-  MDBOOK_MERMAID_VERSION: "0.16.2"
-  MDBOOK_ADMONISH_VERSION: "1.20.0"
-  MDBOOK_LINKCHECK_VERSION: "0.7.7"
+  MDBOOK_VERSION: "0.5.3"
+  MDBOOK_MERMAID_VERSION: "0.17.0"
+  MDBOOK_LINKCHECK2_VERSION: "0.12.2"
 
 jobs:
   build:
@@ -35,14 +34,14 @@ jobs:
       - name: install mdbook toolchain
         uses: taiki-e/install-action@v2
         with:
-          tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-mermaid@${{ env.MDBOOK_MERMAID_VERSION }},mdbook-admonish@${{ env.MDBOOK_ADMONISH_VERSION }},mdbook-linkcheck@${{ env.MDBOOK_LINKCHECK_VERSION }},lychee
-      - name: build book (internal links checked by mdbook-linkcheck)
+          tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-mermaid@${{ env.MDBOOK_MERMAID_VERSION }},mdbook-linkcheck2@${{ env.MDBOOK_LINKCHECK2_VERSION }},lychee
+      - name: build book (internal links checked by mdbook-linkcheck2)
         # Renders with GitHub source-link URLs so readers on GitHub
         # Pages follow repo links to github.com (the Codeberg build
         # uses codeberg.org). See scripts/render-book.sh.
         run: scripts/render-book.sh github
       - name: external link + man-page check (lychee)
-        # Internal links are already gated by mdbook-linkcheck in the
+        # Internal links are already gated by mdbook-linkcheck2 in the
         # build step above; this external check is informational and
         # must not block publishing internally-correct docs when a
         # third-party host is rate-limiting or down on the CI runner.

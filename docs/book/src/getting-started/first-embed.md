@@ -13,12 +13,13 @@ mirrors a complete program under
 [`crates/dynomite/examples/`](../examples/index.md); the inline code
 is the teaching version, the examples are the runnable version.
 
-```admonish tip title="Prerequisites"
-Run inside `nix develop`. Add the crate to your own project with
-`dynomite = "..."` (published as `dynomite-engine` on crates.io). The
-API surface is governed by SemVer once 0.1 is cut; see the
-[Server Lifecycle](../embedding/server.md) SemVer policy.
-```
+> [!TIP]
+> **Prerequisites**
+>
+> Run inside `nix develop`. Add the crate to your own project with
+> `dynomite = "..."` (published as `dynomite-engine` on crates.io). The
+> API surface is governed by SemVer once 0.1 is cut; see the
+> [Server Lifecycle](../embedding/server.md) SemVer policy.
 
 ## The smallest engine that runs
 
@@ -107,13 +108,14 @@ several parts of your program can hold it. The calls you meet first:
 * `handle.shutdown().await?` -- graceful shutdown: cancel every
   background task, deregister, drain, return. It is idempotent.
 
-```admonish warning title="Dropping the handle does not stop the server"
-The background tasks keep running until you call
-<code>shutdown().await</code> (or <code>join().await</code> resolves).
-Dropping the last <code>ServerHandle</code> does <em>not</em> shut the
-server down. In a long-running service, keep a handle and drive shutdown
-from your signal handler.
-```
+> [!WARNING]
+> **Dropping the handle does not stop the server**
+>
+> The background tasks keep running until you call
+> <code>shutdown().await</code> (or <code>join().await</code> resolves).
+> Dropping the last <code>ServerHandle</code> does <em>not</em> shut the
+> server down. In a long-running service, keep a handle and drive shutdown
+> from your signal handler.
 
 ## Step up: a real Valkey backend
 
@@ -326,15 +328,16 @@ plan and, if it targets a co-located peer, forwards through the
 in-process registry. That is how the cluster example verifies a write on
 one node reads back through another entirely in one process.
 
-```admonish note title="Road not taken"
-Embedded multi-node forwarding uses an in-process registry, not a real
-socket hop between the in-process nodes. Cross-process peer serving --
-the real DNODE wire path -- is provided by the <code>dynomited</code>
-binary. The embedded harness keeps tests off the network while
-preserving the production routing semantics (compute plan, deliver to
-target peers). See
-<a href="../embedding/server.md">Server Lifecycle</a>.
-```
+> [!NOTE]
+> **Road not taken**
+>
+> Embedded multi-node forwarding uses an in-process registry, not a real
+> socket hop between the in-process nodes. Cross-process peer serving --
+> the real DNODE wire path -- is provided by the <code>dynomited</code>
+> binary. The embedded harness keeps tests off the network while
+> preserving the production routing semantics (compute plan, deliver to
+> target peers). See
+> <a href="../embedding/server.md">Server Lifecycle</a>.
 
 ## Start-then-park for a long-running service
 

@@ -148,23 +148,24 @@ The properties that matter most day to day:
 * **`allow_mult`** -- whether the bucket keeps siblings on a conflict.
 * **`last_write_wins`** -- whether conflicts are resolved by timestamp.
 
-```admonish warning title="Which bucket properties are enforced today"
-`n_val` (the replica count) and `allow_mult` (sibling retention) change
-behavior, as does `ttl` (object expiry, swept up by the reaper -- see
-below) and `precommit_module` (a WASM hook run on every write -- see
-below). Of the quorum knobs, `r` and `w` ARE enforced: a `handle_get`
-waits for `r` replica responses and a `handle_put` waits for `w`
-replica acks across the key's replica set before answering, failing
-below quorum, with an availability fallback on a fire-and-forget
-transport. `pr`, `pw`, and `dw` are accepted, stored, and echoed back
-on `GetBucket`, but are **not yet applied** on the read/write path --
-no request handler reads them, and there is no durable-write signal
-from storage to enforce `dw` against. They need the sloppy-quorum /
-fallback-node distinction and a storage durability signal that are not
-yet modelled. The PBC `GetBucket` reflects the stored per-bucket
-properties; the HTTP `/props` GET still echoes Riak's documented
-defaults.
-```
+> [!WARNING]
+> **Which bucket properties are enforced today**
+>
+> `n_val` (the replica count) and `allow_mult` (sibling retention) change
+> behavior, as does `ttl` (object expiry, swept up by the reaper -- see
+> below) and `precommit_module` (a WASM hook run on every write -- see
+> below). Of the quorum knobs, `r` and `w` ARE enforced: a `handle_get`
+> waits for `r` replica responses and a `handle_put` waits for `w`
+> replica acks across the key's replica set before answering, failing
+> below quorum, with an availability fallback on a fire-and-forget
+> transport. `pr`, `pw`, and `dw` are accepted, stored, and echoed back
+> on `GetBucket`, but are **not yet applied** on the read/write path --
+> no request handler reads them, and there is no durable-write signal
+> from storage to enforce `dw` against. They need the sloppy-quorum /
+> fallback-node distinction and a storage durability signal that are not
+> yet modelled. The PBC `GetBucket` reflects the stored per-bucket
+> properties; the HTTP `/props` GET still echoes Riak's documented
+> defaults.
 
 Set properties with `PUT`:
 
@@ -174,14 +175,15 @@ curl -X PUT http://127.0.0.1:8098/buckets/users/props \
   -d '{"props": {"n_val": 5, "allow_mult": true}}'
 ```
 
-```admonish note title="Two Dyniak-specific bucket properties"
-Beyond the Riak set, Dyniak adds `chash_keyfun` (route on
-`<bucket>/<key>`, on `<bucket>` only, or through a custom WASM module)
-and `replication_strategy` (per-DC/per-rack quorum fan-out, the
-Dynomite default, versus walk-N-successors, the Riak default). Both are
-documented with their wire encodings in
-[Riak mode ops](../operations/riak.md#bucket-properties).
-```
+> [!NOTE]
+> **Two Dyniak-specific bucket properties**
+>
+> Beyond the Riak set, Dyniak adds `chash_keyfun` (route on
+> `<bucket>/<key>`, on `<bucket>` only, or through a custom WASM module)
+> and `replication_strategy` (per-DC/per-rack quorum fan-out, the
+> Dynomite default, versus walk-N-successors, the Riak default). Both are
+> documented with their wire encodings in
+> [Riak mode ops](../operations/riak.md#bucket-properties).
 
 ### Precommit hooks
 
@@ -234,15 +236,16 @@ with the *currently-live* actor population rather than with every actor
 that ever participated, which suits Dynomite's dynamic-membership
 cluster model. Retired nodes leave no residual cost in the clock.
 
-```admonish warning title="Opaque context: the compatibility boundary"
-The context blob is opaque on the wire. A client that round-trips the
-bytes verbatim keeps working unchanged. A client that cracks the blob
-open and parses it as a Riak DVV must switch decoders, because the byte
-shape is ITC, not DVV. This is the one place Dyniak's byte
-compatibility with Riak breaks; the semantics are identical, the bytes
-are not. The rationale and citations are in
-[Riak mode ops](../operations/riak.md#causality-tracking).
-```
+> [!WARNING]
+> **Opaque context: the compatibility boundary**
+>
+> The context blob is opaque on the wire. A client that round-trips the
+> bytes verbatim keeps working unchanged. A client that cracks the blob
+> open and parses it as a Riak DVV must switch decoders, because the byte
+> shape is ITC, not DVV. This is the one place Dyniak's byte
+> compatibility with Riak breaks; the semantics are identical, the bytes
+> are not. The rationale and citations are in
+> [Riak mode ops](../operations/riak.md#causality-tracking).
 
 ## Conflict resolution and siblings
 
@@ -264,24 +267,25 @@ or genuinely concurrent.
   conflicting values, ties broken by the encoded clock. The read
   returns that one value.
 
-```admonish note title="Siblings are retained under allow_mult"
-With `allow_mult` set on the bucket, two writes concurrent under the
-per-object causal context are BOTH retained as siblings -- no concurrent
-write is lost. A PBC read returns every sibling as its own
-`RpbContent`; an HTTP read returns `300 Multiple Choices`. The client
-resolves the siblings and writes the resolution back carrying the
-context the read returned (the causal join of the siblings), which
-supersedes them all.
-
-Without `allow_mult` (the default), a concurrent write collapses to a
-single deterministic value, so a concurrent write can be lost -- use
-`allow_mult`, or a CRDT, when that matters.
-
-When the merge of concurrent writes is well-defined by the data (a
-count, a set, a map), a **convergent data type (CRDT)** is still the
-better tool: it merges automatically with no client-side sibling
-resolution. See [Convergent Data Types](./crdts.md).
-```
+> [!NOTE]
+> **Siblings are retained under allow_mult**
+>
+> With `allow_mult` set on the bucket, two writes concurrent under the
+> per-object causal context are BOTH retained as siblings -- no concurrent
+> write is lost. A PBC read returns every sibling as its own
+> `RpbContent`; an HTTP read returns `300 Multiple Choices`. The client
+> resolves the siblings and writes the resolution back carrying the
+> context the read returned (the causal join of the siblings), which
+> supersedes them all.
+>
+> Without `allow_mult` (the default), a concurrent write collapses to a
+> single deterministic value, so a concurrent write can be lost -- use
+> `allow_mult`, or a CRDT, when that matters.
+>
+> When the merge of concurrent writes is well-defined by the data (a
+> count, a set, a map), a **convergent data type (CRDT)** is still the
+> better tool: it merges automatically with no client-side sibling
+> resolution. See [Convergent Data Types](./crdts.md).
 
 ### With `last_write_wins: true`
 
@@ -292,16 +296,17 @@ vanishingly rare. (In practice the lexicographic fallback above already
 collapses concurrent opaque writes to one value; `last_write_wins`
 makes that intent explicit at the bucket level.)
 
-```admonish note title="Road not taken: CRDTs over last-write-wins-only"
-Dyniak ships convergent data types (CRDTs) as the recommended option
-for the common concurrent-write cases -- counters, sets, maps. A CRDT
-merges concurrent writes *automatically and correctly* with no lost
-write, because the merge is defined by the data type's algebra rather
-than by a timestamp or lexicographic race. If your value is a count, a
-set, or a map, reach for a CRDT before you reach for an opaque object.
-See [Convergent Data Types](./crdts.md) and
-[Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken: CRDTs over last-write-wins-only**
+>
+> Dyniak ships convergent data types (CRDTs) as the recommended option
+> for the common concurrent-write cases -- counters, sets, maps. A CRDT
+> merges concurrent writes *automatically and correctly* with no lost
+> write, because the merge is defined by the data type's algebra rather
+> than by a timestamp or lexicographic race. If your value is a count, a
+> set, or a map, reach for a CRDT before you reach for an opaque object.
+> See [Convergent Data Types](./crdts.md) and
+> [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## A worked read-modify-write
 

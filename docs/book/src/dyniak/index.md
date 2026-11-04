@@ -21,12 +21,13 @@ is new is where they run -- on the Dynomite substrate described in
 set of capabilities Riak never shipped, chief among them cross-node
 XA transactions.
 
-```admonish tip title="New to Dyniak? Start hands-on."
-Read this chapter for the shape of the system, then jump to
-[Getting Started with Dyniak](./getting-started.md) to build the
-server, write your first object, and grow to a small cluster. Come
-back here when you want the map of the territory.
-```
+> [!TIP]
+> **New to Dyniak? Start hands-on.**
+>
+> Read this chapter for the shape of the system, then jump to
+> [Getting Started with Dyniak](./getting-started.md) to build the
+> server, write your first object, and grow to a small cluster. Come
+> back here when you want the map of the territory.
 
 ## What Dyniak is
 
@@ -99,16 +100,17 @@ What is compatible:
 
 Where the byte shape differs:
 
-```admonish warning title="Causal context is opaque, not byte-identical"
-Dyniak tracks per-key causality with an Interval Tree Clock (ITC), not
-Riak's dotted version vector (DVV). The context blob travels in the
-same header slot, and a client that treats the context as opaque --
-reads it, holds it, echoes it back on the next write -- keeps working
-without modification. A client that cracks the blob open and parses it
-as a Riak DVV needs a switched decoder. The rationale is in
-[Buckets, Keys, and Objects](./objects.md#causal-context) and the ITC
-citation is in [Riak mode ops](../operations/riak.md#causality-tracking).
-```
+> [!WARNING]
+> **Causal context is opaque, not byte-identical**
+>
+> Dyniak tracks per-key causality with an Interval Tree Clock (ITC), not
+> Riak's dotted version vector (DVV). The context blob travels in the
+> same header slot, and a client that treats the context as opaque --
+> reads it, holds it, echoes it back on the next write -- keeps working
+> without modification. A client that cracks the blob open and parses it
+> as a Riak DVV needs a switched decoder. The rationale is in
+> [Buckets, Keys, and Objects](./objects.md#causal-context) and the ITC
+> citation is in [Riak mode ops](../operations/riak.md#causality-tracking).
 
 What is deliberately out of scope:
 
@@ -186,16 +188,17 @@ Two facts about that picture matter operationally:
    when built with `--features riak`. Operators who do not run Riak
    workloads pay nothing for the extra dependencies and listeners.
 
-```admonish note title="Road not taken: Noxu, not a bolt-on KV"
-Riak shipped Bitcask, eLevelDB, and LevelEd as pluggable backends.
-Dyniak's storage trait is equally pluggable, but the default is Noxu
-because Dyniak needs a backend that supports real transactions --
-single-node atomic batches and X/Open XA branches -- to offer the
-cross-node transactions in [Distributed Transactions](./transactions.md).
-A log-structured KV with no transaction support could serve the object
-model but not the transaction model. See
-[Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken: Noxu, not a bolt-on KV**
+>
+> Riak shipped Bitcask, eLevelDB, and LevelEd as pluggable backends.
+> Dyniak's storage trait is equally pluggable, but the default is Noxu
+> because Dyniak needs a backend that supports real transactions --
+> single-node atomic batches and X/Open XA branches -- to offer the
+> cross-node transactions in [Distributed Transactions](./transactions.md).
+> A log-structured KV with no transaction support could serve the object
+> model but not the transaction model. See
+> [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## When to use Dyniak
 

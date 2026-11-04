@@ -40,14 +40,15 @@ treatment -- token arithmetic, the continuum, and how replicas are
 chosen by continuing the walk -- is in
 [The Ring and the Token Space](../architecture/ring.md).
 
-```admonish note title="Road not taken"
-Dynomite hashes keys to fixed token positions rather than hashing to a
-consensus-elected shard leader. There is no leader per shard and no
-central placement service. That is the availability-first choice; its
-consequences (no single ordering point) are discussed in
-[Replication and Consistency](../architecture/consistency.md) and
-[Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken**
+>
+> Dynomite hashes keys to fixed token positions rather than hashing to a
+> consensus-elected shard leader. There is no leader per shard and no
+> central placement service. That is the availability-first choice; its
+> consequences (no single ordering point) are discussed in
+> [Replication and Consistency](../architecture/consistency.md) and
+> [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## Node, rack, datacenter
 
@@ -120,14 +121,15 @@ writes (`write_consistency`):
 | `DC_SAFE_QUORUM` | A quorum that additionally accounts for peer health / token ownership, rejecting when a safe quorum cannot be formed. |
 | `DC_EACH_SAFE_QUORUM` | A safe quorum in **every** datacenter, not just the local one. Strongest overlap, highest latency, cross-DC fan-out. |
 
-```admonish warning title="Quorum is overlap, not linearizability"
-Even `DC_EACH_SAFE_QUORUM` gives you read/write quorum *overlap* in the
-Dynamo tradition -- enough replicas agree that a read is likely to see a
-recent write. It does **not** give you a single global order for writes.
-Concurrent writes to one plain key reconcile last-writer-wins. If you
-need conflict-free merges, use the
-[Dyniak CRDT layer](../dyniak/crdts.md).
-```
+> [!WARNING]
+> **Quorum is overlap, not linearizability**
+>
+> Even `DC_EACH_SAFE_QUORUM` gives you read/write quorum *overlap* in the
+> Dynamo tradition -- enough replicas agree that a read is likely to see a
+> recent write. It does **not** give you a single global order for writes.
+> Concurrent writes to one plain key reconcile last-writer-wins. If you
+> need conflict-free merges, use the
+> [Dyniak CRDT layer](../dyniak/crdts.md).
 
 In the embedded API these are the `ConsistencyLevel` variants
 (`DcOne`, `DcQuorum`, `DcSafeQuorum`, `DcEachSafeQuorum`); in YAML they

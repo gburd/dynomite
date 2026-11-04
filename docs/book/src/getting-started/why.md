@@ -81,13 +81,14 @@ optimizing single-node throughput; the distribution layer evolves on its
 own schedule; and a Memcached shop and a Valkey shop get the same
 availability story from the same binary.
 
-```admonish note title="Road not taken"
-The alternative to a layer is to fork the store and teach it to
-replicate -- which is what Redis Cluster is. Dynomite deliberately did
-not do that. Coupling distribution to one store's internals is exactly
-the coupling the layer exists to avoid. See
-[Design Decisions (Roads Not Taken)](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken**
+>
+> The alternative to a layer is to fork the store and teach it to
+> replicate -- which is what Redis Cluster is. Dynomite deliberately did
+> not do that. Coupling distribution to one store's internals is exactly
+> the coupling the layer exists to avoid. See
+> [Design Decisions (Roads Not Taken)](../reference/roads-not-taken.md).
 
 ## What Dynomite is not
 
@@ -178,13 +179,14 @@ orthogonal to everything above.
   SemVer-governed API. This is the subject of
   [Your First Embedded Engine](./first-embed.md).
 
-```admonish tip title="Not sure which?"
-If you are fronting an off-the-shelf Valkey or Memcached, run the
-server. If you are building a Rust service that needs a distributed
-key/value core inside its own process -- or you want to plug in a custom
-backend, seed source, or metrics sink -- embed the library. The concepts
-are identical; only the packaging differs.
-```
+> [!TIP]
+> **Not sure which?**
+>
+> If you are fronting an off-the-shelf Valkey or Memcached, run the
+> server. If you are building a Rust service that needs a distributed
+> key/value core inside its own process -- or you want to plug in a custom
+> backend, seed source, or metrics sink -- embed the library. The concepts
+> are identical; only the packaging differs.
 
 ## Where to next
 

@@ -19,13 +19,14 @@ or Memcache deployment; the `riak:` configuration block is still parsed
 and validated but is a no-op at run time. With the feature, the server
 gains the PBC and HTTP listeners and the `data_store: dyniak` backend.
 
-```admonish tip title="Confirm the feature is present"
-A quick way to confirm you built the right binary: start it against a
-config that selects `data_store: dyniak` (below). A binary built
-without `--features riak` rejects that value at validation time with
-"dyniak data_store requires dynomited built with --features riak", so
-you find out immediately rather than at first request.
-```
+> [!TIP]
+> **Confirm the feature is present**
+>
+> A quick way to confirm you built the right binary: start it against a
+> config that selects `data_store: dyniak` (below). A binary built
+> without `--features riak` rejects that value at validation time with
+> "dyniak data_store requires dynomited built with --features riak", so
+> you find out immediately rather than at first request.
 
 ## Step 2: write a minimal Dyniak config
 
@@ -65,13 +66,14 @@ A few things to understand about this config:
   listeners. Either can be omitted to disable it; both can run
   side-by-side and share a single backend.
 
-```admonish note title="Why the servers list stays"
-It would be tidier to drop `servers:` for a Dyniak pool, but keeping it
-means one config schema across all three protocol layers, so an
-operator's tooling and validation do not need a Dyniak special case.
-The placeholder is conventional; see
-[Riak mode ops](../operations/riak.md#noxu-as-the-backing-datastore).
-```
+> [!NOTE]
+> **Why the servers list stays**
+>
+> It would be tidier to drop `servers:` for a Dyniak pool, but keeping it
+> means one config schema across all three protocol layers, so an
+> operator's tooling and validation do not need a Dyniak special case.
+> The placeholder is conventional; see
+> [Riak mode ops](../operations/riak.md#noxu-as-the-backing-datastore).
 
 Validate the config before you start it:
 
@@ -139,13 +141,14 @@ curl -s -X DELETE http://127.0.0.1:8098/buckets/users/keys/alice
 As in Riak, deleting an absent key is not an error -- the delete path
 replies `204 No Content` whether or not the key existed.
 
-```admonish note title="The full HTTP route table"
-The routes shown here are the object-level subset. The gateway also
-exposes `/stats`, `/buckets?buckets=true` (list buckets),
-`/buckets/{b}/keys?keys=true` (list keys), `/buckets/{b}/props`
-(bucket properties), `/mapred`, `/transactions`, and the search routes.
-The complete table is in [Dyniak wire protocols](../protocols/dyniak.md#http-routes).
-```
+> [!NOTE]
+> **The full HTTP route table**
+>
+> The routes shown here are the object-level subset. The gateway also
+> exposes `/stats`, `/buckets?buckets=true` (list buckets),
+> `/buckets/{b}/keys?keys=true` (list keys), `/buckets/{b}/props`
+> (bucket properties), `/mapred`, `/transactions`, and the search routes.
+> The complete table is in [Dyniak wire protocols](../protocols/dyniak.md#http-routes).
 
 ## Step 5: the same operation over PBC
 
@@ -242,13 +245,14 @@ to the owning peers before the write is acknowledged, and a read with
 `r=2` waits for two replicas to agree. The client still connects to any
 one node and never learns the topology.
 
-```admonish tip title="Default distribution is random_slicing"
-A Riak-mode pool defaults its `distribution:` to `random_slicing` when
-a Riak listener is configured, so a 3-of-4 host topology cannot
-silently leave a quarter of the ring unowned -- the classic Riak
-behaviour. You can force the legacy `vnode` mode explicitly; see
-[Distribution Modes](../operations/distribution.md).
-```
+> [!TIP]
+> **Default distribution is random_slicing**
+>
+> A Riak-mode pool defaults its `distribution:` to `random_slicing` when
+> a Riak listener is configured, so a 3-of-4 host topology cannot
+> silently leave a quarter of the ring unowned -- the classic Riak
+> behaviour. You can force the legacy `vnode` mode explicitly; see
+> [Distribution Modes](../operations/distribution.md).
 
 ## Where to next
 

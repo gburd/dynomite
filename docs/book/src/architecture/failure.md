@@ -54,13 +54,14 @@ and phi is `0.0` when no heartbeat has ever been recorded (no data is not
 the same as dead) or when fewer than two heartbeats give no inter-arrival
 sample.
 
-```admonish note title="Scope: peer plane only"
-The phi-accrual detector is for the dnode peer plane, driven by gossip
-heartbeats. The backend datastore (redis / memcache) is not
-heartbeat-driven -- it is exercised by real client traffic -- so backend
-health uses a consecutive-failure auto-eject tracker instead. Do not wire
-phi-accrual into backend supervision.
-```
+> [!NOTE]
+> **Scope: peer plane only**
+>
+> The phi-accrual detector is for the dnode peer plane, driven by gossip
+> heartbeats. The backend datastore (redis / memcache) is not
+> heartbeat-driven -- it is exercised by real client traffic -- so backend
+> health uses a consecutive-failure auto-eject tracker instead. Do not wire
+> phi-accrual into backend supervision.
 
 ## The peer state machine
 
@@ -301,24 +302,26 @@ divergent answer (see <a href="./consistency.md">Replication and
 Consistency</a>).</dd>
 </dl>
 
-```admonish warning title="The guarantee is quorum-scoped"
-"No data loss" holds for writes that met their consistency level on a
-side that survived. A write acknowledged at DC_ONE that landed only on a
-replica which then failed permanently before hinting or anti-entropy
-could copy it elsewhere is a genuine loss -- that is the trade DC_ONE
-buys you. Choose the level that matches your durability requirement; see
-[Replication and Consistency](./consistency.md).
-```
+> [!WARNING]
+> **The guarantee is quorum-scoped**
+>
+> "No data loss" holds for writes that met their consistency level on a
+> side that survived. A write acknowledged at DC_ONE that landed only on a
+> replica which then failed permanently before hinting or anti-entropy
+> could copy it elsewhere is a genuine loss -- that is the trade DC_ONE
+> buys you. Choose the level that matches your durability requirement; see
+> [Replication and Consistency](./consistency.md).
 
-```admonish note title="Road not taken: fencing / leader-based failover"
-Dynomite does not fence a partitioned node or fail writes over to a
-leader, because there is no leader and no fencing token. The Dynamo model
-accepts concurrent writes on both sides of a partition and reconciles
-after the fact; that is what keeps both sides available. Systems that
-need strict single-writer semantics use a consensus layer instead and pay
-the availability cost during partition. See
-[Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken: fencing / leader-based failover**
+>
+> Dynomite does not fence a partitioned node or fail writes over to a
+> leader, because there is no leader and no fencing token. The Dynamo model
+> accepts concurrent writes on both sides of a partition and reconciles
+> after the fact; that is what keeps both sides available. Systems that
+> need strict single-writer semantics use a consensus layer instead and pay
+> the availability cost during partition. See
+> [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## Where to go next
 
@@ -332,4 +335,3 @@ the availability cost during partition. See
   the transactional reconciliation path.
 * [Configuration](../configuration.md) -- the `enable_hinted_handoff`,
   `hint_dir`, `hint_ttl_seconds`, and failure-detector knobs.
-</content>

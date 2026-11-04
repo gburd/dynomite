@@ -24,11 +24,12 @@ from the binary's own argument parser -- run
 `cargo run -p dynomited --bin gen-man` to regenerate it after a flag
 change, which keeps the man page and the `--help` output from drifting.
 
-```admonish tip title="--help mirrors the man page"
-Every flag in `dynomited(8)` is also shown by `dynomited --help`. The man
-page adds the prose sections (description, backends, files, signals) that
-do not fit in `--help`.
-```
+> [!TIP]
+> **--help mirrors the man page**
+>
+> Every flag in `dynomited(8)` is also shown by `dynomited --help`. The man
+> page adds the prose sections (description, backends, files, signals) that
+> do not fit in `--help`.
 
 ## `dyn-admin`
 

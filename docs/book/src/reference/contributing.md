@@ -21,15 +21,16 @@ not aspirational prose -- it is tracked, symbol by symbol, in
 which maps each C function to its Rust home and records every deliberate
 divergence as a **deviation** with a rationale.
 
-```admonish note title="Why parity, and where the Rust code is idiomatic"
-Parity governs observable behavior, not code shape. The Rust code reads
-as first-class Rust -- traits, enums, async, typed errors -- and does not
-carry origin-acknowledgement comments. Where a C shape does not map
-cleanly to Rust, the project uses a two-layer pattern: an idiomatic inner
-layer and a thin parity shim that mirrors the C function's semantics.
-Both are
-tested to produce identical behavior.
-```
+> [!NOTE]
+> **Why parity, and where the Rust code is idiomatic**
+>
+> Parity governs observable behavior, not code shape. The Rust code reads
+> as first-class Rust -- traits, enums, async, typed errors -- and does not
+> carry origin-acknowledgement comments. Where a C shape does not map
+> cleanly to Rust, the project uses a two-layer pattern: an idiomatic inner
+> layer and a thin parity shim that mirrors the C function's semantics.
+> Both are
+> tested to produce identical behavior.
 
 If you change behavior, you update `docs/parity.md`. If you find the C
 reference ambiguous, you record the ambiguity, choose the interpretation
@@ -53,13 +54,14 @@ unit, property, and fuzz tests, and both are merge blockers:
    with a history-recording workload and finds zero anomalies of the
    classes it covers.
 
-```admonish warning title="Model the failure first"
-When a real-world distributed failure is found, the discipline is to
-reproduce it in a deterministic model *before* fixing it. A green unit
-suite is explicitly not sufficient evidence of distributed correctness --
-several real defects in this port passed the entire unit suite. See
-[Design Decisions](./roads-not-taken.md#property-dst-and-elle-testing-not-unit-tests-alone).
-```
+> [!WARNING]
+> **Model the failure first**
+>
+> When a real-world distributed failure is found, the discipline is to
+> reproduce it in a deterministic model *before* fixing it. A green unit
+> suite is explicitly not sufficient evidence of distributed correctness --
+> several real defects in this port passed the entire unit suite. See
+> [Design Decisions](./roads-not-taken.md#property-dst-and-elle-testing-not-unit-tests-alone).
 
 ## The everyday gate
 
@@ -81,5 +83,5 @@ scripts/check.sh
 ```
 
 The flake pins the Rust toolchain and every auxiliary tool -- including
-the mdBook, mermaid, admonish, linkcheck, and lychee binaries this manual
+the mdBook, mermaid, linkcheck, and lychee binaries this manual
 is built with -- so a fresh checkout reproduces CI exactly.

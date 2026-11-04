@@ -73,12 +73,13 @@ Link: </buckets/users>; rel="up"
 Link: </buckets/users/keys/bob>; riaktag="friend"
 ```
 
-```admonish note title="rel=up links are navigation, not object links"
-The `rel="up"` bucket link points at a bucket, not an object, so it
-carries no key and no tag. It is not a link a traversal can walk; the
-gateway skips it on parse and re-synthesizes it on read. Only
-`(bucket, key, tag)` object links are walkable.
-```
+> [!NOTE]
+> **rel=up links are navigation, not object links**
+>
+> The `rel="up"` bucket link points at a bucket, not an object, so it
+> carries no key and no tag. It is not a link a traversal can walk; the
+> gateway skips it on parse and re-synthesizes it on read. Only
+> `(bucket, key, tag)` object links are walkable.
 
 Over PBC, links are `RpbLink` entries inside the object's `RpbContent`
 message -- the same slot the value and content type occupy. A Riak
@@ -184,13 +185,14 @@ and point outward. For query-by-attribute, reach for
 [secondary indexes](./mapreduce.md#secondary-indexes-2i); for graph
 navigation from a known starting object, links are the tool.
 
-```admonish tip title="Links plus 2i plus MapReduce compose"
-Because link-walking is a MapReduce phase, you can seed a pipeline from
-a secondary-index query (find the starting objects by attribute), walk
-their links (navigate the graph), and reduce the result (aggregate) --
-all in one job. The next chapter covers the 2i and MapReduce halves of
-that combination.
-```
+> [!TIP]
+> **Links plus 2i plus MapReduce compose**
+>
+> Because link-walking is a MapReduce phase, you can seed a pipeline from
+> a secondary-index query (find the starting objects by attribute), walk
+> their links (navigate the graph), and reduce the result (aggregate) --
+> all in one job. The next chapter covers the 2i and MapReduce halves of
+> that combination.
 
 ## Where to next
 

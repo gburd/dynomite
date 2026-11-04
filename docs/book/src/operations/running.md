@@ -30,12 +30,13 @@ cargo run -p dynomited -- --conf-file my.yml
 dynomited --conf-file my.yml
 ```
 
-```admonish tip title="Sample configs live in the test fixtures"
-Working configs for single-node, two-node, multi-datacenter, memcache,
-and secure setups are in
-[`crates/dynomite/tests/fixtures/conf/`](DYN_SRC_BASE/crates/dynomite/tests/fixtures/conf).
-They are exercised by the test suite, so they are guaranteed to parse.
-```
+> [!TIP]
+> **Sample configs live in the test fixtures**
+>
+> Working configs for single-node, two-node, multi-datacenter, memcache,
+> and secure setups are in
+> [`crates/dynomite/tests/fixtures/conf/`](DYN_SRC_BASE/crates/dynomite/tests/fixtures/conf).
+> They are exercised by the test suite, so they are guaranteed to parse.
 
 ### Key fields
 
@@ -115,11 +116,12 @@ dynomited --conf-file my.yml --daemonize --pid-file /run/dynomited.pid
 stdio to `/dev/null`. Pair it with `--pid-file` so a supervisor can find
 and signal the process.
 
-```admonish note title="Under a service manager"
-When running under systemd or another supervisor that manages the process
-lifecycle, prefer running in the foreground (no `--daemonize`) and let the
-supervisor handle backgrounding, restart, and logging.
-```
+> [!NOTE]
+> **Under a service manager**
+>
+> When running under systemd or another supervisor that manages the process
+> lifecycle, prefer running in the foreground (no `--daemonize`) and let the
+> supervisor handle backgrounding, restart, and logging.
 
 ## Signals
 
@@ -128,13 +130,14 @@ shutdown -- it stops accepting new connections, drains in-flight requests,
 and closes the backend and peer connections before exiting. Send
 `SIGTERM` (or `SIGINT` in the foreground) to trigger it.
 
-```admonish warning title="Fast restarts and the stats port"
-On a very fast kill-and-relaunch, a listening socket can briefly linger.
-Dynomite sets <code>SO_REUSEADDR</code> on all its listeners, including
-the stats port, so a prompt rebind succeeds. If you script restarts, wait
-for the process to actually exit before relaunching rather than assuming a
-fixed sleep is enough.
-```
+> [!WARNING]
+> **Fast restarts and the stats port**
+>
+> On a very fast kill-and-relaunch, a listening socket can briefly linger.
+> Dynomite sets <code>SO_REUSEADDR</code> on all its listeners, including
+> the stats port, so a prompt rebind succeeds. If you script restarts, wait
+> for the process to actually exit before relaunching rather than assuming a
+> fixed sleep is enough.
 
 ## Where to go next
 

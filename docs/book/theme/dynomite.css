@@ -48,8 +48,8 @@
 }
 
 /* Roads-not-taken block: an explicit "we did NOT choose X" callout.
-   Rendered via  ```admonish note title="Road not taken" ...  as well,
-   but this class styles inline HTML variants. */
+   Rendered as a `> [!NOTE]` alert as well, but this class styles
+   inline HTML variants. */
 .dyn-alt {
   border-left: 4px solid #5e81ac;
   background: rgba(94, 129, 172, 0.08);

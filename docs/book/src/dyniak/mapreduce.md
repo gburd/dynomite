@@ -67,20 +67,21 @@ Over PBC these are `RpbIndexReq` with `qtype: 0` (equality) or
 single frame with `done = true`; streaming one frame per chunk is a
 tracked follow-up.
 
-```admonish note title="Storage layout: a deviation from Riak's schema"
-Riak stored 2i entries in a `2i_partition_table`. Dyniak stores them as
-plain records inside the same Noxu environment as the primary data,
-under three reserved key prefixes -- a primary record, a forward index
-(name+value -> key) for the query path, and a reverse index
-(key -> name+value list) so a delete or overwrite can clean stale
-forward entries. A fixed-width length prefix on the value keeps prefix
-scans unambiguous when value bytes contain the structural separator.
-The full layout is in
-[Riak mode ops](../operations/riak.md#secondary-indexes-2i). The 2i
-entries an object carries are written and removed atomically with the
-object itself, including inside a transaction (see
-[Distributed Transactions](./transactions.md)).
-```
+> [!NOTE]
+> **Storage layout: a deviation from Riak's schema**
+>
+> Riak stored 2i entries in a `2i_partition_table`. Dyniak stores them as
+> plain records inside the same Noxu environment as the primary data,
+> under three reserved key prefixes -- a primary record, a forward index
+> (name+value -> key) for the query path, and a reverse index
+> (key -> name+value list) so a delete or overwrite can clean stale
+> forward entries. A fixed-width length prefix on the value keeps prefix
+> scans unambiguous when value bytes contain the structural separator.
+> The full layout is in
+> [Riak mode ops](../operations/riak.md#secondary-indexes-2i). The 2i
+> entries an object carries are written and removed atomically with the
+> object itself, including inside a transaction (see
+> [Distributed Transactions](./transactions.md)).
 
 ## MapReduce
 
@@ -89,17 +90,18 @@ phase transforms a stream of values into another stream; the phases are
 chained, and the last phase's output is the job result. The shape is
 Riak's "pipe of phases."
 
-```admonish note title="Road not taken: named Rust phases, not embedded JavaScript"
-Riak shipped a JavaScript (and Erlang) MapReduce engine so operators
-could ship arbitrary phase code inline. Dyniak takes a different bet: a
-fixed registry of named built-in phase functions written in Rust, plus
-optional sandboxed WebAssembly for custom phases. The built-ins cover
-the common jobs -- extract, count, sum, sort, union, project -- with no
-scripting engine to secure or slow down, and the WASM path (below)
-gives you custom logic when you need it without embedding a JavaScript
-runtime in the data plane. The rationale is in the crate's MapReduce
-module docs.
-```
+> [!NOTE]
+> **Road not taken: named Rust phases, not embedded JavaScript**
+>
+> Riak shipped a JavaScript (and Erlang) MapReduce engine so operators
+> could ship arbitrary phase code inline. Dyniak takes a different bet: a
+> fixed registry of named built-in phase functions written in Rust, plus
+> optional sandboxed WebAssembly for custom phases. The built-ins cover
+> the common jobs -- extract, count, sum, sort, union, project -- with no
+> scripting engine to secure or slow down, and the WASM path (below)
+> gives you custom logic when you need it without embedding a JavaScript
+> runtime in the data plane. The rationale is in the crate's MapReduce
+> module docs.
 
 ### The job envelope
 
@@ -199,14 +201,15 @@ This requires two things:
 }
 ```
 
-```admonish warning title="WasmModule needs the wasm feature"
-Without the `wasm` feature the phase is still parsed and validated, but
-submitting a job that contains a `WasmModule` phase returns a
-`WasmNotImplemented` error. Build with `--features wasm` and register
-the module before you submit. The WASM executor shares its module store,
-compilation cache, and resource limits with the custom-keyfun routing
-described in [Dyniak features ops](../operations/dyniak-features.md).
-```
+> [!WARNING]
+> **WasmModule needs the wasm feature**
+>
+> Without the `wasm` feature the phase is still parsed and validated, but
+> submitting a job that contains a `WasmModule` phase returns a
+> `WasmNotImplemented` error. Build with `--features wasm` and register
+> the module before you submit. The WASM executor shares its module store,
+> compilation cache, and resource limits with the custom-keyfun routing
+> described in [Dyniak features ops](../operations/dyniak-features.md).
 
 ## Combining 2i, links, and MapReduce
 

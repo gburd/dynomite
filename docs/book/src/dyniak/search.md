@@ -14,16 +14,17 @@ chapter shows both faces of it: the `FT.*` commands on the RESP plane
 (the same surface RediSearch exposes) and the HTTP index/search routes
 on the Dyniak gateway.
 
-```admonish note title="Road not taken: in-process search, not Solr"
-Riak's search story leaned on Apache Solr -- riak_search 1.x, then
-yokozuna in 2.x, both shipping documents out to a co-located Solr
-instance. Dyniak does it in-process, inheriting Dynomite's `dyntext`
-(trigram funnel plus a TRE-backed approximate-regex matcher) and
-`dynvec` (an HNSW graph with turbovec quantisation) crates. The bet is
-the same as the rest of the system: fewer moving parts, one durable
-store, no second cluster to operate or keep in sync. See
-[Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken: in-process search, not Solr**
+>
+> Riak's search story leaned on Apache Solr -- riak_search 1.x, then
+> yokozuna in 2.x, both shipping documents out to a co-located Solr
+> instance. Dyniak does it in-process, inheriting Dynomite's `dyntext`
+> (trigram funnel plus a TRE-backed approximate-regex matcher) and
+> `dynvec` (an HNSW graph with turbovec quantisation) crates. The bet is
+> the same as the rest of the system: fewer moving parts, one durable
+> store, no second cluster to operate or keep in sync. See
+> [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## Two ways to reach the same engine
 
@@ -198,15 +199,16 @@ List a bucket's declared indexes:
 curl -s http://127.0.0.1:8098/buckets/articles/index
 ```
 
-```admonish note title="How indexes bind to buckets"
-Each bucket is backed by two registry index names: <code>text:{bucket}</code>
-holds the text fields and <code>vec:{bucket}</code> holds the vector
-engine. A bucket name containing a colon could in principle collide with
-this scheme; in practice bucket names are flat identifiers, so the
-collision is documented rather than guarded. Indexing is best-effort on
-write: the object is durable first, so an indexing miss never turns a
-write into an error.
-```
+> [!NOTE]
+> **How indexes bind to buckets**
+>
+> Each bucket is backed by two registry index names: <code>text:{bucket}</code>
+> holds the text fields and <code>vec:{bucket}</code> holds the vector
+> engine. A bucket name containing a colon could in principle collide with
+> this scheme; in practice bucket names are flat identifiers, so the
+> collision is documented rather than guarded. Indexing is best-effort on
+> write: the object is durable first, so an indexing miss never turns a
+> write into an error.
 
 ## The durable index
 

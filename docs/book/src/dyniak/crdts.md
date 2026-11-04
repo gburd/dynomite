@@ -37,17 +37,18 @@ locks, no consensus round. A replica can accept a write while
 partitioned from the rest of the cluster, and when the partition heals,
 the merge reconciles the divergence deterministically.
 
-```admonish note title="Road not taken: CRDTs instead of last-write-wins only"
-Riak (and Dyniak) can resolve conflicts with last-write-wins, but that
-throws away one of two concurrent writes based on a clock comparison --
-and clocks skew. CRDTs were added precisely so that the common
-structured values (a counter, a set of tags, a nested map) never need
-to lose a write. The cost is that the merge is fixed by the type: you
-cannot define an arbitrary application-specific merge for a CRDT the way
-you can for a sibling set. For values whose merge is a count, a union,
-or a field-wise combine, that trade is a bargain. See
-[Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken: CRDTs instead of last-write-wins only**
+>
+> Riak (and Dyniak) can resolve conflicts with last-write-wins, but that
+> throws away one of two concurrent writes based on a clock comparison --
+> and clocks skew. CRDTs were added precisely so that the common
+> structured values (a counter, a set of tags, a nested map) never need
+> to lose a write. The cost is that the merge is fixed by the type: you
+> cannot define an arbitrary application-specific merge for a CRDT the way
+> you can for a sibling set. For values whose merge is a count, a union,
+> or a field-wise combine, that trade is a bargain. See
+> [Roads Not Taken](../reference/roads-not-taken.md).
 
 Every type below satisfies all three laws; property tests in the crate
 (`crates/dyniak/tests/datatypes_properties.rs`) exercise associativity,
@@ -94,15 +95,16 @@ flowchart TB
 primitive type or, recursively, another Map -- the same composition
 Riak's riak_dt_map offers.</p>
 
-```admonish note title="All six types are served over the wire"
-All six types are first-class, tested Rust APIs (the examples in this
-chapter are doctests) AND served over the Dyniak PBC / HTTP wire:
-**Counter**, **Set**, **Register**, **Flag**, **Map**, and
-**HyperLogLog**. A `DtUpdate` / `DtFetch` for the `counters`, `sets`,
-`registers`, `flags`, `maps`, or `hlls` bucket type is handled, and a
-read coordinates and merges across the replica set. Map fields may be
-counters, sets, registers, flags, or (recursively) nested maps.
-```
+> [!NOTE]
+> **All six types are served over the wire**
+>
+> All six types are first-class, tested Rust APIs (the examples in this
+> chapter are doctests) AND served over the Dyniak PBC / HTTP wire:
+> **Counter**, **Set**, **Register**, **Flag**, **Map**, and
+> **HyperLogLog**. A `DtUpdate` / `DtFetch` for the `counters`, `sets`,
+> `registers`, `flags`, `maps`, or `hlls` bucket type is handled, and a
+> read coordinates and merges across the replica set. Map fields may be
+> counters, sets, registers, flags, or (recursively) nested maps.
 
 ### Counter
 
@@ -202,14 +204,15 @@ The field types a map may carry are `Counter`, `OrSet`, `LwwRegister`,
 with a `visits` counter, an `interests` set, and a `name` register, all
 merging independently.
 
-```admonish tip title="Removal keeps the value, tombstones the tags"
-When you remove a field from a Map, Dyniak leaves the underlying CRDT
-value intact and only tombstones its add-tags. A later re-add through
-the same actor mints a fresh tag and re-exposes the field. This is a
-small, documented divergence from Riak's exact removal bookkeeping; the
-observable add-wins semantics are the same. See the module docs in
-`crates/dyniak/src/datatypes/map.rs`.
-```
+> [!TIP]
+> **Removal keeps the value, tombstones the tags**
+>
+> When you remove a field from a Map, Dyniak leaves the underlying CRDT
+> value intact and only tombstones its add-tags. A later re-add through
+> the same actor mints a fresh tag and re-exposes the field. This is a
+> small, documented divergence from Riak's exact removal bookkeeping; the
+> observable add-wins semantics are the same. See the module docs in
+> `crates/dyniak/src/datatypes/map.rs`.
 
 ### HyperLogLog
 
@@ -246,24 +249,25 @@ The exchange that carries CRDT state between replicas is the same
 anti-entropy machinery described in
 [Anti-Entropy and Repair](./aae.md).
 
-```admonish note title="Implementation status: write and read convergence"
-A write applies to the coordinating node and fans the merged state to
-the key's replica set, where each replica merges it idempotently
-(element-wise max), so **every replica converges** and no update is lost
-or double-counted. This is validated at scale under partitions and node
-churn: a multi-region chaos run reports zero lost updates and zero
-over-counts.
-
-A read (`DtFetch`) coordinates across the replica set: the coordinating
-node fans the fetch to the key's replicas, merges their states, and
-answers with the converged value, also writing the merged state back
-locally (read repair). A fetch to any node therefore returns the full
-value when the transport supports request/response; on a fire-and-forget
-transport it falls back to the local value with anti-entropy as the
-convergence backstop. For opaque non-CRDT objects, `R` (read quorum) is
-enforced on the object read path; `PR` (primary-replica read quorum) is
-accepted but not yet applied.
-```
+> [!NOTE]
+> **Implementation status: write and read convergence**
+>
+> A write applies to the coordinating node and fans the merged state to
+> the key's replica set, where each replica merges it idempotently
+> (element-wise max), so **every replica converges** and no update is lost
+> or double-counted. This is validated at scale under partitions and node
+> churn: a multi-region chaos run reports zero lost updates and zero
+> over-counts.
+>
+> A read (`DtFetch`) coordinates across the replica set: the coordinating
+> node fans the fetch to the key's replicas, merges their states, and
+> answers with the converged value, also writing the merged state back
+> locally (read repair). A fetch to any node therefore returns the full
+> value when the transport supports request/response; on a fire-and-forget
+> transport it falls back to the local value with anti-entropy as the
+> convergence backstop. For opaque non-CRDT objects, `R` (read quorum) is
+> enforced on the object read path; `PR` (primary-replica read quorum) is
+> accepted but not yet applied.
 
 ## Choosing a type
 

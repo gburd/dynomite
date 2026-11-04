@@ -46,14 +46,15 @@ is mapped onto the runtime enum by `map_hash` in
 that mapping is the single seam so the dispatcher, the reaper, and the
 Dyniak replica router all agree on which hash a pool uses.
 
-```admonish note title="Hash tags"
-The token is computed over the *hash tag*, not necessarily the whole
-key. When a key contains a `{...}` tag, only the bytes inside the braces
-are hashed, so `{user:1042}:profile` and `{user:1042}:sessions` land on
-the same node. The dispatcher pulls the tag-aware sub-range via
-`KeyPos::tag_bytes`; commands with no parsed key (`PING`, `INFO`) route
-to the local datastore.
-```
+> [!NOTE]
+> **Hash tags**
+>
+> The token is computed over the *hash tag*, not necessarily the whole
+> key. When a key contains a `{...}` tag, only the bytes inside the braces
+> are hashed, so `{user:1042}:profile` and `{user:1042}:sessions` land on
+> the same node. The dispatcher pulls the tag-aware sub-range via
+> `KeyPos::tag_bytes`; commands with no parsed key (`PING`, `INFO`) route
+> to the local datastore.
 
 ### The token as a signed big integer
 
@@ -77,11 +78,12 @@ agree on every token string.</dd>
 32-bit hash occupies one word.</dd>
 </dl>
 
-```admonish warning title="Do not treat the token comparator as arithmetic"
-The comparator is a total order over the representation, not an integer
-comparator with wraparound. The ring's wraparound behaviour lives in the
-dispatch function, not in `DynToken::cmp`. See the wraparound rule below.
-```
+> [!WARNING]
+> **Do not treat the token comparator as arithmetic**
+>
+> The comparator is a total order over the representation, not an integer
+> comparator with wraparound. The ring's wraparound behaviour lives in the
+> dispatch function, not in `DynToken::cmp`. See the wraparound rule below.
 
 ## Mapping a token to a node: the continuum
 
@@ -156,17 +158,18 @@ boundaries are the configured tokens; the seed list carries them.</dd>
 Smoother load, cheaper rebalancing, larger continuum.</dd>
 </dl>
 
-```admonish note title="Road not taken: rendezvous hashing everywhere"
-Dynomite routes with a token ring (consistent hashing), not rendezvous
-(highest-random-weight) hashing. Rendezvous hashing needs no sorted ring
-and rebalances cleanly, but it costs an O(nodes) score computation per
-key rather than an O(log points) binary search, and -- more importantly --
-it does not reproduce the upstream Dynomite key-to-node mapping, which is
-the whole point of a parity port. Random slicing is available as an
-alternative partition table per rack (and as a shadow distribution to
-diff routes against the live one), but the token ring is the default and
-the reference. See [Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken: rendezvous hashing everywhere**
+>
+> Dynomite routes with a token ring (consistent hashing), not rendezvous
+> (highest-random-weight) hashing. Rendezvous hashing needs no sorted ring
+> and rebalances cleanly, but it costs an O(nodes) score computation per
+> key rather than an O(log points) binary search, and -- more importantly --
+> it does not reproduce the upstream Dynomite key-to-node mapping, which is
+> the whole point of a parity port. Random slicing is available as an
+> alternative partition table per rack (and as a shadow distribution to
+> diff routes against the live one), but the token ring is the default and
+> the reference. See [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## Racks are replicas
 
@@ -301,13 +304,14 @@ touched rack deterministically, two nodes that have converged on the same
 gossip view compute byte-identical continua and therefore route every key
 identically.
 
-```admonish tip title="Determinism is the invariant"
-The property that makes routing coordination-free is not "the ring is
-fast" but "the ring is a deterministic function of the gossiped
-topology". Same topology plus same key implies same owner, on every node,
-with no messages exchanged at routing time. That determinism is exercised
-directly by the ring-routing property tests.
-```
+> [!TIP]
+> **Determinism is the invariant**
+>
+> The property that makes routing coordination-free is not "the ring is
+> fast" but "the ring is a deterministic function of the gossiped
+> topology". Same topology plus same key implies same owner, on every node,
+> with no messages exchanged at routing time. That determinism is exercised
+> directly by the ring-routing property tests.
 
 ## Where to go next
 
@@ -322,5 +326,3 @@ directly by the ring-routing property tests.
   used when a key's owner is remote.
 * [Configuration](../configuration.md) -- the `hash`, `distribution`,
   `tokens`, and per-bucket `n_val` knobs referenced here.
-</content>
-</invoke>

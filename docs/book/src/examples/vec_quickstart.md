@@ -60,13 +60,14 @@ command passes <code>--features http</code>. Without it, the store is a
 library only.</dd>
 </dl>
 
-```admonish note title="Road not taken: one global vector configuration"
-Distance metric, codec, and index algorithm are chosen per table rather
-than globally. A store commonly holds vectors with different
-dimensionalities and accuracy needs; forcing one setting on all of them
-would push the trade-off onto the wrong layer. The cost is a slightly
-larger table schema; the benefit is that each table is tuned to its data.
-```
+> [!NOTE]
+> **Road not taken: one global vector configuration**
+>
+> Distance metric, codec, and index algorithm are chosen per table rather
+> than globally. A store commonly holds vectors with different
+> dimensionalities and accuracy needs; forcing one setting on all of them
+> would push the trade-off onto the wrong layer. The cost is a slightly
+> larger table schema; the benefit is that each table is tuned to its data.
 
 ## When to use this pattern
 

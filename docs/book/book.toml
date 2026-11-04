@@ -13,10 +13,10 @@ create-missing = false
 default-theme = "navy"
 preferred-dark-theme = "navy"
 git-repository-url = "https://codeberg.org/gregburd/dynomite"
-git-repository-icon = "fa-git-alt"
+git-repository-icon = "fab-git-alt"
 edit-url-template = "https://codeberg.org/gregburd/dynomite/_edit/main/docs/book/{path}"
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
-additional-css = ["./mdbook-admonish.css", "./theme/dynomite.css"]
+additional-css = ["./theme/dynomite.css"]
 no-section-label = false
 mathjax-support = false
 
@@ -36,7 +36,7 @@ boost-title = 2
 boost-hierarchy = 2
 heading-split-level = 3
 
-[output.linkcheck]
+[output.linkcheck2]
 follow-web-links = false
 warning-policy = "error"
 exclude = ['dynomite\.local', 'example\.com']
@@ -44,6 +44,3 @@ exclude = ['dynomite\.local', 'example\.com']
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
 
-[preprocessor.admonish]
-command = "mdbook-admonish"
-assets_version = "3.1.0" # do not edit: managed by `mdbook-admonish install`

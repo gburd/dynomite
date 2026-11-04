@@ -46,15 +46,16 @@ is no primary replica, no leader, and no log. This is the Amazon Dynamo
 lineage: available and partition-tolerant, with consistency as a tunable
 rather than a guarantee.
 
-```admonish warning title="This is not linearizable consensus"
-Dynomite does not run RAFT, Paxos, or any leader-based log. There is no
-single authority that orders writes. Two clients writing the same key
-concurrently through different coordinators can both succeed, and a later
-read can observe either value (or, under a strict level, an error). If you
-need linearizable single-key semantics, Dynomite's quorum levels do not
-provide them; see the note at the end of this chapter and
-[Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!WARNING]
+> **This is not linearizable consensus**
+>
+> Dynomite does not run RAFT, Paxos, or any leader-based log. There is no
+> single authority that orders writes. Two clients writing the same key
+> concurrently through different coordinators can both succeed, and a later
+> read can observe either value (or, under a strict level, an error). If you
+> need linearizable single-key semantics, Dynomite's quorum levels do not
+> provide them; see the note at the end of this chapter and
+> [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## The four consistency levels
 
@@ -103,12 +104,13 @@ The weakest and fastest level.
   the first successful reply. The write still reaches all local replicas;
   the client just does not wait for all of them.
 
-```admonish note title="DC_ONE writes are still replicated"
-It is a common misread that DC_ONE means "write to one replica". The write
-is *delivered* to every local-DC replica; only the *acknowledgement* is
-returned on the first reply. This matches upstream Dynomite, where a
-DC_ONE write replicates within the local DC.
-```
+> [!NOTE]
+> **DC_ONE writes are still replicated**
+>
+> It is a common misread that DC_ONE means "write to one replica". The write
+> is *delivered* to every local-DC replica; only the *acknowledgement* is
+> returned on the first reply. This matches upstream Dynomite, where a
+> DC_ONE write replicates within the local DC.
 
 ### DC_QUORUM
 
@@ -281,17 +283,18 @@ reconciler, unless an embedder wires in a reconciling source. The Dyniak
 layer's own Tictac-tree AAE design is covered in
 [Dyniak AAE](../dyniak/aae.md).
 
-```admonish note title="Road not taken: consensus instead of quorum"
-We considered a leader-based consensus layer (RAFT) for strong single-key
-semantics. It was rejected for the engine's core path: consensus makes the
-system unavailable for writes during a partition of the leader's side,
-which is exactly the failure mode Dynomite exists to survive. The Dynamo
-bet is that a highly-available, eventually-consistent layer plus tunable
-quorum plus read repair and anti-entropy is the right trade for the
-workloads Dynomite targets. Consensus-style guarantees, where needed, are
-built above the engine in the Dyniak layer's transaction machinery, not in
-the ring. See [Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken: consensus instead of quorum**
+>
+> We considered a leader-based consensus layer (RAFT) for strong single-key
+> semantics. It was rejected for the engine's core path: consensus makes the
+> system unavailable for writes during a partition of the leader's side,
+> which is exactly the failure mode Dynomite exists to survive. The Dynamo
+> bet is that a highly-available, eventually-consistent layer plus tunable
+> quorum plus read repair and anti-entropy is the right trade for the
+> workloads Dynomite targets. Consensus-style guarantees, where needed, are
+> built above the engine in the Dyniak layer's transaction machinery, not in
+> the ring. See [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## Choosing a level
 
@@ -323,4 +326,3 @@ are documented in [Configuration](../configuration.md).
   anti-entropy path that heals what read repair does not.
 * [DNODE protocol](../protocols/dnode.md) -- the frames the coordinator
   sends to replicas.
-</content>

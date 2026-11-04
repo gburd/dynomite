@@ -35,17 +35,18 @@ pub struct PipeTransport {
 
 ## Why it is only a sketch
 
-```admonish warning title="Not a runnable plug-in yet"
-The example does <strong>not</strong> plug a custom listener into the
-embedded engine. Wiring a <code>Box&lt;dyn TransportListener&gt;</code>
-into <code>ServerBuilder</code> is deferred work; until it lands, the
-embedded engine's sanctioned in-process entry point is
-<code>inject_request</code> (see
-<a href="./embedded_cluster3.md"><code>embedded_cluster3</code></a>). The
-sketch shows the trait shape so that when the setter arrives, swapping
-the built-in <code>TcpListener</code> for an embedder-supplied source is
-a one-line change.
-```
+> [!WARNING]
+> **Not a runnable plug-in yet**
+>
+> The example does <strong>not</strong> plug a custom listener into the
+> embedded engine. Wiring a <code>Box&lt;dyn TransportListener&gt;</code>
+> into <code>ServerBuilder</code> is deferred work; until it lands, the
+> embedded engine's sanctioned in-process entry point is
+> <code>inject_request</code> (see
+> <a href="./embedded_cluster3.md"><code>embedded_cluster3</code></a>). The
+> sketch shows the trait shape so that when the setter arrives, swapping
+> the built-in <code>TcpListener</code> for an embedder-supplied source is
+> a one-line change.
 
 This honesty is itself a documentation decision: the example teaches the
 trait contract without pretending a capability exists. It compiles and
@@ -66,13 +67,14 @@ transfers unchanged.</dd>
 tag is how the engine routes a connection to the right handler.</dd>
 </dl>
 
-```admonish note title="Road not taken: a transport-registry plugin system"
-Rather than a general plugin registry, Dynomite models a transport as a
-single trait an embedder implements and hands to the builder. The trait
-is small on purpose -- a byte stream plus a role and an address -- so
-that supporting a new transport is writing one adapter, not learning a
-framework. TCP and QUIC in the shipped engine are exactly such adapters.
-```
+> [!NOTE]
+> **Road not taken: a transport-registry plugin system**
+>
+> Rather than a general plugin registry, Dynomite models a transport as a
+> single trait an embedder implements and hands to the builder. The trait
+> is small on purpose -- a byte stream plus a role and an address -- so
+> that supporting a new transport is writing one adapter, not learning a
+> framework. TCP and QUIC in the shipped engine are exactly such adapters.
 
 ## When to use this pattern
 

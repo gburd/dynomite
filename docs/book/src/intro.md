@@ -18,13 +18,14 @@ own program; and as a reference, dipped into by section when you need
 the exact semantics of a consistency level, a wire frame, or a
 configuration knob.
 
-```admonish tip title="New here? Start with the tour."
-Read [Why Dynomite?](./getting-started/why.md) and
-[Concepts in Ten Minutes](./getting-started/concepts.md), then stand up
-[Your First Cluster](./getting-started/first-cluster.md). If you are
-embedding the engine in a Rust program instead of running the server,
-jump to [Your First Embedded Engine](./getting-started/first-embed.md).
-```
+> [!TIP]
+> **New here? Start with the tour.**
+>
+> Read [Why Dynomite?](./getting-started/why.md) and
+> [Concepts in Ten Minutes](./getting-started/concepts.md), then stand up
+> [Your First Cluster](./getting-started/first-cluster.md). If you are
+> embedding the engine in a Rust program instead of running the server,
+> jump to [Your First Embedded Engine](./getting-started/first-embed.md).
 
 ## What it is
 
@@ -108,15 +109,16 @@ the designs we considered and deliberately did **not** choose. Those are
 collected in [Design Decisions (Roads Not Taken)](./reference/roads-not-taken.md)
 and called out inline wherever a choice matters.
 
-```admonish note title="Origin and parity"
-This is a from-scratch Rust implementation of
-[Netflix Dynomite](https://github.com/Netflix/dynomite), which itself
-extended Twitter's `twemproxy`. It aims to be functionally identical to
-the C original; the live symbol-level mapping is in
-[`docs/parity.md`](DYN_SRC_BASE/docs/parity.md).
-Where the Rust port deliberately diverges, that divergence is recorded
-as a parity deviation and explained in this manual.
-```
+> [!NOTE]
+> **Origin and parity**
+>
+> This is a from-scratch Rust implementation of
+> [Netflix Dynomite](https://github.com/Netflix/dynomite), which itself
+> extended Twitter's `twemproxy`. It aims to be functionally identical to
+> the C original; the live symbol-level mapping is in
+> [`docs/parity.md`](DYN_SRC_BASE/docs/parity.md).
+> Where the Rust port deliberately diverges, that divergence is recorded
+> as a parity deviation and explained in this manual.
 
 ## Conventions used in this manual
 

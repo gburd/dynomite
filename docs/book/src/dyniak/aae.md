@@ -60,20 +60,21 @@ periodically exchange tree summaries; where the summaries differ, they
 drill down to the exact divergent keys and repair them. This is the
 design the library code implements and unit-tests today.
 
-```admonish warning title="Designed and tested, not yet wired into dynomited"
-The Tictac tree, the three-phase exchange protocol below, and the
-repair scheduler are implemented and unit-tested as library code in
-`crates/dyniak/src/aae/`. `dynomited`'s background AAE task
-(`spawn_aae` in `crates/dynomited/src/riak.rs`) currently only ticks
-the configured cadence and logs the tick at `debug` -- it does not run
-the exchange, does not compare trees, and does not enqueue a repair.
-So a running dyniak node today performs no background divergence
-detection or repair; the descriptions of ROOT-SYNC / TREE-SYNC /
-KEY-SYNC and winner selection below describe designed and tested
-behaviour that is not yet live in the binary. Object-level read repair
-(the next chapter section, and covered above) is wired and tested; only
-this background exchange is not.
-```
+> [!WARNING]
+> **Designed and tested, not yet wired into dynomited**
+>
+> The Tictac tree, the three-phase exchange protocol below, and the
+> repair scheduler are implemented and unit-tested as library code in
+> `crates/dyniak/src/aae/`. `dynomited`'s background AAE task
+> (`spawn_aae` in `crates/dynomited/src/riak.rs`) currently only ticks
+> the configured cadence and logs the tick at `debug` -- it does not run
+> the exchange, does not compare trees, and does not enqueue a repair.
+> So a running dyniak node today performs no background divergence
+> detection or repair; the descriptions of ROOT-SYNC / TREE-SYNC /
+> KEY-SYNC and winner selection below describe designed and tested
+> behaviour that is not yet live in the binary. Object-level read repair
+> (the next chapter section, and covered above) is wired and tested; only
+> this background exchange is not.
 
 The tree is two levels deep. The top level splits the keyspace into
 *time buckets*; each time bucket splits into *segments*. A key hashes
@@ -126,13 +127,14 @@ rest of Dyniak uses for per-key causality (see
 scheduler is implemented and unit-tested; it is not yet invoked by
 dynomited's running AAE task (see the warning above).
 
-```admonish note title="Ambiguous clocks are not silently dropped"
-If a divergence's only entry has an unparseable causal context, the
-scheduler surfaces an explicit "ambiguous clock" event rather than
-guessing a winner or silently discarding the key. An operator can see
-it; the repair does not quietly lose data. This is a deliberate
-safety choice in the scheduler's design.
-```
+> [!NOTE]
+> **Ambiguous clocks are not silently dropped**
+>
+> If a divergence's only entry has an unparseable causal context, the
+> scheduler surfaces an explicit "ambiguous clock" event rather than
+> guessing a winner or silently discarding the key. An operator can see
+> it; the repair does not quietly lose data. This is a deliberate
+> safety choice in the scheduler's design.
 
 For CRDT keys the reconciliation is even cleaner: two divergent replicas
 of a CRDT do not need a winner at all -- they *merge*, and the merge is
@@ -180,14 +182,15 @@ bucket count is rejected). The tree is persisted across restarts, so a
 node that comes back does not rebuild its tree from a full keyspace
 scan.
 
-```admonish tip title="Tuning the cadence"
-More frequent ticks converge faster but cost more background bandwidth
-and CPU. The defaults -- a daily full sweep, a per-minute tick -- suit a
-steady workload. Shorten the segment interval if you need divergence
-closed faster after partitions; lengthen it on a bandwidth-constrained
-link. The validator enforces
-<code>segment_interval &lt;= full_sweep_interval</code>.
-```
+> [!TIP]
+> **Tuning the cadence**
+>
+> More frequent ticks converge faster but cost more background bandwidth
+> and CPU. The defaults -- a daily full sweep, a per-minute tick -- suit a
+> steady workload. Shorten the segment interval if you need divergence
+> closed faster after partitions; lengthen it on a bandwidth-constrained
+> link. The validator enforces
+> <code>segment_interval &lt;= full_sweep_interval</code>.
 
 ## The divergence-proportional alternative: MST reconcile
 
@@ -204,19 +207,20 @@ sets -- not their total size. On a large, mostly-in-sync cluster where a
 partition touched a handful of keys, the MST path transfers work for
 those keys and little else.
 
-```admonish note title="Road not taken -- and taken as an option"
-The MST reconcile does not replace the Tictac tree; it is selected by
-an internal field (<code>reconcile_mode</code> on <code>ConfAae</code>)
-that defaults to <code>Tictac</code>. There is currently no YAML or CLI
-config surface for it in <code>dynomited</code> -- an operator cannot
-set it today, so every running deployment uses the default. The Tictac
-path is the compatible default (it is what Riak did); the MST path is
-there, once a config surface and the exchange wiring land, for
-operators whose dataset is large enough that fixed-grid comparison cost
-hurts. Both use the same storage fold to build their trees and the same
-exchange plumbing to ship repairs. See
-[Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken -- and taken as an option**
+>
+> The MST reconcile does not replace the Tictac tree; it is selected by
+> an internal field (<code>reconcile_mode</code> on <code>ConfAae</code>)
+> that defaults to <code>Tictac</code>. There is currently no YAML or CLI
+> config surface for it in <code>dynomited</code> -- an operator cannot
+> set it today, so every running deployment uses the default. The Tictac
+> path is the compatible default (it is what Riak did); the MST path is
+> there, once a config surface and the exchange wiring land, for
+> operators whose dataset is large enough that fixed-grid comparison cost
+> hurts. Both use the same storage fold to build their trees and the same
+> exchange plumbing to ship repairs. See
+> [Roads Not Taken](../reference/roads-not-taken.md).
 
 The MST reconcile also composes with delta shipping: a value change
 flips exactly one MST entry (the entry's value side is a content digest

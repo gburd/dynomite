@@ -38,15 +38,16 @@ and anti-entropy to converge divergent replicas.
 **Not chosen:** a consensus protocol (Raft, Paxos, or multi-Paxos) giving
 linearizable single-key writes.
 
-```admonish note title="What this costs you"
-Dynomite does not offer linearizability for ordinary reads and writes. Two
-clients writing the same key concurrently under <code>DC_ONE</code> can
-both succeed and produce divergent replicas that are reconciled later.
-This is the deliberate Dynamo trade: availability and low, predictable
-tail latency during partitions, in exchange for eventual (not immediate)
-consistency. If you need linearizable writes, you need a consensus system,
-and Dynomite is the wrong tool.
-```
+> [!NOTE]
+> **What this costs you**
+>
+> Dynomite does not offer linearizability for ordinary reads and writes. Two
+> clients writing the same key concurrently under <code>DC_ONE</code> can
+> both succeed and produce divergent replicas that are reconciled later.
+> This is the deliberate Dynamo trade: availability and low, predictable
+> tail latency during partitions, in exchange for eventual (not immediate)
+> consistency. If you need linearizable writes, you need a consensus system,
+> and Dynomite is the wrong tool.
 
 Consensus buys linearizability at the price of availability under
 partition (a minority partition cannot make progress) and of a latency

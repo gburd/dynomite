@@ -76,12 +76,13 @@ optional list of 2i entries, fanned into the secondary-index layer as
 part of the same atomic unit, so the object and its index land together
 or not at all.
 
-```admonish note title="JSON values are UTF-8; use PBC for binary"
-The JSON transaction endpoint carries values and index values as UTF-8
-strings. Arbitrary binary payloads are not representable through JSON;
-the PBC transaction extension carries raw bytes. This is the same
-limitation the object endpoints have when you choose JSON encoding.
-```
+> [!NOTE]
+> **JSON values are UTF-8; use PBC for binary**
+>
+> The JSON transaction endpoint carries values and index values as UTF-8
+> strings. Arbitrary binary payloads are not representable through JSON;
+> the PBC transaction extension carries raw bytes. This is the same
+> limitation the object endpoints have when you choose JSON encoding.
 
 ### The abort path
 
@@ -155,26 +156,27 @@ coordinator; only the transport differs. The cross-node coordinator
 drives the identical prepare-then-commit phases over the DNODE peer
 plane described in [Dyniak wire protocols](../protocols/dyniak.md).
 
-```admonish note title="Road not taken: 2PC, not Paxos or Raft, for cross-node transactions"
-Two-phase commit is famously blocking: if the coordinator fails at the
-wrong instant, a prepared branch can be stuck until recovery runs.
-Consensus protocols like Paxos or Raft are non-blocking under the same
-failure. So why 2PC?
-
-First, the failure window is narrow and Dyniak closes it with the
-durable in-doubt log and automatic cold-restart recovery above -- a
-branch that voted to commit always reaches a decision. Second, Dyniak's
-whole design bet is *distribution as a thin layer over a transactional
-storage engine*: Noxu already implements XA branches with a durable
-prepared-transaction log, so 2PC is a thin coordinator over machinery
-that exists, whereas a per-transaction consensus group would be a large
-new subsystem duplicating what Noxu already guarantees locally. Third, a
-Raft-per-key or Raft-per-transaction design is exactly the
-strong-consistency subsystem Dyniak deliberately leaves out of scope
-(Riak's `riak_ensemble`); adopting it for transactions would drag the
-whole store toward a consistency model it does not promise. The full
-argument is in [Roads Not Taken](../reference/roads-not-taken.md).
-```
+> [!NOTE]
+> **Road not taken: 2PC, not Paxos or Raft, for cross-node transactions**
+>
+> Two-phase commit is famously blocking: if the coordinator fails at the
+> wrong instant, a prepared branch can be stuck until recovery runs.
+> Consensus protocols like Paxos or Raft are non-blocking under the same
+> failure. So why 2PC?
+>
+> First, the failure window is narrow and Dyniak closes it with the
+> durable in-doubt log and automatic cold-restart recovery above -- a
+> branch that voted to commit always reaches a decision. Second, Dyniak's
+> whole design bet is *distribution as a thin layer over a transactional
+> storage engine*: Noxu already implements XA branches with a durable
+> prepared-transaction log, so 2PC is a thin coordinator over machinery
+> that exists, whereas a per-transaction consensus group would be a large
+> new subsystem duplicating what Noxu already guarantees locally. Third, a
+> Raft-per-key or Raft-per-transaction design is exactly the
+> strong-consistency subsystem Dyniak deliberately leaves out of scope
+> (Riak's `riak_ensemble`); adopting it for transactions would drag the
+> whole store toward a consistency model it does not promise. The full
+> argument is in [Roads Not Taken](../reference/roads-not-taken.md).
 
 ## The read-atomic path (RAMP)
 

@@ -13,10 +13,9 @@ on:
   pull_request:
 
 env:
-  MDBOOK_VERSION: "0.4.52"
-  MDBOOK_MERMAID_VERSION: "0.16.2"
-  MDBOOK_ADMONISH_VERSION: "1.20.0"
-  MDBOOK_LINKCHECK_VERSION: "0.7.7"
+  MDBOOK_VERSION: "0.5.3"
+  MDBOOK_MERMAID_VERSION: "0.17.0"
+  MDBOOK_LINKCHECK2_VERSION: "0.12.2"
 
 jobs:
   build:
@@ -31,17 +30,15 @@ jobs:
           set -euo pipefail
           curl -fsSL https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
           curl -fsSL https://github.com/badboy/mdbook-mermaid/releases/download/v${MDBOOK_MERMAID_VERSION}/mdbook-mermaid-v${MDBOOK_MERMAID_VERSION}-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
-          curl -fsSL https://github.com/tommilligan/mdbook-admonish/releases/download/v${MDBOOK_ADMONISH_VERSION}/mdbook-admonish-v${MDBOOK_ADMONISH_VERSION}-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
-          curl -fsSL https://github.com/Michael-F-Bryan/mdbook-linkcheck/releases/download/v${MDBOOK_LINKCHECK_VERSION}/mdbook-linkcheck.x86_64-unknown-linux-gnu.zip -o /tmp/lc.zip
-          unzip -o /tmp/lc.zip -d /usr/local/bin && chmod +x /usr/local/bin/mdbook-linkcheck
+          curl -fsSL https://github.com/marxin/mdbook-linkcheck2/releases/download/v${MDBOOK_LINKCHECK2_VERSION}/mdbook-linkcheck2-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
           curl -fsSL https://github.com/lycheeverse/lychee/releases/latest/download/lychee-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin lychee
-      - name: build book (internal links checked by mdbook-linkcheck)
+      - name: build book (internal links checked by mdbook-linkcheck2)
         # Renders with Codeberg source-link URLs so readers on Codeberg
         # Pages follow repo links to codeberg.org (the GitHub build uses
         # github.com). See scripts/render-book.sh.
         run: scripts/render-book.sh codeberg
       - name: external link + man-page check (lychee)
-        # Internal links are already gated by mdbook-linkcheck above;
+        # Internal links are already gated by mdbook-linkcheck2 above;
         # this external check is informational and must not block
         # publishing internally-correct docs when a third-party host is
         # rate-limiting or down on the CI runner.

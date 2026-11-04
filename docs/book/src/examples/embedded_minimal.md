@@ -70,13 +70,14 @@ concurrent peer traffic and keeps the example's resource use trivial.
 Production embeddings use the multi-thread flavor.</dd>
 </dl>
 
-```admonish note title="Road not taken: a builder that starts implicitly"
-`ServerBuilder` deliberately does *not* start the server when it is
-built. Build and start are separate so that a caller can inspect or
-register against the `Server` (events, stats handle) before any socket is
-bound. `start_with` exists only to collapse the common case into one
-line. See [Server Lifecycle](../embedding/server.md).
-```
+> [!NOTE]
+> **Road not taken: a builder that starts implicitly**
+>
+> `ServerBuilder` deliberately does *not* start the server when it is
+> built. Build and start are separate so that a caller can inspect or
+> register against the `Server` (events, stats handle) before any socket is
+> bound. `start_with` exists only to collapse the common case into one
+> line. See [Server Lifecycle](../embedding/server.md).
 
 ## When to use this pattern
 

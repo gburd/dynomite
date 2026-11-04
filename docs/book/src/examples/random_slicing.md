@@ -63,14 +63,15 @@ even split would be 2,500 per peer; the spread from that is the point of
 comparing distribution modes.</dd>
 </dl>
 
-```admonish note title="Road not taken: only consistent hashing"
-Dynomite ships more than one distribution strategy. Random slicing
-trades the strict monotonicity of a plain token ring for more even
-rebalancing when peers are added or removed. This example exists so you
-can *measure* that trade-off rather than take it on faith; see
-<a href="../operations/distribution.md">Distribution Modes</a> for the
-full comparison and when each is appropriate.
-```
+> [!NOTE]
+> **Road not taken: only consistent hashing**
+>
+> Dynomite ships more than one distribution strategy. Random slicing
+> trades the strict monotonicity of a plain token ring for more even
+> rebalancing when peers are added or removed. This example exists so you
+> can *measure* that trade-off rather than take it on faith; see
+> <a href="../operations/distribution.md">Distribution Modes</a> for the
+> full comparison and when each is appropriate.
 
 ## When to use this pattern
 
