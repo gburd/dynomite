@@ -46,6 +46,14 @@ fail-fast = false
 # profile is precisely where these binaries are meant to run.
 default-filter = "all()"
 
+# optest scenarios run multi-node clusters in a namespace and bound
+# themselves (OPTEST_SCENARIO_TIMEOUT_SECS, default 600s); some wait out
+# a full request timeout on purpose (an isolated DC_QUORUM node). The
+# 30s/60s conformance cap would kill them mid-scenario.
+[[profile.conformance.overrides]]
+filter = "package(optest)"
+slow-timeout = { period = "120s", terminate-after = 5 }
+
 [profile.conformance.junit]
 # Path is relative to the per-profile store directory; the
 # resolved location is `target/nextest/conformance/junit.xml`.
