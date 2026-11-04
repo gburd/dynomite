@@ -11,6 +11,8 @@ mod common;
 
 use std::time::Duration;
 
+use nix::sys::signal::Signal;
+
 use common::{assert_history, op, start_or_skip};
 use optest::check::Guarantee;
 use optest::cluster::Engine;
@@ -302,4 +304,73 @@ fn fiu_write_random_errno_exits_rather_than_hangs() {
             Guarantee::Eventual,
         );
     }
+}
+
+/// Operator signals: SIGTTIN / SIGTTOU move the log level up / down and
+/// are logged; SIGUSR1 / SIGUSR2 are received without killing the node;
+/// the node keeps serving throughout. Rust only: the C reference logs
+/// from inside its signal handler (`signal_handler` -> `_log` ->
+/// `localtime`, not async-signal-safe), and a signal that arrives while
+/// another handler or the main loop is inside `localtime` deadlocks on
+/// glibc's timezone lock, after which the node never answers again
+/// (reproduced with gdb: `__lll_lock_wait_private` in `__tz_convert` under
+/// two nested `signal_handler` frames). It is a race: in this harness C
+/// hung within the four signals on 4 of 4 runs, so the scenario is not run
+/// against C; see `c_signal_handler_can_deadlock_is_recorded`.
+#[test]
+fn log_level_and_user_signals_keep_the_node_serving() {
+    sandboxed!("log_level_and_user_signals_keep_the_node_serving");
+    let Some(mut c) = start_or_skip(ClusterSpec::grid(1, 1, 1).engine(Engine::Rust)) else {
+        return;
+    };
+    for sig in [
+        Signal::SIGTTIN,
+        Signal::SIGTTOU,
+        Signal::SIGUSR1,
+        Signal::SIGUSR2,
+    ] {
+        c.nodes[0].send_signal(sig).expect("signal");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(c.nodes[0].alive(), "{sig:?} killed the node");
+        let mut cl = c.nodes[0].client(Duration::from_secs(5)).expect("connect");
+        assert!(
+            cl.cmd(&["SET", "k", "v"]).expect("SET").is_ok(),
+            "after {sig:?}"
+        );
+    }
+    let log = std::fs::read_to_string(c.nodes[0].log_path()).unwrap_or_default();
+    for (sig, what) in [
+        ("SIGTTIN", "up logging level"),
+        ("SIGTTOU", "down logging level"),
+    ] {
+        assert!(
+            log.lines().any(|l| l.contains(sig) && l.contains(what)),
+            "no '{sig} ... {what}' line in the node log"
+        );
+    }
+}
+
+/// The C finding above, recorded (not a requirement on C, and not asserted:
+/// it is a race): a burst of SIGTTIN/SIGTTOU can leave the C reference
+/// unresponsive. The outcome is printed.
+#[test]
+fn c_signal_handler_can_deadlock_is_recorded() {
+    sandboxed!("c_signal_handler_can_deadlock_is_recorded");
+    if optest::Tools::discover().c_dynomite.is_none() {
+        return;
+    }
+    let Some(c) = start_or_skip(ClusterSpec::grid(1, 1, 1).engine(Engine::C)) else {
+        return;
+    };
+    for _ in 0..40 {
+        let _ = c.nodes[0].send_signal(Signal::SIGTTIN);
+        let _ = c.nodes[0].send_signal(Signal::SIGTTOU);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let answered = c.nodes[0]
+        .client(Duration::from_secs(2))
+        .and_then(|mut cl| cl.cmd(&["PING"]))
+        .is_ok();
+    eprintln!("[C] answers PING after a signal burst: {answered}");
 }

@@ -12,12 +12,11 @@
 //! * `SIGHUP` -> reopen the log file (via
 //!   [`dynomite::core::log::reopen_on_sighup`]) and, when a config
 //!   path is set, re-parse and apply the reloadable pool knobs.
+//! * `SIGTTIN` / `SIGTTOU` -> raise / lower the log level by one.
+//! * `SIGUSR1` / `SIGUSR2` -> logged and otherwise ignored, so the
+//!   default action (terminate) does not apply.
 //! * `SIGPIPE` is ignored implicitly by tokio (writes return
 //!   `EPIPE`); no stream is attached for it.
-//!
-//! Log-level toggling (`SIGTTIN` / `SIGTTOU`) and the user signals
-//! (`SIGUSR1` / `SIGUSR2`) are not handled; they are listed in
-//! `docs/parity.md` as deferred rows.
 
 use std::io;
 
@@ -32,6 +31,12 @@ pub enum SignalEvent {
     Terminate,
     /// `SIGHUP`. Reopens the log file and reloads config.
     Hangup,
+    /// `SIGTTIN`. Raises the log level by one.
+    LogLevelUp,
+    /// `SIGTTOU`. Lowers the log level by one.
+    LogLevelDown,
+    /// `SIGUSR1` or `SIGUSR2`: received and ignored.
+    User,
 }
 
 /// Bundle of tokio `signal` streams the run loop selects on.
@@ -53,6 +58,10 @@ pub struct SignalSet {
     sigint: UnixSignal,
     sigterm: UnixSignal,
     sighup: UnixSignal,
+    sigttin: UnixSignal,
+    sigttou: UnixSignal,
+    sigusr1: UnixSignal,
+    sigusr2: UnixSignal,
 }
 
 impl SignalSet {
@@ -68,6 +77,14 @@ impl SignalSet {
             sigint: signal(SignalKind::interrupt())?,
             sigterm: signal(SignalKind::terminate())?,
             sighup: signal(SignalKind::hangup())?,
+            sigttin: signal(SignalKind::from_raw(
+                nix::sys::signal::Signal::SIGTTIN as i32,
+            ))?,
+            sigttou: signal(SignalKind::from_raw(
+                nix::sys::signal::Signal::SIGTTOU as i32,
+            ))?,
+            sigusr1: signal(SignalKind::user_defined1())?,
+            sigusr2: signal(SignalKind::user_defined2())?,
         })
     }
 
@@ -82,6 +99,10 @@ impl SignalSet {
             v = self.sigterm.recv() => v.map(|()| SignalEvent::Terminate),
             v = self.sigint.recv()  => v.map(|()| SignalEvent::Interrupt),
             v = self.sighup.recv()  => v.map(|()| SignalEvent::Hangup),
+            v = self.sigttin.recv() => v.map(|()| SignalEvent::LogLevelUp),
+            v = self.sigttou.recv() => v.map(|()| SignalEvent::LogLevelDown),
+            v = self.sigusr1.recv() => v.map(|()| SignalEvent::User),
+            v = self.sigusr2.recv() => v.map(|()| SignalEvent::User),
         }
     }
 }

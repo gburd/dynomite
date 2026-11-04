@@ -97,6 +97,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 nix = { workspace = true }
+socket2 = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 # Optional: only used by the `gen-man` binary. Enabled via the

@@ -109,6 +109,9 @@ impl BackendAddr {
             BackendAddr::Tcp(addr) => {
                 let stream = tokio::net::TcpStream::connect(addr).await?;
                 let _ = stream.set_nodelay(true);
+                // SO_KEEPALIVE, so a datastore that vanishes without a
+                // FIN is noticed; failure is not fatal.
+                let _ = socket2::SockRef::from(&stream).set_keepalive(true);
                 Ok(Box::new(TcpTransport::new(stream, ConnRole::Server)))
             }
             #[cfg(unix)]
@@ -1676,6 +1679,17 @@ async fn supervise(
                         let _ = shutdown_tx.send(true);
                         return Ok(());
                     }
+                    Some(SignalEvent::LogLevelUp) => {
+                        let level = dynomite::core::log::log_level_increment();
+                        tracing::info!(level, "signal SIGTTIN received, up logging level");
+                    }
+                    Some(SignalEvent::LogLevelDown) => {
+                        let level = dynomite::core::log::log_level_decrement();
+                        tracing::info!(level, "signal SIGTTOU received, down logging level");
+                    }
+                    Some(SignalEvent::User) => {
+                        tracing::info!("signal SIGUSR1/SIGUSR2 received");
+                    }
                     Some(SignalEvent::Hangup) => {
                         // Reopen the log file FIRST so the
                         // reload's INFO line lands in the new
@@ -2545,6 +2559,9 @@ async fn peer_supervisor(
         let stream = match connect {
             Ok(Ok(s)) => {
                 backoff_ms = 100;
+                // SO_KEEPALIVE on peer links, so a peer that vanishes
+                // without a FIN is noticed; failure is not fatal.
+                let _ = socket2::SockRef::from(&s).set_keepalive(true);
                 s
             }
             Ok(Err(e)) => {
