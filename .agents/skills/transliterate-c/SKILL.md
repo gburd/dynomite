@@ -23,5 +23,5 @@ Plan and gates: `docs/transliteration/PLAN.md`. Deviations: `docs/transliteratio
 * Scope rulings (`deviations.md` section 0): **P1** Rust nodes never talk to C nodes, so encodings (wire, file) are chosen on merit while the C logic is still transliterated; **P2** configuration is Rust-native, every C capability preserved; **P3** no Lua: where the C builds a Lua script, transliterate the script's logic into Rust.
 * C pin: `~/src/dynomite` at `2046b05`, `DYNOMITE_C_REF=~/src/dynomite`. Build the oracle with `scripts/build_cref.sh`.
 * Ledger statuses: `todo`, `ported`, `replaced` (authorised substrate), `deviation:<DEV-id>` (authorised only), `dead` (C function unreachable in C, with evidence).
-* A C test that cannot run against the C binary on this host runs on the `chef` EC2 burner (Debian). Tear down every instance you create.
+* A C test that cannot run against the C binary on this host runs on the EC2 burner host (`woof`, Debian; `scripts/ec2-dist/burner-testhost.sh`). Tear down every instance you create.
 * Performance claims follow `pg-benchmark-rigor`: interleaved A/B against the C build, n>=5, STABLE/NOISY verdict.
