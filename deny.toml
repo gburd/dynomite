@@ -33,6 +33,12 @@ ignore = [
     # only that the standalone crate is archived. Tracked for removal
     # when the TLS stack drops the wrapper. RUSTSEC-2025-0134.
     "RUSTSEC-2025-0134",
+    # unsafe-libyaml 0.2.11 (via serde_yaml 0.9, itself deprecated) is
+    # flagged unmaintained; no vulnerability is reported and no
+    # maintained release exists. It parses the C-compatible YAML
+    # config only. Removed when the config moves to the Rust-native
+    # schema (DEV-K1, plan T4), which drops serde_yaml. RUSTSEC-2024-0449.
+    "RUSTSEC-2024-0449",
 ]
 
 [bans]

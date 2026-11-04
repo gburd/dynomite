@@ -134,7 +134,7 @@ prost = "0.14"
 # in-process runtime, plus WAT support so tests can ship modules
 # as text. Pinned at the 26.x series; bumping requires a journal
 # entry.
-wasmtime = { version = "46.0", default-features = false, features = ["cranelift", "runtime", "wat"] }
+wasmtime = { version = "48.0.8", default-features = false, features = ["cranelift", "runtime", "wat"] }
 
 # Schema-first wire codecs (dyn-encoding crate). Pinned to track
 # the rest of the workspace; bumping requires a journal entry.
