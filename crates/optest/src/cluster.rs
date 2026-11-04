@@ -314,6 +314,30 @@ impl Node {
         self.signal(Signal::SIGCONT)
     }
 
+    /// Freeze the node's datastore process: it keeps its connections but
+    /// answers nothing.
+    pub fn pause_store(&self) -> Result<()> {
+        self.store_signal(Signal::SIGSTOP)
+    }
+
+    /// Resume a datastore frozen by [`Node::pause_store`].
+    pub fn resume_store(&self) -> Result<()> {
+        self.store_signal(Signal::SIGCONT)
+    }
+
+    fn store_signal(&self, sig: Signal) -> Result<()> {
+        let pid = self
+            .store
+            .as_ref()
+            .map(Child::id)
+            .ok_or_else(|| Error::Protocol("datastore not running".into()))?;
+        kill(
+            Pid::from_raw(i32::try_from(pid).expect("pid fits i32")),
+            sig,
+        )
+        .map_err(|e| Error::Io(std::io::Error::from(e)))
+    }
+
     /// Send an arbitrary signal (SIGHUP reload, SIGUSR1 log level, ...).
     pub fn send_signal(&self, sig: Signal) -> Result<()> {
         self.signal(sig)
