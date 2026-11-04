@@ -285,4 +285,302 @@ mod tests {
         };
         applier.apply(&encode_peer_op(&op)).await;
     }
+
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use dynomite::embed::hooks::Protocol;
+    use dynomite::msg::{Msg, MsgType};
+    use parking_lot::Mutex;
+
+    use crate::crdt_store::{CrdtOp, CrdtStore, CrdtValue, DT_WIRE_OP, DT_WIRE_STATE};
+    use crate::datatypes::{counter_to_bytes, ActorId, PnCounter, TAG_COUNTER};
+    use crate::router::composite_storage_bucket;
+
+    /// In-memory riak store double; `fail` turns every call into a
+    /// backend error so the warn-and-swallow arms are exercised.
+    type Keyspace = HashMap<(Vec<u8>, Vec<u8>), Vec<u8>>;
+
+    #[derive(Default)]
+    struct Store {
+        map: Mutex<Keyspace>,
+        fail: AtomicBool,
+    }
+
+    impl Store {
+        fn get(&self, bucket: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+            self.map
+                .lock()
+                .get(&(bucket.to_vec(), key.to_vec()))
+                .cloned()
+        }
+        fn err(&self) -> Option<DatastoreError> {
+            self.fail
+                .load(Ordering::SeqCst)
+                .then(|| DatastoreError::Backend("injected".into()))
+        }
+    }
+
+    impl Datastore for Store {
+        fn protocol(&self) -> Protocol {
+            Protocol::Custom
+        }
+        fn dispatch(&self, _req: Msg) -> BoxFuture<'_, Result<Msg, DatastoreError>> {
+            Box::pin(async { Err(DatastoreError::Unsupported(MsgType::Unknown)) })
+        }
+        fn riak_get<'a>(
+            &'a self,
+            bucket: &'a [u8],
+            key: &'a [u8],
+        ) -> BoxFuture<'a, Result<Option<Vec<u8>>, DatastoreError>> {
+            let r = self.err().map_or_else(|| Ok(self.get(bucket, key)), Err);
+            Box::pin(async move { r })
+        }
+        fn riak_put<'a>(
+            &'a self,
+            bucket: &'a [u8],
+            key: &'a [u8],
+            value: &'a [u8],
+            _indexes: &'a [(Vec<u8>, Vec<u8>)],
+        ) -> BoxFuture<'a, Result<(), DatastoreError>> {
+            let r = self.err().map_or_else(
+                || {
+                    self.map
+                        .lock()
+                        .insert((bucket.to_vec(), key.to_vec()), value.to_vec());
+                    Ok(())
+                },
+                Err,
+            );
+            Box::pin(async move { r })
+        }
+        fn riak_delete<'a>(
+            &'a self,
+            bucket: &'a [u8],
+            key: &'a [u8],
+        ) -> BoxFuture<'a, Result<bool, DatastoreError>> {
+            let r = self.err().map_or_else(
+                || {
+                    Ok(self
+                        .map
+                        .lock()
+                        .remove(&(bucket.to_vec(), key.to_vec()))
+                        .is_some())
+                },
+                Err,
+            );
+            Box::pin(async move { r })
+        }
+    }
+
+    fn setup() -> (Arc<Store>, ReplicaApplier) {
+        let store = Arc::new(Store::default());
+        let ds: Arc<dyn Datastore> = store.clone();
+        (store, ReplicaApplier::new(ds))
+    }
+
+    fn sb() -> Vec<u8> {
+        composite_storage_bucket(b"default", b"b")
+    }
+
+    fn repair(storage: &[u8]) -> Vec<u8> {
+        encode_peer_op(&PeerOp::RepairPut {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+            storage: storage.to_vec(),
+        })
+    }
+
+    fn dt_update(op: Vec<u8>) -> Vec<u8> {
+        encode_peer_op(&PeerOp::DtUpdate {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+            op,
+        })
+    }
+
+    fn counter_op(peer: &str, delta: i64) -> CrdtOp {
+        CrdtOp::Counter {
+            actor: ActorId::new("dc1", peer),
+            delta,
+        }
+    }
+
+    async fn counter_value(store: &Arc<Store>) -> CrdtValue {
+        let ds: Arc<dyn Datastore> = store.clone();
+        CrdtStore::new(ds)
+            .fetch(&sb(), b"k", TAG_COUNTER)
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn debug_does_not_leak_the_datastore() {
+        let (_, a) = setup();
+        assert_eq!(format!("{a:?}"), "ReplicaApplier { .. }");
+    }
+
+    #[tokio::test]
+    async fn put_stores_a_bare_value_envelope_and_del_removes_it() {
+        let (store, a) = setup();
+        let put = PeerOp::Put {
+            bucket_type: Vec::new(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+            value: b"hello".to_vec(),
+        };
+        // A write op is not a query: the receive loop must call apply.
+        assert_eq!(a.apply_query(&encode_peer_op(&put)).await, None);
+        a.apply(&encode_peer_op(&put)).await;
+        let stored = store.get(&sb(), b"k").expect("stored");
+        let obj = HttpObject::from_storage_bytes(&stored).unwrap();
+        assert_eq!(obj.value, b"hello");
+        assert!(obj.indexes.is_empty() && obj.links.is_empty());
+        assert_eq!(obj.content_type, None);
+
+        let del = PeerOp::Del {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+        };
+        a.apply(&encode_peer_op(&del)).await;
+        assert_eq!(store.get(&sb(), b"k"), None);
+        // Deleting an absent key is fine too.
+        a.apply(&encode_peer_op(&del)).await;
+    }
+
+    #[tokio::test]
+    async fn repair_put_stores_bytes_verbatim_on_both_paths() {
+        let (store, a) = setup();
+        a.apply(&repair(b"siblings-1")).await;
+        assert_eq!(store.get(&sb(), b"k").unwrap(), b"siblings-1");
+        let ack = a.apply_query(&repair(b"siblings-2")).await;
+        assert_eq!(ack, Some(vec![a.durable_ack_byte()]));
+        assert!(matches!(ack.unwrap()[0], ACK_STORED | ACK_STORED_DURABLE));
+        assert_eq!(store.get(&sb(), b"k").unwrap(), b"siblings-2");
+    }
+
+    #[tokio::test]
+    async fn get_and_dt_fetch_are_write_no_ops_but_answer_queries() {
+        let (store, a) = setup();
+        let get = encode_peer_op(&PeerOp::Get {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+        });
+        let fetch = encode_peer_op(&PeerOp::DtFetch {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+            tag: TAG_COUNTER,
+        });
+        a.apply(&get).await;
+        a.apply(&fetch).await;
+        assert!(store.map.lock().is_empty());
+        // Absent key answers empty.
+        assert_eq!(a.apply_query(&get).await, Some(Vec::new()));
+        store
+            .map
+            .lock()
+            .insert((sb(), b"k".to_vec()), b"state".to_vec());
+        assert_eq!(a.apply_query(&get).await, Some(b"state".to_vec()));
+        assert_eq!(a.apply_query(&fetch).await, Some(b"state".to_vec()));
+        // Undecodable query payload is not answered.
+        assert_eq!(a.apply_query(&[0xEE]).await, None);
+    }
+
+    #[tokio::test]
+    async fn dt_update_op_accumulates_and_state_merges_idempotently() {
+        let (store, a) = setup();
+        // OP form applies once per delivery.
+        a.apply(&dt_update(counter_op("a", 2).to_op_wire())).await;
+        a.apply(&dt_update(counter_op("a", 3).to_op_wire())).await;
+        assert_eq!(counter_value(&store).await, CrdtValue::Counter(5));
+        // STATE form merges: re-delivery does not double-count.
+        let mut remote = PnCounter::new();
+        remote.increment(&ActorId::new("dc1", "b"), 4);
+        let state = crate::crdt_store::to_state_wire(&counter_to_bytes(&remote));
+        assert_eq!(state[0], DT_WIRE_STATE);
+        a.apply(&dt_update(state.clone())).await;
+        a.apply(&dt_update(state)).await;
+        assert_eq!(counter_value(&store).await, CrdtValue::Counter(9));
+        // An untagged payload whose first byte is neither discriminator
+        // takes the legacy state path; a valid state blob can never get
+        // there because its FORMAT_V1 version byte equals DT_WIRE_OP.
+        let raw = counter_to_bytes(&remote);
+        assert_eq!(raw[0], DT_WIRE_OP);
+        a.apply(&dt_update(vec![7, 1, 1])).await;
+        assert_eq!(counter_value(&store).await, CrdtValue::Counter(9));
+    }
+
+    #[tokio::test]
+    async fn dt_update_bad_payloads_are_dropped_without_writing() {
+        let (store, a) = setup();
+        // Op discriminator followed by garbage.
+        a.apply(&dt_update(vec![DT_WIRE_OP, 0xFF, 0xFF])).await;
+        // Empty payload falls back to the state path and fails to parse.
+        a.apply(&dt_update(Vec::new())).await;
+        // State discriminator followed by a corrupt blob.
+        a.apply(&dt_update(vec![DT_WIRE_STATE, 9, 9])).await;
+        assert!(store.map.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn backend_failures_are_swallowed_and_queries_answer_empty() {
+        let (store, a) = setup();
+        store.fail.store(true, Ordering::SeqCst);
+        let put = PeerOp::Put {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+            value: b"v".to_vec(),
+        };
+        let del = PeerOp::Del {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+        };
+        a.apply(&encode_peer_op(&put)).await;
+        a.apply(&encode_peer_op(&del)).await;
+        a.apply(&repair(b"s")).await;
+        a.apply(&dt_update(counter_op("a", 1).to_op_wire())).await;
+        // A failed acked repair replies empty: not counted toward W.
+        assert_eq!(a.apply_query(&repair(b"s")).await, Some(Vec::new()));
+        let get = encode_peer_op(&PeerOp::Get {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+        });
+        assert_eq!(a.apply_query(&get).await, Some(Vec::new()));
+        store.fail.store(false, Ordering::SeqCst);
+        assert!(store.map.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn unsupported_datastore_acks_repair_and_answers_reads_empty() {
+        let ds: Arc<dyn Datastore> = Arc::new(dynomite::embed::MemoryDatastore::new());
+        let a = ReplicaApplier::new(ds);
+        // Unsupported riak_put still acks: the in-memory store has no
+        // riak keyspace and anti-entropy owns the gap.
+        assert_eq!(
+            a.apply_query(&repair(b"s")).await,
+            Some(vec![ACK_STORED_DURABLE])
+        );
+        a.apply(&repair(b"s")).await;
+        let del = PeerOp::Del {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+        };
+        a.apply(&encode_peer_op(&del)).await;
+        a.apply(&dt_update(counter_op("a", 1).to_op_wire())).await;
+        let get = encode_peer_op(&PeerOp::Get {
+            bucket_type: b"default".to_vec(),
+            bucket: b"b".to_vec(),
+            key: b"k".to_vec(),
+        });
+        assert_eq!(a.apply_query(&get).await, Some(Vec::new()));
+    }
 }
