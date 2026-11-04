@@ -260,7 +260,7 @@ pub fn classify(ty: MsgType) -> CommandClass {
         // arg vector for the dispatcher's intercept; the
         // intercept then synthesises a `-ERR not supported`
         // reply.
-        M::ReqRedisFtUnknown => CommandClass::ArgN,
+        M::ReqRedisFtUnknown | M::ReqDynRepairScript => CommandClass::ArgN,
 
         _ => CommandClass::Arg0,
     }
@@ -384,6 +384,14 @@ pub fn lookup(keyword: &[u8]) -> Option<(MsgType, CommandTraits)> {
     }
     let (ty, is_read, quit, routing) = match key {
         // length 3
+        // Internal repair-script request between nodes; it runs on the
+        // receiving node's own datastore.
+        b"dynomite.repair-script" => (
+            MsgType::ReqDynRepairScript,
+            false,
+            false,
+            RoutingOverride::LocalNodeOnly,
+        ),
         b"get" => (MsgType::ReqRedisGet, true, false, RoutingOverride::None),
         b"set" => (MsgType::ReqRedisSet, false, false, RoutingOverride::None),
         b"ttl" => (MsgType::ReqRedisTtl, false, false, RoutingOverride::None),

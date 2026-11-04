@@ -7,10 +7,11 @@
 //! script with a [`ScriptRun`] on that same connection, and answers with
 //! the script's reply encoded by [`encode_reply`].
 //!
-//! Wire layout (every element a bulk string):
+//! The key comes first so the request parser records it as the request
+//! key. Wire layout (every element a bulk string):
 //!
 //! ```text
-//! DYNOMITE.REPAIR-SCRIPT <script> <key> <add_set> <rem_set> <orig_cmd>
+//! DYNOMITE.REPAIR-SCRIPT <key> <script> <add_set> <rem_set> <orig_cmd>
 //!     <num_opts> <num_fields> <num_values> <ts> <opt>... <field>... <value>...
 //! ```
 
@@ -364,8 +365,8 @@ impl ScriptRequest {
         ];
         let mut args: Vec<&[u8]> = vec![
             REPAIR_SCRIPT_CMD,
-            script,
             &self.key,
+            script,
             &self.add_set,
             &self.rem_set,
             &self.orig_cmd,
@@ -395,8 +396,8 @@ impl ScriptRequest {
         if next()? != REPAIR_SCRIPT_CMD {
             return None;
         }
-        let script = Some(Script::from_name(&next()?)?);
         let key = next()?;
+        let script = Some(Script::from_name(&next()?)?);
         let add_set = next()?;
         let rem_set = next()?;
         let orig_cmd = next()?;
@@ -748,6 +749,19 @@ mod tests {
         check("ZSCORE k m", Script::Hget, "", "m", "", false);
         let incr = parsed(&encode_command(&words("INCR k")));
         assert!(ScriptRequest::from_request(&incr, 1).is_none());
+    }
+
+    #[test]
+    fn peer_parses_request_as_local_only_with_its_key() {
+        let m = parsed(&encode_command(&words("HSET k f v")));
+        let wire = ScriptRequest::from_request(&m, 7)
+            .expect("rewrite")
+            .encode();
+        let p = parsed(&wire);
+        assert_eq!(p.ty(), MsgType::ReqDynRepairScript);
+        assert_eq!(p.keys().len(), 1);
+        assert_eq!(p.keys()[0].key(), b"k");
+        assert_eq!(p.routing(), crate::msg::MsgRouting::LocalNodeOnly);
     }
 
     #[test]

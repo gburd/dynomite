@@ -6,7 +6,7 @@
 //! form a stable, ordered codec so the integer indices and the names
 //! returned by [`MsgType::name`] stay compatible across releases.
 //!
-//! The enum is exhaustive: 182 named variants plus the trailing
+//! The enum is exhaustive: 183 named variants plus the trailing
 //! `EndIdx` sentinel. Helpers are provided to round-trip integer
 //! indices and to classify a tag as a request or a response.
 
@@ -234,6 +234,7 @@ define_msg_types![
     (ReqRedisFtSugdel, "REQ_REDIS_FT_SUGDEL"),
     (ReqRedisFtSuglen, "REQ_REDIS_FT_SUGLEN"),
     (ReqRedisFtUnknown, "REQ_REDIS_FT_UNKNOWN"),
+    (ReqDynRepairScript, "REQ_DYN_REPAIR_SCRIPT"),
     (EndIdx, "END_IDX"),
 ];
 
