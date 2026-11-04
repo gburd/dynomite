@@ -24,6 +24,10 @@
 //!   `crates/dynomite/src/msg/response_mgr.rs` and the consistency
 //!   fan-out in `crates/dynomite/src/cluster/dispatch.rs` /
 //!   `pool.rs`.
+//! * [`reply_class`] models the classification of local and peer
+//!   replies before the coalescer votes on them (`classify_reply` in
+//!   `crates/dynomite/src/cluster/dispatch.rs`): identical payloads agree
+//!   whichever path delivered them.
 //! * [`ring`] models the token-ring routing implemented in
 //!   `crates/dynomite/src/cluster/vnode.rs` (primary + successor
 //!   preference list, determinism, coverage, bounded disruption on a
@@ -97,6 +101,7 @@ pub mod quorum;
 pub mod quorum_decision;
 pub mod ramp;
 pub mod replication;
+pub mod reply_class;
 pub mod ring;
 pub mod swim;
 pub mod xa;
