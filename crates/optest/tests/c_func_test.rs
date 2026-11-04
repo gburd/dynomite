@@ -24,10 +24,9 @@
 //! `main` stays green and the gap stays listed; run it with
 //! `--run-ignored only`.
 //!
-//! Not exercised here: multi-key fragmentation inside a multi-node rack.
 //! Both C topologies enter through a one-node rack, so MGET/MSET never
-//! split; the Rust engine does not wire `redis_fragment` into the request
-//! path yet (plan T7/T9).
+//! split there; `func_test_multikey_fragmented` adds two topologies whose
+//! entry rack has three nodes, so multi-key requests split per owner.
 
 #[macro_use]
 mod common;
@@ -498,5 +497,60 @@ fn func_test_safe_quorum_read_repair() {
             return;
         };
         comparison_test(&c, engine, false, Some("dc1"), true);
+    }
+}
+
+/// One DC, one rack of three nodes: every multi-key request entering
+/// node 0 spans several owners of its own rack and must be split.
+fn fragmented_one_rack_topology() -> ClusterSpec {
+    ClusterSpec::layout(&[("dc1".into(), vec![("rack1".into(), 3)])])
+        .with("read_consistency", "DC_ONE")
+        .with("write_consistency", "DC_ONE")
+}
+
+/// One DC, three racks of three nodes, `DC_QUORUM`: each fragment is
+/// replicated to its owner in every rack and answered by quorum.
+fn fragmented_quorum_topology() -> ClusterSpec {
+    ClusterSpec::layout(&[(
+        "dc1".into(),
+        vec![
+            ("rack1".into(), 3),
+            ("rack2".into(), 3),
+            ("rack3".into(), 3),
+        ],
+    )])
+    .with("read_consistency", "DC_QUORUM")
+    .with("write_consistency", "DC_QUORUM")
+}
+
+/// `run_multikey_test` and `run_key_value_tests` through an entry node
+/// whose rack has three nodes, so MGET / MSET / EXISTS split per owner
+/// and the merged replies must equal a standalone datastore's.
+#[test]
+fn func_test_multikey_fragmented() {
+    sandboxed!("func_test_multikey_fragmented");
+    for topology in [fragmented_one_rack_topology, fragmented_quorum_topology] {
+        for engine in engines() {
+            let Some(cluster) = start_or_skip(topology().engine(engine)) else {
+                return;
+            };
+            let mut rng = Rng(seed());
+            let redis = standalone_client(&cluster);
+            let dyno = cluster.nodes[0].client(T).expect("cluster node");
+            let mut c = Dual {
+                cluster: &cluster,
+                redis,
+                dyno,
+                sort: false,
+                engine,
+                checked: 0,
+            };
+            run_multikey_test(&mut c, &mut rng, 1000, 10);
+            run_key_value_tests(&mut c, &mut rng, 100, 1024);
+            eprintln!(
+                "[{engine:?}] func_test_multikey_fragmented: {} commands verified",
+                c.checked
+            );
+        }
     }
 }
