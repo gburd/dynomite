@@ -471,6 +471,7 @@ impl Server {
         }
         let server_pool = Arc::new(ServerPool::new(pool_config.clone(), peers));
         server_pool.preselect_remote_racks();
+        dynomite::msg::set_read_repairs_enabled(conf_pool.read_repairs_enabled.unwrap_or(false));
 
         // Open the local-datastore connection. The dispatcher
         // routes `LocalDatastore` plans to this `ServerConn`
@@ -834,7 +835,8 @@ impl Server {
                 Some(
                     StatsServer::bind(addr, stats_sink.clone())
                         .map_err(ServerError::Io)?
-                        .with_ring_provider(ring_provider),
+                        .with_ring_provider(ring_provider)
+                        .with_admin_pool(server_pool.clone()),
                 )
             }
             None => None,

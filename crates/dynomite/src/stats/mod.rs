@@ -36,7 +36,7 @@ pub use crate::stats::failure::{
 pub use crate::stats::histogram::{bucket_offsets, Histogram, BUCKET_COUNT};
 pub use crate::stats::prometheus::render_prometheus;
 pub use crate::stats::rest::{
-    ClusterInfoProvider, RingProvider, StatsServer, MAX_HEADERS, MAX_REQUEST_BYTES,
+    ClusterInfoProvider, HistoResetHook, RingProvider, StatsServer, MAX_HEADERS, MAX_REQUEST_BYTES,
 };
 pub use crate::stats::snapshot::{
     describe_stats, HistogramSummary, PeerStats, PoolStats, ServerStats, ServiceInfo, Snapshot,

@@ -624,8 +624,8 @@ impl ClusterDispatcher {
         let consistency = match (bucket_type, is_read) {
             (Some(bt), true) => bt.read_consistency,
             (Some(bt), false) => bt.write_consistency,
-            (None, true) => cfg.read_consistency,
-            (None, false) => cfg.write_consistency,
+            (None, true) => self.pool.read_consistency(),
+            (None, false) => self.pool.write_consistency(),
         };
         let n_val_cap = bucket_type.map_or(0, |bt| bt.n_val);
         let dcs = self.pool.datacenters().read();

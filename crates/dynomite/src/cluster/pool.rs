@@ -9,6 +9,7 @@
 //! `dynomited` binary and the embedding API construct from a parsed
 //! [`crate::conf::Config`].
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -301,6 +302,115 @@ pub struct ServerPool {
     peers: Arc<RwLock<Vec<Peer>>>,
     datacenters: Arc<RwLock<Vec<Datacenter>>>,
     auto_eject: Arc<RwLock<Vec<AutoEject>>>,
+    read_consistency: AtomicU8,
+    write_consistency: AtomicU8,
+    timeout_factor: AtomicU8,
+    local_state: AtomicU8,
+}
+
+/// Lifecycle state of the local node, as reported by the stats
+/// endpoint `/state/get_state` and set by `/state/<state>`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::cluster::pool::DynState;
+/// assert_eq!(DynState::WritesOnly.name(), "WRITES_ONLY");
+/// assert_eq!(DynState::Unknown.name(), "Unknown");
+/// ```
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[repr(u8)]
+pub enum DynState {
+    /// Process is initialising.
+    Init = 0,
+    /// Node serves neither reads nor writes.
+    Standby = 1,
+    /// Node accepts writes but drops reads.
+    WritesOnly = 2,
+    /// Node is coming back from standby.
+    Resuming = 3,
+    /// Node serves all traffic.
+    Normal = 4,
+    /// Node is joining the ring (gossip enabled, no peer update yet).
+    Joining = 7,
+    /// Node is down.
+    Down = 8,
+    /// Node connections are being reset.
+    Reset = 11,
+    /// Unknown state.
+    Unknown = 12,
+}
+
+impl DynState {
+    /// Display name used in the `State: <name>` admin reply.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::DynState;
+    /// assert_eq!(DynState::Normal.name(), "NORMAL");
+    /// ```
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            DynState::Init => "INIT",
+            DynState::Standby => "STANDBY",
+            DynState::WritesOnly => "WRITES_ONLY",
+            DynState::Resuming => "RESUMING",
+            DynState::Normal => "NORMAL",
+            DynState::Joining => "JOINING",
+            DynState::Down => "DOWN",
+            DynState::Reset => "RESET",
+            DynState::Unknown => "Unknown",
+        }
+    }
+
+    fn from_u8(v: u8) -> Self {
+        match v {
+            0 => DynState::Init,
+            1 => DynState::Standby,
+            2 => DynState::WritesOnly,
+            3 => DynState::Resuming,
+            4 => DynState::Normal,
+            7 => DynState::Joining,
+            8 => DynState::Down,
+            11 => DynState::Reset,
+            _ => DynState::Unknown,
+        }
+    }
+}
+
+/// Lower bound of the request timeout multiplier.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(dynomite::cluster::pool::TIMEOUT_FACTOR_MIN, 1);
+/// ```
+pub const TIMEOUT_FACTOR_MIN: u8 = 1;
+
+/// Upper bound of the request timeout multiplier.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(dynomite::cluster::pool::TIMEOUT_FACTOR_MAX, 10);
+/// ```
+pub const TIMEOUT_FACTOR_MAX: u8 = 10;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+fn consistency_from_u8(v: u8) -> ConsistencyLevel {
+    match v {
+        1 => ConsistencyLevel::DcQuorum,
+        2 => ConsistencyLevel::DcSafeQuorum,
+        3 => ConsistencyLevel::DcEachSafeQuorum,
+        _ => ConsistencyLevel::DcOne,
+    }
 }
 
 impl ServerPool {
@@ -349,7 +459,18 @@ impl ServerPool {
         for _ in &peers {
             auto_ejects.push(auto_eject_template.clone());
         }
+        // Without gossip the node is serving as soon as it starts;
+        // with gossip it stays JOINING until the first peer update.
+        let initial_state = if config.enable_gossip {
+            DynState::Joining
+        } else {
+            DynState::Normal
+        };
         let pool = Self {
+            read_consistency: AtomicU8::new(config.read_consistency as u8),
+            write_consistency: AtomicU8::new(config.write_consistency as u8),
+            timeout_factor: AtomicU8::new(TIMEOUT_FACTOR_MIN),
+            local_state: AtomicU8::new(initial_state as u8),
             config,
             peers: Arc::new(RwLock::new(peers)),
             datacenters: Arc::new(RwLock::new(dcs)),
@@ -363,6 +484,185 @@ impl ServerPool {
     #[must_use]
     pub fn config(&self) -> &PoolConfig {
         &self.config
+    }
+
+    /// Current pool-wide read consistency. Starts at
+    /// `read_consistency:` and changes at runtime via
+    /// `/set_consistency/read/<level>`. Bucket-type overrides take
+    /// precedence at dispatch time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// use dynomite::msg::ConsistencyLevel;
+    /// let pool = ServerPool::new(PoolConfig::default(), Vec::new());
+    /// pool.set_read_consistency(ConsistencyLevel::DcQuorum);
+    /// assert_eq!(pool.read_consistency(), ConsistencyLevel::DcQuorum);
+    /// ```
+    #[must_use]
+    pub fn read_consistency(&self) -> ConsistencyLevel {
+        consistency_from_u8(self.read_consistency.load(Ordering::Relaxed))
+    }
+
+    /// Current pool-wide write consistency; see
+    /// [`ServerPool::read_consistency`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// use dynomite::msg::ConsistencyLevel;
+    /// let pool = ServerPool::new(PoolConfig::default(), Vec::new());
+    /// assert_eq!(pool.write_consistency(), ConsistencyLevel::DcOne);
+    /// ```
+    #[must_use]
+    pub fn write_consistency(&self) -> ConsistencyLevel {
+        consistency_from_u8(self.write_consistency.load(Ordering::Relaxed))
+    }
+
+    /// Replace the pool-wide read consistency.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// use dynomite::msg::ConsistencyLevel;
+    /// let pool = ServerPool::new(PoolConfig::default(), Vec::new());
+    /// pool.set_read_consistency(ConsistencyLevel::DcSafeQuorum);
+    /// assert_eq!(pool.read_consistency(), ConsistencyLevel::DcSafeQuorum);
+    /// ```
+    pub fn set_read_consistency(&self, level: ConsistencyLevel) {
+        self.read_consistency.store(level as u8, Ordering::Relaxed);
+    }
+
+    /// Replace the pool-wide write consistency.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// use dynomite::msg::ConsistencyLevel;
+    /// let pool = ServerPool::new(PoolConfig::default(), Vec::new());
+    /// pool.set_write_consistency(ConsistencyLevel::DcQuorum);
+    /// assert_eq!(pool.write_consistency(), ConsistencyLevel::DcQuorum);
+    /// ```
+    pub fn set_write_consistency(&self, level: ConsistencyLevel) {
+        self.write_consistency.store(level as u8, Ordering::Relaxed);
+    }
+
+    /// True when read repairs should run: the process-wide flag
+    /// ([`crate::msg::is_read_repairs_enabled`]) is set and both the
+    /// read and the write consistency are stronger than `DC_ONE`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// let pool = ServerPool::new(PoolConfig::default(), Vec::new());
+    /// // DC_ONE consistency never repairs, whatever the flag says.
+    /// assert!(!pool.is_read_repairs_enabled());
+    /// ```
+    #[must_use]
+    pub fn is_read_repairs_enabled(&self) -> bool {
+        crate::msg::is_read_repairs_enabled()
+            && self.read_consistency() != ConsistencyLevel::DcOne
+            && self.write_consistency() != ConsistencyLevel::DcOne
+    }
+
+    /// Current request timeout multiplier, in
+    /// `TIMEOUT_FACTOR_MIN..=TIMEOUT_FACTOR_MAX`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// let pool = ServerPool::new(PoolConfig::default(), Vec::new());
+    /// assert_eq!(pool.timeout_factor(), 1);
+    /// ```
+    #[must_use]
+    pub fn timeout_factor(&self) -> u8 {
+        self.timeout_factor.load(Ordering::Relaxed)
+    }
+
+    /// Set the request timeout multiplier, clamped to
+    /// `TIMEOUT_FACTOR_MIN..=TIMEOUT_FACTOR_MAX`. Returns the stored
+    /// value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// let pool = ServerPool::new(PoolConfig::default(), Vec::new());
+    /// assert_eq!(pool.set_timeout_factor(99), 10);
+    /// assert_eq!(pool.set_timeout_factor(0), 1);
+    /// ```
+    pub fn set_timeout_factor(&self, factor: u8) -> u8 {
+        let f = factor.clamp(TIMEOUT_FACTOR_MIN, TIMEOUT_FACTOR_MAX);
+        self.timeout_factor.store(f, Ordering::Relaxed);
+        f
+    }
+
+    /// Request timeout in milliseconds: `timeout:` multiplied by the
+    /// current timeout factor. A zero `timeout:` means no timeout and
+    /// stays zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// let cfg = PoolConfig { timeout_ms: 100, ..PoolConfig::default() };
+    /// let pool = ServerPool::new(cfg, Vec::new());
+    /// pool.set_timeout_factor(3);
+    /// assert_eq!(pool.request_timeout_ms(), 300);
+    /// ```
+    #[must_use]
+    pub fn request_timeout_ms(&self) -> u64 {
+        self.config
+            .timeout_ms
+            .saturating_mul(u64::from(self.timeout_factor()))
+    }
+
+    /// Lifecycle state of the local node.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{DynState, PoolConfig, ServerPool};
+    /// let pool = ServerPool::new(PoolConfig::default(), Vec::new());
+    /// assert_eq!(pool.local_state(), DynState::Normal);
+    /// ```
+    #[must_use]
+    pub fn local_state(&self) -> DynState {
+        DynState::from_u8(self.local_state.load(Ordering::Relaxed))
+    }
+
+    /// Set the local node state. The local peer entry (index 0)
+    /// follows when the state has a peer-state equivalent
+    /// (`NORMAL`, `STANDBY`, `JOINING`, `DOWN`, `RESET`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::pool::{DynState, PoolConfig, ServerPool};
+    /// let pool = ServerPool::new(PoolConfig::default(), Vec::new());
+    /// pool.set_local_state(DynState::Standby);
+    /// assert_eq!(pool.local_state(), DynState::Standby);
+    /// ```
+    pub fn set_local_state(&self, state: DynState) {
+        use crate::cluster::peer::PeerState;
+        self.local_state.store(state as u8, Ordering::Relaxed);
+        let peer_state = match state {
+            DynState::Normal => Some(PeerState::Normal),
+            DynState::Standby => Some(PeerState::Standby),
+            DynState::Joining => Some(PeerState::Joining),
+            DynState::Down => Some(PeerState::Down),
+            DynState::Reset => Some(PeerState::Reset),
+            _ => None,
+        };
+        if let (Some(ps), Some(local)) = (peer_state, self.peers.write().first_mut()) {
+            local.set_state(ps, now_secs());
+        }
     }
 
     /// Borrow the peer list (RwLock).

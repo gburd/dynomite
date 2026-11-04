@@ -67,7 +67,7 @@ pub use self::gossip::{
 };
 pub use self::hints::{Hint, HintStore, HintStoreError, HintStoreOpenError, HintStoreStats};
 pub use self::peer::{Peer, PeerEndpoint, PeerState};
-pub use self::pool::{PoolConfig, ServerPool};
+pub use self::pool::{DynState, PoolConfig, ServerPool};
 pub use self::snitch::{rack_distance, RackDistance};
 pub use self::swim::{
     Incarnation, Member, ProbeResult, Status, SwimConfig, SwimHandler, SwimState, Tick, Update,

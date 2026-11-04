@@ -186,8 +186,8 @@ struct	conf_pool	src/dyn_conf.h	83	todo
 struct	conf	src/dyn_conf.h	140	todo				
 macro	null_command	src/dyn_conf.h	158	todo				
 macro	DYN_KEEPALIVE_INTERVAL_S	src/dyn_connection.c	87	todo				
-var	g_read_consistency	src/dyn_connection.c	88	todo				
-var	g_write_consistency	src/dyn_connection.c	89	todo				
+var	g_read_consistency	src/dyn_connection.c	88	ported	crates/dynomite/src/cluster/pool.rs::ServerPool::read_consistency	crates/dynomite/tests/stats_admin_http.rs::consistency_and_read_repair_commands		runtime atomic; dispatcher plan reads it, bucket types keep precedence
+var	g_write_consistency	src/dyn_connection.c	89	ported	crates/dynomite/src/cluster/pool.rs::ServerPool::write_consistency	crates/dynomite/tests/stats_admin_http.rs::consistency_and_read_repair_commands		runtime atomic; dispatcher plan reads it, bucket types keep precedence
 fn	conn_is_req_first_in_outqueue	src/dyn_connection.c	91	todo				
 fn	conn_to_ctx	src/dyn_connection.c	99	todo				
 fn	conn_set_read_consistency	src/dyn_connection.c	125	todo				
@@ -278,7 +278,7 @@ fn	conn_pool_active_count	src/dyn_connection_pool.c	212	todo
 typedef	conn_pool_t	src/dyn_connection_pool.h	7	todo				
 var	admin_opt	src/dyn_core.c	36	todo				
 fn	core_print_peer_status	src/dyn_core.c	38	todo				
-fn	core_set_local_state	src/dyn_core.c	68	todo				
+fn	core_set_local_state	src/dyn_core.c	68	ported	crates/dynomite/src/cluster/pool.rs::ServerPool::set_local_state	crates/dynomite/tests/stats_admin_http.rs::local_state_commands		local peer follows for states PeerState can hold; WRITES_ONLY/RESUMING leave the peer entry unchanged
 fn	core_init_last	src/dyn_core.c	75	todo				
 fn	core_gossip_pool_init	src/dyn_core.c	83	todo				
 fn	core_dnode_peer_pool_preconnect	src/dyn_core.c	92	todo				
@@ -305,7 +305,7 @@ fn	core_core	src/dyn_core.c	500	todo
 fn	core_debug	src/dyn_core.c	559	todo				
 fn	core_process_messages	src/dyn_core.c	617	todo				
 fn	core_loop	src/dyn_core.c	642	todo				
-fn	is_read_repairs_enabled	src/dyn_core.c	673	todo				
+fn	is_read_repairs_enabled	src/dyn_core.c	673	ported	crates/dynomite/src/cluster/pool.rs::ServerPool::is_read_repairs_enabled	crates/dynomite/tests/stats_admin_http.rs::consistency_and_read_repair_commands		flag && read > DC_ONE && write > DC_ONE; repair callers still read the raw flag (T8)
 macro	_DYN_CORE_H_	src/dyn_core.h	24	todo				
 macro	ENCRYPTION	src/dyn_core.h	47	todo				
 enum	dyn_state	src/dyn_core.h	49	todo				
@@ -319,7 +319,7 @@ enumerator	DOWN	src/dyn_core.h	58	todo
 enumerator	RESET	src/dyn_core.h	61	todo				
 enumerator	UNKNOWN	src/dyn_core.h	62	todo				
 typedef	dyn_state_t	src/dyn_core.h	63	todo				
-fn	get_state	src/dyn_core.h	65	todo				
+fn	get_state	src/dyn_core.h	65	ported	crates/dynomite/src/cluster/pool.rs::DynState::name	crates/dynomite/tests/stats_admin_http.rs::local_state_commands		
 enum	data_store	src/dyn_core.h	97	todo				
 enumerator	DATA_REDIS	src/dyn_core.h	98	todo				
 enumerator	DATA_MEMCACHE	src/dyn_core.h	99	todo				
@@ -649,9 +649,9 @@ var	logger	src/dyn_log.c	33	todo
 fn	log_init	src/dyn_log.c	42	todo				
 fn	log_deinit	src/dyn_log.c	63	todo				
 fn	log_reopen	src/dyn_log.c	73	todo				
-fn	log_level_up	src/dyn_log.c	86	todo				
-fn	log_level_down	src/dyn_log.c	95	todo				
-fn	log_level_set	src/dyn_log.c	104	todo				
+fn	log_level_up	src/dyn_log.c	86	ported	crates/dynomite/src/core/log/mod.rs::log_level_increment	crates/dynomite/tests/stats_admin_http.rs::log_level_commands		
+fn	log_level_down	src/dyn_log.c	95	ported	crates/dynomite/src/core/log/mod.rs::log_level_decrement	crates/dynomite/tests/stats_admin_http.rs::log_level_commands		
+fn	log_level_set	src/dyn_log.c	104	ported	crates/dynomite/src/core/log/mod.rs::log_level_set	crates/dynomite/tests/stats_admin_http.rs::log_level_commands		caller clamps the signed value to 0..=11
 fn	log_loggable	src/dyn_log.c	111	todo				
 fn	_log	src/dyn_log.c	121	todo				
 fn	_log_stderr	src/dyn_log.c	169	todo				
@@ -751,7 +751,7 @@ var	g_make_repair_query	src/dyn_message.c	163	todo
 var	g_clear_repair_md_for_key	src/dyn_message.c	164	todo				
 macro	DEFINE_ACTION	src/dyn_message.c	166	todo				
 var	msg_type_strings	src/dyn_message.c	167	todo				
-var	g_read_repairs_enabled	src/dyn_message.c	172	todo				
+var	g_read_repairs_enabled	src/dyn_message.c	172	ported	crates/dynomite/src/msg/mod.rs::READ_REPAIRS_ENABLED	crates/dynomite/tests/stats_admin_http.rs::consistency_and_read_repair_commands		AtomicBool, set from read_repairs_enabled: at startup and by /read_repairs
 fn	print_req	src/dyn_message.c	174	todo				
 fn	print_rsp	src/dyn_message.c	184	todo				
 fn	set_datastore_ops	src/dyn_message.c	193	todo				
@@ -1151,29 +1151,29 @@ fn	stats_pool_unmap	src/dyn_stats.c	230	todo
 fn	stats_create_bufs	src/dyn_stats.c	235	todo				
 fn	stats_destroy_buf	src/dyn_stats.c	388	todo				
 fn	stats_reset_buf	src/dyn_stats.c	396	todo				
-fn	stats_add_string	src/dyn_stats.c	398	todo				
-fn	stats_add_num_last	src/dyn_stats.c	419	todo				
+fn	stats_add_string	src/dyn_stats.c	398	ported	crates/dynomite/src/stats/rest.rs::DescBuf::add_string	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		
+fn	stats_add_num_last	src/dyn_stats.c	419	ported	crates/dynomite/src/stats/rest.rs::DescBuf::add_num	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		
 fn	stats_add_num_str	src/dyn_stats.c	447	todo				
-fn	stats_add_num	src/dyn_stats.c	465	todo				
+fn	stats_add_num	src/dyn_stats.c	465	ported	crates/dynomite/src/stats/rest.rs::DescBuf::add_num	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		
 fn	stats_add_header	src/dyn_stats.c	474	todo				
-fn	stats_add_footer	src/dyn_stats.c	579	todo				
-fn	stats_begin_nesting	src/dyn_stats.c	595	todo				
-fn	stats_end_nesting	src/dyn_stats.c	619	todo				
+fn	stats_add_footer	src/dyn_stats.c	579	ported	crates/dynomite/src/stats/rest.rs::DescBuf::footer	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		
+fn	stats_begin_nesting	src/dyn_stats.c	595	ported	crates/dynomite/src/stats/rest.rs::DescBuf::begin	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		used by /cluster_describe; /info still uses Snapshot::to_json
+fn	stats_end_nesting	src/dyn_stats.c	619	ported	crates/dynomite/src/stats/rest.rs::DescBuf::end	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		trailing-comma removal kept
 fn	stats_copy_metric	src/dyn_stats.c	652	todo				
 fn	stats_aggregate_metric	src/dyn_stats.c	670	todo				
 fn	stats_aggregate	src/dyn_stats.c	702	todo				
 fn	stats_make_info_rsp	src/dyn_stats.c	753	todo				
-fn	get_host_from_pname	src/dyn_stats.c	775	todo				
-fn	stats_add_node_host	src/dyn_stats.c	788	todo				
-fn	stats_add_node_name	src/dyn_stats.c	807	todo				
-fn	stats_add_node_details	src/dyn_stats.c	829	todo				
-fn	stats_add_rack_details	src/dyn_stats.c	843	todo				
-fn	stats_add_dc_details	src/dyn_stats.c	862	todo				
-fn	stats_resize_clus_desc_buf	src/dyn_stats.c	882	todo				
-fn	stats_make_cl_desc_rsp	src/dyn_stats.c	902	todo				
-fn	parse_request	src/dyn_stats.c	923	todo				
-fn	stats_http_rsp	src/dyn_stats.c	1110	todo				
-fn	stats_send_rsp	src/dyn_stats.c	1141	todo				
+fn	get_host_from_pname	src/dyn_stats.c	775	ported	crates/dynomite/src/stats/rest.rs::cluster_describe	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		PeerEndpoint::host already holds the host part of the pname
+fn	stats_add_node_host	src/dyn_stats.c	788	ported	crates/dynomite/src/stats/rest.rs::cluster_describe	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		local node uses public_hostname; env label fixed to aws (shortcut noted in code)
+fn	stats_add_node_name	src/dyn_stats.c	807	ported	crates/dynomite/src/stats/rest.rs::cluster_describe	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		local node uses public_ip4
+fn	stats_add_node_details	src/dyn_stats.c	829	ported	crates/dynomite/src/stats/rest.rs::cluster_describe	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		token = first magnitude word
+fn	stats_add_rack_details	src/dyn_stats.c	843	ported	crates/dynomite/src/stats/rest.rs::cluster_describe	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		
+fn	stats_add_dc_details	src/dyn_stats.c	862	ported	crates/dynomite/src/stats/rest.rs::cluster_describe	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		
+fn	stats_resize_clus_desc_buf	src/dyn_stats.c	882	ported	crates/dynomite/src/stats/rest.rs::cluster_describe	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		Vec::with_capacity(1024 * peers); growth is automatic
+fn	stats_make_cl_desc_rsp	src/dyn_stats.c	902	ported	crates/dynomite/src/stats/rest.rs::cluster_describe	crates/dynomite/tests/stats_admin_http.rs::cluster_describe_and_bad_request_line		JSON bytes identical to C for a 1-DC 2-rack ring
+fn	parse_request	src/dyn_stats.c	923	ported	crates/dynomite/src/stats/rest.rs::parse_request	crates/dynomite/tests/stats_admin_http.rs::consistency_and_read_repair_commands		path rules kept: exact vs prefix match, fixed argument offsets; `/` and non-GET are UB in C (uninitialised cmd) - Rust serves the snapshot for `/` and 405 for non-GET
+fn	stats_http_rsp	src/dyn_stats.c	1110	ported	crates/dynomite/src/stats/rest.rs::write_json_response	crates/dynomite/tests/stats_admin_http.rs::snapshot_help_ping_and_unknown_commands		standard CRLF header framing (P1); body bytes identical
+fn	stats_send_rsp	src/dyn_stats.c	1141	ported	crates/dynomite/src/stats/rest.rs::stats_send_rsp	crates/dynomite/tests/stats_admin_http.rs::peer_state_commands		bodies byte-identical to C; `/peer/<op>/all` resets every peer incl. local as C does
 fn	stats_loop_callback	src/dyn_stats.c	1288	todo				
 fn	stats_loop	src/dyn_stats.c	1303	todo				
 fn	stats_listen	src/dyn_stats.c	1308	todo				

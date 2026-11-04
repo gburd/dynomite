@@ -21,7 +21,7 @@
 //! assert_eq!(mgr.quorum_responses(), 1);
 //! ```
 
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod index;
 pub mod keypos;
@@ -191,41 +191,42 @@ impl DynErrorCode {
     }
 }
 
-static READ_REPAIRS_ENABLED: OnceLock<bool> = OnceLock::new();
+static READ_REPAIRS_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Configure whether read repairs are globally enabled.
+/// Set the process-wide read-repair flag.
 ///
-/// Called once during configuration validation; subsequent calls are
-/// silently ignored, so the cluster-wide read-repair flag is
-/// write-once. Returns `true` when the value was
-/// installed and `false` when an earlier call already pinned it.
+/// Set from `read_repairs_enabled:` at startup and toggled at
+/// runtime by the stats endpoint `/read_repairs/<enable|disable>`.
+/// Returns the previous value.
 ///
 /// # Examples
 ///
 /// ```
-/// use dynomite::msg::set_read_repairs_enabled;
-/// // Calling twice from a single test wins or loses depending on
-/// // whether anyone else got there first; the API is idempotent.
-/// let _ = set_read_repairs_enabled(true);
+/// use dynomite::msg::{is_read_repairs_enabled, set_read_repairs_enabled};
+/// let prev = set_read_repairs_enabled(true);
+/// assert!(is_read_repairs_enabled());
+/// set_read_repairs_enabled(prev);
 /// ```
 pub fn set_read_repairs_enabled(enabled: bool) -> bool {
-    READ_REPAIRS_ENABLED.set(enabled).is_ok()
+    READ_REPAIRS_ENABLED.swap(enabled, Ordering::Relaxed)
 }
 
-/// True when read repairs are enabled cluster-wide.
+/// The raw process-wide read-repair flag.
 ///
-/// Defaults to `false` until configuration validation enables it.
+/// Defaults to `false`. Repairs only run when this flag is set AND
+/// the pool's read and write consistency are both stronger than
+/// `DC_ONE`; that combined gate is
+/// [`crate::cluster::ServerPool::is_read_repairs_enabled`].
 ///
 /// # Examples
 ///
 /// ```
 /// use dynomite::msg::is_read_repairs_enabled;
-/// // Default state is "disabled".
 /// let _ = is_read_repairs_enabled();
 /// ```
 #[must_use]
 pub fn is_read_repairs_enabled() -> bool {
-    *READ_REPAIRS_ENABLED.get().unwrap_or(&false)
+    READ_REPAIRS_ENABLED.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
