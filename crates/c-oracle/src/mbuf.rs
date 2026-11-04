@@ -15,6 +15,7 @@ extern "C" {
     fn oracle_mbuf_rewind();
     fn oracle_mbuf_read(out: *mut u8) -> u32;
     fn oracle_mbuf_split(at: u32, tail_out: *mut u8) -> c_int;
+    fn oracle_mbuf_geometry(size: u32, out: *mut u32);
     fn oracle_strchr(p: *const u8, n: u32, c: u8) -> *const u8;
     fn oracle_strrchr(p: *const u8, n: u32, c: u8) -> *const u8;
     fn keypos_elem_len(elem: *const CKeyPos) -> u32;
@@ -52,6 +53,16 @@ pub fn reset() {
 pub fn copy(d: &[u8]) -> bool {
     // SAFETY: `d` is valid for `d.len()` bytes; C reads exactly that many.
     unsafe { oracle_mbuf_copy(d.as_ptr(), u32::try_from(d.len()).expect("fits u32")) == 0 }
+}
+
+/// C `mbuf_init(size)` geometry: `(mbuf_data_size(), end - start,
+/// end_extra - start)` of a fresh mbuf. The default size is restored
+/// afterwards; callers hold [`crate::util::GLOBALS`].
+pub fn geometry(size: u32) -> (u32, u32, u32) {
+    let mut out = [0u32; 3];
+    // SAFETY: `out` holds the three u32 slots the shim writes.
+    unsafe { oracle_mbuf_geometry(size, out.as_mut_ptr()) };
+    (out[0], out[1], out[2])
 }
 
 /// C `mbuf_length`.

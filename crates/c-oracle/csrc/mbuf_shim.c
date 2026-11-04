@@ -56,6 +56,23 @@ int oracle_mbuf_split(uint32_t at, uint8_t *tail_out) {
   return n;
 }
 
+/*
+ * Re-run mbuf_init(size) and report mbuf_data_size() plus the writable
+ * (end - start) and data (end_extra - start) spans of a fresh mbuf,
+ * then restore the default size the other entry points rely on.
+ */
+void oracle_mbuf_geometry(uint32_t size, uint32_t out[3]) {
+  struct mbuf *m;
+  ob_ensure();
+  mbuf_init(size);
+  out[0] = (uint32_t)mbuf_data_size();
+  m = mbuf_get();
+  out[1] = (uint32_t)(m->end - m->start);
+  out[2] = (uint32_t)(m->end_extra - m->start);
+  mbuf_dealloc(m);
+  mbuf_init(MBUF_SIZE);
+}
+
 const uint8_t *oracle_strchr(const uint8_t *p, uint32_t n, uint8_t c) {
   return _dn_strchr((uint8_t *)p, (uint8_t *)p + n, c);
 }

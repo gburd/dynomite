@@ -5,7 +5,9 @@
 #![cfg(not(c_oracle_absent))]
 
 use c_oracle::{mbuf as c, util::GLOBALS};
-use dynomite::io::mbuf::{MbufPool, MBUF_HSIZE, MBUF_SIZE};
+use dynomite::io::mbuf::{
+    mbuf_data_size, mbuf_init, MbufPool, MBUF_HSIZE, MBUF_MAX_SIZE, MBUF_MIN_SIZE, MBUF_SIZE,
+};
 use dynomite::msg::keypos::{ArgPos, KeyPos};
 use dynomite::util::{dyn_string, time};
 use hegel::generators as gs;
@@ -62,6 +64,46 @@ fn c_mbuf_data_capacity_is_size_minus_header() {
     assert_eq!(r.remaining(), c_cap);
     r.copy_from_slice(&vec![7u8; c_cap]);
     assert!(r.is_full());
+}
+
+/// For every legal `mbuf_size` (a multiple of 16 in
+/// `[MBUF_MIN_SIZE, MBUF_MAX_SIZE]`), C `mbuf_init` + `mbuf_data_size`
+/// and the C mbuf spans equal the Rust values.
+#[hegel::test(test_cases = 300)]
+fn mbuf_data_size_matches_c(tc: TestCase) {
+    let _g = GLOBALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let k: usize = tc.draw(
+        gs::integers::<usize>()
+            .min_value(MBUF_MIN_SIZE / 16)
+            .max_value(MBUF_MAX_SIZE / 16),
+    );
+    let size = k * 16;
+    let (c_data, c_writable, c_extra) = c::geometry(u32::try_from(size).expect("fits u32"));
+    let pool = MbufPool::new(size, 0);
+    let buf = pool.get();
+    assert_eq!(pool.data_size(), c_data as usize, "size {size}");
+    assert_eq!(buf.data_size(), c_data as usize, "size {size}");
+    assert_eq!(buf.usable_capacity(), c_extra as usize, "size {size}");
+    assert_eq!(buf.capacity(), c_writable as usize, "size {size}");
+    assert_eq!(buf.remaining(), c_writable as usize, "size {size}");
+    mbuf_init(size);
+    assert_eq!(mbuf_data_size(), c_data as usize, "size {size}");
+    mbuf_init(MBUF_SIZE);
+}
+
+#[test]
+fn mbuf_data_size_matches_c_at_bounds() {
+    let _g = GLOBALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for size in [MBUF_MIN_SIZE, MBUF_SIZE, MBUF_MAX_SIZE] {
+        let (c_data, c_writable, _) = c::geometry(u32::try_from(size).expect("fits u32"));
+        assert_eq!(MbufPool::new(size, 0).data_size(), c_data as usize);
+        assert_eq!(MbufPool::new(size, 0).get().capacity(), c_writable as usize);
+    }
+    assert_eq!(c::geometry(16384), (16336, 16320, 16336));
 }
 
 #[hegel::test(test_cases = 500)]
