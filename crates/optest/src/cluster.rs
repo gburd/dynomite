@@ -355,21 +355,13 @@ impl Node {
         let mut s =
             std::net::TcpStream::connect_timeout(&self.stats_addr(), Duration::from_secs(3))?;
         s.set_read_timeout(Some(Duration::from_secs(3)))?;
-        write!(s, "GET {path} HTTP/1.0\r\nHost: x\r\n\r\n")?;
-        // The C stats server closes with a reset when it has not read the
-        // whole request; whatever arrived before the reset is the reply.
+        // One write: the C stats server reads the request with a single
+        // recv, so a request split across segments (as `write!` on an
+        // unbuffered stream does) parses as "GET" with no path (400) and
+        // the unread rest makes the close a reset.
+        s.write_all(format!("GET {path} HTTP/1.0\r\nHost: x\r\n\r\n").as_bytes())?;
         let mut raw = Vec::new();
-        let mut buf = [0u8; 16 * 1024];
-        loop {
-            match s.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => raw.extend_from_slice(&buf[..n]),
-                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset && !raw.is_empty() => {
-                    break
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
+        s.read_to_end(&mut raw)?;
         let body = String::from_utf8_lossy(&raw).into_owned();
         Ok(body
             .split_once("\r\n\r\n")
