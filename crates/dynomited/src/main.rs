@@ -232,6 +232,17 @@ fn run_server(cli: &Cli) -> ExitCode {
         cfg.pool_mut().enable_gossip = Some(true);
     }
 
+    // The deprecated `-m` flag sizes mbufs only when the YAML leaves
+    // `mbuf_size:` unset; the configuration validator range-checks it.
+    if cfg.pool().mbuf_size.is_none() {
+        if let Some(m) = cli.mbuf_size {
+            tracing::info!(
+                "-m or --mbuf-size command line arguments has been deprecated. Use configuration file."
+            );
+            cfg.pool_mut().mbuf_size = Some(i64::from(m));
+        }
+    }
+
     if let Some(s) = cli.distribution_shadow.as_deref() {
         match dynomite::conf::Distribution::parse(s) {
             Ok(d) => {

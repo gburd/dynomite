@@ -475,6 +475,12 @@ impl Server {
         let server_pool = Arc::new(ServerPool::new(pool_config.clone(), peers));
         server_pool.preselect_remote_racks();
         dynomite::msg::set_read_repairs_enabled(conf_pool.read_repairs_enabled.unwrap_or(false));
+        dynomite::io::mbuf::mbuf_init(
+            conf_pool
+                .mbuf_size
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(dynomite::io::mbuf::MBUF_SIZE),
+        );
 
         // Open the local-datastore connection. The dispatcher
         // routes `LocalDatastore` plans to this `ServerConn`

@@ -18,9 +18,13 @@
 //!
 //! The default chunk size is [`MBUF_SIZE`] (16 KiB), tunable through
 //! [`MbufPool::new`]. The configurable range is
-//! `[MBUF_MIN_SIZE, MBUF_MAX_SIZE]`. The trailing [`MBUF_ESIZE`] bytes
-//! of every chunk are reserved for the crypto MAC region; normal
-//! writes stop at [`Mbuf::capacity`].
+//! `[MBUF_MIN_SIZE, MBUF_MAX_SIZE]`; [`mbuf_init`] sets the
+//! process-wide size from the `mbuf_size:` setting. A configured size
+//! reserves [`MBUF_HSIZE`] bytes for the chunk header, leaving a data
+//! region of `size + MBUF_ESIZE - MBUF_HSIZE` bytes
+//! ([`mbuf_data_size`]). The trailing [`MBUF_ESIZE`] bytes of that region
+//! are reserved for the crypto MAC; normal writes stop at
+//! [`Mbuf::capacity`].
 //!
 //! # Examples
 //!
@@ -42,7 +46,10 @@
 //! ```
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use parking_lot::Mutex;
 
@@ -60,6 +67,55 @@ pub const MBUF_MAX_SIZE: usize = 512_000;
 /// Bytes reserved at the tail of every chunk for crypto padding and
 /// overflow guards. Mirrors the reference `MBUF_ESIZE`.
 pub const MBUF_ESIZE: usize = 16;
+
+/// Bytes of every configured chunk taken by the per-chunk header
+/// (magic, queue link, five cursors, flags and chunk size on a 64-bit
+/// target). Mirrors the reference `MBUF_HSIZE`; the Rust header lives
+/// in the [`Mbuf`] struct, but the data region keeps the same size.
+pub const MBUF_HSIZE: usize = 64;
+
+/// Configured chunk size, set once at startup by [`mbuf_init`].
+static MBUF_CHUNK_SIZE: AtomicUsize = AtomicUsize::new(MBUF_SIZE);
+
+/// Data region (writable bytes plus the trailing [`MBUF_ESIZE`] extra
+/// region) of a chunk configured as `chunk_size` bytes.
+const fn chunk_data_size(chunk_size: usize) -> usize {
+    chunk_size + MBUF_ESIZE - MBUF_HSIZE
+}
+
+/// Set the process-wide chunk size (the `mbuf_size:` setting) used by
+/// [`MbufPool::default`] and [`mbuf_data_size`]. Mirrors `mbuf_init`.
+///
+/// `mbuf_size` must be in `[MBUF_MIN_SIZE, MBUF_MAX_SIZE]`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::io::mbuf::{mbuf_data_size, mbuf_init, MBUF_SIZE};
+/// mbuf_init(MBUF_SIZE);
+/// assert_eq!(mbuf_data_size(), 16336);
+/// ```
+pub fn mbuf_init(mbuf_size: usize) {
+    assert!(
+        (MBUF_MIN_SIZE..=MBUF_MAX_SIZE).contains(&mbuf_size),
+        "mbuf chunk_size {mbuf_size} outside [{MBUF_MIN_SIZE}, {MBUF_MAX_SIZE}]"
+    );
+    MBUF_CHUNK_SIZE.store(mbuf_size, Ordering::Relaxed);
+}
+
+/// Data region size of a chunk of the configured size: the bound the
+/// redis request parser applies to key lengths. Mirrors
+/// `mbuf_data_size`.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::io::mbuf::{mbuf_data_size, MBUF_ESIZE, MBUF_HSIZE, MBUF_SIZE};
+/// assert_eq!(mbuf_data_size(), MBUF_SIZE + MBUF_ESIZE - MBUF_HSIZE);
+/// ```
+pub fn mbuf_data_size() -> usize {
+    chunk_data_size(MBUF_CHUNK_SIZE.load(Ordering::Relaxed))
+}
 
 /// Maximum number of free chunks the pool retains before dropping
 /// returned buffers on the floor.
@@ -123,8 +179,8 @@ impl Mbuf {
             (MBUF_MIN_SIZE..=MBUF_MAX_SIZE).contains(&chunk_size),
             "mbuf chunk_size {chunk_size} outside [{MBUF_MIN_SIZE}, {MBUF_MAX_SIZE}]"
         );
-        let buf = vec![0u8; chunk_size].into_boxed_slice();
-        let end = chunk_size - MBUF_ESIZE;
+        let buf = vec![0u8; chunk_data_size(chunk_size)].into_boxed_slice();
+        let end = buf.len() - MBUF_ESIZE;
         Self {
             buf,
             pos: 0,
@@ -135,7 +191,7 @@ impl Mbuf {
         }
     }
 
-    /// Total byte length of the chunk allocation.
+    /// Configured chunk size this buffer was carved for.
     ///
     /// # Examples
     ///
@@ -145,33 +201,34 @@ impl Mbuf {
     /// assert_eq!(buf.chunk_size(), MBUF_SIZE);
     /// ```
     pub fn chunk_size(&self) -> usize {
+        self.buf.len() + MBUF_HSIZE - MBUF_ESIZE
+    }
+
+    /// Data region size: the writable bytes plus the trailing
+    /// [`MBUF_ESIZE`] extra region, equal to
+    /// `chunk_size + MBUF_ESIZE - MBUF_HSIZE`. Mirrors `mbuf_data_size`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::io::mbuf::{Mbuf, MBUF_ESIZE, MBUF_HSIZE, MBUF_SIZE};
+    /// let buf = Mbuf::with_chunk_size(MBUF_SIZE);
+    /// assert_eq!(buf.data_size(), MBUF_SIZE + MBUF_ESIZE - MBUF_HSIZE);
+    /// ```
+    pub fn data_size(&self) -> usize {
         self.buf.len()
     }
 
-    /// Number of bytes that can be written before [`is_full`](Self::is_full)
-    /// trips, equal to `chunk_size - MBUF_ESIZE`. Mirrors `mbuf_data_size`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use dynomite::io::mbuf::{Mbuf, MBUF_SIZE, MBUF_ESIZE};
-    /// let buf = Mbuf::with_chunk_size(MBUF_SIZE);
-    /// assert_eq!(buf.data_size(), MBUF_SIZE - MBUF_ESIZE);
-    /// ```
-    pub fn data_size(&self) -> usize {
-        self.end
-    }
-
     /// Total byte addressable region including the trailing extra
-    /// area, equal to `chunk_size`. This spans past the
-    /// [`Mbuf::capacity`] write boundary up to the `end_extra` edge.
+    /// area, equal to [`data_size`](Self::data_size). This spans past
+    /// the [`Mbuf::capacity`] write boundary up to the `end_extra` edge.
     ///
     /// # Examples
     ///
     /// ```
-    /// use dynomite::io::mbuf::{Mbuf, MBUF_SIZE};
+    /// use dynomite::io::mbuf::{Mbuf, MBUF_ESIZE, MBUF_HSIZE, MBUF_SIZE};
     /// let buf = Mbuf::with_chunk_size(MBUF_SIZE);
-    /// assert_eq!(buf.usable_capacity(), MBUF_SIZE);
+    /// assert_eq!(buf.usable_capacity(), MBUF_SIZE + MBUF_ESIZE - MBUF_HSIZE);
     /// ```
     pub fn usable_capacity(&self) -> usize {
         self.buf.len()
@@ -193,8 +250,7 @@ impl Mbuf {
     }
 
     /// Maximum number of bytes the buffer can ever hold (the writable
-    /// region size, equal to [`data_size`](Self::data_size)). Mirrors
-    /// `mbuf_size` in the reference's higher-level usage.
+    /// region size, equal to `chunk_size - MBUF_HSIZE`).
     pub fn capacity(&self) -> usize {
         self.end
     }
@@ -205,9 +261,9 @@ impl Mbuf {
     /// # Examples
     ///
     /// ```
-    /// use dynomite::io::mbuf::{Mbuf, MBUF_SIZE, MBUF_ESIZE};
+    /// use dynomite::io::mbuf::{Mbuf, MBUF_HSIZE, MBUF_SIZE};
     /// let buf = Mbuf::with_chunk_size(MBUF_SIZE);
-    /// assert_eq!(buf.remaining(), MBUF_SIZE - MBUF_ESIZE);
+    /// assert_eq!(buf.remaining(), MBUF_SIZE - MBUF_HSIZE);
     /// ```
     pub fn remaining(&self) -> usize {
         self.end - self.last
@@ -443,7 +499,7 @@ impl Mbuf {
 impl std::fmt::Debug for Mbuf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Mbuf")
-            .field("chunk_size", &self.buf.len())
+            .field("data_size", &self.buf.len())
             .field("pos", &self.pos)
             .field("last", &self.last)
             .field("end", &self.end)
@@ -591,8 +647,10 @@ struct MbufPoolState {
 }
 
 impl Default for MbufPool {
+    /// A pool of chunks of the size set by [`mbuf_init`] (default
+    /// [`MBUF_SIZE`]).
     fn default() -> Self {
-        Self::new(MBUF_SIZE, MBUF_POOL_MAX_FREE)
+        Self::new(MBUF_CHUNK_SIZE.load(Ordering::Relaxed), MBUF_POOL_MAX_FREE)
     }
 }
 
@@ -632,6 +690,12 @@ impl MbufPool {
         self.inner.chunk_size
     }
 
+    /// Data region size of every chunk this pool hands out (see
+    /// [`Mbuf::data_size`]).
+    pub fn data_size(&self) -> usize {
+        chunk_data_size(self.inner.chunk_size)
+    }
+
     /// Maximum number of chunks the free list retains.
     pub fn max_free(&self) -> usize {
         self.inner.max_free
@@ -650,8 +714,7 @@ impl MbufPool {
     /// ```
     pub fn get(&self) -> Mbuf {
         let buf = self.alloc_buffer();
-        let chunk_size = buf.len();
-        let end = chunk_size - MBUF_ESIZE;
+        let end = buf.len() - MBUF_ESIZE;
         Mbuf {
             buf,
             pos: 0,
@@ -676,7 +739,7 @@ impl MbufPool {
     /// assert_eq!(pool.free_count(), 1);
     /// ```
     pub fn put(&self, mut mbuf: Mbuf) {
-        if mbuf.buf.len() != self.inner.chunk_size {
+        if mbuf.buf.len() != self.data_size() {
             // Off-size buffers (e.g. from [`Mbuf::with_chunk_size`])
             // are simply dropped rather than poisoning the free list.
             return;
@@ -709,7 +772,7 @@ impl MbufPool {
         }
         state.total_allocated += 1;
         drop(state);
-        vec![0u8; self.inner.chunk_size].into_boxed_slice()
+        vec![0u8; self.data_size()].into_boxed_slice()
     }
 }
 
@@ -744,7 +807,7 @@ mod tests {
         let mut buf = Mbuf::with_chunk_size(MBUF_MIN_SIZE);
         let payload = vec![7u8; MBUF_MIN_SIZE * 2];
         let n = buf.recv(&payload);
-        assert_eq!(n, MBUF_MIN_SIZE - MBUF_ESIZE);
+        assert_eq!(n, MBUF_MIN_SIZE - MBUF_HSIZE);
         assert!(buf.is_full());
     }
 

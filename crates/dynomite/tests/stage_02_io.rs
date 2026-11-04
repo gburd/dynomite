@@ -9,7 +9,7 @@
 //!   [`Transport`](dynomite::io::reactor::Transport) abstraction.
 
 use dynomite::io::cbuf::CBuf;
-use dynomite::io::mbuf::{Mbuf, MbufPool, MbufQueue, MBUF_ESIZE, MBUF_SIZE};
+use dynomite::io::mbuf::{Mbuf, MbufPool, MbufQueue, MBUF_HSIZE, MBUF_SIZE};
 use dynomite::io::reactor::{ConnRole, TcpTransport, Transport};
 use hegel::generators as gs;
 use hegel::TestCase;
@@ -23,12 +23,12 @@ fn split_off_then_append_reconstructs(tc: TestCase) {
     let bytes = tc.draw(
         gs::vecs(gs::integers::<u8>())
             .min_size(0)
-            .max_size(MBUF_SIZE - MBUF_ESIZE - 1),
+            .max_size(MBUF_SIZE - MBUF_HSIZE - 1),
     );
     let cut_raw = tc.draw(
         gs::integers::<usize>()
             .min_value(0)
-            .max_value(2 * (MBUF_SIZE - MBUF_ESIZE) - 1),
+            .max_value(2 * (MBUF_SIZE - MBUF_HSIZE) - 1),
     );
     let pool = MbufPool::default();
     let mut head = pool.get();

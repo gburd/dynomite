@@ -23,7 +23,7 @@
 #![allow(clippy::manual_let_else)]
 
 use super::commands::{classify, error_lookup, lookup, CommandClass, RoutingOverride};
-use crate::io::mbuf::MBUF_MAX_SIZE;
+use crate::io::mbuf::mbuf_data_size;
 use crate::msg::{ArgPos, KeyPos, Msg, MsgParseResult, MsgRouting, MsgType};
 
 const CR: u8 = b'\r';
@@ -460,7 +460,7 @@ pub fn redis_parse_req_with_args(
                     rlen = rlen.saturating_mul(10).saturating_add(u32::from(ch - b'0'));
                     p += 1;
                 } else if ch == CR {
-                    if rlen == 0 || rlen as usize >= MBUF_MAX_SIZE || rntokens == 0 {
+                    if rlen == 0 || rlen as usize >= mbuf_data_size() || rntokens == 0 {
                         return finish_req_error(
                             r, state, p, token, rlen, rntokens, ntokens, nkeys, ty, is_read, quit,
                             routing,

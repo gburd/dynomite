@@ -206,6 +206,11 @@ impl Server {
         hooks: ServerHooks,
         command_extension: Option<Arc<dyn crate::embed::CommandExtension>>,
     ) -> Self {
+        crate::io::mbuf::mbuf_init(
+            pool.mbuf_size
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(crate::io::mbuf::MBUF_SIZE),
+        );
         let pool_cfg = PoolConfig::from_conf(&pool_name, &pool);
         let local_peer = build_local_peer(&pool, &pool_cfg);
         let mut peers = vec![local_peer];

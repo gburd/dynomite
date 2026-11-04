@@ -5,7 +5,7 @@
 #![cfg(not(c_oracle_absent))]
 
 use c_oracle::{mbuf as c, util::GLOBALS};
-use dynomite::io::mbuf::{MbufPool, MBUF_ESIZE, MBUF_SIZE};
+use dynomite::io::mbuf::{MbufPool, MBUF_HSIZE, MBUF_SIZE};
 use dynomite::msg::keypos::{ArgPos, KeyPos};
 use dynomite::util::{dyn_string, time};
 use hegel::generators as gs;
@@ -21,7 +21,7 @@ fn mbuf_copy_split_matches_c(tc: TestCase) {
     let pool = MbufPool::default();
     let mut r = pool.get();
     c::reset();
-    assert_eq!(r.remaining(), MBUF_SIZE - MBUF_ESIZE);
+    assert_eq!(r.remaining(), MBUF_SIZE - MBUF_HSIZE);
     let chunks: Vec<Vec<u8>> =
         tc.draw(gs::vecs(gs::vecs(gs::integers::<u8>()).max_size(64)).max_size(8));
     for ch in &chunks {
@@ -45,12 +45,10 @@ fn mbuf_copy_split_matches_c(tc: TestCase) {
     assert_eq!((r.len(), r.is_empty()), (c::length() as usize, c::empty()));
 }
 
-/// Finding: one C mbuf holds `MBUF_SIZE - sizeof(struct mbuf)` data
-/// bytes (`mbuf_get` sets `end = start + mbuf_offset - MBUF_ESIZE`,
-/// `mbuf_offset = MBUF_SIZE + MBUF_ESIZE - MBUF_HSIZE`); the Rust mbuf
-/// holds `MBUF_SIZE - MBUF_ESIZE`. Pinned here until the Rust capacity
-/// is aligned (ledger rows mbuf_get / mbuf_remaining_space /
-/// mbuf_data_size stay todo).
+/// One C mbuf holds `MBUF_SIZE - sizeof(struct mbuf)` data bytes
+/// (`mbuf_get` sets `end = start + mbuf_offset - MBUF_ESIZE`,
+/// `mbuf_offset = MBUF_SIZE + MBUF_ESIZE - MBUF_HSIZE`); so does the
+/// Rust mbuf.
 #[test]
 fn c_mbuf_data_capacity_is_size_minus_header() {
     let _g = GLOBALS
@@ -60,10 +58,10 @@ fn c_mbuf_data_capacity_is_size_minus_header() {
     c::reset();
     assert!(c::copy(&vec![7u8; c_cap]));
     assert!(!c::copy(b"x"));
-    assert_eq!(
-        MbufPool::default().get().remaining(),
-        MBUF_SIZE - MBUF_ESIZE
-    );
+    let mut r = MbufPool::new(MBUF_SIZE, 0).get();
+    assert_eq!(r.remaining(), c_cap);
+    r.copy_from_slice(&vec![7u8; c_cap]);
+    assert!(r.is_full());
 }
 
 #[hegel::test(test_cases = 500)]
