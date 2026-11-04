@@ -1872,7 +1872,7 @@ enumerator	SW_FRAGMENT	src/proto/dyn_redis.c	533	todo
 enumerator	SW_INLINE_PING	src/proto/dyn_redis.c	534	todo				
 enumerator	SW_SENTINEL	src/proto/dyn_redis.c	535	todo				
 enumerator	SW_SENTINEL	src/proto/dyn_redis.c	535	todo				
-fn	redis_parse_rsp	src/proto/dyn_redis.c	2418	pending:DEV-P1	crates/dynomite/src/proto/redis/parser.rs::redis_parse_rsp	crates/c-oracle/tests/redis_rsp_oracle.rs::redis_parse_rsp_matches_c		oracle covers single-read and resumed parses; bare error word (-WORD CR LF) differs, see DEV-P1
+fn	redis_parse_rsp	src/proto/dyn_redis.c	2418	deviation:DEV-P1	crates/dynomite/src/proto/redis/parser.rs::redis_parse_rsp	crates/c-oracle/tests/redis_rsp_oracle.rs::redis_parse_rsp_matches_c		oracle covers single-read and resumed parses; bare error word (-WORD CR LF) differs, see DEV-P1
 enumerator	SW_STATUS	src/proto/dyn_redis.c	2425	todo				
 enumerator	SW_ERROR	src/proto/dyn_redis.c	2426	todo				
 enumerator	SW_INTEGER	src/proto/dyn_redis.c	2427	todo				

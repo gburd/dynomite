@@ -404,7 +404,8 @@ held at its current behaviour until the owner decides.
   byte for byte and compare this class against C with a space inserted.
 * Recommendation: keep the Rust behaviour. Matching C would stall or
   desynchronise a client on a valid RESP reply.
-* Status: PROPOSED
+* Status: AUTHORIZED
+* Authorized-by: Greg Burd, 2026-11-04 ("keep Rust behavior")
 
 ### DEV-P2: nested multibulk replies end at the inner count (finding)
 
@@ -417,11 +418,11 @@ held at its current behaviour until the owner decides.
   `$1\r\nb\r\n` is parsed as the next reply. Replies with a nested
   array before the last element (`EXEC`, `CLUSTER SLOTS`, `COMMAND`,
   `XRANGE`, `GEOPOS`) desynchronise the server connection.
-* Rust: identical to C (oracle-verified); no code change.
+* Rust: identical to C (oracle-verified); no code change. Ruling: keep
+  the Rust behaviour as it is, which is C's. Not a deviation.
 * Evidence: `c-oracle/tests/redis_rsp_oracle.rs::nested_multibulk_ends_at_inner_count`.
-* Recommendation: owner ruling on whether to parse nested arrays with a
-  depth stack as an authorised fix. Until then Rust stays equal to C.
-* Status: PROPOSED
+* Status: RECORDED
+* Authorized-by: Greg Burd, 2026-11-04 ("keep Rust behavior")
 
 ### DEV-R1a: repair-script atomicity by running the logic on the datastore connection
 
@@ -456,7 +457,8 @@ held at its current behaviour until the owner decides.
   engine with real Lua vs Rust engine, interleaved writers with
   conflicting timestamps through the same node, identical final data
   and metadata sets).
-* Status: PROPOSED
+* Status: AUTHORIZED
+* Authorized-by: Greg Burd, 2026-11-04 ("agreed")
 
 ### DEV-R2: stale field writes clear the field's delete marker (C finding)
 
@@ -473,7 +475,13 @@ held at its current behaviour until the owner decides.
 * Recommendation: authorise the HDEL ordering for the three write
   scripts (remove the marker only when the write is not stale). It is a
   one-line change per script and cannot change any non-stale outcome.
-* Status: PROPOSED
+* Rust: the three write scripts take the HDEL ordering. The repair-logic
+  oracle compares against the C scripts with this one change applied to
+  the C text, so every other step stays pinned to the real Lua; a
+  directed test pins that a stale write leaves the delete marker and the
+  field stays deleted.
+* Status: AUTHORIZED
+* Authorized-by: Greg Burd, 2026-11-04 ("agreed, fix the C bug and ensure this works properly in Rust")
 
 ### DEV-H5: empty latency histograms report 1, not 0 (C finding)
 
@@ -487,7 +495,8 @@ held at its current behaviour until the owner decides.
 * Recommendation: keep C's 1 (it is what C operators see); align the
   compute-on-update condition in T12 when the stats surface is
   transliterated.
-* Status: PROPOSED
+* Status: AUTHORIZED
+* Authorized-by: Greg Burd, 2026-11-04 ("sure")
 
 ## E. Decisions log
 
@@ -508,6 +517,19 @@ Owner decisions are appended here with date and the exact instruction.
   above-`u32::MAX` tokens. Token width stays 32-bit (owner question on
   `u64` answered in the journal: no placement benefit at any plausible
   node count; widening is a separate change if ever wanted).
+* 2026-11-04: DEV-R1a AUTHORIZED ("agreed"): repair-script logic runs
+  inline on the node's datastore connection. DEV-R2 AUTHORIZED ("agreed,
+  fix the C bug and ensure this works properly in Rust"). DEV-P1
+  AUTHORIZED ("keep Rust behavior"). DEV-P2 decided ("keep Rust
+  behavior"): Rust already equals C, so nothing changes and it is
+  RECORDED, not a deviation. DEV-H5
+  AUTHORIZED ("sure"). `crc32` stays a valid ring hash ("crc32 is fine
+  unless you know of a better alternative"): it is libmemcached's 15-bit
+  `((~crc) >> 16) & 0x7fff`, so on a 32-bit token ring every key lands
+  below 32768 and goes to the first node. The better alternative already exists in the same table,
+  `crc32a` (full 32-bit CRC); the configuration chapter warns about it and
+  points to `crc32a` / `murmur3`. Pinned by
+  `regression_hash_placement.rs::crc32_reaches_one_vnode_and_crc32a_spreads`.
 * 2026-11-02: defects found in authorised additions while implementing the
   above, fixed without changing their contracts: random slicing (DEV-A9)
   received 32-bit hashes in the low half of a `u64` and put every key in

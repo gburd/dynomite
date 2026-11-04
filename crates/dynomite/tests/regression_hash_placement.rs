@@ -126,3 +126,19 @@ const ALL: [HashType; 14] = [
     HashType::Murmur3,
     HashType::Murmur3X64_64,
 ];
+
+/// `crc32` (libmemcached, `(~crc >> 16) & 0x7fff`) only reaches values
+/// below 32768, so on a 4-node vnode ring with tokens spread over the 32-bit
+/// space every key goes to one node, in C as here. Documented in the
+/// configuration chapter, kept for token-plan compatibility. `crc32a`, the
+/// full 32-bit CRC, spreads. (`crc16`, despite its name, is not narrow: the
+/// accumulator is never masked to 16 bits, in C as here.)
+#[test]
+fn crc32_reaches_one_vnode_and_crc32a_spreads() {
+    let narrow = per_peer(HashType::Crc32, Distribution::Vnode);
+    assert_eq!(narrow.iter().filter(|&&c| c > 0).count(), 1, "{narrow:?}");
+    for wide_hash in [HashType::Crc32a, HashType::Crc16] {
+        let wide = per_peer(wide_hash, Distribution::Vnode);
+        assert!(wide.iter().all(|&c| c > 0), "{wide_hash:?}: {wide:?}");
+    }
+}

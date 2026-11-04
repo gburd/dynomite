@@ -283,6 +283,24 @@ and `--riak-aae-enabled`. They are visible in
 `--features riak`. See [Riak mode](./operations/riak.md) for
 operator-facing details.
 
+## Hash functions
+
+The pool's `hash:` directive names the function that turns a key (or
+its `{...}` hash tag) into a ring token. Every name the original
+Dynomite accepts is accepted here and produces the same value:
+`one_at_a_time` (the default), `md5`, `crc16`, `crc32`, `crc32a`,
+`fnv1_64`, `fnv1a_64`, `fnv1_32`, `fnv1a_32`, `hsieh`, `murmur`,
+`jenkins`, `murmur3` (MurmurHash3 x86_32), and `murmur3_x64_64`.
+
+> [!WARNING]
+> **`crc32` is a 15-bit hash**
+>
+> `crc32` is the libmemcached variant, `((~crc) >> 16) & 0x7fff`: every
+> key hashes below 32768, so with `distribution: vnode` and node tokens
+> spread over the 32-bit space, one node per rack owns the whole keyspace.
+> It is kept because existing token plans may depend on it. For a CRC over the full 32-bit range use
+> `crc32a`; for new pools `murmur3` is the usual choice.
+
 ## Distribution modes
 
 The pool's `distribution:` directive selects the algorithm that

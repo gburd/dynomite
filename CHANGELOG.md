@@ -13,6 +13,64 @@ the upstream project outside `README.md`, `NOTICE`, and `LICENSE`.
 
 [netflix-dynomite]: https://github.com/Netflix/dynomite
 
+## [Unreleased]
+
+The engine is being re-done as a transliteration of the C reference
+(`docs/transliteration/PLAN.md`); this section collects what has landed
+so far. Behaviour changes are deliberate and each is either C's
+behaviour or an owner-authorised deviation (`docs/transliteration/deviations.md`).
+
+### Upgrade notes
+
+- **Data moves for three hash/distribution settings.** In 2.0.1,
+  `hash: murmur3` and `hash: murmur3_x64_64` produced multi-word tokens
+  that sorted above every node token, and `distribution: random_slicing`
+  received 32-bit hashes in the low half of its 64-bit space; in all
+  three cases every key went to a single node per rack. They now spread
+  keys over the ring (`murmur3` is MurmurHash3 x86_32, DEV-H1). A
+  cluster using any of them will see keys owned by different nodes after
+  upgrading: plan a full repair or a re-load, or stay on 2.0.1 for that
+  pool. Every other hash and the default `vnode` distribution place keys
+  exactly as before.
+- **`tokens:` takes exactly one token per node, in `0..=4294967295`.**
+  Lists, negative values and larger values are rejected at load
+  (DEV-H4); 2.0.1 silently used the first or zero.
+- **`hash: crc32` is a 15-bit hash** (libmemcached, as in C), so with
+  `distribution: vnode` one node per rack owns every key. Unchanged, now
+  documented; use `crc32a` or `murmur3` for new pools.
+
+### Fixed
+
+- Requests or replies larger than 4 KiB reset the connection, and larger
+  than 16 KiB hung; values up to the datastore's limit now round-trip.
+- `SCRIPT LOAD` / `FLUSH` / `KILL` / `EXISTS` reach every node, so
+  `EVALSHA` works at quorum consistency levels.
+- Redis clients received memcache-style `SERVER_ERROR` text for
+  Dynomite-generated errors on every command except GET and SET.
+- Identical error replies from replicas no longer fail a
+  `DC_SAFE_QUORUM` request as divergent.
+- A `DC_QUORUM` request with one replica down no longer hangs; a peer
+  that closes its link is redialled; every listener sets `SO_REUSEADDR`.
+- Any thread panic aborts the process instead of leaving a node that
+  accepts connections and serves nothing.
+- A peer could crash a node with an over-long number in a DNODE header,
+  or a dyniak node with a replica frame claiming a huge element count.
+- Redis response parsing matches C: integers, error words, bulk
+  terminators, nested-array elements, values split across reads.
+- Latency histograms bucket and publish exactly as C (`/info`
+  percentiles of an idle node read 1, DEV-H5).
+
+### Changed
+
+- `TCP_NODELAY` on accepted peer connections: `DC_QUORUM` single-client
+  throughput rose from 24 to about 1,800 requests/s.
+- Dependencies: rustls 0.23.46, rustls-webpki 0.103.16, webpki-roots
+  1.0.11, tokio 1.54.1, wasmtime 48.0.8, noxu 7.11.2 (7.11.0 was
+  yanked); clears RUSTSEC-2026-0346, -0381, -0382, -0386 and the
+  wasmtime advisories.
+- The manual builds with mdbook 0.5 (native callouts replace
+  mdbook-admonish).
+
 ## [2.0.1] - 2026-09-28
 
 Patch release. Dependency currency and test-portability fixes; no
