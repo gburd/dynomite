@@ -498,6 +498,26 @@ held at its current behaviour until the owner decides.
 * Status: AUTHORIZED
 * Authorized-by: Greg Burd, 2026-11-04 ("sure")
 
+### DEV-U1: C `string_compare` orders any length mismatch as greater (finding)
+
+* C: `string_compare` (src/dyn_string.c:98) returns
+  `s1->len - s2->len > 0 ? 1 : -1` on mismatched lengths. Both operands
+  are `uint32_t`, so the difference is unsigned and the test is true
+  whenever the lengths differ: `compare("a", "ab")` and
+  `compare("ab", "a")` both return 1. Equality and equal-length order are
+  correct. The only ordering caller is `rack_name_cmp`
+  (src/dyn_dnode_peer.c:1380) passed to `array_sort` -> `qsort` in
+  `preselect_remote_rack_for_replication`; qsort with an inconsistent
+  comparator gives an implementation-defined rack order when rack names
+  in a DC differ in length, which picks the remote rack writes replicate to.
+* Rust: `util::dyn_string::string_compare` sorts the shorter first;
+  `Datacenter::sort_racks` sorts rack names lexicographically.
+* Evidence: crates/c-oracle/tests/util_oracle.rs::string_compare_matches_c
+  pins equality, equal-length order and the C length-mismatch answer.
+* Recommendation: keep a consistent total order (Rust behaviour); C
+  configurations whose rack names in one DC have equal length behave as C.
+* Status: PROPOSED
+
 ## E. Decisions log
 
 Owner decisions are appended here with date and the exact instruction.

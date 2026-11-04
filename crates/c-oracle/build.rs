@@ -21,6 +21,8 @@ const UNITS: &[&str] = &[
     "src/dyn_log.c",
     "src/dyn_string.c",
     "src/dyn_array.c",
+    "src/dyn_setting.c",
+    "src/dyn_signal.c",
     "src/hashkit/dyn_crc16.c",
     "src/hashkit/dyn_crc32.c",
     "src/hashkit/dyn_fnv.c",
@@ -141,7 +143,11 @@ fn compile_release_units(manifest: &Path, workspace: &Path, src_root: &Path, deb
         println!("cargo:rerun-if-changed={}", path.display());
         build.file(path);
     }
-    for shim in ["csrc/redis_shim.c", "csrc/redis_link_stubs.c"] {
+    for shim in [
+        "csrc/redis_shim.c",
+        "csrc/redis_link_stubs.c",
+        "csrc/mbuf_shim.c",
+    ] {
         let path = manifest.join(shim);
         println!("cargo:rerun-if-changed={}", path.display());
         build.file(path);

@@ -31,3 +31,4 @@ cc = "1.0"
 [dev-dependencies]
 dynomite = { path = "../dynomite", package = "dynomite-engine" }
 hegeltest = { workspace = true }
+nix = { workspace = true }

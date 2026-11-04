@@ -31,3 +31,4 @@ dump.rdb
 .mcp.json
 .local-scratch/
 .zvec-grep/
+.hegel/

@@ -9,7 +9,7 @@ fn	array_pop	src/dyn_array.c	120	replaced	crates/dynomite/src/cluster/datacenter
 fn	array_get	src/dyn_array.c	131	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
 fn	array_top	src/dyn_array.c	142	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
 fn	array_swap	src/dyn_array.c	148	dead				no use outside dyn_array.[ch] (grep -rw over src/: no hits)
-fn	array_sort	src/dyn_array.c	160	todo				
+fn	array_sort	src/dyn_array.c	160	pending:DEV-U1	crates/dynomite/src/cluster/datacenter.rs::sort_racks			only C caller sorts racks with rack_name_cmp = string_compare (dyn_dnode_peer.c:1380); the C comparator is inconsistent for names of different length
 fn	array_each	src/dyn_array.c	170	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
 fn	array_each_2	src/dyn_array.c	188	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
 macro	_DYN_ARRAY_H_	src/dyn_array.h	24	dead				include guard; no Rust counterpart needed
@@ -645,91 +645,91 @@ fn	histo_compute	src/dyn_histogram.c	225	ported	crates/dynomite/src/stats/histog
 macro	DYN_HISTOGRAM_H_	src/dyn_histogram.h	9	dead				include guard; no Rust counterpart needed
 macro	BUCKET_SIZE	src/dyn_histogram.h	11	ported	crates/dynomite/src/stats/histogram.rs::BUCKET_COUNT	crates/c-oracle/tests/histogram_oracle.rs::layout_constants_match_c		
 struct	histogram	src/dyn_histogram.h	13	ported	crates/dynomite/src/stats/histogram.rs::Histogram	crates/c-oracle/tests/histogram_oracle.rs::histogram_ops_match_c		every field compared against the C struct
-var	logger	src/dyn_log.c	33	todo				
-fn	log_init	src/dyn_log.c	42	todo				
-fn	log_deinit	src/dyn_log.c	63	todo				
-fn	log_reopen	src/dyn_log.c	73	todo				
-fn	log_level_up	src/dyn_log.c	86	ported	crates/dynomite/src/core/log/mod.rs::log_level_increment	crates/dynomite/tests/stats_admin_http.rs::log_level_commands		
-fn	log_level_down	src/dyn_log.c	95	ported	crates/dynomite/src/core/log/mod.rs::log_level_decrement	crates/dynomite/tests/stats_admin_http.rs::log_level_commands		
-fn	log_level_set	src/dyn_log.c	104	ported	crates/dynomite/src/core/log/mod.rs::log_level_set	crates/dynomite/tests/stats_admin_http.rs::log_level_commands		caller clamps the signed value to 0..=11
-fn	log_loggable	src/dyn_log.c	111	todo				
-fn	_log	src/dyn_log.c	121	todo				
-fn	_log_stderr	src/dyn_log.c	169	todo				
-fn	_log_hexdump	src/dyn_log.c	198	todo				
+var	logger	src/dyn_log.c	33	replaced	crates/dynomite/src/core/log/mod.rs::State			DEV-S2: tracing subscriber state
+fn	log_init	src/dyn_log.c	42	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing; line format and LOG_MAX_LEN truncation are not reproduced
+fn	log_deinit	src/dyn_log.c	63	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing; line format and LOG_MAX_LEN truncation are not reproduced
+fn	log_reopen	src/dyn_log.c	73	replaced	crates/dynomite/src/core/log/mod.rs::reopen_on_sighup			DEV-S2: reopen the file sink on SIGHUP
+fn	log_level_up	src/dyn_log.c	86	ported	crates/dynomite/src/core/log/mod.rs::log_level_increment	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		
+fn	log_level_down	src/dyn_log.c	95	ported	crates/dynomite/src/core/log/mod.rs::log_level_decrement	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		
+fn	log_level_set	src/dyn_log.c	104	ported	crates/dynomite/src/core/log/mod.rs::log_level_set	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		
+fn	log_loggable	src/dyn_log.c	111	ported	crates/dynomite/src/core/log/mod.rs::log_loggable	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		
+fn	_log	src/dyn_log.c	121	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing; line format and LOG_MAX_LEN truncation are not reproduced
+fn	_log_stderr	src/dyn_log.c	169	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing; line format and LOG_MAX_LEN truncation are not reproduced
+fn	_log_hexdump	src/dyn_log.c	198	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing; line format and LOG_MAX_LEN truncation are not reproduced
 macro	_DYN_LOG_H_	src/dyn_log.h	24	dead				include guard; no Rust counterpart needed
-struct	logger	src/dyn_log.h	26	todo				
-macro	LOG_EMERG	src/dyn_log.h	33	todo				
-macro	LOG_ALERT	src/dyn_log.h	34	todo				
-macro	LOG_CRIT	src/dyn_log.h	35	todo				
-macro	LOG_ERR	src/dyn_log.h	36	todo				
-macro	LOG_WARN	src/dyn_log.h	37	todo				
-macro	LOG_NOTICE	src/dyn_log.h	38	todo				
-macro	LOG_INFO	src/dyn_log.h	39	todo				
-macro	LOG_DEBUG	src/dyn_log.h	40	todo				
-macro	LOG_VERB	src/dyn_log.h	41	todo				
-macro	LOG_VVERB	src/dyn_log.h	42	todo				
-macro	LOG_VVVERB	src/dyn_log.h	43	todo				
-macro	LOG_PVERB	src/dyn_log.h	44	todo				
-macro	LOG_MAX_LEN	src/dyn_log.h	46	todo				
-macro	log_debug	src/dyn_log.h	79	todo				
-macro	log_debug	src/dyn_log.h	79	todo				
-macro	log_hexdump	src/dyn_log.h	80	todo				
-macro	log_hexdump	src/dyn_log.h	80	todo				
-macro	log_notice	src/dyn_log.h	84	todo				
-macro	log_info	src/dyn_log.h	85	todo				
-macro	log_stderr	src/dyn_log.h	87	todo				
-macro	loga	src/dyn_log.h	92	todo				
-macro	loga_hexdump	src/dyn_log.h	97	todo				
-macro	log_error	src/dyn_log.h	104	todo				
-macro	log_warn	src/dyn_log.h	111	todo				
-macro	log_panic	src/dyn_log.h	118	todo				
-var	nfree_mbufq	src/dyn_mbuf.c	28	todo				
-var	free_mbufq	src/dyn_mbuf.c	29	todo				
-var	mbuf_chunk_size	src/dyn_mbuf.c	31	todo				
-var	mbuf_offset	src/dyn_mbuf.c	33	todo				
-var	mbuf_alloc_count	src/dyn_mbuf.c	34	todo				
-fn	mbuf_alloc_get_count	src/dyn_mbuf.c	36	todo				
-fn	mbuf_chunk_sz	src/dyn_mbuf.c	38	todo				
-fn	_mbuf_get	src/dyn_mbuf.c	40	todo				
-fn	mbuf_get	src/dyn_mbuf.c	93	todo				
-fn	mbuf_free	src/dyn_mbuf.c	121	todo				
-fn	mbuf_free_queue_size	src/dyn_mbuf.c	133	todo				
-fn	mbuf_dump	src/dyn_mbuf.c	135	todo				
-fn	mbuf_put	src/dyn_mbuf.c	146	todo				
-fn	mbuf_rewind	src/dyn_mbuf.c	160	todo				
-fn	mbuf_length	src/dyn_mbuf.c	169	todo				
-fn	mbuf_remaining_space	src/dyn_mbuf.c	179	todo				
-fn	mbuf_data_size	src/dyn_mbuf.c	189	todo				
-fn	mbuf_insert	src/dyn_mbuf.c	194	todo				
-fn	mbuf_insert_head	src/dyn_mbuf.c	199	todo				
-fn	mbuf_insert_after	src/dyn_mbuf.c	205	todo				
-fn	mbuf_remove	src/dyn_mbuf.c	215	todo				
-fn	mbuf_copy	src/dyn_mbuf.c	228	todo				
-fn	mbuf_split	src/dyn_mbuf.c	250	todo				
-fn	mbuf_init	src/dyn_mbuf.c	292	todo				
-fn	mbuf_deinit	src/dyn_mbuf.c	303	todo				
-fn	mbuf_write_char	src/dyn_mbuf.c	313	todo				
-fn	mbuf_write_string	src/dyn_mbuf.c	319	todo				
-fn	mbuf_write_mbuf	src/dyn_mbuf.c	324	todo				
-fn	mbuf_write_bytes	src/dyn_mbuf.c	328	todo				
-fn	mbuf_write_uint8	src/dyn_mbuf.c	332	todo				
-fn	mbuf_write_uint32	src/dyn_mbuf.c	342	todo				
-fn	mbuf_write_uint64	src/dyn_mbuf.c	352	todo				
-fn	mbuf_alloc	src/dyn_mbuf.c	363	todo				
-fn	mbuf_dealloc	src/dyn_mbuf.c	387	todo				
+struct	logger	src/dyn_log.h	26	replaced	crates/dynomite/src/core/log/mod.rs::State			DEV-S2
+macro	LOG_EMERG	src/dyn_log.h	33	ported	crates/dynomite/src/core/log/mod.rs::LOG_EMERG	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_ALERT	src/dyn_log.h	34	ported	crates/dynomite/src/core/log/mod.rs::LOG_ALERT	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_CRIT	src/dyn_log.h	35	ported	crates/dynomite/src/core/log/mod.rs::LOG_CRIT	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_ERR	src/dyn_log.h	36	ported	crates/dynomite/src/core/log/mod.rs::LOG_ERR	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_WARN	src/dyn_log.h	37	ported	crates/dynomite/src/core/log/mod.rs::LOG_WARN	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_NOTICE	src/dyn_log.h	38	ported	crates/dynomite/src/core/log/mod.rs::LOG_NOTICE	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_INFO	src/dyn_log.h	39	ported	crates/dynomite/src/core/log/mod.rs::LOG_INFO	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_DEBUG	src/dyn_log.h	40	ported	crates/dynomite/src/core/log/mod.rs::LOG_DEBUG	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_VERB	src/dyn_log.h	41	ported	crates/dynomite/src/core/log/mod.rs::LOG_VERB	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_VVERB	src/dyn_log.h	42	ported	crates/dynomite/src/core/log/mod.rs::LOG_VVERB	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_VVVERB	src/dyn_log.h	43	ported	crates/dynomite/src/core/log/mod.rs::LOG_VVVERB	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_PVERB	src/dyn_log.h	44	ported	crates/dynomite/src/core/log/mod.rs::LOG_PVERB	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		same numeric value as C
+macro	LOG_MAX_LEN	src/dyn_log.h	46	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_debug	src/dyn_log.h	79	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_debug	src/dyn_log.h	79	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_hexdump	src/dyn_log.h	80	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_hexdump	src/dyn_log.h	80	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_notice	src/dyn_log.h	84	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_info	src/dyn_log.h	85	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_stderr	src/dyn_log.h	87	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	loga	src/dyn_log.h	92	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	loga_hexdump	src/dyn_log.h	97	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_error	src/dyn_log.h	104	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_warn	src/dyn_log.h	111	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+macro	log_panic	src/dyn_log.h	118	replaced	crates/dynomite/src/core/log/mod.rs::log_init			DEV-S2: tracing macros
+var	nfree_mbufq	src/dyn_mbuf.c	28	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
+var	free_mbufq	src/dyn_mbuf.c	29	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
+var	mbuf_chunk_size	src/dyn_mbuf.c	31	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+var	mbuf_offset	src/dyn_mbuf.c	33	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+var	mbuf_alloc_count	src/dyn_mbuf.c	34	replaced	crates/dynomite/src/io/mbuf.rs::total_allocated	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2
+fn	mbuf_alloc_get_count	src/dyn_mbuf.c	36	replaced	crates/dynomite/src/io/mbuf.rs::total_allocated	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2
+fn	mbuf_chunk_sz	src/dyn_mbuf.c	38	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+fn	_mbuf_get	src/dyn_mbuf.c	40	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+fn	mbuf_get	src/dyn_mbuf.c	93	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+fn	mbuf_free	src/dyn_mbuf.c	121	replaced	crates/dynomite/src/io/mbuf.rs::Mbuf			DEV-S3: Drop
+fn	mbuf_free_queue_size	src/dyn_mbuf.c	133	replaced	crates/dynomite/src/io/mbuf.rs::free_count	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2
+fn	mbuf_dump	src/dyn_mbuf.c	135	replaced	crates/dynomite/src/io/mbuf.rs::readable			debug hexdump; Rust logs the readable slice
+fn	mbuf_put	src/dyn_mbuf.c	146	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
+fn	mbuf_rewind	src/dyn_mbuf.c	160	ported	crates/dynomite/src/io/mbuf.rs::rewind	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		
+fn	mbuf_length	src/dyn_mbuf.c	169	ported	crates/dynomite/src/io/mbuf.rs::len	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		
+fn	mbuf_remaining_space	src/dyn_mbuf.c	179	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+fn	mbuf_data_size	src/dyn_mbuf.c	189	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+fn	mbuf_insert	src/dyn_mbuf.c	194	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque push_back/push_front/remove
+fn	mbuf_insert_head	src/dyn_mbuf.c	199	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque push_back/push_front/remove
+fn	mbuf_insert_after	src/dyn_mbuf.c	205	dead				no caller in src/ (grep -rnw over src/*.[ch]: definition only)
+fn	mbuf_remove	src/dyn_mbuf.c	215	replaced	crates/dynomite/src/io/mbuf.rs::MbufQueue	crates/dynomite/src/io/mbuf.rs::mbuf_queue_push_pop_fifo		DEV-S2: VecDeque push_back/push_front/remove
+fn	mbuf_copy	src/dyn_mbuf.c	228	ported	crates/dynomite/src/io/mbuf.rs::copy_from_slice	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		
+fn	mbuf_split	src/dyn_mbuf.c	250	ported	crates/dynomite/src/io/mbuf.rs::split_off	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		cb precopy argument: callers write into the returned Mbuf
+fn	mbuf_init	src/dyn_mbuf.c	292	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
+fn	mbuf_deinit	src/dyn_mbuf.c	303	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool	crates/dynomite/src/io/mbuf.rs::mbuf_pool_recycles_buffers_without_reallocation		DEV-S2/S3: LIFO free list (Vec), capped at MBUF_POOL_MAX_FREE
+fn	mbuf_write_char	src/dyn_mbuf.c	313	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: dnode header written with write! decimal formatting
+fn	mbuf_write_string	src/dyn_mbuf.c	319	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: dnode header written with write! decimal formatting
+fn	mbuf_write_mbuf	src/dyn_mbuf.c	324	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: dnode header written with write! decimal formatting
+fn	mbuf_write_bytes	src/dyn_mbuf.c	328	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: dnode header written with write! decimal formatting
+fn	mbuf_write_uint8	src/dyn_mbuf.c	332	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: dnode header written with write! decimal formatting
+fn	mbuf_write_uint32	src/dyn_mbuf.c	342	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: dnode header written with write! decimal formatting
+fn	mbuf_write_uint64	src/dyn_mbuf.c	352	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: dnode header written with write! decimal formatting
+fn	mbuf_alloc	src/dyn_mbuf.c	363	replaced	crates/dynomite/src/io/mbuf.rs::with_chunk_size			DEV-S3: one-off non-pooled buffer
+fn	mbuf_dealloc	src/dyn_mbuf.c	387	replaced	crates/dynomite/src/io/mbuf.rs::Mbuf			DEV-S3: Drop
 macro	_DYN_MBUF_H_	src/dyn_mbuf.h	24	dead				include guard; no Rust counterpart needed
-typedef	func_mbuf_copy_t	src/dyn_mbuf.h	33	todo				
-struct	mbuf	src/dyn_mbuf.h	35	todo				
-macro	MBUF_MAGIC	src/dyn_mbuf.h	49	todo				
-macro	MBUF_MIN_SIZE	src/dyn_mbuf.h	50	todo				
-macro	MBUF_MAX_SIZE	src/dyn_mbuf.h	51	todo				
-macro	MBUF_SIZE	src/dyn_mbuf.h	52	todo				
-macro	MBUF_HSIZE	src/dyn_mbuf.h	53	todo				
-macro	MBUF_ESIZE	src/dyn_mbuf.h	54	todo				
-macro	MBUF_FLAGS_READ_FLIP	src/dyn_mbuf.h	57	todo				
-macro	MBUF_FLAGS_JUST_DECRYPTED	src/dyn_mbuf.h	58	todo				
-fn	mbuf_empty	src/dyn_mbuf.h	60	todo				
-fn	mbuf_full	src/dyn_mbuf.h	64	todo				
+typedef	func_mbuf_copy_t	src/dyn_mbuf.h	33	replaced	crates/dynomite/src/io/mbuf.rs::split_off			DEV-S3: caller writes into the returned Mbuf instead of a precopy callback
+struct	mbuf	src/dyn_mbuf.h	35	replaced	crates/dynomite/src/io/mbuf.rs::Mbuf			DEV-S3: owned buffer; no header magic needed to detect overrun
+macro	MBUF_MAGIC	src/dyn_mbuf.h	49	replaced	crates/dynomite/src/io/mbuf.rs::Mbuf			DEV-S3: owned buffer; no header magic needed to detect overrun
+macro	MBUF_MIN_SIZE	src/dyn_mbuf.h	50	ported	crates/dynomite/src/io/mbuf.rs::MBUF_MIN_SIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		same value as C
+macro	MBUF_MAX_SIZE	src/dyn_mbuf.h	51	ported	crates/dynomite/src/io/mbuf.rs::MBUF_MAX_SIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		same value as C
+macro	MBUF_SIZE	src/dyn_mbuf.h	52	ported	crates/dynomite/src/io/mbuf.rs::MBUF_SIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		same value as C
+macro	MBUF_HSIZE	src/dyn_mbuf.h	53	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
+macro	MBUF_ESIZE	src/dyn_mbuf.h	54	ported	crates/dynomite/src/io/mbuf.rs::MBUF_ESIZE	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		same value as C
+macro	MBUF_FLAGS_READ_FLIP	src/dyn_mbuf.h	57	ported	crates/dynomite/src/io/mbuf.rs::MBUF_FLAG_READ_FLIP	crates/dynomite/src/io/mbuf.rs::mbuf_flags_round_trip		same value as C
+macro	MBUF_FLAGS_JUST_DECRYPTED	src/dyn_mbuf.h	58	ported	crates/dynomite/src/io/mbuf.rs::MBUF_FLAG_JUST_DECRYPTED	crates/dynomite/src/io/mbuf.rs::mbuf_flags_round_trip		same value as C
+fn	mbuf_empty	src/dyn_mbuf.h	60	ported	crates/dynomite/src/io/mbuf.rs::is_empty	crates/c-oracle/tests/mbuf_oracle.rs::mbuf_copy_split_matches_c		
+fn	mbuf_full	src/dyn_mbuf.h	64	todo				C one-mbuf data capacity is MBUF_SIZE - sizeof(struct mbuf) = 16320, mbuf_data_size() = 16336 (redis key-length bound, dyn_redis.c:1653), mbuf_chunk_sz() = 16400; Rust Mbuf holds MBUF_SIZE - MBUF_ESIZE = 16368 (pinned by c-oracle mbuf_oracle.rs::c_mbuf_data_capacity_is_size_minus_header)
 macro	DN_IOV_MAX	src/dyn_message.c	37	todo				
 macro	DN_IOV_MAX	src/dyn_message.c	37	todo				
 var	msg_id	src/dyn_message.c	146	todo				
@@ -1013,22 +1013,22 @@ macro	CIRCLEQ_LAST	src/dyn_queue.h	813	dead				no CIRCLEQ_* macro is expanded ou
 macro	CIRCLEQ_NEXT	src/dyn_queue.h	815	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
 macro	CIRCLEQ_PREV	src/dyn_queue.h	817	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
 macro	CIRCLEQ_REMOVE	src/dyn_queue.h	819	dead				no CIRCLEQ_* macro is expanded outside dyn_queue.h (grep -rw over src/*.[ch]: no hits)
-fn	rbtree_node_init	src/dyn_rbtree.c	31	todo				
-fn	rbtree_init	src/dyn_rbtree.c	45	todo				
-fn	rbtree_node_min	src/dyn_rbtree.c	52	todo				
-fn	rbtree_min	src/dyn_rbtree.c	63	todo				
-fn	rbtree_left_rotate	src/dyn_rbtree.c	76	todo				
-fn	rbtree_right_rotate	src/dyn_rbtree.c	101	todo				
-fn	rbtree_insert	src/dyn_rbtree.c	126	todo				
-fn	rbtree_delete	src/dyn_rbtree.c	204	todo				
+fn	rbtree_node_init	src/dyn_rbtree.c	31	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+fn	rbtree_init	src/dyn_rbtree.c	45	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+fn	rbtree_node_min	src/dyn_rbtree.c	52	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+fn	rbtree_min	src/dyn_rbtree.c	63	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+fn	rbtree_left_rotate	src/dyn_rbtree.c	76	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+fn	rbtree_right_rotate	src/dyn_rbtree.c	101	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+fn	rbtree_insert	src/dyn_rbtree.c	126	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+fn	rbtree_delete	src/dyn_rbtree.c	204	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
 macro	_DYN_RBTREE_	src/dyn_rbtree.h	24	dead				include guard; no Rust counterpart needed
-macro	rbtree_red	src/dyn_rbtree.h	27	todo				
-macro	rbtree_black	src/dyn_rbtree.h	28	todo				
-macro	rbtree_is_red	src/dyn_rbtree.h	29	todo				
-macro	rbtree_is_black	src/dyn_rbtree.h	30	todo				
-macro	rbtree_copy_color	src/dyn_rbtree.h	31	todo				
-struct	rbnode	src/dyn_rbtree.h	33	todo				
-struct	rbtree	src/dyn_rbtree.h	43	todo				
+macro	rbtree_red	src/dyn_rbtree.h	27	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+macro	rbtree_black	src/dyn_rbtree.h	28	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+macro	rbtree_is_red	src/dyn_rbtree.h	29	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+macro	rbtree_is_black	src/dyn_rbtree.h	30	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+macro	rbtree_copy_color	src/dyn_rbtree.h	31	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+struct	rbnode	src/dyn_rbtree.h	33	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
+struct	rbtree	src/dyn_rbtree.h	43	todo				msg timeout tree (dyn_message.c:242-291): equal keys insert right, so equal deadlines fire in insertion order; Rust timeout tie order not yet pinned (DEV-S2 obligation)
 fn	req_get	src/dyn_request.c	27	todo				
 fn	req_put	src/dyn_request.c	40	todo				
 fn	req_done	src/dyn_request.c	65	todo				
@@ -1114,16 +1114,16 @@ fn	req_server_dequeue_omsgq	src/dyn_server.c	954	todo
 var	server_ops	src/dyn_server.c	970	todo				
 fn	init_server_conn	src/dyn_server.c	986	todo				
 macro	_DYN_SERVER_H_	src/dyn_server.h	24	todo				
-var	conn_msg_rate	src/dyn_setting.c	19	todo				
-fn	msgs_per_sec	src/dyn_setting.c	22	todo				
-fn	set_msgs_per_sec	src/dyn_setting.c	24	todo				
+var	conn_msg_rate	src/dyn_setting.c	19	ported	crates/dynomite/src/core/setting.rs::MSGS_PER_SEC	crates/c-oracle/tests/util_oracle.rs::msgs_per_sec_matches_c		
+fn	msgs_per_sec	src/dyn_setting.c	22	ported	crates/dynomite/src/core/setting.rs::msgs_per_sec	crates/c-oracle/tests/util_oracle.rs::msgs_per_sec_matches_c		
+fn	set_msgs_per_sec	src/dyn_setting.c	24	ported	crates/dynomite/src/core/setting.rs::set_msgs_per_sec	crates/c-oracle/tests/util_oracle.rs::msgs_per_sec_matches_c		
 macro	_DYN_SETTING_H_	src/dyn_setting.h	17	dead				include guard; no Rust counterpart needed
-var	signals	src/dyn_signal.c	29	todo				
-fn	signal_init	src/dyn_signal.c	45	todo				
-fn	signal_deinit	src/dyn_signal.c	67	todo				
-fn	signal_handler	src/dyn_signal.c	69	todo				
+var	signals	src/dyn_signal.c	29	ported	crates/dynomite/src/core/signal.rs::SIGNAL_TABLE	crates/c-oracle/tests/util_oracle.rs::signal_table_matches_c_source		
+fn	signal_init	src/dyn_signal.c	45	todo				MISSING in Rust: dynomited installs only INT/TERM/HUP (crates/dynomited/src/signals.rs); SIGTTIN/SIGTTOU do not change the log level, SIGSEGV has no SA_RESETHAND handler
+fn	signal_deinit	src/dyn_signal.c	67	dead				empty body (dyn_signal.c:67), no caller in src/
+fn	signal_handler	src/dyn_signal.c	69	ported	crates/dynomite/src/core/signal.rs::dispatch	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		SIGTTIN/SIGTTOU/SIGUSR1/SIGUSR2 driven through C signal_handler
 macro	_DYN_SIGNAL_H_	src/dyn_signal.h	24	dead				include guard; no Rust counterpart needed
-struct	signal	src/dyn_signal.h	31	todo				
+struct	signal	src/dyn_signal.h	31	ported	crates/dynomite/src/core/signal.rs::SignalEntry	crates/c-oracle/tests/util_oracle.rs::signal_table_matches_c_source		
 struct	stats_desc	src/dyn_stats.c	42	todo				
 var	stats_pool_codec	src/dyn_stats.c	49	todo				
 var	stats_server_codec	src/dyn_stats.c	52	todo				
@@ -1284,35 +1284,35 @@ macro	stats_server_set_val	src/dyn_stats.h	436	todo
 macro	stats_server_get_val	src/dyn_stats.h	438	todo				
 macro	stats_server_get_val	src/dyn_stats.h	438	todo				
 macro	stats_enabled	src/dyn_stats.h	442	todo				
-fn	string_init	src/dyn_string.c	45	todo				
-fn	string_deinit	src/dyn_string.c	50	todo				
-fn	string_empty	src/dyn_string.c	60	todo				
-fn	string_duplicate	src/dyn_string.c	66	todo				
-fn	string_copy	src/dyn_string.c	79	todo				
-fn	string_copy_c	src/dyn_string.c	94	todo				
-fn	string_compare	src/dyn_string.c	98	todo				
+fn	string_init	src/dyn_string.c	45	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: owned String/Vec<u8>; clone is duplicate/copy, Drop is deinit, is_empty is string_empty
+fn	string_deinit	src/dyn_string.c	50	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: owned String/Vec<u8>; clone is duplicate/copy, Drop is deinit, is_empty is string_empty
+fn	string_empty	src/dyn_string.c	60	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: owned String/Vec<u8>; clone is duplicate/copy, Drop is deinit, is_empty is string_empty
+fn	string_duplicate	src/dyn_string.c	66	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: owned String/Vec<u8>; clone is duplicate/copy, Drop is deinit, is_empty is string_empty
+fn	string_copy	src/dyn_string.c	79	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: owned String/Vec<u8>; clone is duplicate/copy, Drop is deinit, is_empty is string_empty
+fn	string_copy_c	src/dyn_string.c	94	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: owned String/Vec<u8>; clone is duplicate/copy, Drop is deinit, is_empty is string_empty
+fn	string_compare	src/dyn_string.c	98	pending:DEV-U1	crates/dynomite/src/util/dyn_string.rs::string_compare	crates/c-oracle/tests/util_oracle.rs::string_compare_matches_c		C bug: s1->len - s2->len is uint32_t, so any length mismatch returns 1; equality and equal-length order match C (oracle)
 macro	_DYN_STRING_H_	src/dyn_string.h	24	dead				include guard; no Rust counterpart needed
-struct	string	src/dyn_string.h	31	todo				
-macro	string	src/dyn_string.h	36	todo				
-macro	null_string	src/dyn_string.h	38	todo				
-macro	string_set_text	src/dyn_string.h	41	todo				
-macro	string_set_raw	src/dyn_string.h	47	todo				
-macro	dn_memcpy	src/dyn_string.h	65	todo				
-macro	dn_memmove	src/dyn_string.h	67	todo				
-macro	dn_memchr	src/dyn_string.h	69	todo				
-macro	dn_strlen	src/dyn_string.h	71	todo				
-macro	dn_strncmp	src/dyn_string.h	73	todo				
-macro	dn_strcmp	src/dyn_string.h	76	todo				
-macro	dn_strcasecmp	src/dyn_string.h	79	todo				
-macro	dn_strchr	src/dyn_string.h	82	todo				
-macro	dn_strrchr	src/dyn_string.h	85	todo				
-macro	dn_strndup	src/dyn_string.h	88	todo				
-macro	dn_snprintf	src/dyn_string.h	90	todo				
-macro	dn_sprintf	src/dyn_string.h	93	todo				
-macro	dn_scnprintf	src/dyn_string.h	95	todo				
-macro	dn_vscnprintf	src/dyn_string.h	98	todo				
-fn	_dn_strchr	src/dyn_string.h	101	todo				
-fn	_dn_strrchr	src/dyn_string.h	112	todo				
+struct	string	src/dyn_string.h	31	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: byte-string literals and slices
+macro	string	src/dyn_string.h	36	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: byte-string literals and slices
+macro	null_string	src/dyn_string.h	38	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: byte-string literals and slices
+macro	string_set_text	src/dyn_string.h	41	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: byte-string literals and slices
+macro	string_set_raw	src/dyn_string.h	47	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: byte-string literals and slices
+macro	dn_memcpy	src/dyn_string.h	65	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S2: slice copy/compare, len(), format!
+macro	dn_memmove	src/dyn_string.h	67	dead				only defined in dyn_string.h (grep -rnw over src/*.[ch])
+macro	dn_memchr	src/dyn_string.h	69	dead				only defined in dyn_string.h (grep -rnw over src/*.[ch])
+macro	dn_strlen	src/dyn_string.h	71	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S2: slice copy/compare, len(), format!
+macro	dn_strncmp	src/dyn_string.h	73	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S2: slice copy/compare, len(), format!
+macro	dn_strcmp	src/dyn_string.h	76	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S2: slice copy/compare, len(), format!
+macro	dn_strcasecmp	src/dyn_string.h	79	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: ASCII case-insensitive compare
+macro	dn_strchr	src/dyn_string.h	82	ported	crates/dynomite/src/util/dyn_string.rs::strchr	crates/c-oracle/tests/mbuf_oracle.rs::strchr_strrchr_match_c		
+macro	dn_strrchr	src/dyn_string.h	85	ported	crates/dynomite/src/util/dyn_string.rs::strrchr	crates/c-oracle/tests/mbuf_oracle.rs::strchr_strrchr_match_c		
+macro	dn_strndup	src/dyn_string.h	88	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S2: slice copy/compare, len(), format!
+macro	dn_snprintf	src/dyn_string.h	90	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S2: slice copy/compare, len(), format!
+macro	dn_sprintf	src/dyn_string.h	93	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S2: slice copy/compare, len(), format!
+macro	dn_scnprintf	src/dyn_string.h	95	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S2: slice copy/compare, len(), format!
+macro	dn_vscnprintf	src/dyn_string.h	98	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S2: slice copy/compare, len(), format!
+fn	_dn_strchr	src/dyn_string.h	101	ported	crates/dynomite/src/util/dyn_string.rs::strchr	crates/c-oracle/tests/mbuf_oracle.rs::strchr_strrchr_match_c		
+fn	_dn_strrchr	src/dyn_string.h	112	ported	crates/dynomite/src/util/dyn_string.rs::strrchr	crates/c-oracle/tests/mbuf_oracle.rs::strchr_strrchr_match_c		
 var	task_rbt	src/dyn_task.c	28	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
 var	task_rbs	src/dyn_task.c	29	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
 struct	task	src/dyn_task.c	32	replaced	crates/dynomite/src/core/task.rs::task_schedule_once	crates/dynomite/src/core/task.rs::one_shot_fires_exactly_once		DEV-S1: tokio timers replace the task rbtree; the C caller (dyn_connection_pool.c reconnect) is net/pool.rs Backoff
@@ -1359,175 +1359,175 @@ fn	test_core_ctx_create	src/dyn_test.c	602	todo
 fn	test_server_pool	src/dyn_test.c	621	todo				
 fn	init_test	src/dyn_test.c	634	todo				
 fn	main	src/dyn_test.c	657	todo				
-macro	OBJECT_MAGIC	src/dyn_types.c	4	todo				
-fn	cleanup_charptr	src/dyn_types.c	6	todo				
-fn	init_object	src/dyn_types.c	10	todo				
-fn	print_obj	src/dyn_types.c	16	todo				
-macro	DN_DEBUG_LOG	src/dyn_types.h	26	todo				
-macro	DN_ASSERT_PANIC	src/dyn_types.h	30	todo				
-macro	DN_ASSERT_LOG	src/dyn_types.h	34	todo				
-macro	DN_STATS	src/dyn_types.h	40	todo				
-macro	DN_STATS	src/dyn_types.h	40	todo				
-macro	DN_HAVE_EPOLL	src/dyn_types.h	44	todo				
-macro	DN_HAVE_KQUEUE	src/dyn_types.h	46	todo				
-macro	DN_HAVE_EVENT_PORTS	src/dyn_types.h	48	todo				
-macro	DN_LITTLE_ENDIAN	src/dyn_types.h	54	todo				
-macro	DN_HAVE_BACKTRACE	src/dyn_types.h	58	todo				
-macro	DN_NOOPS	src/dyn_types.h	62	todo				
-macro	DN_OK	src/dyn_types.h	63	todo				
-macro	DN_ERROR	src/dyn_types.h	64	todo				
-macro	DN_EAGAIN	src/dyn_types.h	65	todo				
-macro	DN_ENOMEM	src/dyn_types.h	66	todo				
-macro	DN_ENO_IMPL	src/dyn_types.h	67	todo				
-macro	THROW_STATUS	src/dyn_types.h	69	todo				
-macro	IGNORE_RET_VAL	src/dyn_types.h	78	todo				
-typedef	msgid_t	src/dyn_types.h	80	todo				
-typedef	msec_t	src/dyn_types.h	81	todo				
-typedef	usec_t	src/dyn_types.h	82	todo				
-typedef	sec_t	src/dyn_types.h	83	todo				
-typedef	rstatus_t	src/dyn_types.h	85	todo				
-typedef	err_t	src/dyn_types.h	86	todo				
-enumerator	SECURE_OPTION_NONE	src/dyn_types.h	89	todo				
-enumerator	SECURE_OPTION_RACK	src/dyn_types.h	90	todo				
-enumerator	SECURE_OPTION_DC	src/dyn_types.h	91	todo				
-enumerator	SECURE_OPTION_ALL	src/dyn_types.h	92	todo				
-typedef	secure_server_option_t	src/dyn_types.h	93	todo				
-macro	SCOPED_CHARPTR	src/dyn_types.h	117	todo				
-enumerator	OBJ_REQ	src/dyn_types.h	121	todo				
-enumerator	OBJ_RSP	src/dyn_types.h	122	todo				
-enumerator	OBJ_CONN	src/dyn_types.h	123	todo				
-enumerator	OBJ_CONN_POOL	src/dyn_types.h	124	todo				
-enumerator	OBJ_POOL	src/dyn_types.h	125	todo				
-enumerator	OBJ_DATASTORE	src/dyn_types.h	126	todo				
-enumerator	OBJ_NODE	src/dyn_types.h	127	todo				
-enumerator	OBJ_LAST	src/dyn_types.h	128	todo				
-typedef	object_type_t	src/dyn_types.h	129	todo				
-macro	PRINT_BUF_SIZE	src/dyn_types.h	131	todo				
-typedef	func_print_t	src/dyn_types.h	134	todo				
-struct	object	src/dyn_types.h	135	todo				
-typedef	object_t	src/dyn_types.h	140	todo				
-fn	dn_set_blocking	src/dyn_util.c	45	todo				
-fn	dn_set_nonblocking	src/dyn_util.c	56	todo				
-fn	dn_set_reuseaddr	src/dyn_util.c	67	todo				
-fn	dn_set_keepalive	src/dyn_util.c	77	todo				
-fn	dn_set_tcpnodelay	src/dyn_util.c	89	todo				
-fn	dn_set_linger	src/dyn_util.c	99	todo				
-fn	dn_set_sndbuf	src/dyn_util.c	111	todo				
-fn	dn_set_rcvbuf	src/dyn_util.c	119	todo				
-fn	dn_get_soerror	src/dyn_util.c	127	todo				
-fn	dn_get_sndbuf	src/dyn_util.c	142	todo				
-fn	dn_get_rcvbuf	src/dyn_util.c	157	todo				
-fn	_dn_atoi	src/dyn_util.c	172	todo				
-fn	_dn_atoui	src/dyn_util.c	194	todo				
-fn	dn_valid_port	src/dyn_util.c	212	todo				
-fn	_dn_alloc	src/dyn_util.c	220	todo				
-fn	_dn_zalloc	src/dyn_util.c	235	todo				
-fn	_dn_calloc	src/dyn_util.c	246	todo				
-fn	_dn_realloc	src/dyn_util.c	250	todo				
-fn	_dn_free	src/dyn_util.c	265	todo				
-fn	dn_stacktrace	src/dyn_util.c	271	todo				
-fn	dn_assert	src/dyn_util.c	300	todo				
-fn	_vscnprintf	src/dyn_util.c	308	todo				
-fn	_scnprintf	src/dyn_util.c	334	todo				
-fn	_dn_sendn	src/dyn_util.c	348	todo				
-fn	_dn_recvn	src/dyn_util.c	377	todo				
-fn	dn_usec_now	src/dyn_util.c	406	todo				
-fn	dn_msec_now	src/dyn_util.c	425	todo				
-fn	dn_resolve_inet	src/dyn_util.c	427	todo				
-fn	dn_resolve_unix	src/dyn_util.c	491	todo				
-fn	dn_resolve	src/dyn_util.c	517	todo				
-fn	dn_unresolve_addr	src/dyn_util.c	531	todo				
-fn	dn_unresolve_peer_desc	src/dyn_util.c	553	todo				
-fn	dn_unresolve_desc	src/dyn_util.c	577	todo				
-fn	count_digits	src/dyn_util.c	595	todo				
-fn	current_timestamp_in_millis	src/dyn_util.c	599	todo				
-fn	keypos_elem_len	src/dyn_util.c	608	todo				
-fn	argpos_elem_len	src/dyn_util.c	613	todo				
+macro	OBJECT_MAGIC	src/dyn_types.c	4	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2/S3: Debug impls; ownership makes the magic corruption check unnecessary
+fn	cleanup_charptr	src/dyn_types.c	6	replaced	crates/dynomite/src/crypto/base64.rs::base64_encode			DEV-S3: Drop
+fn	init_object	src/dyn_types.c	10	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2/S3: Debug impls; ownership makes the magic corruption check unnecessary
+fn	print_obj	src/dyn_types.c	16	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2/S3: Debug impls; ownership makes the magic corruption check unnecessary
+macro	DN_DEBUG_LOG	src/dyn_types.h	26	replaced	crates/dynomite/src/core/log/mod.rs::log_loggable			build switch; Rust level-gates at run time
+macro	DN_ASSERT_PANIC	src/dyn_types.h	30	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			build switch; Rust asserts always panic and abort
+macro	DN_ASSERT_LOG	src/dyn_types.h	34	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			build switch; Rust asserts always panic and abort
+macro	DN_STATS	src/dyn_types.h	40	replaced	crates/dynomite/src/stats/mod.rs::Stats			build switch; Rust stats are always compiled in
+macro	DN_STATS	src/dyn_types.h	40	replaced	crates/dynomite/src/stats/mod.rs::Stats			build switch; Rust stats are always compiled in
+macro	DN_HAVE_EPOLL	src/dyn_types.h	44	replaced	crates/dynomite/src/io/reactor.rs::TcpTransport			DEV-S1: tokio picks the poller
+macro	DN_HAVE_KQUEUE	src/dyn_types.h	46	replaced	crates/dynomite/src/io/reactor.rs::TcpTransport			DEV-S1: tokio picks the poller
+macro	DN_HAVE_EVENT_PORTS	src/dyn_types.h	48	replaced	crates/dynomite/src/io/reactor.rs::TcpTransport			DEV-S1: tokio picks the poller
+macro	DN_LITTLE_ENDIAN	src/dyn_types.h	54	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			only selects the word-compare strNcmp variant (dyn_util.h:229)
+macro	DN_HAVE_BACKTRACE	src/dyn_types.h	58	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			build switch; Rust asserts always panic and abort
+macro	DN_NOOPS	src/dyn_types.h	62	replaced	crates/dynomite/src/core/types.rs::DynError	crates/dynomite/src/core/types.rs::generic_carries_message		DEV-S2: Result<(), DynError>
+macro	DN_OK	src/dyn_types.h	63	replaced	crates/dynomite/src/core/types.rs::DynError	crates/dynomite/src/core/types.rs::generic_carries_message		DEV-S2: Result<(), DynError>
+macro	DN_ERROR	src/dyn_types.h	64	replaced	crates/dynomite/src/core/types.rs::DynError	crates/dynomite/src/core/types.rs::generic_carries_message		DEV-S2: Result<(), DynError>
+macro	DN_EAGAIN	src/dyn_types.h	65	replaced	crates/dynomite/src/core/types.rs::DynError	crates/dynomite/src/core/types.rs::generic_carries_message		DEV-S2: Result<(), DynError>
+macro	DN_ENOMEM	src/dyn_types.h	66	replaced	crates/dynomite/src/core/types.rs::DynError	crates/dynomite/src/core/types.rs::generic_carries_message		DEV-S2: Result<(), DynError>
+macro	DN_ENO_IMPL	src/dyn_types.h	67	replaced	crates/dynomite/src/core/types.rs::DynError	crates/dynomite/src/core/types.rs::generic_carries_message		DEV-S2: Result<(), DynError>
+macro	THROW_STATUS	src/dyn_types.h	69	replaced	crates/dynomite/src/core/types.rs::Status			DEV-S2: ? operator / let _ =
+macro	IGNORE_RET_VAL	src/dyn_types.h	78	replaced	crates/dynomite/src/core/types.rs::Status			DEV-S2: ? operator / let _ =
+typedef	msgid_t	src/dyn_types.h	80	ported	crates/dynomite/src/core/types.rs::MsgId	crates/dynomite/src/core/types.rs::typed_aliases_have_expected_widths		
+typedef	msec_t	src/dyn_types.h	81	ported	crates/dynomite/src/core/types.rs::Msec	crates/dynomite/src/core/types.rs::typed_aliases_have_expected_widths		
+typedef	usec_t	src/dyn_types.h	82	ported	crates/dynomite/src/core/types.rs::Usec	crates/dynomite/src/core/types.rs::typed_aliases_have_expected_widths		
+typedef	sec_t	src/dyn_types.h	83	ported	crates/dynomite/src/core/types.rs::Sec	crates/dynomite/src/core/types.rs::typed_aliases_have_expected_widths		
+typedef	rstatus_t	src/dyn_types.h	85	replaced	crates/dynomite/src/core/types.rs::Status			DEV-S2: ? operator / let _ =
+typedef	err_t	src/dyn_types.h	86	replaced	crates/dynomite/src/core/types.rs::DynError	crates/dynomite/src/core/types.rs::generic_carries_message		DEV-S2: Result<(), DynError>
+enumerator	SECURE_OPTION_NONE	src/dyn_types.h	89	ported	crates/dynomite/src/core/types.rs::SecureServerOption	crates/dynomite/src/core/types.rs::secure_option_parses_case_insensitively		discriminants 0..3 as C
+enumerator	SECURE_OPTION_RACK	src/dyn_types.h	90	ported	crates/dynomite/src/core/types.rs::SecureServerOption	crates/dynomite/src/core/types.rs::secure_option_parses_case_insensitively		discriminants 0..3 as C
+enumerator	SECURE_OPTION_DC	src/dyn_types.h	91	ported	crates/dynomite/src/core/types.rs::SecureServerOption	crates/dynomite/src/core/types.rs::secure_option_parses_case_insensitively		discriminants 0..3 as C
+enumerator	SECURE_OPTION_ALL	src/dyn_types.h	92	ported	crates/dynomite/src/core/types.rs::SecureServerOption	crates/dynomite/src/core/types.rs::secure_option_parses_case_insensitively		discriminants 0..3 as C
+typedef	secure_server_option_t	src/dyn_types.h	93	ported	crates/dynomite/src/core/types.rs::SecureServerOption	crates/dynomite/src/core/types.rs::secure_option_parses_case_insensitively		discriminants 0..3 as C
+macro	SCOPED_CHARPTR	src/dyn_types.h	117	replaced	crates/dynomite/src/crypto/base64.rs::base64_encode			DEV-S3: owned String dropped at scope end
+enumerator	OBJ_REQ	src/dyn_types.h	121	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+enumerator	OBJ_RSP	src/dyn_types.h	122	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+enumerator	OBJ_CONN	src/dyn_types.h	123	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+enumerator	OBJ_CONN_POOL	src/dyn_types.h	124	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+enumerator	OBJ_POOL	src/dyn_types.h	125	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+enumerator	OBJ_DATASTORE	src/dyn_types.h	126	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+enumerator	OBJ_NODE	src/dyn_types.h	127	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+enumerator	OBJ_LAST	src/dyn_types.h	128	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+typedef	object_type_t	src/dyn_types.h	129	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+macro	PRINT_BUF_SIZE	src/dyn_types.h	131	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+typedef	func_print_t	src/dyn_types.h	134	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+struct	object	src/dyn_types.h	135	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+typedef	object_t	src/dyn_types.h	140	replaced	crates/dynomite/src/net/conn.rs::Conn			DEV-S2: per-type Debug/Display impls replace the object vtable used by print_obj
+fn	dn_set_blocking	src/dyn_util.c	45	dead				no caller in src/ (grep -rnw over src/*.[ch]: definition only)
+fn	dn_set_nonblocking	src/dyn_util.c	56	replaced	crates/dynomite/src/net/listener.rs::bind_dual_stack	crates/dynomite/src/net/listener.rs::regression_default_sets_so_reuseaddr		DEV-S1: socket2/tokio listener options
+fn	dn_set_reuseaddr	src/dyn_util.c	67	replaced	crates/dynomite/src/net/listener.rs::bind_dual_stack	crates/dynomite/src/net/listener.rs::regression_default_sets_so_reuseaddr		DEV-S1: socket2/tokio listener options
+fn	dn_set_keepalive	src/dyn_util.c	77	todo				MISSING in Rust: C sets SO_KEEPALIVE on server and peer connections (dyn_connection.c:235,291); no Rust keepalive
+fn	dn_set_tcpnodelay	src/dyn_util.c	89	replaced	crates/dynomite/src/net/proxy.rs::run			DEV-S1: TcpStream::set_nodelay on accepted and connected sockets
+fn	dn_set_linger	src/dyn_util.c	99	dead				no caller in src/ (grep -rnw over src/*.[ch]: definition only)
+fn	dn_set_sndbuf	src/dyn_util.c	111	dead				no caller in src/ (grep -rnw over src/*.[ch]: definition only)
+fn	dn_set_rcvbuf	src/dyn_util.c	119	dead				no caller in src/ (grep -rnw over src/*.[ch]: definition only)
+fn	dn_get_soerror	src/dyn_util.c	127	replaced	crates/dynomite/src/io/reactor.rs::TcpTransport			DEV-S1: tokio surfaces SO_ERROR as io::Error on the next I/O
+fn	dn_get_sndbuf	src/dyn_util.c	142	dead				no caller in src/ (grep -rnw over src/*.[ch]: definition only)
+fn	dn_get_rcvbuf	src/dyn_util.c	157	dead				no caller in src/ (grep -rnw over src/*.[ch]: definition only)
+fn	_dn_atoi	src/dyn_util.c	172	ported	crates/dynomite/src/util/atoi.rs::dn_atoi	crates/c-oracle/tests/util_oracle.rs::dn_atoi_matches_c		C -1 is Rust None
+fn	_dn_atoui	src/dyn_util.c	194	ported	crates/dynomite/src/util/atoi.rs::dn_atoui	crates/c-oracle/tests/util_oracle.rs::dn_atoui_matches_c		C 0-on-error is Rust None
+fn	dn_valid_port	src/dyn_util.c	212	ported	crates/dynomite/src/util/atoi.rs::valid_port	crates/c-oracle/tests/util_oracle.rs::dn_valid_port_matches_c		
+fn	_dn_alloc	src/dyn_util.c	220	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust global allocator and ownership (Box/Vec, Drop)
+fn	_dn_zalloc	src/dyn_util.c	235	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust global allocator and ownership (Box/Vec, Drop)
+fn	_dn_calloc	src/dyn_util.c	246	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust global allocator and ownership (Box/Vec, Drop)
+fn	_dn_realloc	src/dyn_util.c	250	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust global allocator and ownership (Box/Vec, Drop)
+fn	_dn_free	src/dyn_util.c	265	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust global allocator and ownership (Box/Vec, Drop)
+fn	dn_stacktrace	src/dyn_util.c	271	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/panic with backtrace; the hook aborts as dn_assert does
+fn	dn_assert	src/dyn_util.c	300	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/panic with backtrace; the hook aborts as dn_assert does
+fn	_vscnprintf	src/dyn_util.c	308	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: write!/format! into growable buffers; no truncation needed
+fn	_scnprintf	src/dyn_util.c	334	replaced	crates/dynomite/src/proto/dnode.rs::dmsg_write			DEV-S2: write!/format! into growable buffers; no truncation needed
+fn	_dn_sendn	src/dyn_util.c	348	replaced	crates/dynomite/src/stats/rest.rs::write_response			DEV-S1: AsyncWriteExt::write_all
+fn	_dn_recvn	src/dyn_util.c	377	dead				no caller in src/ (grep -rnw over src/*.[ch]: definition only)
+fn	dn_usec_now	src/dyn_util.c	406	ported	crates/dynomite/src/util/time.rs::usec_now	crates/c-oracle/tests/mbuf_oracle.rs::wall_clock_matches_c		
+fn	dn_msec_now	src/dyn_util.c	425	ported	crates/dynomite/src/util/time.rs::msec_now	crates/c-oracle/tests/mbuf_oracle.rs::wall_clock_matches_c		
+fn	dn_resolve_inet	src/dyn_util.c	427	replaced	crates/dynomite/src/util/sockinfo.rs::resolve	crates/dynomite/src/util/sockinfo.rs::resolve_loopback_v4		DEV-S2: ToSocketAddrs (getaddrinfo), first address as C
+fn	dn_resolve_unix	src/dyn_util.c	491	todo				MISSING in Rust: C rejects unix paths >= sizeof(sun_path) (DN_UNIX_ADDRSTRLEN); SockInfo::resolve accepts any length
+fn	dn_resolve	src/dyn_util.c	517	replaced	crates/dynomite/src/util/sockinfo.rs::resolve	crates/dynomite/src/util/sockinfo.rs::resolve_loopback_v4		DEV-S2: ToSocketAddrs (getaddrinfo), first address as C
+fn	dn_unresolve_addr	src/dyn_util.c	531	replaced	crates/dynomite/src/net/conn.rs::peer_addr			DEV-S2: SocketAddr Display; IPv6 prints [addr]:port where C getnameinfo prints addr:port (log text only)
+fn	dn_unresolve_peer_desc	src/dyn_util.c	553	replaced	crates/dynomite/src/net/conn.rs::peer_addr			DEV-S2: SocketAddr Display; IPv6 prints [addr]:port where C getnameinfo prints addr:port (log text only)
+fn	dn_unresolve_desc	src/dyn_util.c	577	replaced	crates/dynomite/src/net/conn.rs::peer_addr			DEV-S2: SocketAddr Display; IPv6 prints [addr]:port where C getnameinfo prints addr:port (log text only)
+fn	count_digits	src/dyn_util.c	595	ported	crates/dynomite/src/util/time.rs::count_digits	crates/c-oracle/tests/util_oracle.rs::count_digits_matches_c		
+fn	current_timestamp_in_millis	src/dyn_util.c	599	ported	crates/dynomite/src/util/time.rs::msec_now	crates/c-oracle/tests/mbuf_oracle.rs::wall_clock_matches_c		
+fn	keypos_elem_len	src/dyn_util.c	608	ported	crates/dynomite/src/msg/keypos.rs::tag_len	crates/c-oracle/tests/mbuf_oracle.rs::keypos_argpos_len_match_c		
+fn	argpos_elem_len	src/dyn_util.c	613	ported	crates/dynomite/src/msg/keypos.rs::len	crates/c-oracle/tests/mbuf_oracle.rs::keypos_argpos_len_match_c		
 macro	_DYN_UTIL_H_	src/dyn_util.h	24	dead				include guard; no Rust counterpart needed
-macro	LF	src/dyn_util.h	32	todo				
-macro	CR	src/dyn_util.h	33	todo				
-macro	CRLF	src/dyn_util.h	34	todo				
-macro	CRLF_LEN	src/dyn_util.h	35	todo				
-macro	NELEMS	src/dyn_util.h	37	todo				
-macro	MIN	src/dyn_util.h	39	todo				
-macro	MAX	src/dyn_util.h	40	todo				
-macro	SQUARE	src/dyn_util.h	42	todo				
-macro	VAR	src/dyn_util.h	43	todo				
-macro	STDDEV	src/dyn_util.h	44	todo				
-macro	DN_INET4_ADDRSTRLEN	src/dyn_util.h	46	todo				
-macro	DN_INET6_ADDRSTRLEN	src/dyn_util.h	47	todo				
-macro	DN_INET_ADDRSTRLEN	src/dyn_util.h	49	todo				
-macro	DN_UNIX_ADDRSTRLEN	src/dyn_util.h	50	todo				
-macro	DN_MAXHOSTNAMELEN	src/dyn_util.h	53	todo				
-macro	DN_UINT8_MAXLEN	src/dyn_util.h	65	todo				
-macro	DN_UINT16_MAXLEN	src/dyn_util.h	66	todo				
-macro	DN_UINT32_MAXLEN	src/dyn_util.h	67	todo				
-macro	DN_UINT64_MAXLEN	src/dyn_util.h	68	todo				
-macro	DN_UINTMAX_MAXLEN	src/dyn_util.h	69	todo				
-macro	DN_ALIGNMENT	src/dyn_util.h	75	todo				
-macro	DN_ALIGN	src/dyn_util.h	76	todo				
-macro	DN_ALIGN_PTR	src/dyn_util.h	77	todo				
-macro	dn_gethostname	src/dyn_util.h	84	todo				
-macro	dn_atoi	src/dyn_util.h	86	todo				
-macro	dn_atoui	src/dyn_util.h	87	todo				
-macro	dn_alloc	src/dyn_util.h	115	todo				
-macro	dn_zalloc	src/dyn_util.h	117	todo				
-macro	dn_calloc	src/dyn_util.h	119	todo				
-macro	dn_realloc	src/dyn_util.h	122	todo				
-macro	dn_free	src/dyn_util.h	124	todo				
-macro	dn_sendn	src/dyn_util.h	140	todo				
-macro	dn_recvn	src/dyn_util.h	142	todo				
-macro	dn_read	src/dyn_util.h	148	todo				
-macro	dn_readv	src/dyn_util.h	150	todo				
-macro	dn_write	src/dyn_util.h	152	todo				
-macro	dn_writev	src/dyn_util.h	154	todo				
-macro	ASSERT_CONCAT_	src/dyn_util.h	166	todo				
-macro	ASSERT_CONCAT	src/dyn_util.h	167	todo				
-macro	STATIC_ASSERT	src/dyn_util.h	177	todo				
-macro	STATIC_ASSERT	src/dyn_util.h	177	todo				
-macro	ASSERT	src/dyn_util.h	222	todo				
-macro	ASSERT	src/dyn_util.h	222	todo				
-macro	ASSERT	src/dyn_util.h	222	todo				
-macro	ASSERT_LOG	src/dyn_util.h	223	todo				
-macro	ASSERT_LOG	src/dyn_util.h	223	todo				
-macro	ASSERT_LOG	src/dyn_util.h	223	todo				
-macro	NOT_REACHED	src/dyn_util.h	225	todo				
-macro	NOT_REACHED	src/dyn_util.h	225	todo				
-macro	NOT_REACHED	src/dyn_util.h	225	todo				
-macro	str4cmp	src/dyn_util.h	264	todo				
-macro	str4cmp	src/dyn_util.h	264	todo				
-macro	str5cmp	src/dyn_util.h	267	todo				
-macro	str5cmp	src/dyn_util.h	267	todo				
-macro	str6cmp	src/dyn_util.h	270	todo				
-macro	str6cmp	src/dyn_util.h	270	todo				
-macro	str7cmp	src/dyn_util.h	273	todo				
-macro	str7cmp	src/dyn_util.h	273	todo				
-macro	str8cmp	src/dyn_util.h	276	todo				
-macro	str8cmp	src/dyn_util.h	276	todo				
-macro	str9cmp	src/dyn_util.h	279	todo				
-macro	str9cmp	src/dyn_util.h	279	todo				
-macro	str10cmp	src/dyn_util.h	282	todo				
-macro	str10cmp	src/dyn_util.h	282	todo				
-macro	str11cmp	src/dyn_util.h	285	todo				
-macro	str11cmp	src/dyn_util.h	285	todo				
-macro	str12cmp	src/dyn_util.h	288	todo				
-macro	str12cmp	src/dyn_util.h	288	todo				
-macro	str3icmp	src/dyn_util.h	293	todo				
-macro	str4icmp	src/dyn_util.h	297	todo				
-macro	str5icmp	src/dyn_util.h	300	todo				
-macro	str6icmp	src/dyn_util.h	303	todo				
-macro	str7icmp	src/dyn_util.h	306	todo				
-macro	str8icmp	src/dyn_util.h	309	todo				
-macro	str9icmp	src/dyn_util.h	313	todo				
-macro	str10icmp	src/dyn_util.h	317	todo				
-macro	str11icmp	src/dyn_util.h	321	todo				
-macro	str12icmp	src/dyn_util.h	325	todo				
-macro	str13icmp	src/dyn_util.h	329	todo				
-macro	str14icmp	src/dyn_util.h	333	todo				
-macro	str15icmp	src/dyn_util.h	338	todo				
-macro	str16icmp	src/dyn_util.h	343	todo				
-macro	str17icmp	src/dyn_util.h	349	todo				
-struct	sockinfo	src/dyn_util.h	368	todo				
+macro	LF	src/dyn_util.h	32	replaced	crates/dynomite/src/proto/dnode.rs::CRLF			DEV-S2: byte-string constants
+macro	CR	src/dyn_util.h	33	replaced	crates/dynomite/src/proto/dnode.rs::CRLF			DEV-S2: byte-string constants
+macro	CRLF	src/dyn_util.h	34	replaced	crates/dynomite/src/proto/dnode.rs::CRLF			DEV-S2: byte-string constants
+macro	CRLF_LEN	src/dyn_util.h	35	replaced	crates/dynomite/src/proto/dnode.rs::CRLF			DEV-S2: byte-string constants
+macro	NELEMS	src/dyn_util.h	37	replaced	crates/dynomite/src/stats/mod.rs::Stats			DEV-S2: slice len() / Rust layout replace the stats buffer sizing (dyn_stats.c:77,370)
+macro	MIN	src/dyn_util.h	39	replaced	crates/dynomite/src/core/log/mod.rs::clamp_level	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		DEV-S2: Ord::min/max (log level clamp is the C MIN/MAX site)
+macro	MAX	src/dyn_util.h	40	replaced	crates/dynomite/src/core/log/mod.rs::clamp_level	crates/c-oracle/tests/util_oracle.rs::log_level_ops_match_c		DEV-S2: Ord::min/max (log level clamp is the C MIN/MAX site)
+macro	SQUARE	src/dyn_util.h	42	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	VAR	src/dyn_util.h	43	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	STDDEV	src/dyn_util.h	44	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	DN_INET4_ADDRSTRLEN	src/dyn_util.h	46	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	DN_INET6_ADDRSTRLEN	src/dyn_util.h	47	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	DN_INET_ADDRSTRLEN	src/dyn_util.h	49	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	DN_UNIX_ADDRSTRLEN	src/dyn_util.h	50	todo				MISSING in Rust: see dn_resolve_unix
+macro	DN_MAXHOSTNAMELEN	src/dyn_util.h	53	replaced	crates/dynomite/src/core/log/host.rs::local_hostname	crates/dynomite/src/core/log/host.rs::hostname_is_non_empty_ascii		DEV-S2: nix gethostname into String
+macro	DN_UINT8_MAXLEN	src/dyn_util.h	65	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	DN_UINT16_MAXLEN	src/dyn_util.h	66	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	DN_UINT32_MAXLEN	src/dyn_util.h	67	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	DN_UINT64_MAXLEN	src/dyn_util.h	68	replaced	crates/dynomite/src/util/sockinfo.rs::resolve			DEV-S2: integers formatted into growable Strings
+macro	DN_UINTMAX_MAXLEN	src/dyn_util.h	69	replaced	crates/dynomite/src/util/sockinfo.rs::resolve			DEV-S2: integers formatted into growable Strings
+macro	DN_ALIGNMENT	src/dyn_util.h	75	replaced	crates/dynomite/src/stats/mod.rs::Stats			DEV-S2: slice len() / Rust layout replace the stats buffer sizing (dyn_stats.c:77,370)
+macro	DN_ALIGN	src/dyn_util.h	76	replaced	crates/dynomite/src/stats/mod.rs::Stats			DEV-S2: slice len() / Rust layout replace the stats buffer sizing (dyn_stats.c:77,370)
+macro	DN_ALIGN_PTR	src/dyn_util.h	77	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	dn_gethostname	src/dyn_util.h	84	replaced	crates/dynomite/src/core/log/host.rs::local_hostname	crates/dynomite/src/core/log/host.rs::hostname_is_non_empty_ascii		DEV-S2: nix gethostname into String
+macro	dn_atoi	src/dyn_util.h	86	ported	crates/dynomite/src/util/atoi.rs::dn_atoi	crates/c-oracle/tests/util_oracle.rs::dn_atoi_matches_c		
+macro	dn_atoui	src/dyn_util.h	87	ported	crates/dynomite/src/util/atoi.rs::dn_atoui	crates/c-oracle/tests/util_oracle.rs::dn_atoui_matches_c		
+macro	dn_alloc	src/dyn_util.h	115	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust allocator and ownership
+macro	dn_zalloc	src/dyn_util.h	117	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust allocator and ownership
+macro	dn_calloc	src/dyn_util.h	119	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust allocator and ownership
+macro	dn_realloc	src/dyn_util.h	122	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust allocator and ownership
+macro	dn_free	src/dyn_util.h	124	replaced	crates/dynomite/src/io/mbuf.rs::MbufPool			DEV-S3: Rust allocator and ownership
+macro	dn_sendn	src/dyn_util.h	140	replaced	crates/dynomite/src/stats/rest.rs::write_response			DEV-S1: write_all
+macro	dn_recvn	src/dyn_util.h	142	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	dn_read	src/dyn_util.h	148	replaced	crates/dynomite/src/io/reactor.rs::TcpTransport			DEV-S1: tokio AsyncRead/AsyncWrite
+macro	dn_readv	src/dyn_util.h	150	dead				only referenced inside dyn_util.h (grep -rnw over src/*.[ch])
+macro	dn_write	src/dyn_util.h	152	replaced	crates/dynomite/src/io/reactor.rs::TcpTransport			DEV-S1: tokio AsyncRead/AsyncWrite
+macro	dn_writev	src/dyn_util.h	154	replaced	crates/dynomite/src/io/reactor.rs::TcpTransport			DEV-S1: tokio AsyncRead/AsyncWrite
+macro	ASSERT_CONCAT_	src/dyn_util.h	166	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	ASSERT_CONCAT	src/dyn_util.h	167	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	STATIC_ASSERT	src/dyn_util.h	177	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	STATIC_ASSERT	src/dyn_util.h	177	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	ASSERT	src/dyn_util.h	222	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	ASSERT	src/dyn_util.h	222	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	ASSERT	src/dyn_util.h	222	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	ASSERT_LOG	src/dyn_util.h	223	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	ASSERT_LOG	src/dyn_util.h	223	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	ASSERT_LOG	src/dyn_util.h	223	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	NOT_REACHED	src/dyn_util.h	225	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	NOT_REACHED	src/dyn_util.h	225	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	NOT_REACHED	src/dyn_util.h	225	replaced	crates/dynomited/src/main.rs::install_fatal_panic_hook			DEV-S3: assert!/const assert/unreachable!; panics abort via the hook
+macro	str4cmp	src/dyn_util.h	264	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str4cmp	src/dyn_util.h	264	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str5cmp	src/dyn_util.h	267	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str5cmp	src/dyn_util.h	267	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str6cmp	src/dyn_util.h	270	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str6cmp	src/dyn_util.h	270	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str7cmp	src/dyn_util.h	273	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str7cmp	src/dyn_util.h	273	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str8cmp	src/dyn_util.h	276	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str8cmp	src/dyn_util.h	276	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str9cmp	src/dyn_util.h	279	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str9cmp	src/dyn_util.h	279	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str10cmp	src/dyn_util.h	282	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str10cmp	src/dyn_util.h	282	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str11cmp	src/dyn_util.h	285	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str11cmp	src/dyn_util.h	285	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str12cmp	src/dyn_util.h	288	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str12cmp	src/dyn_util.h	288	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str3icmp	src/dyn_util.h	293	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str4icmp	src/dyn_util.h	297	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str5icmp	src/dyn_util.h	300	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str6icmp	src/dyn_util.h	303	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str7icmp	src/dyn_util.h	306	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str8icmp	src/dyn_util.h	309	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str9icmp	src/dyn_util.h	313	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str10icmp	src/dyn_util.h	317	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str11icmp	src/dyn_util.h	321	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str12icmp	src/dyn_util.h	325	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str13icmp	src/dyn_util.h	329	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str14icmp	src/dyn_util.h	333	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str15icmp	src/dyn_util.h	338	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str16icmp	src/dyn_util.h	343	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+macro	str17icmp	src/dyn_util.h	349	replaced	crates/dynomite/src/util/dyn_string.rs::eq_ignore_ascii_case			DEV-S2: parser keyword match; C folds with c^0x20 so a non-letter pattern byte also matches its ^0x20 partner (e.g. '.' vs 0x0e in json.set), Rust folds ASCII letters only
+struct	sockinfo	src/dyn_util.h	368	replaced	crates/dynomite/src/util/sockinfo.rs::SockInfo	crates/dynomite/src/util/sockinfo.rs::resolve_loopback_v4		DEV-S2: enum over SocketAddr / PathBuf
 fn	vnode_item_cmp	src/dyn_vnode.c	34	ported	crates/dynomite/src/hashkit/token.rs::cmp	crates/c-oracle/tests/token_oracle.rs::cmp_dyn_token_matches_c		qsort comparator == cmp_dyn_token; Rust sorts by DynToken Ord
 fn	vnode_rack_verify_continuum	src/dyn_vnode.c	41	todo				
 fn	vnode_update	src/dyn_vnode.c	61	todo				

@@ -25,6 +25,10 @@ pub mod hashkit;
 #[cfg(not(c_oracle_absent))]
 pub mod histogram;
 #[cfg(not(c_oracle_absent))]
+pub mod mbuf;
+#[cfg(not(c_oracle_absent))]
 pub mod redis;
+#[cfg(not(c_oracle_absent))]
+pub mod util;
 #[cfg(not(c_oracle_absent))]
 pub mod vnode;

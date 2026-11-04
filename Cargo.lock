@@ -442,6 +442,7 @@ dependencies = [
  "cc",
  "dynomite-engine",
  "hegeltest",
+ "nix",
 ]
 
 [[package]]

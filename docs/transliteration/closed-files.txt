@@ -25,3 +25,11 @@ src/dyn_dict.c
 src/dyn_dict.h
 src/dyn_dict_msg_id.c
 src/dyn_array.h
+src/dyn_string.h
+src/dyn_types.c
+src/dyn_types.h
+src/dyn_log.c
+src/dyn_log.h
+src/dyn_signal.h
+src/dyn_setting.c
+src/dyn_setting.h
