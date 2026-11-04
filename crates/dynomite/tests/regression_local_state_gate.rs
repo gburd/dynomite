@@ -33,7 +33,12 @@ const INVALID_STATE: &[u8] =
     b"-ERR Dynomite: Dynomite's current state does not allow this request\r\n";
 
 fn pool() -> Arc<ServerPool> {
+    pool_with_timeout(5_000)
+}
+
+fn pool_with_timeout(timeout_ms: u64) -> Arc<ServerPool> {
     let cfg = PoolConfig {
+        timeout_ms,
         dc: "dc1".into(),
         rack: "r1".into(),
         hash: HashType::Murmur,
@@ -96,7 +101,10 @@ struct Rig {
 }
 
 fn rig() -> Rig {
-    let pool = pool();
+    rig_with(pool())
+}
+
+fn rig_with(pool: Arc<ServerPool>) -> Rig {
     let (local_tx, local_rx) = mpsc::channel::<OutboundRequest>(16);
     let (peer_tx, peer_rx) = mpsc::channel::<OutboundRequest>(16);
     let disp = ClusterDispatcher::new(pool.clone())
@@ -208,4 +216,47 @@ async fn normal_does_not_release_a_held_write() {
     assert_eq!(dispatch(&r, 22, &set), None);
     let forwarded = drain(&mut r.local_rx);
     assert_eq!(forwarded, vec![20, 21, 22]);
+}
+
+/// A held request is answered with the storage error when its timeout
+/// passes, as the datastore connection it waits on would time out; the
+/// requests held behind it go with it.
+#[tokio::test]
+async fn held_requests_fail_with_the_storage_error_at_their_timeout() {
+    let mut r = rig_with(pool_with_timeout(200));
+    r.pool.set_local_state(DynState::WritesOnly);
+    let (tx, mut rx) = mpsc::channel::<OutboundEnvelope>(4);
+    let set = resp(&[b"SET", &r.local_key, b"v"]);
+    let started = tokio::time::Instant::now();
+    assert!(matches!(
+        r.disp.dispatch(parse(40, &set), tx.clone()),
+        DispatchOutcome::Pending
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(matches!(
+        r.disp.dispatch(parse(41, &set), tx),
+        DispatchOutcome::Pending
+    ));
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let env = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("answered")
+            .expect("envelope");
+        assert_eq!(
+            bytes(&env.rsp),
+            b"-ERR Storage: Datastore refused connection\r\n"
+        );
+        ids.push(env.req_id);
+    }
+    let waited = started.elapsed();
+    assert_eq!(ids, vec![40, 41]);
+    assert!(
+        waited >= std::time::Duration::from_millis(190),
+        "answered after {waited:?}, before the 200 ms timeout"
+    );
+    assert!(
+        drain(&mut r.local_rx).is_empty(),
+        "nothing reached the datastore"
+    );
 }

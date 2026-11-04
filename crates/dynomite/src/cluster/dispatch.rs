@@ -316,18 +316,33 @@ enum LocalSendError {
 /// Requests the gate holds wait here, oldest first, until a request
 /// arrives under RESUMING; every clone shares the queue, so it is per
 /// node.
+///
+/// A held request keeps its deadline: when the oldest one passes, every
+/// held request is answered `Storage: Datastore refused connection`, as
+/// the datastore connection they are queued on times out and closes.
 #[derive(Clone)]
 struct LocalBackend {
     tx: mpsc::Sender<OutboundRequest>,
     held: Arc<parking_lot::Mutex<std::collections::VecDeque<OutboundRequest>>>,
+    /// Wakes the expiry task when a request is held.
+    wake: Arc<tokio::sync::Notify>,
 }
 
 impl LocalBackend {
-    fn new(tx: mpsc::Sender<OutboundRequest>) -> Self {
-        Self {
+    fn new(tx: mpsc::Sender<OutboundRequest>, data_store: crate::conf::DataStore) -> Self {
+        let this = Self {
             tx,
             held: Arc::default(),
+            wake: Arc::default(),
+        };
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(expire_held(
+                Arc::downgrade(&this.held),
+                this.wake.clone(),
+                data_store,
+            ));
         }
+        this
     }
 
     /// Hand `env` on as `pool`'s state allows ([`local_gate`]). A send
@@ -349,6 +364,7 @@ impl LocalBackend {
             }
             LocalGate::Hold | LocalGate::SendIfIdle => {
                 held.push_back(env);
+                self.wake.notify_one();
                 Ok(())
             }
             LocalGate::Send => {
@@ -363,6 +379,66 @@ impl LocalBackend {
                 }
                 self.tx.try_send(env).map_err(LocalSendError::Channel)
             }
+        }
+    }
+}
+
+/// Answer every held request with the storage error once the earliest
+/// held deadline passes. Ends when the dispatcher (the queue's owner) is
+/// gone.
+async fn expire_held(
+    held: std::sync::Weak<parking_lot::Mutex<std::collections::VecDeque<OutboundRequest>>>,
+    wake: Arc<tokio::sync::Notify>,
+    data_store: crate::conf::DataStore,
+) {
+    loop {
+        // Register for a wake-up before reading the queue so a request
+        // held in between is not missed.
+        let notified = wake.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let next = {
+            let Some(q) = held.upgrade() else { return };
+            let next = q.lock().iter().filter_map(|r| r.deadline).min();
+            next
+        };
+        tokio::select! {
+            () = crate::net::server::request_timer(next) => {}
+            () = &mut notified => continue,
+        }
+        let expired: Vec<OutboundRequest> = {
+            let Some(q) = held.upgrade() else { return };
+            let mut q = q.lock();
+            // The earliest deadline passed: the queue's connection closes
+            // and takes every request on it.
+            if !q
+                .iter()
+                .filter_map(|r| r.deadline)
+                .any(|d| d <= tokio::time::Instant::now())
+            {
+                continue;
+            }
+            q.drain(..).collect()
+        };
+        let pool = MbufPool::default();
+        for req in expired {
+            let anchor = Msg::new(req.req_id, MsgType::Unknown, true);
+            let rsp = crate::msg::response::make_error(
+                &anchor,
+                error_rsp_type(data_store),
+                0,
+                crate::msg::DynErrorCode::StorageConnectionRefuse,
+                &pool,
+            );
+            let _ = req
+                .responder
+                .send(OutboundEnvelope {
+                    req_id: req.req_id,
+                    rsp,
+                    span: req.span,
+                    source_peer_idx: req.target_peer_idx,
+                })
+                .await;
         }
     }
 }
@@ -463,7 +539,7 @@ impl ClusterDispatcher {
     /// the same channel are fine.
     #[must_use]
     pub fn with_backend(mut self, backend: mpsc::Sender<OutboundRequest>) -> Self {
-        self.backend = Some(LocalBackend::new(backend));
+        self.backend = Some(LocalBackend::new(backend, self.pool.config().data_store));
         self
     }
 
