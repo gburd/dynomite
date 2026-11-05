@@ -79,6 +79,26 @@ fn set(addr: SocketAddr, key: &str, value: &str) -> Vec<u8> {
 }
 
 /// `VALUE <key> <flags> <bytes> <cas>` lines without their cas.
+/// The `VALUE` blocks of a retrieval reply, sorted, and whether it ends
+/// with `END`. A miss before a hit in the same fragment moves that hit up
+/// a slot (DEV-M1), so the merged reply holds the same blocks as
+/// memcached's in a possibly different order.
+fn blocks(reply: &[u8]) -> (Vec<String>, bool) {
+    let text = String::from_utf8_lossy(reply).into_owned();
+    let mut lines = text.split("\r\n");
+    let mut out = Vec::new();
+    let mut ended = false;
+    while let Some(l) = lines.next() {
+        if l.starts_with("VALUE ") {
+            out.push(format!("{l}\r\n{}", lines.next().unwrap_or_default()));
+        } else if l == "END" {
+            ended = true;
+        }
+    }
+    out.sort();
+    (out, ended)
+}
+
 fn strip_cas(reply: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(reply);
     let lines: Vec<String> = text
@@ -186,17 +206,29 @@ fn rust_merges_like_standalone(cluster: &Cluster) {
     let gets = format!("gets {}\r\n", keys.join(" "));
     let want = mc(alone, get.as_bytes());
     let got = mc(entry, get.as_bytes());
-    assert_eq!(
-        String::from_utf8_lossy(&got),
-        String::from_utf8_lossy(&want),
-        "get"
-    );
+    assert_eq!(blocks(&got), blocks(&want), "get");
+    assert!(blocks(&got).1, "get reply ends with END");
     let want_s = strip_cas(&mc(alone, gets.as_bytes()));
     let got_s = strip_cas(&mc(entry, gets.as_bytes()));
+    assert_eq!(blocks(&got_s), blocks(&want_s), "gets");
+    // With no misses the order is the client's, byte for byte.
+    let hits: Vec<&String> = keys
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != 7 && *i != 13)
+        .map(|(_, k)| k)
+        .collect();
+    let get_hits = format!(
+        "get {}\r\n",
+        hits.iter()
+            .map(|k| k.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
     assert_eq!(
-        String::from_utf8_lossy(&got_s),
-        String::from_utf8_lossy(&want_s),
-        "gets"
+        String::from_utf8_lossy(&mc(entry, get_hits.as_bytes())),
+        String::from_utf8_lossy(&mc(alone, get_hits.as_bytes())),
+        "get without misses"
     );
     eprintln!(
         "[Rust] memcache_fragment: {} keys over owners {owners:?}, get and gets equal standalone memcached ({} bytes)",
@@ -206,7 +238,6 @@ fn rust_merges_like_standalone(cluster: &Cluster) {
 }
 
 #[test]
-#[ignore = "Rust memcache cluster: node 0's link to node 2 keeps closing and set answers -ERR Peer: Peer Node is down"]
 fn memcache_get_split_per_owner() {
     sandboxed!("memcache_get_split_per_owner");
     for engine in engines() {

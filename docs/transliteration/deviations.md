@@ -605,7 +605,13 @@ held at its current behaviour until the owner decides.
 * Rust: the intended semantics. Split per local-rack owner
   (`get ` / `gets `, each key followed by one space, CRLF); drop each
   fragment's `END`; every key in client order takes the next `VALUE`
-  block of its fragment (a miss takes nothing); append `END\r\n`.
+  block of its fragment, and a miss takes nothing; append `END\r\n`.
+  This is C's `memcache_post_coalesce` / `memcache_copy_bulk` logic, and
+  it has a consequence: a miss before a hit in the same fragment moves
+  that hit up into the missed key's slot, so the reply holds the same
+  `VALUE` blocks as a standalone memcached's but not always in key order
+  (optest `memcache_fragment`: `key:18` arrives where `key:7`, a miss,
+  would be). Clients that read blocks by key name are unaffected.
   A fragment error or a missing fragment reply answers
   `SERVER_ERROR unknown: unknown\r\n`, the reply `req_error` /
   `rsp_make_error` build for a request vector with an errored fragment
@@ -615,6 +621,9 @@ held at its current behaviour until the owner decides.
   merged redis split path answers the same error instead of closing.
 * Recommendation: authorise the semantics above (the C fix is to read
   `selected_rsp`), with the error reply instead of the connection close.
+  Separately: match each fragment's blocks to keys by name, so a reply
+  with misses is in key order like memcached's (a small change to the
+  merge; asked as a question, not done).
 * Pinned by: `crates/dynomite/tests/regression_memcache_multiget_fragment.rs`.
 * Status: PROPOSED
 
