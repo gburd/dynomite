@@ -533,13 +533,20 @@ held at its current behaviour until the owner decides.
   reply EQUAL to a maximum that a later reply then beats is never marked:
   for timestamps 5, 5, 9 the first replica is repaired and the second is
   left at 5.
-* Rust: identical (`proto/redis/repair/make.rs::find_most_updated`,
-  pinned by `equal_stale_reply_after_new_max_is_not_marked`).
-* Effect: the second replica stays stale until a later read; with
-  DC_SAFE_QUORUM the next read of the key repairs it.
+* Rust: every reply with a record whose timestamp is below the winner's
+  is marked stale (`proto/redis/repair/make.rs::find_most_updated`): for
+  5, 5, 9 both replicas at 5 are repaired. Winner selection is C's (the
+  first reply with the largest timestamp; `X` replies take no part; ties
+  for the maximum are not repaired). Pinned by
+  `equal_stale_replies_before_new_max_are_all_marked` and the property
+  `stale_set_is_every_reply_below_the_winner`; the `lww_repair` model
+  uses C's rule as its negative control.
+* Effect (C): the second replica stays stale until a later read, and the
+  client is answered from it (the first reply not marked for repair).
 * Recommendation: fix it (mark every reply below the final maximum). It
   only adds repair writes C would have needed anyway on the next read.
-* Status: PROPOSED
+* Status: AUTHORIZED
+* Authorized-by: Greg Burd, 2026-11-05 ("fix it as you suggested")
 
 ### DEV-R4: same-millisecond writes leave replicas divergent (C finding)
 
@@ -685,3 +692,5 @@ Owner decisions are appended here with date and the exact instruction.
 * 2026-11-05: DEV-U1 AUTHORIZED ("hash names to a 32bit int, sort that
   numerically"): racks sort by the 32-bit MurmurHash3 of their name, name
   as tie-break.
+* 2026-11-05: DEV-R3 AUTHORIZED ("fix it as you suggested"): a repairing
+  read marks every reply below the newest timestamp stale.
