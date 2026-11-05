@@ -110,6 +110,37 @@ strings, and that `default_bucket_type` (when set) names an
 entry in `bucket_types`. Invalid stanzas are caught by
 `dynomited --test-conf` before the daemon starts.
 
+## Read-repair node id
+
+With `read_repairs_enabled: true` and both consistencies above
+`DC_ONE`, every write and repairable read is stamped with a
+timestamp the replicas compare to keep the newest write. The
+stamp is the number of milliseconds since 2026-01-01T00:00:00Z
+shifted left by 12 bits, with the coordinating node's id in the
+low 12 bits. Two nodes writing one key in the same millisecond
+therefore never tie. Stamps stay exact as sorted-set scores (53
+bits) until 2095-09-07.
+
+```yaml
+dyn_o_mite:
+  node_id: 17
+```
+
+* `node_id` (uint `0..=4095`, default derived): this node's id in
+  its repair timestamps. Values above 4095 are rejected. When
+  unset, the id is the low 12 bits of the 32-bit MurmurHash3 of
+  `"<datacenter>:<rack>:<token>"`.
+
+Every node computes the id of every node in its pool (its own,
+explicit or derived, and each `dyn_seeds` entry's derived id) and
+refuses to start when two nodes share one; the error names both
+nodes. Give the colliding nodes distinct explicit `node_id:`
+values. A node knows only the derived ids of its peers, so an
+explicit `node_id:` set on one node is not visible to the others:
+pick a value no other node uses, explicit or derived.
+
+Changing `node_id:` takes a restart.
+
 ## Hinted handoff
 
 Hinted handoff is the data-availability tier that lets writes

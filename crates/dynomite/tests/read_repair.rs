@@ -10,7 +10,9 @@
 //! * a repairable read answers the client with the freshest replica's
 //!   plain value and sends the add repair to each stale replica;
 //! * a delete answered by every replica is followed by its cleanup
-//!   script on each of them.
+//!   script on each of them;
+//! * writes to one key stamped in the same millisecond by concurrent
+//!   client tasks reach every replica in one order.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -248,5 +250,56 @@ async fn timestamp_read_repair() {
     assert!(cleanups.iter().all(|s| s.fields == vec![b"m".to_vec()]));
     assert!(seen.iter().all(|(_, _, b)| is_script(b)));
 
+    same_millisecond_writes_reach_every_replica_in_one_order().await;
+
     set_read_repairs_enabled(false);
+}
+
+/// Many tasks on a multi-thread runtime SET one key with a frozen clock,
+/// so every write carries the same timestamp. A replica keeps the write
+/// it applies last, so every replica must receive them in the same order.
+async fn same_millisecond_writes_reach_every_replica_in_one_order() {
+    const WRITERS: usize = 16;
+    const WRITES: usize = 50;
+    let mut disp = ClusterDispatcher::new(pool_three_replicas(ConsistencyLevel::DcSafeQuorum))
+        .with_repair_clock(|| 1_800_000_000_000);
+    let (rec_tx, mut rec_rx) = mpsc::channel::<Recorded>(WRITERS * WRITES * 3);
+    for i in 0..3u32 {
+        let (tx, rx) = mpsc::channel::<OutboundRequest>(WRITERS * WRITES);
+        spawn_replica(i, b":1\r\n".to_vec(), rx, rec_tx.clone());
+        disp = disp.with_peer_backend(i, tx);
+    }
+    drop(rec_tx);
+    let disp = Arc::new(disp);
+    let tasks: Vec<_> = (0..WRITERS)
+        .map(|w| {
+            let disp = Arc::clone(&disp);
+            tokio::spawn(async move {
+                for i in 0..WRITES {
+                    let id = u64::try_from(1_000 + w * WRITES + i).unwrap();
+                    let (client_tx, mut client_rx) = mpsc::channel::<OutboundEnvelope>(4);
+                    let _ =
+                        disp.dispatch(request(id, &["SET", "k", &format!("w{w}i{i}")]), client_tx);
+                    let _ = tokio::time::timeout(Duration::from_secs(5), client_rx.recv()).await;
+                }
+            })
+        })
+        .collect();
+    for t in tasks {
+        t.await.expect("writer");
+    }
+    drop(disp);
+    let mut order: [Vec<Vec<u8>>; 3] = Default::default();
+    let mut stamps = std::collections::BTreeSet::new();
+    while let Ok(Some((p, _, b))) =
+        tokio::time::timeout(Duration::from_secs(2), rec_rx.recv()).await
+    {
+        let s = ScriptRequest::decode(&b).expect("repair script");
+        stamps.insert(s.ts);
+        order[usize::try_from(p).unwrap()].push(s.values[0].clone());
+    }
+    assert_eq!(stamps.len(), 1, "one frozen millisecond, one stamp");
+    assert_eq!(order[0].len(), WRITERS * WRITES);
+    assert_eq!(order[0], order[1]);
+    assert_eq!(order[0], order[2]);
 }

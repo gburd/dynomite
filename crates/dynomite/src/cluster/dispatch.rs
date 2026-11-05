@@ -255,6 +255,27 @@ pub struct ClusterDispatcher {
     /// `ServerHandle::inject_request` uses. When `None`, the
     /// backend byte channel is used (the standalone proxy path).
     local_datastore: Option<Arc<dyn crate::embed::hooks::Datastore>>,
+    /// Unix time in milliseconds, read when a request is stamped for
+    /// read repair.
+    repair_clock: fn() -> u64,
+    /// Per-key-slot locks ordering repair-script writes: a write takes
+    /// its slot's lock before it is stamped and holds it until it is
+    /// queued on every target, so two writes to one key reach every
+    /// replica in the same order. Shared by clones.
+    repair_order: Arc<[parking_lot::Mutex<()>]>,
+}
+
+/// A held [`ClusterDispatcher`] repair-ordering slot.
+type RepairOrderGuard<'a> = parking_lot::MutexGuard<'a, ()>;
+
+/// Number of [`ClusterDispatcher`] repair-ordering lock slots.
+const REPAIR_ORDER_SLOTS: usize = 1024;
+
+/// Unix time in milliseconds; `0` before 1970.
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// What the node's own state allows for a request bound for its local
@@ -491,7 +512,29 @@ impl ClusterDispatcher {
             failure_metrics: None,
             command_extension: None,
             local_datastore: None,
+            repair_clock: unix_now_ms,
+            repair_order: (0..REPAIR_ORDER_SLOTS)
+                .map(|_| parking_lot::Mutex::new(()))
+                .collect(),
         }
+    }
+
+    /// Replace the clock read-repair timestamps are taken from (Unix
+    /// milliseconds; the system clock by default).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use dynomite::cluster::dispatch::ClusterDispatcher;
+    /// # use dynomite::cluster::pool::{PoolConfig, ServerPool};
+    /// # use std::sync::Arc;
+    /// let pool = Arc::new(ServerPool::new(PoolConfig::default(), Vec::new()));
+    /// let _disp = ClusterDispatcher::new(pool).with_repair_clock(|| 1_767_225_600_042);
+    /// ```
+    #[must_use]
+    pub fn with_repair_clock(mut self, now_ms: fn() -> u64) -> Self {
+        self.repair_clock = now_ms;
+        self
     }
 
     /// Override the dispatcher's mbuf pool. Useful when the
@@ -1395,7 +1438,7 @@ impl Dispatcher for ClusterDispatcher {
             .unwrap_or_default();
         let plan = self.plan(&req, &key);
         let (req_span, _plan_span) = enter_plan_span(req.id(), &plan);
-        let script = self.repair_script(&req);
+        let (_order, script) = self.repair_script(&req).unzip();
         match plan {
             DispatchPlan::Drop => DispatchOutcome::Drop,
             DispatchPlan::NoTargets => {
@@ -1660,9 +1703,17 @@ impl ClusterDispatcher {
 
     /// The repair script a client request is rewritten into: when read
     /// repairs are on ([`ServerPool::is_read_repairs_enabled`]) and the
-    /// command has repair support, stamped with the current time in
-    /// milliseconds. Requests relayed by a peer are served as they came.
-    fn repair_script(&self, req: &Msg) -> Option<ScriptRequest> {
+    /// command has repair support, stamped with
+    /// [`crate::cluster::pool::repair_timestamp`] of the current time and
+    /// this node's id. Requests relayed by a peer are served as they
+    /// came.
+    ///
+    /// A write is stamped under its key slot's ordering lock, returned
+    /// with the script: the caller holds it until the script is queued
+    /// on every target. Equal stamps from this node (one millisecond)
+    /// are then queued in one order on every replica's channel, and
+    /// each replica keeps the later one.
+    fn repair_script(&self, req: &Msg) -> Option<(Option<RepairOrderGuard<'_>>, ScriptRequest)> {
         if req.dmsg().is_some()
             || matches!(
                 self.pool.config().data_store,
@@ -1672,11 +1723,17 @@ impl ClusterDispatcher {
         {
             return None;
         }
-        cmd_info(req.ty())?;
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
-        ScriptRequest::from_request(req, ts)
+        let info = cmd_info(req.ty())?;
+        let key = req.keys().first()?.tag_bytes();
+        let order = (!info.is_repairable).then(|| {
+            let h = crate::hashkit::hash(HashType::Murmur3, key).get_int();
+            self.repair_order[usize::try_from(h).unwrap_or(0) % self.repair_order.len()].lock()
+        });
+        let ts = crate::cluster::pool::repair_timestamp(
+            (self.repair_clock)(),
+            self.pool.config().node_id,
+        );
+        Some((order, ScriptRequest::from_request(req, ts)?))
     }
 
     /// The sink a single replica's reply goes to: the client's, with the

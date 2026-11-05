@@ -19,6 +19,7 @@ use crate::cluster::datacenter::Datacenter;
 use crate::cluster::peer::Peer;
 use crate::conf::{
     ConfPool, ConsistencyLevel as ConfConsistencyLevel, DataStore, Distribution, HashType,
+    TokenList,
 };
 
 use crate::msg::ConsistencyLevel;
@@ -58,6 +59,66 @@ pub struct BucketType {
     pub write_consistency: ConsistencyLevel,
     /// Replica fan-out cap. `0` means no cap.
     pub n_val: u8,
+}
+
+/// Largest node id a read-repair timestamp can carry.
+pub const NODE_ID_MAX: u16 = 0x0fff;
+
+/// Start of the read-repair timestamp clock: 2026-01-01T00:00:00Z in
+/// Unix milliseconds.
+///
+/// Stamps count milliseconds from here rather than from 1970 so the
+/// shifted value fits the 53 exact bits of the sorted-set score that
+/// stores it until 2095-09-07; from the Unix epoch it would only fit
+/// until 2039.
+pub const REPAIR_EPOCH_MS: u64 = 1_767_225_600_000;
+
+/// Number of low bits of a read-repair timestamp holding the node id.
+pub const NODE_ID_BITS: u32 = 12;
+
+/// The node id a node uses when `node_id:` is unset: the 32-bit
+/// MurmurHash3 of `"<dc>:<rack>:<token>"`, folded to its low 12 bits.
+///
+/// Every node knows every peer's datacenter, rack and token, so each
+/// node can compute every other node's id and refuse to start on a
+/// collision.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::cluster::pool::{derive_node_id, NODE_ID_MAX};
+/// let id = derive_node_id("dc1", "rack1", 101_134_286);
+/// assert!(id <= NODE_ID_MAX);
+/// assert_eq!(id, derive_node_id("dc1", "rack1", 101_134_286));
+/// assert_ne!(id, derive_node_id("dc1", "rack2", 101_134_286));
+/// ```
+#[must_use]
+pub fn derive_node_id(dc: &str, rack: &str, token: u32) -> u16 {
+    let key = format!("{dc}:{rack}:{token}");
+    let h = crate::hashkit::hash(crate::hashkit::HashType::Murmur3, key.as_bytes()).get_int();
+    u16::try_from(h & u32::from(NODE_ID_MAX)).unwrap_or(NODE_ID_MAX)
+}
+
+/// The read-repair timestamp a coordinator stamps a request with at
+/// Unix time `now_ms`: milliseconds since [`REPAIR_EPOCH_MS`] in the
+/// high bits and `node_id` in the low [`NODE_ID_BITS`] bits.
+///
+/// Two coordinators stamping one key in the same millisecond get
+/// different stamps, so replicas agree on which write is newer. A
+/// clock before the epoch counts as the epoch.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::cluster::pool::{repair_timestamp, REPAIR_EPOCH_MS};
+/// let t = REPAIR_EPOCH_MS + 5;
+/// assert_eq!(repair_timestamp(t, 3), (5 << 12) | 3);
+/// assert!(repair_timestamp(t, 1) > repair_timestamp(t, 0));
+/// assert!(repair_timestamp(t + 1, 0) > repair_timestamp(t, 4095));
+/// ```
+#[must_use]
+pub fn repair_timestamp(now_ms: u64, node_id: u16) -> u64 {
+    (now_ms.saturating_sub(REPAIR_EPOCH_MS) << NODE_ID_BITS) | u64::from(node_id & NODE_ID_MAX)
 }
 
 /// Minimal projection of the YAML pool block consumed by the
@@ -133,6 +194,10 @@ pub struct PoolConfig {
     /// hint store persists one segment file per peer here and
     /// replays them at startup. `None` keeps the store RAM-only.
     pub hint_dir: Option<std::path::PathBuf>,
+    /// The local node's id in the low bits of its read-repair
+    /// timestamps ([`repair_timestamp`]): the `node_id:` setting, or
+    /// [`derive_node_id`] of the local datacenter, rack and token.
+    pub node_id: u16,
 }
 
 impl Default for PoolConfig {
@@ -159,6 +224,7 @@ impl Default for PoolConfig {
             hint_store_max_bytes: 64 * 1024 * 1024,
             hint_drain_interval_ms: 30_000,
             hint_dir: None,
+            node_id: 0,
         }
     }
 }
@@ -264,6 +330,13 @@ impl PoolConfig {
             hint_store_max_bytes: pool.hint_store_max_bytes.unwrap_or(64 * 1024 * 1024),
             hint_drain_interval_ms: pool.hint_drain_interval_ms.unwrap_or(30_000),
             hint_dir: pool.hint_dir.clone(),
+            node_id: pool.node_id.unwrap_or_else(|| {
+                derive_node_id(
+                    pool.datacenter.as_deref().unwrap_or("localdc"),
+                    pool.rack.as_deref().unwrap_or("localrack"),
+                    pool.tokens.as_ref().map_or(0, TokenList::value),
+                )
+            }),
         }
     }
 }
@@ -910,6 +983,44 @@ impl ServerPool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn repair_timestamp_orders_by_millisecond_then_node() {
+        let t = REPAIR_EPOCH_MS + 1_000;
+        assert!(repair_timestamp(t + 1, 0) > repair_timestamp(t, NODE_ID_MAX));
+        assert!(repair_timestamp(t, 7) > repair_timestamp(t, 6));
+        let ids: std::collections::BTreeSet<u64> = (0..=NODE_ID_MAX)
+            .map(|id| repair_timestamp(t, id))
+            .collect();
+        assert_eq!(ids.len(), usize::from(NODE_ID_MAX) + 1);
+    }
+
+    #[test]
+    fn repair_timestamp_saturates_before_the_epoch() {
+        assert_eq!(repair_timestamp(0, 9), 9);
+        assert_eq!(repair_timestamp(REPAIR_EPOCH_MS - 1, 9), 9);
+        assert_eq!(repair_timestamp(REPAIR_EPOCH_MS, 9), 9);
+    }
+
+    #[test]
+    fn repair_timestamp_is_exact_as_a_double_until_2095() {
+        // 2095-09-07T15:47:35.552Z is 2^41 ms past the epoch.
+        let last_exact = REPAIR_EPOCH_MS + (1 << 41) - 1;
+        let stamp = repair_timestamp(last_exact, NODE_ID_MAX);
+        assert!(stamp < 1 << 53);
+        // The repair scripts read a stamp as a double.
+        let as_double = |n: u64| n.to_string().parse::<f64>().expect("number");
+        assert_eq!(format!("{:.0}", as_double(stamp)), stamp.to_string());
+        assert!(as_double(stamp - 1) < as_double(stamp));
+        assert!(repair_timestamp(last_exact + 1, 0) >= 1 << 53);
+    }
+
+    #[test]
+    fn derive_node_id_fits_twelve_bits() {
+        for token in [0, 1, 101_134_286, u32::MAX] {
+            assert!(derive_node_id("dc", "r", token) <= NODE_ID_MAX);
+        }
+    }
     use super::*;
     use crate::cluster::peer::PeerEndpoint;
     use crate::hashkit::DynToken;

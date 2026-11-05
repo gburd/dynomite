@@ -405,6 +405,9 @@ fn classify_non_reloadable(old: &ConfPool, new: &ConfPool, out: &mut ReloadOutco
     if old.datacenter != new.datacenter {
         out.non_reloadable.push("datacenter");
     }
+    if old.node_id != new.node_id {
+        out.non_reloadable.push("node_id");
+    }
     if old.data_store != new.data_store {
         out.non_reloadable.push("data_store");
     }

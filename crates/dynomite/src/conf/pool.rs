@@ -441,6 +441,12 @@ pub struct ConfPool {
     /// false.
     #[serde(default)]
     pub hint_dir: Option<PathBuf>,
+    /// `node_id:` - this node's id in the low bits of its read-repair
+    /// timestamps, `0..=4095`. When unset it is derived from the
+    /// node's datacenter, rack and token
+    /// ([`crate::cluster::pool::derive_node_id`]).
+    #[serde(default)]
+    pub node_id: Option<u16>,
     /// `log_format:` - selectable shape for tracing output.
     ///
     /// Accepted values are `default`, `rfc5424`, `rfc3164`, `json`,
@@ -1380,6 +1386,15 @@ impl ConfPool {
         check_positive("dyn_write_timeout", self.dyn_write_timeout)?;
         check_positive("gos_interval", self.gos_interval)?;
         check_positive("stats_interval", self.stats_interval)?;
+        if let Some(id) = self.node_id {
+            if id > crate::cluster::pool::NODE_ID_MAX {
+                return Err(ConfError::OutOfRange {
+                    field: "node_id",
+                    value: i64::from(id),
+                    reason: "must be in 0..=4095",
+                });
+            }
+        }
 
         if let Some(n) = self.dyn_connections {
             if n <= 0 {
@@ -2199,6 +2214,23 @@ hint_dir: /scratch/dynomite-hints
                 field: "hint_store_max_bytes",
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn node_id_must_fit_twelve_bits() {
+        let mut p = pool();
+        p.apply_defaults();
+        p.node_id = Some(4095);
+        assert!(p.validate("p").is_ok());
+        p.node_id = Some(4096);
+        assert!(matches!(
+            p.validate("p"),
+            Err(ConfError::OutOfRange {
+                field: "node_id",
+                value: 4096,
+                ..
+            })
         ));
     }
 
