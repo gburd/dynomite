@@ -9,23 +9,20 @@
 //! treated as fatal. The supervisor's flat 50 ms reconnect
 //! sleep then drove a tight reconnect storm.
 //!
-//! The fix in `crates/dynomited/src/server.rs` introduces an
-//! exponential, jittered backoff that resets only after at
-//! least one frame is successfully parsed, plus a
-//! `backend_reconnect_total{backend, reason}` counter so
-//! future runs can detect the same shape from metrics
-//! scrapes alone.
+//! The supervisor now waits per [`ReconnectBackoff`] (1 s,
+//! doubling, capped at `server_retry_timeout / 1000` s, never
+//! below 1 s) and counts every attempt in
+//! `backend_reconnect_total{backend, reason}` so the same shape
+//! is detectable from metrics scrapes alone.
 //!
 //! This test exercises three invariants:
 //!
-//! * The pure backoff helpers ([`next_backoff_ms`],
-//!   [`jittered_backoff`]) double cleanly, cap at the
-//!   configured ceiling, and emit a non-zero sleep with the
-//!   advertised jitter window.
+//! * The pure schedule doubles from 1 s, caps at the retry
+//!   timeout in whole seconds, and never waits less than 1 s.
 //! * Faced with a synthetic backend that accepts every TCP
 //!   connect and immediately closes it, the supervisor's
 //!   reconnect rate is bounded (dozens per second under the
-//!   old code, single digits under the new one).
+//!   old code, about one per second now).
 //! * The supervisor still drives the `backend_reconnect_total`
 //!   counter on every failed attempt.
 
@@ -39,50 +36,34 @@ use tokio::time::sleep;
 
 use dynomited::metrics::backend_reconnect;
 use dynomited::server::{
-    classify_reconnect_reason, jittered_backoff, next_backoff_ms, should_log_reconnect,
-    spawn_backend_supervisor_for_testing, BACKEND_BACKOFF_INIT_MS, BACKEND_BACKOFF_MAX_MS,
+    classify_reconnect_reason, should_log_reconnect, spawn_backend_supervisor_for_testing,
+    ReconnectBackoff,
 };
 
-#[test]
-fn backoff_doubles_and_caps() {
-    // Doubles cleanly until the cap.
-    let a = BACKEND_BACKOFF_INIT_MS;
-    let b = next_backoff_ms(a);
-    let c = next_backoff_ms(b);
-    let d = next_backoff_ms(c);
-    assert_eq!(b, a * 2);
-    assert_eq!(c, a * 4);
-    assert_eq!(d, a * 8);
-
-    // Far above the cap saturates.
-    assert_eq!(
-        next_backoff_ms(BACKEND_BACKOFF_MAX_MS),
-        BACKEND_BACKOFF_MAX_MS
-    );
-    assert_eq!(
-        next_backoff_ms(BACKEND_BACKOFF_MAX_MS * 100),
-        BACKEND_BACKOFF_MAX_MS,
-    );
-    // Saturating multiply does not panic on near-u64::MAX.
-    assert_eq!(next_backoff_ms(u64::MAX), BACKEND_BACKOFF_MAX_MS);
+fn waits(b: &mut ReconnectBackoff, n: usize) -> Vec<u64> {
+    (0..n).map(|_| b.next_wait().as_secs()).collect()
 }
 
 #[test]
-fn jitter_lands_in_advertised_window() {
-    // For a base of 1 000 ms, every sample must fall in
-    // [500 ms, 1 500 ms]. Run enough samples that we exercise
-    // the rng without making the test flaky.
-    let base_ms: u64 = 1_000;
-    let lo = Duration::from_millis(500);
-    let hi = Duration::from_millis(1_500);
-    for _ in 0..256 {
-        let d = jittered_backoff(base_ms);
-        assert!(d >= lo, "jitter underflowed: {d:?} < {lo:?}");
-        assert!(d <= hi, "jitter overflowed: {d:?} > {hi:?}");
-    }
-    // Zero base still produces a non-zero sleep.
-    let z = jittered_backoff(0);
-    assert!(z >= Duration::from_millis(1));
+fn reconnect_schedule_doubles_from_one_second_to_the_cap() {
+    // Default server_retry_timeout (10 000 ms) caps at 10 s.
+    let mut b = ReconnectBackoff::new(10_000);
+    assert_eq!(waits(&mut b, 6), [1, 2, 4, 8, 10, 10]);
+    // An established connection resets the schedule to 1 s.
+    b.connected();
+    assert_eq!(waits(&mut b, 2), [1, 2]);
+}
+
+#[test]
+fn reconnect_schedule_caps_in_whole_seconds_and_never_below_one() {
+    // 1 500 ms truncates to a 1 s cap.
+    assert_eq!(waits(&mut ReconnectBackoff::new(1_500), 3), [1, 1, 1]);
+    // Below 1 000 ms the cap truncates to 0; the 1 s floor wins.
+    assert_eq!(waits(&mut ReconnectBackoff::new(500), 3), [1, 1, 1]);
+    assert_eq!(waits(&mut ReconnectBackoff::new(0), 2), [1, 1]);
+    // A huge timeout keeps doubling without overflow.
+    let mut b = ReconnectBackoff::new(u64::MAX);
+    assert_eq!(waits(&mut b, 4), [1, 2, 4, 8]);
 }
 
 #[test]
@@ -134,13 +115,9 @@ fn reconnect_reason_classification_covers_every_neterror() {
 /// is forced through the reconnect path repeatedly.
 ///
 /// The pre-fix code reconnected at a flat ~50 ms cadence
-/// (~20/sec). The post-fix code applies exponential backoff
-/// with jitter starting at 50 ms; a 2 s window therefore caps
-/// the reconnect count at roughly 50 / 50 + 50 / 100 + ... ~= 6.
-/// We assert a generous ceiling of 30 attempts in 2 s so
-/// scheduler jitter does not flake the test, while still
-/// failing loudly if a future regression reintroduces the flat
-/// 50 ms loop (which would deliver ~40 attempts).
+/// (~20/sec). Every connect here succeeds, which resets the
+/// schedule, so each close waits the 1 s floor: a 2 s window
+/// sees attempts at about 0 s, 1 s and 2 s, at most 3.
 #[tokio::test(flavor = "current_thread")]
 async fn supervisor_throttles_reconnect_storm_against_always_closing_backend() {
     // Bind a fake backend that accepts and closes.
@@ -177,8 +154,13 @@ async fn supervisor_throttles_reconnect_storm_against_always_closing_backend() {
     // Hold the sender so the channel is "open but empty"; the
     // supervisor is forced to attempt connects.
     let (tx, rx) = mpsc::channel::<dynomite::net::server::OutboundRequest>(1);
-    let supervisor =
-        spawn_backend_supervisor_for_testing(addr, rx, dynomite::conf::DataStore::Memcache, None);
+    let supervisor = spawn_backend_supervisor_for_testing(
+        addr,
+        rx,
+        dynomite::conf::DataStore::Memcache,
+        None,
+        10_000,
+    );
 
     // Let the supervisor reconnect-storm against the synthetic
     // backend for two seconds.
@@ -197,16 +179,11 @@ async fn supervisor_throttles_reconnect_storm_against_always_closing_backend() {
     let _ = tokio::time::timeout(Duration::from_secs(1), listener_task).await;
 
     // Pre-fix: the flat 50 ms sleep delivers ~40 attempts in
-    // 2 s. Post-fix: backoff doubles 50, 100, 200, 400, 800,
-    // 1 600, capped at 5 000; jitter widens this by [0.5, 1.5].
-    // Six attempts is the expected median; we assert <= 30 to
-    // absorb scheduler jitter on a busy CI runner while still
-    // catching any regression that reintroduces a sub-100 ms
-    // floor.
+    // 2 s. Now every attempt is followed by a 1 s wait.
     assert!(
-        attempts_in_window <= 30,
+        attempts_in_window <= 3,
         "supervisor reconnected {attempts_in_window} times in 2 s; \
-         busy-loop fix is regressed (expected <= 30, pre-fix saw ~40)",
+         busy-loop fix is regressed (expected <= 3, pre-fix saw ~40)",
     );
     // Lower bound: the supervisor must keep trying. A zero
     // count here would mean we accidentally muted reconnects.
@@ -257,8 +234,13 @@ async fn supervisor_cpu_stays_bounded_against_always_closing_backend() {
     });
 
     let (tx, rx) = mpsc::channel::<dynomite::net::server::OutboundRequest>(1);
-    let supervisor =
-        spawn_backend_supervisor_for_testing(addr, rx, dynomite::conf::DataStore::Memcache, None);
+    let supervisor = spawn_backend_supervisor_for_testing(
+        addr,
+        rx,
+        dynomite::conf::DataStore::Memcache,
+        None,
+        10_000,
+    );
 
     let clk_tck = clock_ticks_per_second();
     let cpu_before = read_self_user_ticks();

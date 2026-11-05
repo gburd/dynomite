@@ -155,8 +155,13 @@ async fn regression_backend_request_times_out_and_fails_outstanding() {
     let (l, addr) = listener().await;
     tokio::spawn(fake_backend(l));
     let (tx, rx) = mpsc::channel(16);
-    let sup =
-        spawn_backend_supervisor_for_testing(addr, rx, dynomite::conf::DataStore::Valkey, None);
+    let sup = spawn_backend_supervisor_for_testing(
+        addr,
+        rx,
+        dynomite::conf::DataStore::Valkey,
+        None,
+        10_000,
+    );
 
     let start = Instant::now();
     let (r1, mut rx1) = request(1, DmsgType::Req, Duration::from_millis(300));
@@ -191,8 +196,13 @@ async fn regression_backend_request_without_deadline_never_times_out() {
     let (l, addr) = listener().await;
     tokio::spawn(fake_backend(l));
     let (tx, rx) = mpsc::channel(16);
-    let _sup =
-        spawn_backend_supervisor_for_testing(addr, rx, dynomite::conf::DataStore::Valkey, None);
+    let _sup = spawn_backend_supervisor_for_testing(
+        addr,
+        rx,
+        dynomite::conf::DataStore::Valkey,
+        None,
+        10_000,
+    );
     let (mut r1, mut rx1) = request(1, DmsgType::Req, Duration::ZERO);
     r1.deadline = None;
     tx.send(r1).await.expect("send");

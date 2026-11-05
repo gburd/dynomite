@@ -101,8 +101,13 @@ async fn repair_scripts_run_on_the_datastore_connection() {
         return;
     };
     let (tx, rx) = mpsc::channel(16);
-    let _sup =
-        spawn_backend_supervisor_for_testing(vk.1, rx, dynomite::conf::DataStore::Valkey, None);
+    let _sup = spawn_backend_supervisor_for_testing(
+        vk.1,
+        rx,
+        dynomite::conf::DataStore::Valkey,
+        None,
+        10_000,
+    );
     // Plain request, then a script: the script waits for the pipelined reply.
     assert_eq!(send(&tx, 1, wire("SET plain p")).await, b"+OK\r\n");
     assert_eq!(send(&tx, 2, script("SET k v1", 10)).await, b"+OK\r\n");

@@ -142,6 +142,7 @@ async fn unix_backend_round_trip() {
         rx,
         dynomite::conf::DataStore::Valkey,
         None,
+        10_000,
     );
 
     // Push a SET request and await its reply on a per-request
@@ -197,6 +198,7 @@ async fn unix_backend_auth_round_trip() {
         rx,
         dynomite::conf::DataStore::Valkey,
         Some("hunter2".to_string()),
+        10_000,
     );
 
     let (rsp_tx, mut rsp_rx) = mpsc::channel::<OutboundEnvelope>(1);

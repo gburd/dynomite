@@ -1325,7 +1325,6 @@ dependencies = [
  "predicates",
  "prometheus",
  "prost",
- "rand 0.8.8",
  "rcgen",
  "rustls",
  "rustls-pemfile",

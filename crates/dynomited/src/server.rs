@@ -630,6 +630,7 @@ impl Server {
                 }
             }
             let backend_requirepass = conf_pool.redis_requirepass.clone();
+            let backend_retry_timeout_ms = pool_config.server_retry_timeout_ms;
             let backend_stats = engine_stats.clone();
             Some(tokio::spawn(async move {
                 backend_supervisor(
@@ -637,6 +638,7 @@ impl Server {
                     backend_rx,
                     backend_data_store,
                     backend_requirepass,
+                    backend_retry_timeout_ms,
                     Some(backend_stats),
                 )
                 .await
@@ -1894,22 +1896,10 @@ where
 /// backoff whenever a `ServerConn` driver returns. Exits when
 /// the receiver half is closed (the dispatcher is dropped).
 ///
-/// Backoff is exponential with multiplicative jitter:
-///
-/// * Initial delay: 50 ms.
-/// * Cap: 5 000 ms.
-/// * Doubling factor on every failure.
-/// * Per-sleep jitter uniform in `[0.5x, 1.5x]` so concurrent
-///   supervisors do not synchronise on the same retry instant.
-///
-/// The backoff resets to its initial value only after a run
-/// during which the inner driver successfully parsed at least
-/// one frame. A connection that opens, fails its first parse,
-/// and disconnects therefore does not earn a free reset: the
-/// pass-6 chaos run caught the previous flat-50 ms reconnect
-/// loop spinning at ~18 cores against a misconfigured backend
-/// that returned a parse error on every probe (see
-/// `docs/journal/2026-05-27-busy-loop-investigation.md`).
+/// The wait before each reconnect follows [`ReconnectBackoff`]: 1 s
+/// after the first failure, doubling on every further failure, capped
+/// at `server_retry_timeout_ms / 1000` seconds (never below 1 s), and
+/// back to 1 s once a connection is established. No jitter.
 ///
 /// Every reconnect attempt increments
 /// `backend_reconnect_total{backend, reason}` so the same shape
@@ -1933,10 +1923,11 @@ async fn backend_supervisor(
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
     data_store: dynomite::conf::DataStore,
     requirepass: Option<String>,
+    server_retry_timeout_ms: u64,
     stats: Option<Arc<dynomite::stats::Stats>>,
 ) -> Result<(), NetError> {
     let backend_label = addr.to_string();
-    let mut backoff_ms: u64 = BACKEND_BACKOFF_INIT_MS;
+    let mut backoff = ReconnectBackoff::new(server_retry_timeout_ms);
     let mut consecutive_failures: u64 = 0;
     loop {
         // Bail out if the channel is empty AND the sender side has
@@ -1948,7 +1939,10 @@ async fn backend_supervisor(
         }
         let connect = tokio::time::timeout(Duration::from_secs(5), addr.connect()).await;
         let mut transport = match connect {
-            Ok(Ok(t)) => t,
+            Ok(Ok(t)) => {
+                backoff.connected();
+                t
+            }
             Ok(Err(e)) => {
                 serve_errors_while(
                     record_reconnect_and_back_off(
@@ -1957,7 +1951,7 @@ async fn backend_supervisor(
                         Some(&e.to_string()),
                         "backend connect failed; retrying",
                         &mut consecutive_failures,
-                        &mut backoff_ms,
+                        &mut backoff,
                     ),
                     &mut rx,
                     data_store,
@@ -1973,7 +1967,7 @@ async fn backend_supervisor(
                         None,
                         "backend connect timed out; retrying",
                         &mut consecutive_failures,
-                        &mut backoff_ms,
+                        &mut backoff,
                     ),
                     &mut rx,
                     data_store,
@@ -1999,7 +1993,7 @@ async fn backend_supervisor(
                             Some(&e.to_string()),
                             "backend AUTH failed; reconnecting after backoff",
                             &mut consecutive_failures,
-                            &mut backoff_ms,
+                            &mut backoff,
                         ),
                         &mut rx,
                         data_store,
@@ -2030,11 +2024,8 @@ async fn backend_supervisor(
             Err(e) => {
                 record_server_close(stats.as_deref(), &e);
                 if frames_ok > 0 {
-                    // The connection produced real work before it
-                    // tore down; treat the next attempt as a fresh
-                    // start so a long-lived but eventually-dropped
-                    // link does not pay the previous run's backoff.
-                    backoff_ms = BACKEND_BACKOFF_INIT_MS;
+                    // The connection did real work, so the next failure
+                    // starts the log throttle afresh.
                     consecutive_failures = 0;
                 }
                 let reason = classify_reconnect_reason(&e);
@@ -2045,7 +2036,7 @@ async fn backend_supervisor(
                         Some(&e.to_string()),
                         "backend connection ended; reconnecting",
                         &mut consecutive_failures,
-                        &mut backoff_ms,
+                        &mut backoff,
                     ),
                     &mut rx,
                     data_store,
@@ -2056,15 +2047,6 @@ async fn backend_supervisor(
     }
 }
 
-/// Increment `backend_reconnect_total{backend, reason}`, log
-/// the supplied message subject to the throttle returned by
-/// [`should_log_reconnect`], and `tokio::time::sleep` for the
-/// next jittered backoff slot.
-///
-/// Mutates `consecutive_failures` (incremented, saturating) and
-/// `backoff_ms` (advanced through [`next_backoff_ms`]) in place
-/// so callers see the same schedule the supervisor itself
-/// observes on the next iteration.
 /// While the datastore supervisor waits to reconnect, answer every
 /// request that arrives with the storage error at once instead of letting
 /// it wait out the backoff, so a node whose datastore is down fails its
@@ -2094,7 +2076,7 @@ async fn record_reconnect_and_back_off(
     error: Option<&str>,
     message: &'static str,
     consecutive_failures: &mut u64,
-    backoff_ms: &mut u64,
+    backoff: &mut ReconnectBackoff,
 ) {
     *consecutive_failures = consecutive_failures.saturating_add(1);
     crate::metrics::backend_reconnect()
@@ -2118,44 +2100,93 @@ async fn record_reconnect_and_back_off(
             );
         }
     }
-    tokio::time::sleep(jittered_backoff(*backoff_ms)).await;
-    *backoff_ms = next_backoff_ms(*backoff_ms);
+    tokio::time::sleep(backoff.next_wait()).await;
 }
 
-/// Initial reconnect delay (50 ms) and ceiling (5 000 ms) used
-/// by the `backend_supervisor` backoff schedule. Exposed at
-/// module scope so the regression test in
-/// `tests/regression_busy_loop.rs` can reason about the
-/// expected wall-clock spread.
-pub const BACKEND_BACKOFF_INIT_MS: u64 = 50;
-/// Ceiling on the per-attempt sleep imposed by the
-/// `backend_supervisor` backoff schedule.
-pub const BACKEND_BACKOFF_MAX_MS: u64 = 5_000;
+/// Shortest wait before a datastore reconnect, in seconds.
+pub const MIN_WAIT_BEFORE_RECONNECT_SECS: u64 = 1;
 
-/// Compute the next non-jittered backoff value: double the
-/// previous one, saturating at the ceiling. The jittered sleep
-/// uses [`jittered_backoff`].
-#[must_use]
-pub fn next_backoff_ms(prev: u64) -> u64 {
-    prev.saturating_mul(2).min(BACKEND_BACKOFF_MAX_MS)
-}
-
-/// Apply uniform multiplicative jitter in `[0.5, 1.5]` to the
-/// supplied backoff in ms and return a [`Duration`]. Jitter is
-/// computed in integer arithmetic so the function never panics
-/// and never depends on floating-point determinism.
+/// Reconnect wait schedule for the local datastore connection.
 ///
-/// The minimum sleep is 1 ms: a zero-duration sleep would
-/// degrade to a yield, which is precisely what we are guarding
-/// against here.
-#[must_use]
-pub fn jittered_backoff(ms: u64) -> Duration {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    // Multiplicative jitter in [50, 150] / 100 == [0.5, 1.5].
-    let scale: u64 = rng.gen_range(50..=150);
-    let scaled = ms.saturating_mul(scale) / 100;
-    Duration::from_millis(scaled.max(1))
+/// Every failure waits `max(current, 1)` seconds and then doubles
+/// `current`, capped at `server_retry_timeout_ms / 1000` seconds
+/// (integer division, so a timeout under 1 000 ms caps at 0 and every
+/// wait is the 1 s floor). An established connection resets `current`
+/// to 0, so the next failure waits 1 s again.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use dynomited::server::ReconnectBackoff;
+/// let mut b = ReconnectBackoff::new(10_000);
+/// let waits: Vec<u64> = (0..6).map(|_| b.next_wait().as_secs()).collect();
+/// assert_eq!(waits, [1, 2, 4, 8, 10, 10]);
+/// b.connected();
+/// assert_eq!(b.next_wait(), Duration::from_secs(1));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReconnectBackoff {
+    current_timeout_sec: u64,
+    max_timeout_sec: u64,
+}
+
+impl ReconnectBackoff {
+    /// A schedule for a datastore whose `server_retry_timeout` is
+    /// `server_retry_timeout_ms`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomited::server::ReconnectBackoff;
+    /// let mut b = ReconnectBackoff::new(1_500);
+    /// assert_eq!(b.next_wait().as_secs(), 1);
+    /// assert_eq!(b.next_wait().as_secs(), 1);
+    /// ```
+    #[must_use]
+    pub fn new(server_retry_timeout_ms: u64) -> Self {
+        Self {
+            current_timeout_sec: 0,
+            max_timeout_sec: server_retry_timeout_ms / 1000,
+        }
+    }
+
+    /// Record a failure: return how long to wait before reconnecting
+    /// and advance the schedule.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomited::server::ReconnectBackoff;
+    /// let mut b = ReconnectBackoff::new(500);
+    /// assert_eq!(b.next_wait().as_secs(), 1);
+    /// assert_eq!(b.next_wait().as_secs(), 1);
+    /// ```
+    pub fn next_wait(&mut self) -> Duration {
+        self.current_timeout_sec = self.current_timeout_sec.max(MIN_WAIT_BEFORE_RECONNECT_SECS);
+        let wait = Duration::from_secs(self.current_timeout_sec);
+        self.current_timeout_sec = self
+            .current_timeout_sec
+            .saturating_mul(2)
+            .min(self.max_timeout_sec);
+        wait
+    }
+
+    /// Record an established connection: the next failure waits 1 s.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomited::server::ReconnectBackoff;
+    /// let mut b = ReconnectBackoff::new(10_000);
+    /// b.next_wait();
+    /// b.next_wait();
+    /// b.connected();
+    /// assert_eq!(b.next_wait().as_secs(), 1);
+    /// ```
+    pub fn connected(&mut self) {
+        self.current_timeout_sec = 0;
+    }
 }
 
 /// Translate a [`NetError`] into the `reason` label for the
@@ -2198,12 +2229,14 @@ pub fn spawn_backend_supervisor_for_testing(
     rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
     data_store: dynomite::conf::DataStore,
     requirepass: Option<String>,
+    server_retry_timeout_ms: u64,
 ) -> tokio::task::JoinHandle<Result<(), NetError>> {
     tokio::spawn(backend_supervisor(
         BackendAddr::Tcp(addr),
         rx,
         data_store,
         requirepass,
+        server_retry_timeout_ms,
         None,
     ))
 }
@@ -2220,12 +2253,14 @@ pub fn spawn_backend_supervisor_unix_for_testing(
     rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
     data_store: dynomite::conf::DataStore,
     requirepass: Option<String>,
+    server_retry_timeout_ms: u64,
 ) -> tokio::task::JoinHandle<Result<(), NetError>> {
     tokio::spawn(backend_supervisor(
         BackendAddr::Unix(path),
         rx,
         data_store,
         requirepass,
+        server_retry_timeout_ms,
         None,
     ))
 }
@@ -4005,27 +4040,16 @@ mod tests {
     // ---- backoff schedule helpers ----
 
     #[test]
-    fn next_backoff_doubles_then_saturates() {
-        assert_eq!(next_backoff_ms(BACKEND_BACKOFF_INIT_MS), 100);
-        assert_eq!(next_backoff_ms(100), 200);
-        // Saturates at the ceiling rather than overflowing.
-        assert_eq!(
-            next_backoff_ms(BACKEND_BACKOFF_MAX_MS),
-            BACKEND_BACKOFF_MAX_MS
-        );
-        assert_eq!(next_backoff_ms(u64::MAX), BACKEND_BACKOFF_MAX_MS);
-    }
-
-    #[test]
-    fn jittered_backoff_stays_in_band_and_never_zero() {
-        // Multiplicative jitter is in [0.5, 1.5]; the floor is 1ms.
-        for _ in 0..256 {
-            let d = jittered_backoff(1000);
-            assert!(d >= Duration::from_millis(500));
-            assert!(d <= Duration::from_millis(1500));
-        }
-        // A zero input still yields the 1ms floor, never a 0-sleep.
-        assert_eq!(jittered_backoff(0), Duration::from_millis(1));
+    fn reconnect_backoff_doubles_to_the_retry_timeout_cap() {
+        let waits = |ms: u64, n: usize| {
+            let mut b = ReconnectBackoff::new(ms);
+            (0..n).map(|_| b.next_wait().as_secs()).collect::<Vec<_>>()
+        };
+        assert_eq!(waits(10_000, 6), [1, 2, 4, 8, 10, 10]);
+        assert_eq!(waits(1_500, 2), [1, 1]);
+        assert_eq!(waits(500, 2), [1, 1]);
+        assert_eq!(waits(0, 2), [1, 1]);
+        assert_eq!(waits(u64::MAX, 3), [1, 2, 4]);
     }
 
     #[test]
