@@ -577,9 +577,9 @@ held at its current behaviour until the owner decides.
 * Evidence: the cluster probe (3 nodes, one rack, started 0.3 s apart)
   answered the first write `Failed to achieve Quorum` 3 of 3 times with
   the 1 s wait and 0 of 10 times with 100 ms.
-* Status: PROPOSED. Nothing new relies on it: 100 ms / 5 s is the wait
-  `main` already had; the change to C's schedule is what waits on this
-  ruling.
+* Status: AUTHORIZED
+* Authorized-by: Greg Burd, 2026-11-05 ("keep it until routing stops
+  depending on gossip state").
 * Recommendation: keep 100 ms / 5 s until routing stops gating on
   gossip state (the C rule); then adopt C's schedule. The alternative,
   routing to DOWN owners as C does, changes the failure behaviour every
@@ -622,10 +622,12 @@ held at its current behaviour until the owner decides.
 * Recommendation: authorise the semantics above (the C fix is to read
   `selected_rsp`), with the error reply instead of the connection close.
   Separately: match each fragment's blocks to keys by name, so a reply
-  with misses is in key order like memcached's (a small change to the
-  merge; asked as a question, not done).
+  with misses is in key order like memcached's. Owner, 2026-11-05: keep
+  C's order; not done.
 * Pinned by: `crates/dynomite/tests/regression_memcache_multiget_fragment.rs`.
-* Status: PROPOSED
+* Status: AUTHORIZED
+* Authorized-by: Greg Burd, 2026-11-05 ("yes, keep it"): the semantics
+  above as implemented, including C's merge order after a miss.
 
 ## E. Decisions log
 
@@ -668,3 +670,8 @@ Owner decisions are appended here with date and the exact instruction.
   `murmur3_x64_64` as a vnode ring token is folded to its high word.
   Pinned by `dynomite/tests/regression_hash_placement.rs` and
   `dyniak/src/router.rs::regression_every_hash_spreads_over_the_node_token_ring`.
+* 2026-11-05: DEV-N1 AUTHORIZED ("keep it until routing stops depending
+  on gossip state"): the peer redial wait stays 100 ms doubling to 5 s.
+  DEV-M1 AUTHORIZED ("yes, keep it"): memcache get/gets split per owner
+  and merged with C's logic, a fragment error answers the server error,
+  and the reply order after a miss is C's.
