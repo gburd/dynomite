@@ -354,14 +354,13 @@ pub struct Server {
     /// plaintext (in which case the cell stays empty and the
     /// reload pipeline has nothing to swap).
     tls_profiles: Option<SharedTlsProfiles>,
-    /// Shared failure-cause metrics accumulator. Plumbed into
-    /// the dispatcher (which records per-cause dispatch error
-    /// counters) and the gossip handler (which records peer
-    /// state transitions and phi-score gauges). The run loop
-    /// snapshots these into the stats sink on a periodic
-    /// timer so the `/stats` and `/metrics` endpoints expose
-    /// them.
-    failure_metrics: Arc<dynomite::stats::FailureMetrics>,
+    /// The node's counters and histograms, including the failure-cause
+    /// metrics the dispatcher and gossip handler record; the run loop
+    /// copies a snapshot into [`Self::stats_sink`] every
+    /// `stats_interval`.
+    engine_stats: Arc<dynomite::stats::Stats>,
+    /// Interval at which the stats sink is refreshed.
+    stats_interval: Duration,
     /// Mutex-shared stats snapshot the [`StatsServer`] reads
     /// from. The run loop refreshes the failure block of this
     /// snapshot on a one-second timer.
@@ -494,6 +493,21 @@ impl Server {
             .as_ref()
             .and_then(|s| s.entries().first())
             .ok_or(ServerError::MissingConfig("servers"))?;
+        // The node's counters and histograms, served on `/info` once per
+        // `stats_interval`; the failure metrics live in the same aggregator.
+        let engine_stats = Arc::new(dynomite::stats::Stats::new(
+            dynomite::stats::ServiceInfo {
+                source: nix::unistd::gethostname()
+                    .ok()
+                    .and_then(|h| h.into_string().ok())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                rack: pool_config.rack.clone(),
+                dc: pool_config.dc.clone(),
+            },
+            dynomite::stats::PoolStats::new(&pool_name),
+            dynomite::stats::ServerStats::new(datastore.name()),
+        ));
         let backend_data_store = pool_config.data_store;
         let is_dyniak = backend_data_store == dynomite::conf::DataStore::Dyniak;
         let preconnect = conf_pool.preconnect.unwrap_or(false);
@@ -616,12 +630,14 @@ impl Server {
                 }
             }
             let backend_requirepass = conf_pool.redis_requirepass.clone();
+            let backend_stats = engine_stats.clone();
             Some(tokio::spawn(async move {
                 backend_supervisor(
                     backend_addr,
                     backend_rx,
                     backend_data_store,
                     backend_requirepass,
+                    Some(backend_stats),
                 )
                 .await
             }))
@@ -660,7 +676,7 @@ impl Server {
             None
         };
         let mut dispatcher = ClusterDispatcher::new(server_pool.clone()).with_backend(backend_tx);
-        let failure_metrics = Arc::new(dynomite::stats::FailureMetrics::new());
+        let failure_metrics = engine_stats.failure_metrics();
         dispatcher = dispatcher.with_failure_metrics(failure_metrics.clone());
         if let Some(store) = hint_store.as_ref() {
             dispatcher = dispatcher.with_hint_store(store.clone());
@@ -766,6 +782,10 @@ impl Server {
             gossip_peer_txs.push((peer_idx, peer_pname.clone(), peer_tx));
             let peer_tls_for_supervisor = peer_tls.clone();
             let peer_dc_for_supervisor = peer_dc.clone();
+            let peer_stats = PeerStats {
+                stats: engine_stats.clone(),
+                same_dc: peer_dc == pool_config.dc,
+            };
             let handle: JoinHandle<Result<(), NetError>> = {
                 use tracing::Instrument as _;
                 let span = tracing::info_span!(
@@ -781,6 +801,7 @@ impl Server {
                             peer_rx,
                             peer_tls_for_supervisor,
                             peer_dc_for_supervisor,
+                            Some(peer_stats),
                         )
                         .await
                     }
@@ -834,7 +855,14 @@ impl Server {
             None => None,
         };
 
-        let stats_sink = Arc::new(Mutex::new(Snapshot::default()));
+        let stats_sink = Arc::new(Mutex::new(engine_stats.snapshot()));
+        let stats_interval = Duration::from_millis(
+            conf_pool
+                .stats_interval
+                .and_then(|n| u64::try_from(n).ok())
+                .filter(|&n| n > 0)
+                .unwrap_or(30_000),
+        );
         let stats = match stats_listen_addr {
             Some(addr) => {
                 let ring_pool = server_pool.clone();
@@ -1060,7 +1088,8 @@ impl Server {
             conf_path: None,
             reloadable,
             tls_profiles,
-            failure_metrics,
+            engine_stats,
+            stats_interval,
             stats_sink,
             #[cfg(feature = "search")]
             vector_registry,
@@ -1266,7 +1295,8 @@ impl Server {
             conf_path,
             reloadable,
             tls_profiles,
-            failure_metrics,
+            engine_stats,
+            stats_interval,
             stats_sink,
             #[cfg(feature = "search")]
             vector_registry,
@@ -1283,11 +1313,11 @@ impl Server {
         // engine grows a real `Stats` aggregator (currently
         // out of scope for the binary).
         let stats_refresher: JoinHandle<()> = {
-            let metrics = failure_metrics.clone();
+            let stats = engine_stats.clone();
             let sink = stats_sink.clone();
             let mut cancel_rx = shutdown_rx.clone();
             tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(Duration::from_secs(1));
+                let mut ticker = tokio::time::interval(stats_interval);
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     tokio::select! {
@@ -1296,8 +1326,8 @@ impl Server {
                             if *cancel_rx.borrow() { return; }
                         }
                         _ = ticker.tick() => {
-                            let mut guard = sink.lock();
-                            guard.failure = metrics.snapshot();
+                            let snap = stats.snapshot();
+                            *sink.lock() = snap;
                         }
                     }
                 }
@@ -1903,6 +1933,7 @@ async fn backend_supervisor(
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
     data_store: dynomite::conf::DataStore,
     requirepass: Option<String>,
+    stats: Option<Arc<dynomite::stats::Stats>>,
 ) -> Result<(), NetError> {
     let backend_label = addr.to_string();
     let mut backoff_ms: u64 = BACKEND_BACKOFF_INIT_MS;
@@ -1997,6 +2028,7 @@ async fn backend_supervisor(
         match driver_res {
             Ok(()) => return Ok(()),
             Err(e) => {
+                record_server_close(stats.as_deref(), &e);
                 if frames_ok > 0 {
                     // The connection produced real work before it
                     // tore down; treat the next attempt as a fresh
@@ -2172,6 +2204,7 @@ pub fn spawn_backend_supervisor_for_testing(
         rx,
         data_store,
         requirepass,
+        None,
     ))
 }
 
@@ -2193,6 +2226,7 @@ pub fn spawn_backend_supervisor_unix_for_testing(
         rx,
         data_store,
         requirepass,
+        None,
     ))
 }
 
@@ -2207,6 +2241,36 @@ fn earliest_deadline(
     extra: Option<tokio::time::Instant>,
 ) -> Option<tokio::time::Instant> {
     pending.iter().filter_map(|p| p.4).chain(extra).min()
+}
+
+/// Count a datastore connection that ended with an error: the close
+/// (`server_eof` when the datastore closed it, `server_timedout` for a
+/// request timeout, `server_err` otherwise) and the ejection
+/// (`server_ejects`, `server_ejected_at`). The request that timed out is
+/// one `server_dropped_requests`; requests written to the connection and
+/// still owed a reply are answered with the storage error but, like the
+/// ones already sent in the C engine, are not counted as dropped.
+fn record_server_close(stats: Option<&dynomite::stats::Stats>, err: &NetError) {
+    use dynomite::stats::{PoolField, ServerField};
+    let Some(stats) = stats else { return };
+    let field = match err {
+        NetError::Closed => ServerField::ServerEof,
+        NetError::Io(e) if e.kind() == std::io::ErrorKind::TimedOut => ServerField::ServerTimedout,
+        _ => ServerField::ServerErr,
+    };
+    stats.server_incr(field);
+    if field == ServerField::ServerTimedout {
+        stats.server_incr(ServerField::ServerDroppedRequests);
+    }
+    stats.server_set(ServerField::ServerEjectedAt, now_msec());
+    stats.pool_incr(PoolField::ServerEjects);
+}
+
+/// Wall-clock milliseconds since the UNIX epoch.
+fn now_msec() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// Answer every request the datastore can no longer answer with
@@ -2566,6 +2630,7 @@ async fn peer_supervisor(
     mut rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
     tls: Option<PeerTlsRuntime>,
     peer_dc: String,
+    stats: Option<PeerStats>,
 ) -> Result<(), NetError> {
     // Resolve the per-peer client-side TLS handles dynamically:
     // the supervisor re-reads `tls.profiles` on every reconnect
@@ -2592,6 +2657,10 @@ async fn peer_supervisor(
         let stream = match connect {
             Ok(Ok(s)) => {
                 wait = PeerReconnectWait::default();
+                if let Some(ps) = stats.as_ref() {
+                    ps.stats
+                        .pool_incr(dynomite::stats::PoolField::PeerConnections);
+                }
                 // SO_KEEPALIVE on peer links, so a peer that vanishes
                 // without a FIN is noticed; failure is not fatal.
                 let _ = socket2::SockRef::from(&s).set_keepalive(true);
@@ -2669,6 +2738,9 @@ async fn peer_supervisor(
         )
         .with_first(std::mem::take(&mut held_control));
         let driver_res = driver.run_with(&mut rx).await;
+        if let Some(ps) = stats.as_ref() {
+            ps.record_close(driver_res.as_ref().err());
+        }
         // The driver returns Ok on a clean close (the peer sent FIN, e.g.
         // it restarted) and Err on an I/O failure. Either way the link is
         // gone and the peer must be redialed; only a closed request
@@ -2681,6 +2753,47 @@ async fn peer_supervisor(
             }
         }
         refuse_peer_requests_while(wait.next(), &mut rx, &mut held_control).await;
+    }
+}
+
+/// Where a peer supervisor counts its connection's lifecycle.
+struct PeerStats {
+    stats: Arc<dynomite::stats::Stats>,
+    /// The peer is in this node's datacenter.
+    same_dc: bool,
+}
+
+impl PeerStats {
+    /// Count a peer connection that ended: one fewer connection and the
+    /// ejection time; a close by the peer (`err` none) is `peer_eof`; a
+    /// request timeout is `peer_timedout` (or `remote_peer_timedout`) and
+    /// one `peer_timedout_requests` (or remote); any other error is
+    /// `peer_err`. Requests already written and owed a reply are answered
+    /// with the connection error but, like the ones already sent in the C
+    /// engine, are not counted as dropped.
+    fn record_close(&self, err: Option<&NetError>) {
+        use dynomite::stats::PoolField;
+        let st = &self.stats;
+        st.pool_decr(PoolField::PeerConnections);
+        st.pool_set(PoolField::PeerEjectedAt, now_msec());
+        let Some(err) = err else {
+            st.pool_incr(PoolField::PeerEof);
+            return;
+        };
+        if matches!(err, NetError::Io(e) if e.kind() == std::io::ErrorKind::TimedOut) {
+            let (conn, req) = if self.same_dc {
+                (PoolField::PeerTimedout, PoolField::PeerTimedoutRequests)
+            } else {
+                (
+                    PoolField::RemotePeerTimedout,
+                    PoolField::RemotePeerTimedoutRequests,
+                )
+            };
+            st.pool_incr(conn);
+            st.pool_incr(req);
+        } else {
+            st.pool_incr(PoolField::PeerErr);
+        }
     }
 }
 
@@ -2765,7 +2878,7 @@ pub fn spawn_peer_supervisor_for_testing(
     rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
     peer_dc: String,
 ) -> tokio::task::JoinHandle<Result<(), NetError>> {
-    tokio::spawn(peer_supervisor(addr, peer_idx, rx, None, peer_dc))
+    tokio::spawn(peer_supervisor(addr, peer_idx, rx, None, peer_dc, None))
 }
 
 /// Bundle of TLS handles shared across the dnode listener and
@@ -3395,6 +3508,58 @@ fn seed_to_peer(idx: u32, seed: &ConfDynSeed, pool_config: &PoolConfig) -> Peer 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fresh_stats() -> Arc<dynomite::stats::Stats> {
+        Arc::new(dynomite::stats::Stats::new(
+            dynomite::stats::ServiceInfo::default(),
+            dynomite::stats::PoolStats::new("p"),
+            dynomite::stats::ServerStats::new("s"),
+        ))
+    }
+
+    #[test]
+    fn server_close_counts_by_cause() {
+        use dynomite::stats::{PoolField, ServerField};
+        let st = fresh_stats();
+        record_server_close(Some(&st), &dynomite::net::server::request_timed_out());
+        record_server_close(Some(&st), &NetError::Closed);
+        record_server_close(
+            Some(&st),
+            &NetError::Io(std::io::ErrorKind::ConnectionReset.into()),
+        );
+        assert_eq!(st.server_get(ServerField::ServerTimedout), 1);
+        assert_eq!(st.server_get(ServerField::ServerDroppedRequests), 1);
+        assert_eq!(st.server_get(ServerField::ServerEof), 1);
+        assert_eq!(st.server_get(ServerField::ServerErr), 1);
+        assert_eq!(st.pool_get(PoolField::ServerEjects), 3);
+        assert!(st.server_get(ServerField::ServerEjectedAt) > 0);
+    }
+
+    #[test]
+    fn peer_close_counts_by_cause_and_dc() {
+        use dynomite::stats::PoolField;
+        let st = fresh_stats();
+        let local = PeerStats {
+            stats: st.clone(),
+            same_dc: true,
+        };
+        let remote = PeerStats {
+            stats: st.clone(),
+            same_dc: false,
+        };
+        st.pool_set(PoolField::PeerConnections, 4);
+        local.record_close(Some(&dynomite::net::server::request_timed_out()));
+        remote.record_close(Some(&dynomite::net::server::request_timed_out()));
+        local.record_close(None);
+        remote.record_close(Some(&NetError::Closed));
+        assert_eq!(st.pool_get(PoolField::PeerTimedout), 1);
+        assert_eq!(st.pool_get(PoolField::PeerTimedoutRequests), 1);
+        assert_eq!(st.pool_get(PoolField::RemotePeerTimedout), 1);
+        assert_eq!(st.pool_get(PoolField::RemotePeerTimedoutRequests), 1);
+        assert_eq!(st.pool_get(PoolField::PeerEof), 1);
+        assert_eq!(st.pool_get(PoolField::PeerErr), 1);
+        assert_eq!(st.pool_get(PoolField::PeerConnections), 0);
+    }
 
     fn yaml(listen_port: u16, dyn_port: u16, stats_port: u16) -> String {
         format!(

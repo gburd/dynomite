@@ -106,3 +106,82 @@ fn frozen_datastore_fails_after_the_request_timeout() {
         eprintln!("[{engine:?}] datastore timeout matches");
     }
 }
+
+/// The value of counter `name` in a `/info` body (the first occurrence:
+/// pool counters are unique, server counters sit in the server block).
+fn counter(info: &str, name: &str) -> i64 {
+    let key = format!("\"{name}\":");
+    let at = info
+        .find(&key)
+        .unwrap_or_else(|| panic!("no {name} in /info"));
+    info[at + key.len()..]
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .unwrap_or_else(|_| panic!("{name} is not a number"))
+}
+
+/// A request timeout is counted where the request timed out: a datastore
+/// timeout bumps `server_timedout`, `server_dropped_requests` and
+/// `server_ejects` on the node that owns the datastore; a timeout towards
+/// a frozen same-DC peer bumps `peer_timedout` and `peer_timedout_requests`
+/// on the node that forwarded it. Counters are read from `/info` after a
+/// stats interval (1 s here) has aggregated them.
+#[test]
+fn timeouts_are_counted_in_info() {
+    sandboxed!("timeouts_are_counted_in_info");
+    for engine in engines() {
+        let spec = ClusterSpec::grid(1, 1, 3)
+            .engine(engine)
+            .with("timeout", "1000")
+            .with("stats_interval", "1000");
+        let Some(c) = start_or_skip(spec) else {
+            return;
+        };
+        let k = key_on(&c, 1);
+        let info = |n: usize| c.nodes[n].stats("/info").expect("info");
+        let settle = || std::thread::sleep(Duration::from_millis(2500));
+
+        settle();
+        let before1 = info(1);
+        c.nodes[1].pause_store().expect("freeze datastore");
+        let (v, _) = timed(&c, 1, &["GET", &k]);
+        assert_eq!(v, Value::Error(REFUSED.into()), "{engine:?}");
+        c.nodes[1].resume_store().expect("resume datastore");
+        settle();
+        let after1 = info(1);
+        for name in [
+            "server_timedout",
+            "server_dropped_requests",
+            "server_ejects",
+        ] {
+            assert_eq!(
+                counter(&after1, name) - counter(&before1, name),
+                1,
+                "{engine:?} node 1 {name}"
+            );
+        }
+
+        let before0 = info(0);
+        c.nodes[1].pause().expect("freeze node 1");
+        let (v, _) = timed(&c, 0, &["GET", &k]);
+        assert_eq!(
+            v,
+            Value::Error("ERR Peer: Peer Node refused connection".into()),
+            "{engine:?}"
+        );
+        c.nodes[1].resume().expect("resume node 1");
+        settle();
+        let after0 = info(0);
+        for name in ["peer_timedout", "peer_timedout_requests"] {
+            assert_eq!(
+                counter(&after0, name) - counter(&before0, name),
+                1,
+                "{engine:?} node 0 {name}"
+            );
+        }
+        eprintln!("[{engine:?}] timeout counters match");
+    }
+}
