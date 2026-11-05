@@ -262,7 +262,7 @@ fn	_conn_put	src/dyn_connection_internal.c	181	todo
 fn	_conn_init	src/dyn_connection_internal.c	190	todo				
 fn	_conn_deinit	src/dyn_connection_internal.c	196	todo				
 fn	_conn_reuse	src/dyn_connection_internal.c	208	todo				
-macro	MIN_WAIT_BEFORE_RECONNECT_IN_SECS	src/dyn_connection_pool.c	5	todo				
+macro	MIN_WAIT_BEFORE_RECONNECT_IN_SECS	src/dyn_connection_pool.c	5	ported	crates/dynomited/src/server.rs::MIN_WAIT_BEFORE_RECONNECT_SECS	crates/dynomited/tests/regression_busy_loop.rs::reconnect_schedule_caps_in_whole_seconds_and_never_below_one		1 s floor applied before the cap
 struct	conn_pool	src/dyn_connection_pool.c	7	todo				
 fn	_print_conn_pool	src/dyn_connection_pool.c	28	todo				
 fn	_create_missing_connections	src/dyn_connection_pool.c	38	todo				
@@ -271,9 +271,9 @@ fn	conn_pool_preconnect	src/dyn_connection_pool.c	99	todo
 fn	conn_pool_get	src/dyn_connection_pool.c	121	todo				
 fn	conn_pool_destroy	src/dyn_connection_pool.c	135	todo				
 fn	conn_pool_notify_conn_close	src/dyn_connection_pool.c	159	todo				
-fn	_conn_pool_reconnect_task	src/dyn_connection_pool.c	176	todo				
-fn	conn_pool_notify_conn_errored	src/dyn_connection_pool.c	182	todo				
-fn	conn_pool_connected	src/dyn_connection_pool.c	207	todo				
+fn	_conn_pool_reconnect_task	src/dyn_connection_pool.c	176	replaced	crates/dynomited/src/server.rs::backend_supervisor	crates/dynomited/tests/regression_busy_loop.rs::supervisor_throttles_reconnect_storm_against_always_closing_backend		DEV-S1: tokio sleep in the supervisor loop replaces the scheduled task; the loop reconnects when the wait ends
+fn	conn_pool_notify_conn_errored	src/dyn_connection_pool.c	182	ported	crates/dynomited/src/server.rs::ReconnectBackoff::next_wait	crates/dynomited/tests/regression_busy_loop.rs::reconnect_schedule_doubles_from_one_second_to_the_cap		wait max(cur,1) s, then cur=min(2*cur, server_retry_timeout/1000); one supervisor per datastore so a second pending reconnect cannot exist
+fn	conn_pool_connected	src/dyn_connection_pool.c	207	ported	crates/dynomited/src/server.rs::ReconnectBackoff::connected	crates/dynomited/tests/regression_busy_loop.rs::reconnect_schedule_doubles_from_one_second_to_the_cap		reset on connect; failure_count lives as the supervisor log-throttle counter
 fn	conn_pool_active_count	src/dyn_connection_pool.c	212	todo				
 typedef	conn_pool_t	src/dyn_connection_pool.h	7	todo				
 var	admin_opt	src/dyn_core.c	36	todo				
