@@ -238,7 +238,7 @@ mod tests {
 ///
 /// # Negative control
 ///
-/// [`McMergeModel::positional`] gives each key the block at its position
+/// [`memcache::McMergeModel::positional`] gives each key the block at its position
 /// in its fragment, as if a miss kept a slot. A hit after a miss of the
 /// same fragment is lost; the first invariant catches it.
 pub mod memcache {

@@ -83,6 +83,9 @@ fi
 echo "==> doctests"
 cargo test --doc --workspace
 
+echo "==> rustdoc (-D warnings)"
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --quiet
+
 echo "==> deny"
 if command -v cargo-deny >/dev/null 2>&1; then
   cargo deny check
