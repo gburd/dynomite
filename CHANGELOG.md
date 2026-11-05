@@ -38,6 +38,21 @@ behaviour or an owner-authorised deviation (`docs/transliteration/deviations.md`
 - **`hash: crc32` is a 15-bit hash** (libmemcached, as in C), so with
   `distribution: vnode` one node per rack owns every key. Unchanged, now
   documented; use `crc32a` or `murmur3` for new pools.
+- **Read-repair timestamps carry a node id** (DEV-R4): milliseconds
+  since 2026-01-01 shifted left 12 bits, with the node id (`node_id:`,
+  or derived from dc, rack and token) in the low bits, so two nodes
+  never write equal stamps. Scores an earlier build wrote are plain
+  milliseconds and compare as much older than new ones, so after
+  upgrading a node with read repair on, every new write wins over old
+  metadata, whatever its real age. Clear the repair metadata sets
+  (`._add-set`, `._rem-set` and the per-key `._add-set_<key>` /
+  `._rem-set_<key>` sets) or run with read repair off until every key
+  has been written once. Startup refuses a pool in which two nodes
+  derive the same id; set `node_id:` explicitly on one of them.
+- **Remote replication rack order changes for racks of different name
+  lengths** (DEV-U1): racks now sort by the 32-bit hash of their name,
+  so the rack a remote datacenter replicates a node's writes to can
+  differ from 2.0.1.
 
 ### Fixed
 

@@ -557,18 +557,47 @@ held at its current behaviour until the owner decides.
   timestamps and each replica keeps whichever reached it last.
   `find_most_updated_rsp` sees no newer reply, so a repairing read does
   not reconcile them: the replicas stay divergent until a later write.
-* Rust: identical.
-* Evidence: optest `read_repair::concurrent_writers_converge_after_repairing_reads`
-  (three writers through three nodes, 60 conflicting ops each) leaves
-  one key divergent by such a tie in about 1 of 8 runs, for C and for
-  Rust alike; the scenario reports ties and fails on any other
-  disagreement.
-* Recommendation: break ties deterministically (e.g. append the
-  coordinator's node index to the timestamp, or compare the value bytes
-  when timestamps are equal) so equal-timestamp writes converge. That
-  changes the stored score format (or the scripts' comparison), so it
-  is an owner decision.
-* Status: PROPOSED
+  In optest `read_repair::concurrent_writers_converge_after_repairing_reads`
+  (three writers through three nodes) this leaves a key divergent in about
+  1 run in 8.
+* Rust: the read-repair stamp is
+  `(unix_ms - 1_767_225_600_000) << 12 | node_id`: milliseconds since the
+  epoch 2026-01-01T00:00Z in the high bits, the node id (0..=4095; the
+  `node_id:` setting, or the low 12 bits of the MurmurHash3 of
+  `"<dc>:<rack>:<token>"`) in the low 12 bits. A clock before the epoch
+  counts as the epoch.
+  * Exactness: a sorted-set score holds 53 exact bits, so the stamp is
+    exact until 2095-09-07 (2^41 ms past the epoch). The custom epoch is
+    there because `unix_ms << 12` would be exact only until 2039.
+  * Startup refuses a pool in which two nodes share an id (derived or
+    explicit), so two coordinators never tie.
+  * Two writes from one coordinator in one millisecond share a stamp.
+    Client connections dispatch on separate tasks, so the dispatcher
+    stamps a repair write and queues it on every target under a
+    per-key-slot lock (1024 mutexes, slot = MurmurHash3(key) & 1023;
+    sends are `try_send`, so the lock is held only for the loop). Every
+    replica channel is FIFO, so every replica receives them in one order
+    and keeps the later one.
+  * Residual cases, as in C and out of scope: (a) same coordinator, same
+    millisecond, same key, and one of the two writes fails on some
+    replica; (b) a node clock stepping backwards makes its later writes
+    lose to its own earlier ones.
+  * An explicit `node_id:` is checked against the derived ids of the
+    other nodes on the node that sets it; the others cannot see it.
+* Evidence: crates/model-tests/src/repair_stamp.rs (converges; negative
+  controls: no node id, interleaved fan-out), crates/dynomite/tests/read_repair.rs
+  (one write order on every replica channel under a frozen clock; fails
+  without the lock), optest read_repair strict for Rust (6 runs: Rust 0
+  ties, C 2).
+* Upgrade: scores written by an earlier Rust build are plain milliseconds
+  (about 1.8e12) and compare as far older than new stamps (about 1.1e14),
+  so after an upgrade every new write wins over old metadata; see
+  CHANGELOG.
+* Status: AUTHORIZED
+* Authorized-by: Greg Burd, 2026-11-05 ("use the unchanging part of a
+  timestamp to include a node id if necessary"; the follow-up question
+  whether nanosecond timestamps would do was answered no: a sorted-set
+  score cannot hold them exactly).
 
 ### DEV-N1: peer reconnect wait 100 ms doubling to 5 s, not C's 1 s doubling to 10 s
 
@@ -642,6 +671,7 @@ held at its current behaviour until the owner decides.
 * Status: AUTHORIZED
 * Authorized-by: Greg Burd, 2026-11-05 ("yes, keep it"): the semantics
   above as implemented, including C's merge order after a miss.
+  Upgrade note: Read-repair scores written by an earlier Rust build (plain Unix milliseconds) compare as far older than new stamps, so an upgrade needs the repair metadata sets (`._add-set`, `._rem-set` and the per-key sets) cleared, or read repair off for one write cycle.
 
 ## E. Decisions log
 
@@ -694,3 +724,7 @@ Owner decisions are appended here with date and the exact instruction.
   as tie-break.
 * 2026-11-05: DEV-R3 AUTHORIZED ("fix it as you suggested"): a repairing
   read marks every reply below the newest timestamp stale.
+* 2026-11-05: DEV-R4 AUTHORIZED ("use the unchanging part of a timestamp
+  to include a node id if necessary"): repair stamps carry a 12-bit node
+  id below milliseconds since 2026-01-01T00:00Z (exact until 2095-09-07);
+  a per-key-slot lock orders one coordinator's same-millisecond writes.
