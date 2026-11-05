@@ -28,6 +28,12 @@
 //!   winner and stale-set choice of
 //!   `crates/dynomite/src/proto/redis/repair/make.rs`): after a repairing
 //!   read every replica holds the newest state.
+//! * [`repair_stamp`] models the read-repair timestamps of concurrent
+//!   coordinators (`repair_timestamp` in
+//!   `crates/dynomite/src/cluster/pool.rs`, the per-key ordering lock in
+//!   `ClusterDispatcher::repair_script`): with the node id in the stamp
+//!   and an atomic per-key fan-out, same-millisecond writes converge;
+//!   stamps without the node id, or interleaved fan-outs, diverge.
 //! * [`dc_one_answer`] models which replica answers a `DC_ONE` request
 //!   (`coalesce_actor` in `crates/dynomite/src/cluster/dispatch.rs`):
 //!   the coordinator's own rack, never a faster remote-rack error.
@@ -110,6 +116,7 @@ pub mod lww_repair;
 pub mod quorum;
 pub mod quorum_decision;
 pub mod ramp;
+pub mod repair_stamp;
 pub mod replication;
 pub mod reply_class;
 pub mod ring;
