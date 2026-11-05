@@ -1980,28 +1980,22 @@ async fn backend_supervisor(
         // Optional Redis AUTH handshake before the supervisor
         // hands the stream to the run loop. Memcache backends
         // skip this entirely (binary SASL is not implemented).
-        if data_store == dynomite::conf::DataStore::Valkey {
-            if let Some(pw) = requirepass.as_deref() {
-                if let Err(e) =
-                    redis_auth_handshake(transport.as_mut(), pw, Duration::from_secs(5)).await
-                {
-                    drop(transport);
-                    serve_errors_while(
-                        record_reconnect_and_back_off(
-                            &backend_label,
-                            "auth_failed",
-                            Some(&e.to_string()),
-                            "backend AUTH failed; reconnecting after backoff",
-                            &mut consecutive_failures,
-                            &mut backoff,
-                        ),
-                        &mut rx,
-                        data_store,
-                    )
-                    .await;
-                    continue;
-                }
-            }
+        if let Err(e) = backend_auth(transport.as_mut(), data_store, requirepass.as_deref()).await {
+            drop(transport);
+            serve_errors_while(
+                record_reconnect_and_back_off(
+                    &backend_label,
+                    "auth_failed",
+                    Some(&e.to_string()),
+                    "backend AUTH failed; reconnecting after backoff",
+                    &mut consecutive_failures,
+                    &mut backoff,
+                ),
+                &mut rx,
+                data_store,
+            )
+            .await;
+            continue;
         }
 
         let conn = Conn::new(transport, ConnRole::Server);
@@ -2015,17 +2009,15 @@ async fn backend_supervisor(
         let mut pending = std::collections::VecDeque::new();
         let driver_res =
             run_one_backend_conn(conn, &mut rx, data_store, &mut frames_ok, &mut pending).await;
-        // Every request written to the lost connection is answered with
-        // the storage error, as are those already queued, so no client
-        // waits on a reply that cannot come.
+        // Every request written to the lost connection, and every one
+        // queued behind it, is answered with the storage error.
         fail_backend_requests(&mut pending, &mut rx, data_store).await;
         match driver_res {
             Ok(()) => return Ok(()),
             Err(e) => {
                 record_server_close(stats.as_deref(), &e);
+                // A connection that did real work restarts the log throttle.
                 if frames_ok > 0 {
-                    // The connection did real work, so the next failure
-                    // starts the log throttle afresh.
                     consecutive_failures = 0;
                 }
                 let reason = classify_reconnect_reason(&e);
@@ -2044,6 +2036,21 @@ async fn backend_supervisor(
                 .await;
             }
         }
+    }
+}
+
+/// AUTH with `requirepass` on a fresh Redis datastore connection; a no-op
+/// for other datastores or when no password is configured.
+async fn backend_auth(
+    transport: &mut dyn IoTransport,
+    data_store: dynomite::conf::DataStore,
+    requirepass: Option<&str>,
+) -> Result<(), NetError> {
+    match requirepass {
+        Some(pw) if data_store == dynomite::conf::DataStore::Valkey => {
+            redis_auth_handshake(transport, pw, Duration::from_secs(5)).await
+        }
+        _ => Ok(()),
     }
 }
 
