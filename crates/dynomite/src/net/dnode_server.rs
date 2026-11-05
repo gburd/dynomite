@@ -35,13 +35,21 @@ fn is_data_plane_ty(ty: DmsgType) -> bool {
 pub struct DnodeServerConn {
     conn: Conn,
     requests: mpsc::Receiver<OutboundRequest>,
-    pending: std::collections::VecDeque<(
-        MsgId,
-        tracing::Span,
-        Option<u32>,
-        mpsc::Sender<OutboundEnvelope>,
-    )>,
+    pending: std::collections::VecDeque<PeerPending>,
+    /// Requests to send before reading the request channel (frames queued
+    /// while the peer was not connected).
+    first: std::collections::VecDeque<OutboundRequest>,
 }
+
+/// A request written to the peer and owed a reply: (req_id, span, target
+/// peer index, responder, deadline).
+type PeerPending = (
+    MsgId,
+    tracing::Span,
+    Option<u32>,
+    mpsc::Sender<OutboundEnvelope>,
+    Option<tokio::time::Instant>,
+);
 
 impl DnodeServerConn {
     /// Wrap an outbound peer connection.
@@ -66,7 +74,16 @@ impl DnodeServerConn {
             conn,
             requests,
             pending: std::collections::VecDeque::new(),
+            first: std::collections::VecDeque::new(),
         }
+    }
+
+    /// Send `reqs`, in order, before anything read from the request
+    /// channel.
+    #[must_use]
+    pub fn with_first(mut self, reqs: std::collections::VecDeque<OutboundRequest>) -> Self {
+        self.first = reqs;
+        self
     }
 
     /// Drive the FSM.
@@ -85,9 +102,24 @@ impl DnodeServerConn {
     /// for reconnect supervisors that own the receiver across
     /// multiple connection attempts and pass it in by reference.
     ///
+    /// However the connection ends, every request written to it and
+    /// still owed a reply is answered with
+    /// `Peer: Peer Node refused connection`.
+    ///
     /// # Errors
-    /// Forwarded transport / DNODE parse errors.
+    /// Forwarded transport / DNODE parse errors, and an
+    /// [`std::io::ErrorKind::TimedOut`] I/O error when a request's
+    /// deadline passes without its reply.
     pub async fn run_with(
+        &mut self,
+        requests: &mut mpsc::Receiver<OutboundRequest>,
+    ) -> Result<(), NetError> {
+        let res = self.run_conn(requests).await;
+        self.fail_pending().await;
+        res
+    }
+
+    async fn run_conn(
         &mut self,
         requests: &mut mpsc::Receiver<OutboundRequest>,
     ) -> Result<(), NetError> {
@@ -98,17 +130,24 @@ impl DnodeServerConn {
         loop {
             if self.conn.is_eof() {
                 // The peer closed the link. A reply can no longer arrive for
-                // anything still in flight, so fail each such request now
-                // (as the C `dnode_peer_close` does with
-                // `dnode_peer_ack_err`) instead of leaving its caller to
-                // time out, and return so the supervisor redials.
-                self.fail_pending().await;
+                // anything still in flight; `run_with` fails each such
+                // request and the supervisor redials.
                 self.conn.set_done();
                 return Ok(());
             }
 
+            let next_deadline = self.pending.iter().filter_map(|p| p.4).min();
             tokio::select! {
-                req = requests.recv() => {
+                () = crate::net::server::request_timer(next_deadline) => {
+                    tracing::warn!(pending = self.pending.len(), "peer request timed out; closing the connection");
+                    return Err(crate::net::server::request_timed_out());
+                }
+                req = async {
+                    match self.first.pop_front() {
+                        Some(r) => Some(r),
+                        None => requests.recv().await,
+                    }
+                } => {
                     let Some(req) = req else { continue; };
                     let send_span = tracing::info_span!(
                         parent: &req.span,
@@ -131,16 +170,6 @@ impl DnodeServerConn {
                         u32::try_from(req_bytes.len()).unwrap_or(u32::MAX),
                     )?;
                     let header_len = header_buf.readable().len();
-                    let transport = self.conn.transport_mut().ok_or(NetError::Closed)?;
-                    let write_res = async {
-                        transport.write_all(header_buf.readable()).await?;
-                        transport.write_all(&req_bytes).await?;
-                        Ok::<(), std::io::Error>(())
-                    }
-                    .instrument(send_span)
-                    .await;
-                    write_res?;
-                    self.conn.record_send(header_len + req_bytes.len());
                     if is_data_plane_ty(req_ty) {
                         // Pair the responder WITH its req_id in the
                         // pending queue. A single shared responder slot
@@ -148,12 +177,15 @@ impl DnodeServerConn {
                         // was enqueued LAST, so under fan-out (several
                         // concurrent requests multiplexed on one peer
                         // connection) replies cross wires. FIFO order
-                        // matches the dnode reply order.
+                        // matches the dnode reply order. Queued before
+                        // the write so a write that fails or stalls past
+                        // a deadline still answers this request.
                         self.pending.push_back((
                             req_id,
                             req_span,
                             req.target_peer_idx,
                             req.responder,
+                            req.deadline,
                         ));
                     } else {
                         // Gossip / control-plane frames are
@@ -162,6 +194,21 @@ impl DnodeServerConn {
                         // not block waiting for an ACK.
                         drop(req.responder);
                     }
+                    let timer = crate::net::server::request_timer(
+                        self.pending.iter().filter_map(|p| p.4).min(),
+                    );
+                    let transport = self.conn.transport_mut().ok_or(NetError::Closed)?;
+                    let write_res = tokio::select! {
+                        r = async {
+                            transport.write_all(header_buf.readable()).await?;
+                            transport.write_all(&req_bytes).await?;
+                            Ok::<(), std::io::Error>(())
+                        }
+                        .instrument(send_span) => r,
+                        () = timer => return Err(crate::net::server::request_timed_out()),
+                    };
+                    write_res?;
+                    self.conn.record_send(header_len + req_bytes.len());
                 }
                 read_res = async {
                     if let Some(t) = self.conn.transport_mut() {
@@ -183,16 +230,17 @@ impl DnodeServerConn {
         }
     }
 
-    /// Answer every in-flight request with an error reply, in order.
+    /// Answer every in-flight request with
+    /// `Peer: Peer Node refused connection`, in order.
     async fn fail_pending(&mut self) {
         let pool = self.conn.mbuf_pool().clone();
-        while let Some((req_id, span, source_peer_idx, reply_to)) = self.pending.pop_front() {
+        while let Some((req_id, span, source_peer_idx, reply_to, _)) = self.pending.pop_front() {
             let anchor = Msg::new(req_id, MsgType::Unknown, true);
             let rsp = crate::msg::response::make_error(
                 &anchor,
                 MsgType::RspRedisError,
                 0,
-                crate::msg::DynErrorCode::PeerHostDown,
+                crate::msg::DynErrorCode::PeerConnectionRefuse,
                 &pool,
             );
             let _ = reply_to
@@ -242,7 +290,7 @@ impl DnodeServerConn {
                     // goes back to the request that issued it.
                     let (req_id, req_span, source_peer_idx, reply_to) =
                         match self.pending.pop_front() {
-                            Some(entry) => (entry.0, entry.1, entry.2, Some(entry.3)),
+                            Some((id, span, src, reply_to, _)) => (id, span, src, Some(reply_to)),
                             None => (dmsg.id, tracing::Span::current(), None, None),
                         };
                     let parse_span = tracing::info_span!(

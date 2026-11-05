@@ -2575,8 +2575,11 @@ async fn peer_supervisor(
     // is set, the connection is plaintext).
     let peer_tls_profiles = tls.as_ref().map(|rt| rt.profiles.clone());
     let sni_hostname = dynomite::net::tls::dc_sni_hostname(peer_dc.as_str());
-    let mut backoff_ms: u64 = 100;
-    let backoff_max_ms: u64 = 5_000;
+    let mut wait = PeerReconnectWait::default();
+    // Control frames that arrived while the peer was not connected; the
+    // next connection sends them first.
+    let mut held_control: std::collections::VecDeque<OutboundRequest> =
+        std::collections::VecDeque::new();
     loop {
         if rx.is_closed() && rx.is_empty() {
             return Ok(());
@@ -2586,7 +2589,7 @@ async fn peer_supervisor(
                 .await;
         let stream = match connect {
             Ok(Ok(s)) => {
-                backoff_ms = 100;
+                wait = PeerReconnectWait::default();
                 // SO_KEEPALIVE on peer links, so a peer that vanishes
                 // without a FIN is noticed; failure is not fatal.
                 let _ = socket2::SockRef::from(&s).set_keepalive(true);
@@ -2594,14 +2597,12 @@ async fn peer_supervisor(
             }
             Ok(Err(e)) => {
                 tracing::warn!(peer = %addr, error = %e, "peer connect failed; retrying");
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                refuse_peer_requests_while(wait.next(), &mut rx, &mut held_control).await;
                 continue;
             }
             Err(_) => {
                 tracing::warn!(peer = %addr, "peer connect timed out; retrying");
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                refuse_peer_requests_while(wait.next(), &mut rx, &mut held_control).await;
                 continue;
             }
         };
@@ -2632,8 +2633,7 @@ async fn peer_supervisor(
                         error = %e,
                         "peer TLS server-name parse failed; retrying"
                     );
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                    backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                    refuse_peer_requests_while(wait.next(), &mut rx, &mut held_control).await;
                     continue;
                 }
             };
@@ -2648,8 +2648,7 @@ async fn peer_supervisor(
                         error = %e,
                         "peer TLS handshake failed; retrying"
                     );
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                    backoff_ms = (backoff_ms.saturating_mul(2)).min(backoff_max_ms);
+                    refuse_peer_requests_while(wait.next(), &mut rx, &mut held_control).await;
                     continue;
                 }
             }
@@ -2665,7 +2664,8 @@ async fn peer_supervisor(
             // Placeholder receiver; `run_with` ignores
             // `self.requests` and reads from the borrowed one.
             tokio::sync::mpsc::channel::<OutboundRequest>(1).1,
-        );
+        )
+        .with_first(std::mem::take(&mut held_control));
         let driver_res = driver.run_with(&mut rx).await;
         // The driver returns Ok on a clean close (the peer sent FIN, e.g.
         // it restarted) and Err on an I/O failure. Either way the link is
@@ -2678,8 +2678,90 @@ async fn peer_supervisor(
                 tracing::warn!(peer = %addr, error = %e, "peer connection ended; reconnecting");
             }
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        refuse_peer_requests_while(wait.next(), &mut rx, &mut held_control).await;
     }
+}
+
+/// Wait before redialing a peer whose connection failed or closed: 1 s
+/// after a connection that was up, doubling on each consecutive failure
+/// up to 10 s.
+#[derive(Default)]
+struct PeerReconnectWait {
+    current_secs: u64,
+}
+
+impl PeerReconnectWait {
+    const MIN_SECS: u64 = 1;
+    const MAX_SECS: u64 = 10;
+
+    fn next(&mut self) -> tokio::time::Sleep {
+        let secs = self.current_secs.max(Self::MIN_SECS);
+        self.current_secs = (secs * 2).min(Self::MAX_SECS);
+        tokio::time::sleep(Duration::from_secs(secs))
+    }
+}
+
+/// While a peer is not connected, answer each data-plane request that
+/// arrives with `Peer: Peer Node is not connected` at once instead of
+/// letting it wait out the reconnect. `wait` is the reconnect wait itself.
+///
+/// Control frames (gossip) are not answered: they stay queued, in order,
+/// and go out on the next connection, so the first heartbeat after a
+/// redial reaches the peer instead of being lost to the wait.
+async fn refuse_peer_requests_while(
+    wait: impl std::future::Future<Output = ()>,
+    rx: &mut tokio::sync::mpsc::Receiver<OutboundRequest>,
+    held: &mut std::collections::VecDeque<OutboundRequest>,
+) {
+    use dynomite::msg::{DynErrorCode, Msg, MsgType};
+    use dynomite::proto::dnode::DmsgType;
+    let pool = dynomite::io::mbuf::MbufPool::default();
+    tokio::pin!(wait);
+    loop {
+        tokio::select! {
+            () = &mut wait => return,
+            req = rx.recv() => {
+                let Some(req) = req else { return };
+                if !matches!(
+                    req.ty,
+                    DmsgType::Req | DmsgType::ReqForward | DmsgType::Res | DmsgType::Unknown
+                ) {
+                    held.push_back(req);
+                    continue;
+                }
+                let anchor = Msg::new(req.req_id, MsgType::Unknown, true);
+                let rsp = dynomite::msg::response::make_error(
+                    &anchor,
+                    MsgType::RspRedisError,
+                    0,
+                    DynErrorCode::PeerHostNotConnected,
+                    &pool,
+                );
+                let _ = req
+                    .responder
+                    .send(dynomite::net::OutboundEnvelope {
+                        req_id: req.req_id,
+                        rsp,
+                        span: req.span,
+                        source_peer_idx: req.target_peer_idx,
+                    })
+                    .await;
+            }
+        }
+    }
+}
+
+/// Spawn a plaintext [`peer_supervisor`] for peer `peer_idx` in
+/// datacenter `peer_dc` at `addr`, wired to `rx`, so the regression suite
+/// can drive it against a synthetic peer.
+#[doc(hidden)]
+pub fn spawn_peer_supervisor_for_testing(
+    addr: SocketAddr,
+    peer_idx: u32,
+    rx: tokio::sync::mpsc::Receiver<OutboundRequest>,
+    peer_dc: String,
+) -> tokio::task::JoinHandle<Result<(), NetError>> {
+    tokio::spawn(peer_supervisor(addr, peer_idx, rx, None, peer_dc))
 }
 
 /// Bundle of TLS handles shared across the dnode listener and
