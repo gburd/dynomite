@@ -89,34 +89,31 @@ pub struct MostUpdated {
     pub needs_repair: Vec<bool>,
 }
 
-/// Find the reply with the largest timestamp and mark every older one for
-/// repair. Replies with no record (`X`) take no part. `None` when no reply
-/// needs a repair.
+/// Find the reply with the largest timestamp (the first one on a tie) and
+/// mark every reply older than it for repair. Replies with no record (`X`)
+/// take no part. `None` when no reply needs a repair.
 #[must_use]
 pub fn find_most_updated(replies: &[TsReply]) -> Option<MostUpdated> {
     let mut biggest_ts = 0;
     let mut most_updated: Option<usize> = None;
     let mut repair_by_add = false;
-    let mut at_least_one_repair = false;
-    let mut needs_repair = vec![false; replies.len()];
     for (i, cur) in replies.iter().enumerate() {
         if cur.status == b'X' {
             continue;
         }
         if cur.ts > biggest_ts {
-            if let Some(prev) = most_updated {
-                needs_repair[prev] = true;
-                at_least_one_repair = true;
-            }
             biggest_ts = cur.ts;
             most_updated = Some(i);
             repair_by_add = cur.status == b'E';
-        } else if cur.ts < biggest_ts {
-            needs_repair[i] = true;
-            at_least_one_repair = true;
         }
     }
-    let winner = most_updated.filter(|_| at_least_one_repair)?;
+    // Staleness is judged against the final maximum, so a reply equal to
+    // a maximum that a later reply beats is repaired too (DEV-R3).
+    let needs_repair: Vec<bool> = replies
+        .iter()
+        .map(|r| r.status != b'X' && r.ts < biggest_ts)
+        .collect();
+    let winner = most_updated.filter(|_| needs_repair.contains(&true))?;
     Some(MostUpdated {
         winner,
         repair_by_add,
@@ -209,13 +206,54 @@ mod tests {
         assert_eq!(m.needs_repair, vec![false, false, true]);
     }
 
-    // A reply equal to the running maximum is not marked when a later
-    // reply beats it; only the reply that held the maximum is.
+    // Both replies equal to a maximum that a later reply beats are
+    // repaired, not only the one that held the maximum.
     #[test]
-    fn equal_stale_reply_after_new_max_is_not_marked() {
+    fn equal_stale_replies_before_new_max_are_all_marked() {
         let m = find_most_updated(&[r(b'E', 5), r(b'E', 5), r(b'E', 9)]).unwrap();
         assert_eq!(m.winner, 2);
-        assert_eq!(m.needs_repair, vec![true, false, false]);
+        assert_eq!(m.needs_repair, vec![true, true, false]);
+    }
+
+    // Ties for the maximum keep the first reply as the winner and are not
+    // repaired, whatever their status.
+    #[test]
+    fn ties_for_the_maximum_are_not_marked() {
+        assert!(find_most_updated(&[r(b'E', 9), r(b'R', 9)]).is_none());
+        let m = find_most_updated(&[r(b'R', 9), r(b'E', 9), r(b'E', 2)]).unwrap();
+        assert_eq!((m.winner, m.repair_by_add), (0, false));
+        assert_eq!(m.needs_repair, vec![false, false, true]);
+    }
+
+    /// For any replies, the winner is the first reply with the largest
+    /// timestamp among those with a record, and the stale set is exactly
+    /// the replies with a record whose timestamp is below the winner's.
+    #[hegel::test]
+    fn stale_set_is_every_reply_below_the_winner(tc: hegel::TestCase) {
+        use hegel::generators as gs;
+        let n = tc.draw(gs::integers::<usize>().min_value(1).max_value(6));
+        let replies: Vec<TsReply> = (0..n)
+            .map(|_| {
+                let status = tc.draw(gs::sampled_from(b"ERX"));
+                r(status, tc.draw(gs::integers::<u64>().max_value(4)))
+            })
+            .collect();
+        let live = |x: &TsReply| x.status != b'X';
+        let max = replies.iter().filter(|x| live(x)).map(|x| x.ts).max();
+        let stale: Vec<bool> = replies
+            .iter()
+            .map(|x| live(x) && max.is_some_and(|m| x.ts < m))
+            .collect();
+        match find_most_updated(&replies) {
+            None => assert!(!stale.contains(&true), "{replies:?}"),
+            Some(m) => {
+                let w = &replies[m.winner];
+                assert!(live(w) && Some(w.ts) == max, "{replies:?}");
+                assert!(replies[..m.winner].iter().all(|x| !live(x) || x.ts < w.ts));
+                assert_eq!(m.repair_by_add, w.status == b'E');
+                assert_eq!(m.needs_repair, stale, "{replies:?}");
+            }
+        }
     }
 
     #[test]

@@ -185,15 +185,14 @@ async fn timestamp_read_repair() {
     }
 
     // A read: replica 1 holds the newest value; the client gets it plain
-    // and replicas 0 and 2 get the add repair at its timestamp. The stale
-    // timestamps differ: a stale reply equal to an earlier maximum is not
-    // marked (see make.rs `equal_stale_reply_after_new_max_is_not_marked`),
-    // and arrival order is not fixed here.
+    // and replicas 0 and 2 get the add repair at its timestamp. The two
+    // stale replies carry the same timestamp: every reply below the
+    // newest is repaired, whatever order the replies arrive in.
     let get = request(3, &["GET", "k"]);
     let replies = [
         ts_reply("E", 5, "old"),
         ts_reply("E", 9, "new"),
-        ts_reply("E", 3, "older"),
+        ts_reply("E", 5, "old"),
     ];
     let (bytes, seen) = run(ConsistencyLevel::DcSafeQuorum, get, replies).await;
     assert_eq!(bytes, b"$3\r\nnew\r\n");

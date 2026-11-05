@@ -5,8 +5,9 @@
 //! the key (last writer wins; a delete is a write of a tombstone). Writes
 //! reach any subset of the replicas in any order. A repairing read asks
 //! every replica for `(status, ts, value)`, picks the reply with the
-//! largest timestamp, answers the client with it, and writes that state
-//! back to every replica whose timestamp is smaller. The choice of winner
+//! largest timestamp, writes that state back to every replica whose
+//! timestamp is smaller, and answers the client with the first reply not
+//! marked for repair. The choice of winner
 //! and of the stale set is the coordinator code in
 //! `crates/dynomite/src/proto/redis/repair/make.rs`
 //! (`find_most_updated`), driven over the replies the coalescer collects.
@@ -22,9 +23,12 @@
 //!
 //! # Negative control
 //!
-//! [`LwwRepairModel::first_reply_wins`] repairs every replica to the FIRST
-//! reply instead of the newest one. It violates both invariants, so the
-//! checker is shown to catch a reconcile rule that ignores timestamps.
+//! [`LwwRepairModel::running_max_stale`] picks the same winner but judges
+//! each reply against the running maximum at the time it is seen, so a
+//! reply equal to a maximum that a later reply beats is never repaired
+//! (timestamps 1, 1, 3 repair only the first replica, and the client is
+//! answered with the second). It violates both invariants, so the checker
+//! is shown to catch a stale set that misses replies below the newest.
 
 use stateright::{Model, Property};
 
@@ -41,8 +45,9 @@ type Cell = (u8, u8);
 enum Rule {
     /// Largest timestamp wins (the production rule).
     Newest,
-    /// Negative control: the first replica's reply wins.
-    First,
+    /// Negative control: stale only when below the running maximum
+    /// when seen, or when the reply holding it is beaten.
+    RunningMax,
 }
 
 /// State: each replica's cell, which writes are still undelivered to
@@ -82,10 +87,13 @@ impl LwwRepairModel {
         Self { rule: Rule::Newest }
     }
 
-    /// Negative control: repair to the first reply.
+    /// Negative control: the stale set judged against the running
+    /// maximum.
     #[must_use]
-    pub fn first_reply_wins() -> Self {
-        Self { rule: Rule::First }
+    pub fn running_max_stale() -> Self {
+        Self {
+            rule: Rule::RunningMax,
+        }
     }
 }
 
@@ -95,6 +103,34 @@ fn apply(cell: Cell, write: Cell) -> Cell {
     } else {
         cell
     }
+}
+
+/// Which replicas a read repairs, given the newest timestamp `max`.
+fn stale_set(rule: Rule, cells: [Cell; REPLICAS], max: u8) -> [bool; REPLICAS] {
+    let mut stale = [false; REPLICAS];
+    match rule {
+        Rule::Newest => {
+            for (s, cell) in stale.iter_mut().zip(cells.iter()) {
+                *s = cell.0 < max;
+            }
+        }
+        Rule::RunningMax => {
+            let mut biggest = 0;
+            let mut holder: Option<usize> = None;
+            for (i, cell) in cells.iter().enumerate() {
+                if cell.0 > biggest {
+                    if let Some(prev) = holder {
+                        stale[prev] = true;
+                    }
+                    biggest = cell.0;
+                    holder = Some(i);
+                } else if cell.0 < biggest {
+                    stale[i] = true;
+                }
+            }
+        }
+    }
+    stale
 }
 
 impl Model for LwwRepairModel {
@@ -144,20 +180,22 @@ impl Model for LwwRepairModel {
                     .iter()
                     .max_by_key(|cell| cell.0)
                     .expect("replicas");
-                let winner = match self.rule {
-                    Rule::Newest => newest,
-                    Rule::First => next.cells[0],
-                };
+                let marked = stale_set(self.rule, next.cells, newest.0);
+                // The client gets the first reply not marked stale.
+                let answer = next
+                    .cells
+                    .iter()
+                    .zip(marked)
+                    .find(|(_, stale)| !stale)
+                    .map_or(newest, |(cell, _)| *cell);
                 let mut repaired = false;
-                for cell in &mut next.cells {
-                    let older = cell.0 < winner.0;
-                    let overwritten = matches!(self.rule, Rule::First) && *cell != winner;
-                    if older || overwritten {
-                        *cell = winner;
+                for (cell, stale) in next.cells.iter_mut().zip(marked) {
+                    if stale {
+                        *cell = newest;
                         repaired = true;
                     }
                 }
-                next.read = Some((winner, newest, repaired));
+                next.read = Some((answer, newest, repaired));
             }
         }
         Some(next)
@@ -196,15 +234,15 @@ mod tests {
     }
 
     #[test]
-    fn negative_control_first_reply_repair_is_caught() {
-        let c = LwwRepairModel::first_reply_wins()
+    fn negative_control_running_max_stale_set_is_caught() {
+        let c = LwwRepairModel::running_max_stale()
             .checker()
             .spawn_bfs()
             .join();
         assert!(
             c.discovery("repair converges").is_some()
-                || c.discovery("read returns the newest").is_some(),
-            "the checker must catch a repair that ignores timestamps"
+                && c.discovery("read returns the newest").is_some(),
+            "the checker must catch a stale set that misses replies below the newest"
         );
     }
 }
