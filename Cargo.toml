@@ -167,7 +167,7 @@ hegeltest = { version = "0.44" }
 # the build under `--cfg loom`; production code is unaffected. Tests
 # that depend on it live under `crates/<crate>/tests/loom_*.rs`,
 # each gated on `#![cfg(loom)]`.
-loom = { version = "0.7", features = ["futures"] }
+loom = "0.7"
 hex = "0.4"
 serde_json = "1.0"
 criterion = { version = "0.8", features = ["html_reports"] }
