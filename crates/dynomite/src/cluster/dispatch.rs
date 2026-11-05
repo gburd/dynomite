@@ -1524,6 +1524,16 @@ impl ClusterDispatcher {
         // per-target dispatch state.
         let target_pairs: Vec<(u32, String)> =
             targets.iter().map(|t| (t.peer_idx, t.dc.clone())).collect();
+        // Under DC_ONE only the replica in this node's own rack answers
+        // the client; the other racks' replies are swallowed.
+        let answering: Option<u32> = matches!(consistency, ConsistencyLevel::DcOne)
+            .then(|| {
+                targets
+                    .iter()
+                    .find(|t| t.dc == cfg.dc && t.rack == cfg.rack)
+                    .map(|t| t.peer_idx)
+            })
+            .flatten();
         // Read repair context, for requests rewritten into a repair
         // script.
         let repair_ctx = script.map(|script| ReadRepairContext {
@@ -1578,6 +1588,7 @@ impl ClusterDispatcher {
             consistency,
             target_pairs,
             local_dc,
+            answering,
             intermediate_rx,
             responder,
             mbuf_pool,
@@ -2335,6 +2346,7 @@ async fn coalesce_actor(
     consistency: ConsistencyLevel,
     targets: Vec<(u32, String)>,
     local_dc: String,
+    answering: Option<u32>,
     mut intermediate_rx: mpsc::Receiver<OutboundEnvelope>,
     client_tx: ServerSink,
     mbuf_pool: MbufPool,
@@ -2368,7 +2380,12 @@ async fn coalesce_actor(
         if !rsp.flags().is_error {
             good += 1;
         }
-        let outcome = tracker.record_reply(source, rsp);
+        let swallowed = answering.is_some_and(|a| a != source);
+        let outcome = if swallowed {
+            CoalesceOutcome::Pending
+        } else {
+            tracker.record_reply(source, rsp)
+        };
         let fresh = match (&outcome, repair_ctx.as_ref()) {
             (CoalesceOutcome::Ready { .. } | CoalesceOutcome::Error(_), Some(ctx))
                 if ts_read && !emitted =>

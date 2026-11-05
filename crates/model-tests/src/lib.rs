@@ -28,6 +28,9 @@
 //!   winner and stale-set choice of
 //!   `crates/dynomite/src/proto/redis/repair/make.rs`): after a repairing
 //!   read every replica holds the newest state.
+//! * [`dc_one_answer`] models which replica answers a `DC_ONE` request
+//!   (`coalesce_actor` in `crates/dynomite/src/cluster/dispatch.rs`):
+//!   the coordinator's own rack, never a faster remote-rack error.
 //! * [`reply_class`] models the classification of local and peer
 //!   replies before the coalescer votes on them (`classify_reply` in
 //!   `crates/dynomite/src/cluster/dispatch.rs`): identical payloads agree
@@ -98,6 +101,7 @@ pub mod aae;
 pub mod causal_object;
 pub mod crdt_convergence;
 pub mod crdt_routing;
+pub mod dc_one_answer;
 pub mod delta_crdt;
 pub mod fragment_merge;
 pub mod gossip;
