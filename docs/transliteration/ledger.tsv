@@ -300,7 +300,7 @@ fn	core_recv	src/dyn_core.c	385	todo
 fn	core_send	src/dyn_core.c	396	todo				
 fn	core_close	src/dyn_core.c	407	todo				
 fn	core_error	src/dyn_core.c	429	todo				
-fn	core_timeout	src/dyn_core.c	442	replaced	crates/dynomited/src/server.rs::run_one_backend_conn	crates/dynomited/tests/regression_request_timeout.rs	crates/optest/tests/request_timeout.rs::frozen_datastore_fails_after_the_request_timeout	DEV-S1: the driver sleeps until the earliest deadline, then closes the connection and every request on it is answered (fail_backend_requests); peer side pending (work/t6-peer)
+fn	core_timeout	src/dyn_core.c	442	replaced	crates/dynomited/src/server.rs::run_one_backend_conn; crates/dynomite/src/net/dnode_server.rs::DnodeServerConn::run_with	crates/dynomited/tests/regression_request_timeout.rs	crates/optest/tests/request_timeout.rs::frozen_datastore_fails_after_the_request_timeout	DEV-S1: each driver sleeps until its earliest deadline, then closes the connection and every request on it is answered (fail_backend_requests / fail_pending)
 fn	core_core	src/dyn_core.c	500	todo				
 fn	core_debug	src/dyn_core.c	559	todo				
 fn	core_process_messages	src/dyn_core.c	617	todo				
@@ -517,7 +517,7 @@ struct	dval	src/dyn_dnode_msg.h	52	todo
 struct	dmsg	src/dyn_dnode_msg.h	58	todo				
 fn	dnode_peer_ref	src/dyn_dnode_peer.c	21	todo				
 fn	dnode_peer_unref	src/dyn_dnode_peer.c	44	todo				
-fn	dnode_peer_timeout	src/dyn_dnode_peer.c	63	ported	crates/dynomite/src/cluster/pool.rs::ServerPool::dnode_peer_timeout	crates/dynomite/src/cluster/pool.rs::tests::request_timeouts_follow_target_dc_and_read_write		deadline computed; the peer driver does not apply it yet (work/t6-peer)
+fn	dnode_peer_timeout	src/dyn_dnode_peer.c	63	ported	crates/dynomite/src/cluster/pool.rs::ServerPool::dnode_peer_timeout	crates/dynomite/src/cluster/pool.rs::tests::request_timeouts_follow_target_dc_and_read_write	crates/dynomited/tests/regression_request_timeout.rs	
 fn	dnode_peer_active	src/dyn_dnode_peer.c	82	todo				
 fn	_print_node	src/dyn_dnode_peer.c	110	todo				
 fn	_init_peer_struct	src/dyn_dnode_peer.c	120	todo				
