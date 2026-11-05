@@ -300,7 +300,7 @@ fn	core_recv	src/dyn_core.c	385	todo
 fn	core_send	src/dyn_core.c	396	todo				
 fn	core_close	src/dyn_core.c	407	todo				
 fn	core_error	src/dyn_core.c	429	todo				
-fn	core_timeout	src/dyn_core.c	442	replaced	crates/dynomited/src/server.rs::run_one_backend_conn; crates/dynomite/src/net/dnode_server.rs::DnodeServerConn::run_with	crates/dynomited/tests/regression_request_timeout.rs	crates/optest/tests/request_timeout.rs::frozen_datastore_fails_after_the_request_timeout	DEV-S1: each driver sleeps until its earliest deadline, then closes the connection and every request on it is answered (fail_backend_requests / fail_pending)
+fn	core_timeout	src/dyn_core.c	442	replaced	crates/dynomite/src/net/server.rs::request_timer	crates/dynomited/tests/regression_request_timeout.rs	crates/optest/tests/request_timeout.rs::frozen_datastore_fails_after_the_request_timeout	DEV-S1: the datastore driver (dynomited run_one_backend_conn) and the peer driver (DnodeServerConn::run_with) each sleep until their earliest deadline, then close the connection and every request on it is answered
 fn	core_core	src/dyn_core.c	500	todo				
 fn	core_debug	src/dyn_core.c	559	todo				
 fn	core_process_messages	src/dyn_core.c	617	todo				
