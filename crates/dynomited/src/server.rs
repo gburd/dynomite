@@ -1384,6 +1384,8 @@ impl Server {
             let dispatcher = dispatcher.clone();
             let cancel = cancel_future(shutdown_rx.clone());
             let gossip_for_factory = gossip_handler.clone();
+            // Peer payloads are parsed with the pool's datastore protocol.
+            let peer_data_store = pool.config().data_store;
             #[cfg(feature = "riak")]
             let replica_sink_for_factory = replica_sink.clone();
             tokio::spawn(async move {
@@ -1404,7 +1406,7 @@ impl Server {
                         let handler = dynomite::net::ClientHandler::new(
                             dispatcher.clone(),
                             tx,
-                            dynomite::conf::DataStore::Valkey,
+                            peer_data_store,
                         )
                         .with_read_timeout(Some(Duration::from_mins(1)))
                         .with_gossip(gossip_for_factory.clone());

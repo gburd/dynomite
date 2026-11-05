@@ -134,7 +134,11 @@ impl DnodeProxy {
                     );
                     let h = tokio::spawn(
                         async move {
-                            dnode_client_loop(conn, handler, rx).await
+                            let res = dnode_client_loop(conn, handler, rx).await;
+                            if let Err(e) = &res {
+                                tracing::warn!(error = %e, "dnode peer connection ended with an error");
+                            }
+                            res
                         }
                         .instrument(accept_span),
                     );
