@@ -510,13 +510,20 @@ held at its current behaviour until the owner decides.
   `preselect_remote_rack_for_replication`; qsort with an inconsistent
   comparator gives an implementation-defined rack order when rack names
   in a DC differ in length, which picks the remote rack writes replicate to.
-* Rust: `util::dyn_string::string_compare` sorts the shorter first;
-  `Datacenter::sort_racks` sorts rack names lexicographically.
+* Rust: `util::dyn_string::string_compare` sorts the shorter first.
+  `Datacenter::sort_racks` (the rack order the replication rack is picked
+  from) sorts by the 32-bit MurmurHash3 of each rack name, numerically,
+  with the name breaking a hash tie (`cluster::datacenter::rack_order_key`).
+  The order is total and the same on every node whatever its `hash:`.
 * Evidence: crates/c-oracle/tests/util_oracle.rs::string_compare_matches_c
   pins equality, equal-length order and the C length-mismatch answer.
-* Recommendation: keep a consistent total order (Rust behaviour); C
-  configurations whose rack names in one DC have equal length behave as C.
-* Status: PROPOSED
+* Recommendation was: keep a consistent total order.
+* Status: AUTHORIZED
+* Authorized-by: Greg Burd, 2026-11-05 ("hash names to a 32bit int, sort
+  that numerically").
+* Consequence: the replication rack a remote DC is assigned can differ
+  from C's for the same rack names (C sorts by bytes); Rust nodes never
+  mix with C nodes (P1).
 
 ### DEV-R3: a reply equal to an old maximum is not repaired (C finding)
 
@@ -675,3 +682,6 @@ Owner decisions are appended here with date and the exact instruction.
   DEV-M1 AUTHORIZED ("yes, keep it"): memcache get/gets split per owner
   and merged with C's logic, a fragment error answers the server error,
   and the reply order after a miss is C's.
+* 2026-11-05: DEV-U1 AUTHORIZED ("hash names to a 32bit int, sort that
+  numerically"): racks sort by the 32-bit MurmurHash3 of their name, name
+  as tie-break.

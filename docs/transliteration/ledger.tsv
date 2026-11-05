@@ -9,7 +9,7 @@ fn	array_pop	src/dyn_array.c	120	replaced	crates/dynomite/src/cluster/datacenter
 fn	array_get	src/dyn_array.c	131	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
 fn	array_top	src/dyn_array.c	142	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
 fn	array_swap	src/dyn_array.c	148	dead				no use outside dyn_array.[ch] (grep -rw over src/: no hits)
-fn	array_sort	src/dyn_array.c	160	pending:DEV-U1	crates/dynomite/src/cluster/datacenter.rs::sort_racks			only C caller sorts racks with rack_name_cmp = string_compare (dyn_dnode_peer.c:1380); the C comparator is inconsistent for names of different length
+fn	array_sort	src/dyn_array.c	160	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter::sort_racks			DEV-S2: slice sort; the rack order the only C caller sorts into is DEV-U1
 fn	array_each	src/dyn_array.c	170	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
 fn	array_each_2	src/dyn_array.c	188	replaced	crates/dynomite/src/cluster/datacenter.rs::Datacenter			DEV-S2: std Vec; index-order iteration as C array_each
 macro	_DYN_ARRAY_H_	src/dyn_array.h	24	dead				include guard; no Rust counterpart needed
@@ -561,8 +561,8 @@ fn	dnode_req_peer_enqueue_omsgq	src/dyn_dnode_peer.c	1314	todo
 fn	dnode_req_peer_dequeue_omsgq	src/dyn_dnode_peer.c	1334	todo				
 var	dnode_peer_ops	src/dyn_dnode_peer.c	1355	todo				
 fn	init_dnode_peer_conn	src/dyn_dnode_peer.c	1371	todo				
-fn	rack_name_cmp	src/dyn_dnode_peer.c	1377	todo				
-fn	preselect_remote_rack_for_replication	src/dyn_dnode_peer.c	1385	todo				
+fn	rack_name_cmp	src/dyn_dnode_peer.c	1377	deviation:DEV-U1	crates/dynomite/src/cluster/datacenter.rs::rack_order_key	crates/dynomite/src/cluster/datacenter.rs::tests::sort_racks_by_name_hash		racks order by 32-bit MurmurHash3 of the name, name breaks ties
+fn	preselect_remote_rack_for_replication	src/dyn_dnode_peer.c	1385	ported	crates/dynomite/src/cluster/pool.rs::ServerPool::preselect_remote_racks	crates/dynomite/src/cluster/datacenter.rs::tests::sort_racks_by_name_hash		rack order per DEV-U1
 macro	_DYN_DNODE_PEER_H_	src/dyn_dnode_peer.h	7	todo				
 macro	MAX_WAIT_BEFORE_RECONNECT_IN_SECS	src/dyn_dnode_peer.h	12	todo				
 macro	WAIT_BEFORE_UPDATE_PEERS_IN_MILLIS	src/dyn_dnode_peer.h	13	todo				
@@ -1290,7 +1290,7 @@ fn	string_empty	src/dyn_string.c	60	replaced	crates/dynomite/src/util/mod.rs::dy
 fn	string_duplicate	src/dyn_string.c	66	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: owned String/Vec<u8>; clone is duplicate/copy, Drop is deinit, is_empty is string_empty
 fn	string_copy	src/dyn_string.c	79	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: owned String/Vec<u8>; clone is duplicate/copy, Drop is deinit, is_empty is string_empty
 fn	string_copy_c	src/dyn_string.c	94	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: owned String/Vec<u8>; clone is duplicate/copy, Drop is deinit, is_empty is string_empty
-fn	string_compare	src/dyn_string.c	98	pending:DEV-U1	crates/dynomite/src/util/dyn_string.rs::string_compare	crates/c-oracle/tests/util_oracle.rs::string_compare_matches_c		C bug: s1->len - s2->len is uint32_t, so any length mismatch returns 1; equality and equal-length order match C (oracle)
+fn	string_compare	src/dyn_string.c	98	deviation:DEV-U1	crates/dynomite/src/util/dyn_string.rs::string_compare	crates/c-oracle/tests/util_oracle.rs::string_compare_matches_c		C bug: s1->len - s2->len is uint32_t, so any length mismatch returns 1; equality and equal-length order match C (oracle)
 macro	_DYN_STRING_H_	src/dyn_string.h	24	dead				include guard; no Rust counterpart needed
 struct	string	src/dyn_string.h	31	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: byte-string literals and slices
 macro	string	src/dyn_string.h	36	replaced	crates/dynomite/src/util/mod.rs::dyn_string			DEV-S3: byte-string literals and slices

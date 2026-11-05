@@ -989,13 +989,45 @@ mod tests {
         pool.preselect_remote_racks();
         let topology = pool.datacenters().read();
         let dc2 = topology.iter().find(|d| d.name() == "dc2").unwrap();
-        // Local rack "rA" is at sorted index 0, dc2 has 2 racks, so
-        // preselected idx is 0 -> "rA".
+        // dc1 has one rack, so the local rack index is 0 and dc2's
+        // preselected rack is the first of dc2's racks in name-hash order.
+        let first = ["rA", "rB"]
+            .into_iter()
+            .min_by_key(|n| super::super::datacenter::rack_order_key(n))
+            .unwrap();
         assert_eq!(
             dc2.preselected_rack()
                 .map(super::super::datacenter::Rack::name),
-            Some("rA")
+            Some(first)
         );
+    }
+
+    /// Every node of a two-DC cluster sorts the racks the same way, so a
+    /// node's preselected remote rack depends only on its own rack's
+    /// position, never on the order peers were listed in.
+    #[test]
+    fn preselect_is_independent_of_peer_order() {
+        let racks = ["a", "rack-long-name", "r2"];
+        let pick = |rotation: usize| {
+            let mut peers = vec![peer(0, "dc1", "r2", 10, true, true)];
+            for i in 0..racks.len() {
+                let rack = racks[(i + rotation) % racks.len()];
+                let n = u32::try_from(i).unwrap();
+                peers.push(peer(n + 1, "dc1", rack, 100 + n, false, true));
+                peers.push(peer(n + 4, "dc2", rack, 200 + n, false, false));
+            }
+            let pool = ServerPool::new(cfg("dc1", "r2"), peers);
+            pool.preselect_remote_racks();
+            let topology = pool.datacenters().read();
+            let dc2 = topology.iter().find(|d| d.name() == "dc2").unwrap();
+            dc2.preselected_rack()
+                .map(|r| r.name().to_string())
+                .unwrap()
+        };
+        let first = pick(0);
+        for rotation in 1..racks.len() {
+            assert_eq!(pick(rotation), first, "rotation {rotation}");
+        }
     }
 
     #[test]

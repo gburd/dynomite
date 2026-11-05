@@ -218,6 +218,24 @@ impl Rack {
     }
 }
 
+/// The sort key of a rack name: its 32-bit MurmurHash3, then the name
+/// itself so two names with one hash still order totally.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::cluster::datacenter::rack_order_key;
+/// assert_eq!(rack_order_key("rack1"), rack_order_key("rack1"));
+/// assert_ne!(rack_order_key("rack1"), rack_order_key("rack2"));
+/// ```
+#[must_use]
+pub fn rack_order_key(name: &str) -> (u32, &str) {
+    (
+        crate::hashkit::hash(crate::hashkit::HashType::Murmur3, name.as_bytes()).get_int(),
+        name,
+    )
+}
+
 /// One datacenter.
 ///
 /// A datacenter and its racks. The
@@ -296,12 +314,27 @@ impl Datacenter {
         &mut self.racks[last]
     }
 
-    /// Sort racks by name (ascending). Used by
-    /// [`crate::cluster::pool::ServerPool::preselect_remote_racks`]
-    /// and mirrors the `array_sort(&dc->racks, rack_name_cmp)` call
-    /// in `preselect_remote_rack_for_replication`.
+    /// Sort racks by the 32-bit MurmurHash3 of their name, ascending,
+    /// with the name breaking a hash tie. Used by
+    /// [`crate::cluster::pool::ServerPool::preselect_remote_racks`] to
+    /// pick the rack each remote DC replicates to; every node computes
+    /// the same total order whatever its `hash:` setting (DEV-U1).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::cluster::datacenter::{rack_order_key, Datacenter};
+    /// let mut dc = Datacenter::new("dc1".into());
+    /// for r in ["rack1", "rack22", "r"] {
+    ///     dc.upsert_rack(r.into());
+    /// }
+    /// dc.sort_racks();
+    /// let keys: Vec<_> = dc.racks().iter().map(|r| rack_order_key(r.name())).collect();
+    /// assert!(keys.windows(2).all(|w| w[0] <= w[1]));
+    /// ```
     pub fn sort_racks(&mut self) {
-        self.racks.sort_by(|a, b| a.name().cmp(b.name()));
+        self.racks
+            .sort_by(|a, b| rack_order_key(a.name()).cmp(&rack_order_key(b.name())));
     }
 
     /// Preselected rack index for replicating writes from another
@@ -358,12 +391,23 @@ mod tests {
         assert!(r.continuums().is_empty());
     }
 
+    /// Regression (DEV-U1): rack names of different lengths sort into one
+    /// total order, by name hash, whatever order they were added in.
     #[test]
-    fn sort_racks_alphabetical() {
-        let mut dc = Datacenter::new("dc1".into());
-        dc.upsert_rack("rb".into());
-        dc.upsert_rack("ra".into());
-        dc.sort_racks();
-        assert_eq!(dc.racks()[0].name(), "ra");
+    fn sort_racks_by_name_hash() {
+        let names = ["a", "ab", "rack1", "rack10", "rack2", "us-east-1c"];
+        let mut want: Vec<&str> = names.to_vec();
+        want.sort_by_key(|n| rack_order_key(n));
+        for rotation in 0..names.len() {
+            let mut dc = Datacenter::new("dc1".into());
+            for i in 0..names.len() {
+                dc.upsert_rack(names[(i + rotation) % names.len()].into());
+            }
+            dc.sort_racks();
+            let got: Vec<&str> = dc.racks().iter().map(Rack::name).collect();
+            assert_eq!(got, want, "rotation {rotation}");
+        }
+        let hashes: Vec<u32> = want.iter().map(|n| rack_order_key(n).0).collect();
+        assert!(hashes.windows(2).all(|w| w[0] <= w[1]), "{hashes:?}");
     }
 }
