@@ -48,19 +48,28 @@ host (optest-20261103-133836) is torn down.
   ending the three_node_single_dc bind flake (6/6 failures under port
   churn before, 0/6 after).
 
-## Proposed, need the owner
+## Owner rulings (2026-11-05)
 
-* DEV-N1: peer redial wait stays 100 ms doubling to 5 s (main's value),
-  not C's 1 s / 10 s, because Rust routes only to peers gossip marks
-  NORMAL and C routes regardless.
-* DEV-M1: C's memcache retrieval crash; Rust's semantics; question
-  whether to match blocks to keys by name (C's merge reorders after a
-  miss).
-* Carried: DEV-U1, DEV-R3, DEV-R4.
+* DEV-N1 AUTHORIZED: keep the 100 ms / 5 s peer redial wait until
+  routing stops depending on gossip state.
+* DEV-M1 AUTHORIZED: keep the memcache semantics, C's reply order
+  after a miss included.
+* Still open: DEV-U1, DEV-R3, DEV-R4.
 
-## Not done
+## Follow-up, same day
 
-* Stats counters peer_timedout_requests / remote_peer_timedout_requests
-  / server_dropped_requests exist but are not incremented.
-* The datastore reconnect uses Rust's 50 ms jittered backoff, not C's
-  1 s doubling (`server_retry_timeout`).
+* **Timeout, drop and ejection counters on /info.** dynomited builds a
+  real `Stats` aggregator and refreshes `/info` every `stats_interval`.
+  server_eof / server_timedout / server_err, server_dropped_requests,
+  server_ejects / server_ejected_at, peer_connections, peer_eof /
+  peer_timedout / remote_peer_timedout / peer_err, peer_timedout_requests
+  / remote_peer_timedout_requests and peer_ejected_at are counted at
+  the C points. After a frozen datastore and a frozen peer every one of
+  them equals C's (optest `timeouts_are_counted_in_info`).
+* **Datastore reconnect on C's schedule.** 1 s doubling to
+  `server_retry_timeout / 1000` s (default 10 s), reset on connect, no
+  jitter. Time to serve again after the datastore returns, down 0.5 /
+  2 / 9 s: C 0.81 / 2.82 / 14.8 s, Rust 0.81 / 2.79 / 14.8 s.
+* `check.sh` now runs `cargo doc -D warnings` (a broken intra-doc link
+  had reached main), and loom's unused `futures` feature is dropped to
+  clear RUSTSEC-2026-0441 (pin-utils unmaintained).
