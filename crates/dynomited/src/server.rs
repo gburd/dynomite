@@ -2682,22 +2682,24 @@ async fn peer_supervisor(
     }
 }
 
-/// Wait before redialing a peer whose connection failed or closed: 1 s
-/// after a connection that was up, doubling on each consecutive failure
-/// up to 10 s.
+/// Wait before redialing a peer: 100 ms after a failed dial, doubling up
+/// to 5 s, and back to 100 ms once a dial succeeds.
+///
+/// The C engine waits 1 s doubling to 10 s; see DEV-N1 in
+/// `docs/transliteration/deviations.md` for why this one does not yet.
 #[derive(Default)]
 struct PeerReconnectWait {
-    current_secs: u64,
+    current_ms: u64,
 }
 
 impl PeerReconnectWait {
-    const MIN_SECS: u64 = 1;
-    const MAX_SECS: u64 = 10;
+    const MIN_MS: u64 = 100;
+    const MAX_MS: u64 = 5_000;
 
     fn next(&mut self) -> tokio::time::Sleep {
-        let secs = self.current_secs.max(Self::MIN_SECS);
-        self.current_secs = (secs * 2).min(Self::MAX_SECS);
-        tokio::time::sleep(Duration::from_secs(secs))
+        let ms = self.current_ms.max(Self::MIN_MS);
+        self.current_ms = (ms * 2).min(Self::MAX_MS);
+        tokio::time::sleep(Duration::from_millis(ms))
     }
 }
 

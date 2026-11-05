@@ -556,6 +556,35 @@ held at its current behaviour until the owner decides.
   is an owner decision.
 * Status: PROPOSED
 
+### DEV-N1: peer reconnect wait 100 ms doubling to 5 s, not C's 1 s doubling to 10 s
+
+* C: a peer connection pool that fails schedules its reconnect after
+  `MIN_WAIT_BEFORE_RECONNECT_IN_SECS` (1 s), doubling to
+  `MAX_WAIT_BEFORE_RECONNECT_IN_SECS` (10 s)
+  (`dyn_connection_pool.c` `conn_pool_notify_conn_errored`,
+  `dyn_dnode_peer.c:188`). C routes a request to the key's owner whatever
+  the owner's gossip state (`dnode_peer_for_key_on_rack`), so a slow
+  redial costs nothing until a request actually needs the peer.
+* Rust: the dispatcher routes only to peers the failure detector marks
+  NORMAL, and a peer becomes NORMAL on its first heartbeat over a working
+  link. With C's 1 s wait, a node started 0.3 s before its peers redials
+  them a full second later; until then its view has them DOWN and a write
+  for a key they own fails with `Failed to achieve Quorum` (conformance
+  `three_node_single_dc::each_node_accepts_workload`, 3 of 3 runs). The
+  Rust supervisor therefore keeps its previous wait, 100 ms doubling to
+  5 s, while adopting C's other reconnect behaviour (requests refused at
+  once with `Peer: Peer Node is not connected` while it waits).
+* Evidence: the cluster probe (3 nodes, one rack, started 0.3 s apart)
+  answered the first write `Failed to achieve Quorum` 3 of 3 times with
+  the 1 s wait and 0 of 10 times with 100 ms.
+* Status: PROPOSED. Nothing new relies on it: 100 ms / 5 s is the wait
+  `main` already had; the change to C's schedule is what waits on this
+  ruling.
+* Recommendation: keep 100 ms / 5 s until routing stops gating on
+  gossip state (the C rule); then adopt C's schedule. The alternative,
+  routing to DOWN owners as C does, changes the failure behaviour every
+  optest partition scenario pins, so it is a larger decision.
+
 ## E. Decisions log
 
 Owner decisions are appended here with date and the exact instruction.
