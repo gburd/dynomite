@@ -530,7 +530,7 @@ fn	dnode_initialize_peers	src/dyn_dnode_peer.c	238	todo
 fn	dnode_peer_conn	src/dyn_dnode_peer.c	276	todo				
 fn	dnode_peer_ack_err	src/dyn_dnode_peer.c	280	todo				
 fn	dnode_peer_failure	src/dyn_dnode_peer.c	330	todo				
-fn	dnode_peer_close_stats	src/dyn_dnode_peer.c	341	todo				
+fn	dnode_peer_close_stats	src/dyn_dnode_peer.c	341	ported	crates/dynomited/src/server.rs::PeerStats	crates/dynomited/src/server.rs::tests::peer_close_counts_by_cause_and_dc	crates/optest/tests/request_timeout.rs::timeouts_are_counted_in_info	record_close; also peer_ejected_at and the timed-out request (core_timeout)
 fn	dnode_peer_close	src/dyn_dnode_peer.c	373	todo				
 fn	dnode_peer_each_preconnect	src/dyn_dnode_peer.c	453	todo				
 fn	dnode_peer_each_disconnect	src/dyn_dnode_peer.c	462	todo				
@@ -1079,7 +1079,7 @@ fn	server_deinit	src/dyn_server.c	112	todo
 fn	server_conn	src/dyn_server.c	120	todo				
 fn	datastore_preconnect	src/dyn_server.c	124	todo				
 fn	server_failure	src/dyn_server.c	128	todo				
-fn	server_close_stats	src/dyn_server.c	136	todo				
+fn	server_close_stats	src/dyn_server.c	136	ported	crates/dynomited/src/server.rs::record_server_close	crates/dynomited/src/server.rs::tests::server_close_counts_by_cause	crates/optest/tests/request_timeout.rs::timeouts_are_counted_in_info	also counts server_ejects / server_ejected_at (server_failure) and the timed-out request (core_timeout)
 fn	server_ack_err	src/dyn_server.c	162	todo				
 fn	server_close	src/dyn_server.c	212	todo				
 fn	server_connected	src/dyn_server.c	289	todo				
