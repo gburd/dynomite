@@ -5,11 +5,13 @@
 //! conflicting SET / DEL / HSET / HDEL on a few keys. Afterwards a
 //! repairing read of every key must leave every replica's datastore in
 //! the same state: the same value (or absence) and the same add / remove
-//! metadata for that key, except where two writes landed in the same
-//! millisecond: equal timestamps have no winner, in C as in Rust (DEV-R4),
-//! and the scenario reports those ties instead of failing on them. Run against the C reference first (real Lua),
-//! then the Rust engine; timestamps differ between runs, so the check is
-//! structural: replicas agree with each other.
+//! metadata for that key. The C reference stamps writes with the
+//! millisecond alone, so two of its nodes writing one key in one
+//! millisecond tie and the replicas keep different writes; the scenario
+//! counts those ties for C. The Rust engine adds the node id to the
+//! stamp (DEV-R4) and must leave no tie. Run against the C reference
+//! first (real Lua), then the Rust engine; timestamps differ between
+//! runs, so the check is structural: replicas agree with each other.
 
 #[macro_use]
 mod common;
@@ -150,13 +152,14 @@ fn concurrent_writers_converge_after_repairing_reads() {
             if views.iter().all(|v| v.0 == views[0].0) {
                 continue;
             }
-            // Two writes of the same key in the same millisecond carry the
+            // C: two nodes writing one key in one millisecond carry the
             // same timestamp; each replica keeps the one that reached it
-            // last and the repairing read sees no newer replica (DEV-R4).
-            // Any other disagreement is a repair failure.
+            // last and the repairing read sees no newer replica. Rust
+            // stamps carry the node id, so any disagreement is a repair
+            // failure.
             let same_ts = views.iter().all(|v| v.1.is_some() && v.1 == views[0].1);
             assert!(
-                same_ts,
+                same_ts && engine == Engine::C,
                 "{engine:?}: replicas disagree on {key} after repairing reads:\n{}",
                 views
                     .iter()
@@ -165,7 +168,7 @@ fn concurrent_writers_converge_after_repairing_reads() {
                     .join("\n")
             );
             ties += 1;
-            eprintln!("[{engine:?}] {key}: same-millisecond tie left divergent (DEV-R4)");
+            eprintln!("[{engine:?}] {key}: same-millisecond tie left divergent");
         }
         eprintln!("[{engine:?}] keys left divergent by a timestamp tie: {ties}");
     }
