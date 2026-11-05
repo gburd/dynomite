@@ -205,7 +205,7 @@ impl Server {
         pool: ConfPool,
         hooks: ServerHooks,
         command_extension: Option<Arc<dyn crate::embed::CommandExtension>>,
-    ) -> Self {
+    ) -> Result<Self, crate::embed::EmbedError> {
         crate::io::mbuf::mbuf_init(
             pool.mbuf_size
                 .and_then(|n| usize::try_from(n).ok())
@@ -218,6 +218,8 @@ impl Server {
             let start = u32::try_from(peers.len()).unwrap_or(0);
             peers.extend(peers_from_seeds(&pool_cfg, seeds, start));
         }
+        crate::cluster::pool::check_node_ids(pool_cfg.node_id, &peers)
+            .map_err(|e| crate::embed::EmbedError::Build(e.to_string()))?;
         let server_pool_arc = Arc::new(ServerPool::new(pool_cfg.clone(), peers));
         server_pool_arc.preselect_remote_racks();
 
@@ -232,14 +234,14 @@ impl Server {
             ServerStats::new("backend"),
         ));
 
-        Self {
+        Ok(Self {
             pool_name,
             pool,
             cluster: server_pool_arc,
             hooks,
             stats,
             command_extension,
-        }
+        })
     }
 
     /// Borrow the [`crate::embed::CommandExtension`]

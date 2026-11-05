@@ -21,6 +21,7 @@ use crate::conf::{
     ConfPool, ConsistencyLevel as ConfConsistencyLevel, DataStore, Distribution, HashType,
     TokenList,
 };
+use crate::hashkit::DynToken;
 
 use crate::msg::ConsistencyLevel;
 use crate::net::auto_eject::AutoEject;
@@ -119,6 +120,74 @@ pub fn derive_node_id(dc: &str, rack: &str, token: u32) -> u16 {
 #[must_use]
 pub fn repair_timestamp(now_ms: u64, node_id: u16) -> u64 {
     (now_ms.saturating_sub(REPAIR_EPOCH_MS) << NODE_ID_BITS) | u64::from(node_id & NODE_ID_MAX)
+}
+
+/// Two nodes of one pool with the same read-repair node id
+/// ([`check_node_ids`]).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "nodes {first} and {second} share read-repair node id {id}; \
+     set a distinct `node_id:` (0..=4095) on one of them"
+)]
+pub struct NodeIdCollision {
+    /// The shared id.
+    pub id: u16,
+    /// The node listed first, as `dc/rack/token @ host:port`.
+    pub first: String,
+    /// The node listed second.
+    pub second: String,
+}
+
+/// Check that every node of a pool has its own read-repair node id:
+/// the local node (peer index 0) has `local_id`, every other peer the
+/// [`derive_node_id`] of its datacenter, rack and first token.
+///
+/// # Errors
+///
+/// [`NodeIdCollision`] naming the first two nodes found with one id.
+///
+/// # Examples
+///
+/// ```
+/// use dynomite::cluster::peer::{Peer, PeerEndpoint};
+/// use dynomite::cluster::pool::{check_node_ids, derive_node_id};
+/// use dynomite::hashkit::DynToken;
+/// let peer = |idx, rack: &str, tok| Peer::new(
+///     idx, PeerEndpoint::tcp("h".into(), 8101), rack.into(), "dc".into(),
+///     vec![DynToken::from_u32(tok)], idx == 0, true, false,
+/// );
+/// let peers = [peer(0, "r1", 1), peer(1, "r2", 1)];
+/// assert!(check_node_ids(derive_node_id("dc", "r1", 1), &peers).is_ok());
+/// let err = check_node_ids(derive_node_id("dc", "r2", 1), &peers).unwrap_err();
+/// assert_eq!(err.id, derive_node_id("dc", "r2", 1));
+/// ```
+pub fn check_node_ids(local_id: u16, peers: &[Peer]) -> Result<(), NodeIdCollision> {
+    let name = |p: &Peer| {
+        let token = p.tokens().first().map_or(0, DynToken::get_int);
+        format!("{}/{}/{token} @ {}", p.dc(), p.rack(), p.endpoint().pname())
+    };
+    let mut seen: std::collections::HashMap<u16, String> =
+        std::collections::HashMap::with_capacity(peers.len());
+    for (i, p) in peers.iter().enumerate() {
+        let id = if i == 0 {
+            local_id
+        } else {
+            derive_node_id(
+                p.dc(),
+                p.rack(),
+                p.tokens().first().map_or(0, DynToken::get_int),
+            )
+        };
+        if let Some(first) = seen.get(&id) {
+            return Err(NodeIdCollision {
+                id,
+                first: first.clone(),
+                second: name(p),
+            });
+        }
+        seen.insert(id, name(p));
+    }
+    Ok(())
 }
 
 /// Minimal projection of the YAML pool block consumed by the

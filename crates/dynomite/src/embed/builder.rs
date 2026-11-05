@@ -347,6 +347,22 @@ impl ServerBuilder {
         self
     }
 
+    /// `node_id:` - this node's id in its read-repair timestamps,
+    /// `0..=4095`; derived from datacenter, rack and token when unset
+    /// ([`crate::cluster::pool::derive_node_id`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dynomite::embed::ServerBuilder;
+    /// let _b = ServerBuilder::new("p").node_id(7);
+    /// ```
+    #[must_use]
+    pub fn node_id(mut self, id: u16) -> Self {
+        self.pool.node_id = Some(id);
+        self
+    }
+
     /// `tokens:` - this node's tokens, parsed from the YAML
     /// representation.
     ///
@@ -584,7 +600,7 @@ impl ServerBuilder {
         let metrics = self.hooks.metrics;
         let command_extension = self.command_extension;
 
-        Ok(Server::from_pool(
+        Server::from_pool(
             self.pool_name,
             finalized,
             ServerHooks {
@@ -594,7 +610,7 @@ impl ServerBuilder {
                 metrics,
             },
             command_extension,
-        ))
+        )
     }
 }
 

@@ -471,6 +471,12 @@ impl Server {
                 ));
             }
         }
+        dynomite::cluster::pool::check_node_ids(pool_config.node_id, &peers).map_err(|e| {
+            ServerError::BadConfig {
+                field: "node_id",
+                reason: e.to_string(),
+            }
+        })?;
         let server_pool = Arc::new(ServerPool::new(pool_config.clone(), peers));
         server_pool.preselect_remote_racks();
         dynomite::msg::set_read_repairs_enabled(conf_pool.read_repairs_enabled.unwrap_or(false));
@@ -3957,6 +3963,24 @@ mod tests {
         let pool_config = PoolConfig::default();
         let err = build_local_peer(conf_pool, &pool_config, None).unwrap_err();
         assert!(matches!(err, ServerError::MissingConfig("tokens")));
+    }
+
+    #[tokio::test]
+    async fn build_refuses_a_node_id_shared_with_a_peer() {
+        let peer_id = dynomite::cluster::pool::derive_node_id("dc2", "r9", 77);
+        let yaml = format!(
+            "p:\n  listen: 127.0.0.1:1\n  dyn_listen: 127.0.0.1:2\n  tokens: '1'\n  node_id: {peer_id}\n  dyn_seeds:\n  - 127.0.0.1:9:r9:dc2:77\n  servers:\n  - 127.0.0.1:22122:1\n  data_store: 0\n"
+        );
+        let err = Server::build(Config::parse_str(&yaml).unwrap())
+            .await
+            .err()
+            .expect("a shared node id must refuse to start");
+        let ServerError::BadConfig { field, reason } = &err else {
+            panic!("unexpected error {err}");
+        };
+        assert_eq!(*field, "node_id");
+        assert!(reason.contains(&format!("node id {peer_id}")), "{reason}");
+        assert!(reason.contains("dc2/r9/77 @ 127.0.0.1:9"), "{reason}");
     }
 
     // ---- seed_to_peer: same-dc vs cross-dc ----

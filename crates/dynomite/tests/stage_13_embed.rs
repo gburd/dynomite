@@ -521,3 +521,40 @@ async fn server_handle_is_clone_send_sync() {
     drop(cloned);
     h.shutdown().await.unwrap();
 }
+
+/// A token in `rack` whose derived node id equals the one of
+/// `dc-test/r1/1`.
+fn colliding_token(rack: &str) -> u32 {
+    let target = dynomite::cluster::pool::derive_node_id("dc-test", "r1", 1);
+    (0..=u32::MAX)
+        .find(|&t| dynomite::cluster::pool::derive_node_id("dc-test", rack, t) == target)
+        .expect("a 12-bit id repeats within 2^32 tokens")
+}
+
+#[test]
+fn build_refuses_two_nodes_with_one_node_id() {
+    let builder = |seeds: Vec<ConfDynSeed>| {
+        ServerBuilder::new("p")
+            .listen("127.0.0.1:1".parse().unwrap())
+            .datacenter("dc-test")
+            .rack("r1")
+            .tokens_str("1")
+            .dyn_seeds(seeds)
+    };
+    let token = colliding_token("r2");
+    let peer = seed(&format!("127.0.0.1:9:r2:dc-test:{token}"));
+    let Err(dynomite::embed::EmbedError::Build(msg)) = builder(vec![peer.clone()]).build() else {
+        panic!("a derived-id collision must refuse to build");
+    };
+    assert!(msg.contains("node_id"), "{msg}");
+    assert!(msg.contains("dc-test/r2/"), "{msg}");
+
+    // An explicit id for the local node resolves it ...
+    let local = dynomite::cluster::pool::derive_node_id("dc-test", "r1", 1);
+    let other = (local + 1) % 4096;
+    assert!(builder(vec![peer.clone()]).node_id(other).build().is_ok());
+    // ... and an explicit id equal to a peer's derived id is refused.
+    let derived = dynomite::cluster::pool::derive_node_id("dc-test", "r2", 5);
+    let peer5 = seed("127.0.0.1:9:r2:dc-test:5");
+    assert!(builder(vec![peer5]).node_id(derived).build().is_err());
+}
